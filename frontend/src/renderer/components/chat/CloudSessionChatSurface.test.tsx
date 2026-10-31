@@ -301,6 +301,28 @@ describe("CloudSessionChatSurface", () => {
 		await waitFor(() => expect(modelOption()).toMatchObject({ currentValue: "opus", choices: [{ value: "opus" }] }));
 	});
 
+	it("refreshes a waking session as soon as its worker connects in the chat events", async () => {
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		const connected = (sequence: number): CloudCpClientEvent => ({ sessionId: session.id, sequence, type: "worker.connected", payload: {}, createdAt: "2026-10-31T07:00:00Z" });
+		// The first page holds an earlier worker's connect; the next poll brings this one's.
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [connected(1)], hasMore: false, nextAfter: 1 })
+			.mockResolvedValue({ events: [connected(2)], hasMore: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const refreshes = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["cloud-sessions"])).length;
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: false, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1));
+		expect(refreshes()).toBe(0);
+		await waitFor(() => expect(refreshes()).toBe(1), { timeout: 3_000 });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
+	});
+
 	it("offers only the approval modes the selected model runs, and shows and sends the mode that runs after a model switch", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ model: "opus", models: [

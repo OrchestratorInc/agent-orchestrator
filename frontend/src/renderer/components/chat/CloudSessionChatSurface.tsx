@@ -6,7 +6,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useComposerLease } from "../../hooks/useComposerLease";
-import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
@@ -927,6 +927,20 @@ export function CloudSessionChatSurface({
 			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
 		},
 	});
+	// A waking session's worker connects in these events, polled every second,
+	// before the sessions list's slower poll says so: refresh the session then,
+	// so Chat stops waiting for a worker that is already back.
+	const seenEventRef = useRef<{ sessionId: string; sequence: number } | undefined>(undefined);
+	useEffect(() => {
+		const events = eventsQuery.data;
+		if (!events?.length) return;
+		const seen = seenEventRef.current?.sessionId === session.id ? seenEventRef.current.sequence : undefined;
+		seenEventRef.current = { sessionId: session.id, sequence: events.at(-1)!.sequence };
+		if (seen === undefined || session.runtimeConnected === true) return;
+		if (events.some((event) => event.sequence > seen && (event.type === "worker.connected" || event.type === "worker.ready"))) {
+			void refreshCloudSessionLifecycle(queryClient);
+		}
+	}, [eventsQuery.data, queryClient, session.id, session.runtimeConnected]);
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;

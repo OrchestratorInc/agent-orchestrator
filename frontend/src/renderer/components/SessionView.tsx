@@ -63,6 +63,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
 	refetchCloudProjectsForUnknownSessions,
+	refreshCloudSessionLifecycle,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
 	useRemoteSessionProjectKind,
@@ -247,6 +248,12 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	// The loader comes down once the sessions list says the worker connected.
+	// Its own stream and poll learn that first, and refresh the list then
+	// instead of leaving the loader up until the list's next poll.
+	const listedConnected = useRef(workerConnected);
+	listedConnected.current = workerConnected;
+	const mountedAt = useRef(Date.now());
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
@@ -269,6 +276,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					: event.type === "agent.ready" ? 3
 					: undefined;
 				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+				// A connect from before this loader (allowing for clock skew) is an
+				// earlier worker's, not the one it waits for.
+				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
 			},
 		});
 		return () => controller.abort();
@@ -285,6 +295,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
 				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
+				if (session.runtimeConnected && !listedConnected.current) void refreshCloudSessionLifecycle(queryClient);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
