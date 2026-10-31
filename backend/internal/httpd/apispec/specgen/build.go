@@ -78,6 +78,8 @@ func Build() ([]byte, error) {
 			"Durable dashboard notifications"),
 		*(&openapi31.Tag{Name: "reports"}).WithDescription(
 			"Durable worker reports"),
+		*(&openapi31.Tag{Name: "reminders"}).WithDescription(
+			"One-shot follow-ups an agent schedules into its own session"),
 		*(&openapi31.Tag{Name: "usage"}).WithDescription(
 			"Token usage telemetry for AO sessions"),
 		*(&openapi31.Tag{Name: "push"}).WithDescription(
@@ -540,6 +542,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMarkAllNotificationsReadRequest":  "MarkAllNotificationsReadRequest",
 	"ControllersMarkAllNotificationsReadResponse": "MarkAllNotificationsReadResponse",
 	"ControllersCreateReportRequest":              "CreateReportRequest",
+	"ControllersCreateReminderRequest":            "CreateReminderRequest",
+	"ControllersReminderResponse":                 "ReminderResponse",
+	"ControllersReminderEnvelope":                 "ReminderEnvelope",
+	"ControllersListRemindersResponse":            "ListRemindersResponse",
 	"ControllersReportOutputRequest":              "ReportOutputRequest",
 	"ControllersCreateReportResponse":             "CreateReportResponse",
 	"ControllersReportOutputResponse":             "ReportOutputResponse",
@@ -755,6 +761,7 @@ func operations() []operation {
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
 	ops = append(ops, reportOperations()...)
+	ops = append(ops, reminderOperations()...)
 	ops = append(ops, usageOperations()...)
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)
@@ -880,6 +887,44 @@ func reportOperations() []operation {
 			{http.StatusCreated, controllers.CreateReportResponse{}},
 			{http.StatusBadRequest, envelope.APIError{}},
 			{http.StatusNotFound, envelope.APIError{}},
+			{http.StatusInternalServerError, envelope.APIError{}},
+			{http.StatusNotImplemented, envelope.APIError{}},
+		},
+	}}
+}
+
+func reminderOperations() []operation {
+	return []operation{{
+		method: http.MethodGet, path: "/api/v1/reminders", id: "listReminders", tag: "reminders",
+		summary:    "List a session's pending reminders",
+		pathParams: []any{controllers.ListRemindersQuery{}},
+		resps: []respUnit{
+			{http.StatusOK, controllers.ListRemindersResponse{}},
+			{http.StatusBadRequest, envelope.APIError{}},
+			{http.StatusInternalServerError, envelope.APIError{}},
+			{http.StatusNotImplemented, envelope.APIError{}},
+		},
+	}, {
+		method: http.MethodPost, path: "/api/v1/reminders", id: "createReminder", tag: "reminders",
+		summary: "Schedule a one-shot follow-up into a session",
+		reqBody: controllers.CreateReminderRequest{},
+		resps: []respUnit{
+			{http.StatusCreated, controllers.ReminderEnvelope{}},
+			{http.StatusBadRequest, envelope.APIError{}},
+			{http.StatusNotFound, envelope.APIError{}},
+			{http.StatusConflict, envelope.APIError{}},
+			{http.StatusInternalServerError, envelope.APIError{}},
+			{http.StatusNotImplemented, envelope.APIError{}},
+		},
+	}, {
+		method: http.MethodDelete, path: "/api/v1/reminders/{reminderId}", id: "cancelReminder", tag: "reminders",
+		summary:    "Cancel a pending reminder",
+		pathParams: []any{controllers.CancelReminderParams{}},
+		resps: []respUnit{
+			{http.StatusOK, controllers.ReminderEnvelope{}},
+			{http.StatusBadRequest, envelope.APIError{}},
+			{http.StatusNotFound, envelope.APIError{}},
+			{http.StatusConflict, envelope.APIError{}},
 			{http.StatusInternalServerError, envelope.APIError{}},
 			{http.StatusNotImplemented, envelope.APIError{}},
 		},

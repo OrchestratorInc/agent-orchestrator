@@ -3763,5 +3763,9 @@
 	"newTask.cloudModelsUnavailable": "La nube no tiene una lista de modelos para {{agent}}. Use el predeterminado o introduzca un ID de modelo.",
 	"newTask.cloudModelsVerified": "Verificado en sus workers en la nube",
 	"newTask.cloudModelUnlisted": "{{model}} no está en la lista de modelos de {{agent}} en la nube, así que es posible que no funcione.",
-	"settings.models.useConfiguredDefault": "Usar el predeterminado del proyecto o del agente"
+	"settings.models.useConfiguredDefault": "Usar el predeterminado del proyecto o del agente",
+	"chat.reminders.label": "Seguimientos programados",
+	"chat.reminders.cancel": "Cancelar seguimiento",
+	"chat.reminders.cancelFailed": "No se pudo cancelar el seguimiento.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

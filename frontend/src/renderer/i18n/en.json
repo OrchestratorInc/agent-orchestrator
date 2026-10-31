@@ -3675,5 +3675,9 @@
 	"newTask.cloudModelsUnavailable": "Cloud has no model list for {{agent}}. Use the default or enter a model ID.",
 	"newTask.cloudModelsVerified": "Verified on your Cloud workers",
 	"newTask.cloudModelUnlisted": "{{model}} isn't in Cloud's model list for {{agent}}, so it may not run.",
-	"settings.models.useConfiguredDefault": "Use project or agent default"
+	"settings.models.useConfiguredDefault": "Use project or agent default",
+	"chat.reminders.label": "Scheduled follow-ups",
+	"chat.reminders.cancel": "Cancel follow-up",
+	"chat.reminders.cancelFailed": "Could not cancel the follow-up.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

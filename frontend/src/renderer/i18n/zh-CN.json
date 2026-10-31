@@ -3676,5 +3676,9 @@
 	"newTask.cloudModelsUnavailable": "云端没有 {{agent}} 的模型列表。请使用默认值或输入模型 ID。",
 	"newTask.cloudModelsVerified": "已在你的云端工作节点上验证",
 	"newTask.cloudModelUnlisted": "{{model}} 不在云端 {{agent}} 的模型列表中，可能无法运行。",
-	"settings.models.useConfiguredDefault": "使用项目或智能体默认值"
+	"settings.models.useConfiguredDefault": "使用项目或智能体默认值",
+	"chat.reminders.label": "已安排的跟进",
+	"chat.reminders.cancel": "取消跟进",
+	"chat.reminders.cancelFailed": "无法取消跟进。",
+	"chat.reminders.item": "{{time}}：{{label}}"
 }

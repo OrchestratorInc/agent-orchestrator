@@ -72,6 +72,7 @@ import (
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	remindersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/reminder"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -668,6 +669,7 @@ func Run(buildVersion string) error {
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
+	reminderSvc := remindersvc.New(remindersvc.Deps{Store: store, Delivery: reminderSemanticDelivery{sessions: reportSessions}})
 	reportDeliveryDone := reportCoordinator.Start(ctx)
 	defer func() {
 		stop()
@@ -896,7 +898,7 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
-	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
+	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, reminderSvc, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
@@ -1044,6 +1046,7 @@ func Run(buildVersion string) error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
+		Reminders:          reminderSvc,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
@@ -1392,6 +1395,18 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	return err
+}
+
+// reminderSemanticDelivery hands a due reminder to the same semantic send
+// path reports use. An unsent composer draft defers it rather than failing.
+type reminderSemanticDelivery struct{ sessions reportSemanticSession }
+
+func (d reminderSemanticDelivery) Submit(ctx context.Context, id domain.SessionID, message, idempotencyKey string) error {
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if errors.Is(err, sessionmanager.ErrComposerBusy) {
+		return fmt.Errorf("%w: %w", remindersvc.ErrSessionBusy, err)
 	}
 	return err
 }

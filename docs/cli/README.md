@@ -91,6 +91,8 @@ without a terminal runs it in the background and reads its output; see
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
+| `ao remind --at ... --message ...`  | `POST /api/v1/reminders`                       |
+| `ao remind ls` / `cancel <id>`      | `GET /api/v1/reminders`, `DELETE /api/v1/reminders/{id}` |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
@@ -140,6 +142,17 @@ durable semantic message boundary. Supported TUIs acknowledge delivery only
 after their native prompt hook reports acceptance of the exact durable batch
 identity. A successful terminal write is never acknowledgement. Reports remain
 pending for TUI adapters that cannot expose this semantic boundary.
+
+`ao remind` schedules a one-shot follow-up into the session named by
+`AO_SESSION_ID`. One durable `session_reminders` row holds it; the daemon's
+automation scheduler tick delivers it when due through the same semantic
+message boundary reports use, as a user-role turn into that same session.
+Chat queues it behind a running turn and wakes a hibernated session; a TUI
+session waits until its running turn ends. A reminder for an archived or
+killed session is dropped with the reason recorded. `ao remind ls` and
+`ao remind cancel <id>` are scoped to the calling session. The MCP server
+`ao mcp` offers the same set as the `remind`, `remind_list`, and
+`remind_cancel` tools.
 
 `GET /api/v1/reports?projectId=<id>` is the read-only persisted report
 projection. Consumers such as Project Summary can read ordered report facts

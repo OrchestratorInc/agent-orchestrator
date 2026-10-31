@@ -118,7 +118,7 @@ func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), c.cuaTools(ctx, state)...)
+		tools := append(append(append([]map[string]any{}, mcpTools...), mcpRemindTools...), c.cuaTools(ctx, state)...)
 		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
@@ -132,6 +132,10 @@ func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []
 		case "html_render":
 			resp.Result = c.callHTMLRender(ctx, p.Arguments)
 		default:
+			if isMCPRemindTool(p.Name) {
+				resp.Result = c.callMCPRemind(ctx, p.Name, p.Arguments)
+				break
+			}
 			if c.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
 				resp.Result = c.callCua(ctx, p.Name, p.Arguments)
 				break
