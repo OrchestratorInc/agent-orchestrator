@@ -14,6 +14,7 @@ const {
 	subscribeConnectedHostsMock,
 	unsubscribeConnectedHostsMock,
 	remoteGetMock,
+	discardPendingAgentModelReadsMock,
 } = vi.hoisted(() => ({
 	onStatusMock: vi.fn(),
 	removeStatusMock: vi.fn(),
@@ -26,6 +27,7 @@ const {
 	subscribeConnectedHostsMock: vi.fn(),
 	unsubscribeConnectedHostsMock: vi.fn(),
 	remoteGetMock: vi.fn(),
+	discardPendingAgentModelReadsMock: vi.fn((_queryKey: readonly unknown[], _options?: { reread?: boolean }) => {}),
 }));
 
 vi.mock("./bridge", () => ({
@@ -44,6 +46,10 @@ vi.mock("./host-clients", () => ({
 	baseUrlForHost: baseUrlForHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
+}));
+vi.mock("../hooks/useAgentModelsQuery", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentModelsQuery")>()),
+	discardPendingAgentModelReads: discardPendingAgentModelReadsMock,
 }));
 
 import { createEventTransport } from "./event-transport";
@@ -107,6 +113,7 @@ beforeEach(() => {
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
 	unsubscribeConnectedHostsMock.mockReset();
+	discardPendingAgentModelReadsMock.mockReset();
 	remoteGetMock.mockReset().mockResolvedValue({ data: {
 		conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle",
 		latestSequence: 0, messages: [], activities: [],
@@ -564,6 +571,77 @@ describe("createEventTransport", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("restarts pending catalog reads for a catalog event that only queues a catch-up", async () => {
+		vi.useFakeTimers();
+		let disconnect: (() => void) | undefined;
+		try {
+			const queryClient = fakeQueryClient();
+			const catalogKey = JSON.stringify(["agent-models", "opencode"]);
+			const settleRefresh: Array<() => void> = [];
+			vi.mocked(queryClient.invalidateQueries).mockImplementation(((filters?: { queryKey?: readonly unknown[] }) =>
+				JSON.stringify(filters?.queryKey) === catalogKey
+					? new Promise<void>((resolve) => { settleRefresh.push(resolve); })
+					: Promise.resolve()) as never);
+			const evictions = (reread: boolean) => discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey, options]) =>
+				JSON.stringify(queryKey) === catalogKey && (options?.reread ?? false) === reread).length;
+			disconnect = createEventTransport(queryClient).connect();
+			const emit = (seq: number) => cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq, projectId: "", type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "opencode", projectId: "" },
+				createdAt: "2026-10-26T08:00:00Z",
+			}));
+			emit(50);
+			vi.advanceTimersByTime(200);
+			expect([evictions(true), settleRefresh.length]).toEqual([1, 1]);
+			// The first refresh is still running, so this event only marks it
+			// dirty. Its pending reads must still restart.
+			emit(51);
+			vi.advanceTimersByTime(200);
+			expect([evictions(true), settleRefresh.length]).toEqual([2, 1]);
+			settleRefresh[0]();
+			await vi.waitFor(() => expect(settleRefresh).toHaveLength(2));
+			// The transport's own catch-up is not another catalog change.
+			expect([evictions(true), evictions(false)]).toEqual([2, 1]);
+		} finally {
+			disconnect?.();
+			vi.useRealTimers();
+		}
+	});
+
+	it("evicts remote catalog reads on fallback polls without restarting them", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+			const disconnect = createEventTransport(fakeQueryClient()).connect();
+			discardPendingAgentModelReadsMock.mockClear();
+			await vi.advanceTimersByTimeAsync(6_000);
+			const polls = discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey]) => JSON.stringify(queryKey) === JSON.stringify(["agent-models", "box-a"]));
+			// A read slower than the 2 s interval must still be able to finish.
+			expect(polls).toHaveLength(3);
+			expect(polls.every(([, options]) => options?.reread !== true)).toBe(true);
+			disconnect();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("restarts a remote host's catalog reads only for its typed catalog event", () => {
+		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
+		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+		const disconnect = createEventTransport(fakeQueryClient()).connect();
+		const remoteA = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		const rereads = () => discardPendingAgentModelReadsMock.mock.calls.filter(([, options]) => options?.reread).map(([queryKey]) => queryKey);
+		remoteA.emit("session_updated", JSON.stringify({ sessionId: "s1", payload: { id: "s1" } }));
+		expect(rereads()).toEqual([]);
+		remoteA.emit("session_updated", JSON.stringify({
+			seq: 9, projectId: "", type: "session_updated",
+			payload: { kind: "model_catalog", agentId: "opencode", projectId: "" },
+		}));
+		expect(rereads()).toEqual([["agent-models", "box-a", "opencode"]]);
+		// Each remote event still only evicts the host's reads generically.
+		expect(discardPendingAgentModelReadsMock).toHaveBeenCalledWith(["agent-models", "box-a"], { reread: false });
+		disconnect();
 	});
 
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {

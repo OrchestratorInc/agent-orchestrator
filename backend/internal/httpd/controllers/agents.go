@@ -109,6 +109,24 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if agentID == "opencode" || agentID == "opencode-v2" {
+		if r.URL.Query().Get("catalogOnly") != "true" {
+			// Keep every option: project pickers also offer unconfigured providers.
+			// Only Harness Settings reads context windows; inputs and discovery
+			// metadata have no picker consumer. Do not mutate the shared cache.
+			models := append([]ports.AgentModelInfo{}, catalog.Models...)
+			for i := range models {
+				models[i].ContextWindow = 0
+				models[i].Inputs = nil
+			}
+			catalog.Models = models
+			catalog.Metadata = nil
+			catalog.Providers = nil
+			catalog.BinaryVersion = ""
+			catalog.InputFingerprint = ""
+		}
+
+	}
 	envelope.WriteJSON(w, http.StatusOK, catalog)
 }
 
