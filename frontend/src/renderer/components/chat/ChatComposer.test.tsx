@@ -1438,7 +1438,7 @@ describe("steering", () => {
 	it("offers an explicit steer action for a running Cloud turn", async () => {
 		const { onSend, onSteer, field } = renderSteerable({ showSteerButton: true });
 		await typeInComposer(field, "change course");
-		await userEvent.click(screen.getByRole("button", { name: "Steer into running turn" }));
+		await userEvent.click(screen.getByRole("button", { name: "Send now (interrupts)" }));
 		await waitFor(() => expect(onSteer).toHaveBeenCalledWith("change course"));
 		expect(onSend).not.toHaveBeenCalled();
 	});

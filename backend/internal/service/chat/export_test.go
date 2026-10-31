@@ -32,3 +32,11 @@ func SetDeltaFlushInterval(interval time.Duration) (restore func()) {
 
 // DeltaRunMaxBytes is the most delta text one batched write carries.
 const DeltaRunMaxBytes = deltaRunMaxBytes
+
+// SetQueuedTurnSettleWait shortens how long a queued-turn steer waits for the
+// cancelled turn to settle, for tests, and returns a restore function.
+func SetQueuedTurnSettleWait(limit time.Duration) (restore func()) {
+	previous := queuedTurnSettleWait
+	queuedTurnSettleWait = limit
+	return func() { queuedTurnSettleWait = previous }
+}
