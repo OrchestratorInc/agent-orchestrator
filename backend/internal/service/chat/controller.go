@@ -121,6 +121,7 @@ type Store interface {
 	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) error
 	CancelQueuedTurnByID(ctx context.Context, conversationID, turnID string, now time.Time) error
 	QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
+	QueuedTurnOrder(ctx context.Context, conversationID string) ([]string, error)
 	QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error)
 	UpdateQueuedTurnMessage(ctx context.Context, conversationID, turnID, text, contentJSON string, revision int64, now time.Time, delivery domain.ConversationQueuedEditDelivery) error
 	ReorderQueuedTurns(ctx context.Context, conversationID string, turnIDs []string) error
@@ -1027,7 +1028,11 @@ type nativeHistoryTurn struct {
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
-	return string(role) + "\x00" + text
+	// Trim both sides: providers that strip persisted text (Hermes flattens
+	// every stored message with a string strip) replay answers whose boundary
+	// whitespace AO's live projection kept, and an exact comparison would
+	// re-import the same reply as a duplicate.
+	return string(role) + "\x00" + strings.TrimSpace(text)
 }
 
 func nativeHistoryEventMessageFingerprint(event ports.ChatEvent) (string, bool) {
@@ -1257,7 +1262,13 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		if match == nil && event.Text != "" {
 			for _, candidate := range ordered {
-				if !used[candidate] && candidate.text == event.Text {
+				if used[candidate] || candidate.text == "" {
+					continue
+				}
+				// Trim-tolerant like the checkpoint comparison: providers that
+				// strip persisted text replay the prompt with different
+				// boundary whitespace than the dispatched original.
+				if nativeHistoryTextMatches(candidate.text, event.Text) {
 					match = candidate
 					break
 				}

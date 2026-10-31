@@ -147,8 +147,12 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
+	// promptErrorFailure: see Config.PromptErrorFailure.
+	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
 	historyUserChunkIsMessage bool
+	// historyReconciler: see Config.HistoryReconciler.
+	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually
@@ -797,6 +801,11 @@ func (c *conversation) finishPrompt(
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)
+			if c.promptErrorFailure != nil && !errors.Is(turnErr, ports.ErrChatAuthRequired) {
+				if failure := c.promptErrorFailure(err, answered); failure != nil {
+					turnErr = failure
+				}
+			}
 		}
 	} else {
 		state = turnState(resp.StopReason)

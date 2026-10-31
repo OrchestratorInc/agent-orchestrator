@@ -1447,7 +1447,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
-	const { label, path } = splitSummary(activity);
+	const { label, path, hover } = splitSummary(activity);
 	// Commands and file edits share the explore-style summary line: muted label,
 	// no icon column, always-visible chevron. Everything else keeps the denser
 	// bordered activity row.
@@ -1481,6 +1481,14 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		>
 			<button
 				type="button"
+				onKeyDown={(event) => {
+					// Esc is the keyboard answer to the click that opened the row:
+					// collapse the one row under focus, leave the rest alone.
+					if (event.key === "Escape" && open) {
+						event.stopPropagation();
+						setOverride(false);
+					}
+				}}
 				onClick={() => setOverride(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -1526,7 +1534,12 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					<strong
 						className={cn(
 							compactSummary
-								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
+								? cn(
+										"activity-row-label text-xs font-normal text-muted-foreground group-hover/activity:text-foreground",
+										// A command label is the command text, so it can be long:
+										// let it truncate instead of pinning the row's width.
+										hover ? "min-w-0 flex-1 truncate" : "shrink-0",
+									)
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed"
@@ -1535,7 +1548,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 										? "font-normal text-muted-foreground"
 										: "text-foreground"),
 						)}
-						title={compactSummary ? undefined : noticeLabel ?? label}
+						title={compactSummary ? hover : noticeLabel ?? label}
 					>
 						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
@@ -1594,10 +1607,10 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						) : null}
 						{files.length > 1 ? <FileChangeList files={files} /> : null}
 						{!isFileChange && detail?.command ? (
-							// Said explicitly rather than implied by the label: "Ran command"
-							// alone never tells the reader what ran, and the collapsed row
-							// deliberately keeps only the category.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+							// The body repeats the command verbatim, independent of the
+							// possibly truncated collapsed label above. It wraps rather
+							// than scrolls, for the same reason the explore body does.
+							<pre className="scrollbar-none select-text whitespace-pre-wrap break-words border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
@@ -1658,9 +1671,11 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 
 			{command ? (
+				// The command wraps instead of scrolling: a long invocation must be
+				// readable — and selectable — without a horizontal hunt.
 				<pre
 					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
+						"cursor-chat-explore-command select-text whitespace-pre-wrap break-words px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
 					)}
 				>
@@ -1801,10 +1816,11 @@ function commandOutputText(raw: unknown): string {
 
 /**
  * Split a summary into a bold action and a muted target, which is how the row
- * scans: what happened, then what it happened to. A command becomes its binary
- * plus its arguments; anything without a natural split keeps its whole label.
+ * scans: what happened, then what it happened to. Read/search/vcs commands keep
+ * their intent labels; any other command names what ran — binary plus args —
+ * with `hover` carrying the untouched full text for the title attribute.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string; hover?: string } {
 	if (activity.activityKind === "command") {
 		const rawCommand = activity.detail?.command ?? activity.summary;
 		const category = commandCategory(rawCommand);
@@ -1813,7 +1829,13 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 			if (category === "search") return { label: "Search" };
 			return { label: count && count > 1 ? "Read files" : "Read file" };
 		}
-		return { label: category === "vcs" ? "Checked repository" : "Ran command" };
+		if (category === "vcs") return { label: "Checked repository" };
+		// "Ran command" tells the reader nothing; the row says what ran. The
+		// label collapses to one line — the full text stays on hover and in
+		// the expanded body.
+		const full = rawCommand.replace(/\s+/g, " ").trim();
+		if (!full) return { label: "Ran command" };
+		return { label: truncateCommandLabel(full), hover: full };
 	}
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
@@ -1823,6 +1845,12 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 		};
 	}
 	return { label: activity.summary };
+}
+
+/** One line for the row label: ≤72 chars, a single ellipsis when cut. */
+function truncateCommandLabel(command: string): string {
+	if (command.length <= 72) return command;
+	return `${command.slice(0, 71).trimEnd()}…`;
 }
 
 function ActivityState({
@@ -2086,10 +2114,13 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const server = detail?.server ?? detail?.namespace;
 	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
+	// Null counts as absent here: historical details store a missing payload as
+	// JSON null, and `null !== undefined` is true — a row with only nulls was
+	// expandable and opened onto a literal "null".
 	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
-			detail?.result !== undefined ||
-			detail?.content !== undefined ||
+			detail?.arguments != null ||
+			detail?.result != null ||
+			detail?.content != null ||
 			detail?.error ||
 			detail?.progress,
 	);
@@ -2154,13 +2185,13 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							{detail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
+					{detail?.arguments != null ? (
 						<JsonPayload label="Arguments" value={detail.arguments} />
 					) : null}
-					{detail?.result !== undefined ? (
+					{detail?.result != null ? (
 						<JsonPayload label="Result" value={detail.result} />
 					) : null}
-					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+					{detail?.content != null ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-caption text-muted-foreground/70">

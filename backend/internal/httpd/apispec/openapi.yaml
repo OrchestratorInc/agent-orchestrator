@@ -18850,7 +18850,7 @@ components:
       type: object
     PromoteQueuedTurnResponse:
       properties:
-        activityId:
+        interruptedTurnId:
           type: string
         providerTurnId:
           type: string
@@ -18859,7 +18859,6 @@ components:
       required:
       - sourceTurnId
       - providerTurnId
-      - activityId
       type: object
     ProviderSwitchRequest:
       properties:
@@ -21478,6 +21477,8 @@ components:
           type: string
         duplicate:
           type: boolean
+        interruptedTurnId:
+          type: string
         outcome:
           enum:
           - steered

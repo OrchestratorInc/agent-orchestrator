@@ -838,22 +838,34 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	// The detail is rewritten on every tool update and carried by every snapshot,
 	// so a page an agent hands html_render and the screenshot html_preview hands
 	// back are not stored whole, and neither is output or a diff that a provider
-	// re-sends in full on every update.
+	// re-sends in full on every update. Absent fields stay absent: a missing
+	// input or content stored as JSON null reached the timeline as a literal
+	// "null" body, which reads as data when it is only absence. The call's input
+	// is stored under the neutral mcp_tool key `arguments` — the key clients
+	// render.
 	output, outputCut := commanddetail.TailChars(output, commanddetail.MaxOutputChars)
-	var content any = contentWithoutImageData(tool.content)
-	if activityKind != domain.ActivityKindMCPTool {
-		// Only an MCP-style row renders its content, and for a read or a fetch that
-		// is all the timeline shows of the result. Other rows render other fields (a
-		// command its output, a file change its files), so their content is held to
-		// the tool payload cap.
-		content = cappedPayload(content)
-	}
 	detailMap := map[string]any{
-		"protocol": "acp", "toolKind": tool.kind, "locations": tool.locations,
-		"input": cappedPayload(tool.rawInput), "output": output, "content": content,
+		"protocol": "acp", "toolKind": tool.kind, "output": output,
 	}
 	if outputCut {
 		detailMap["outputTruncated"] = true
+	}
+	if input := cappedPayload(tool.rawInput); input != nil {
+		detailMap["arguments"] = input
+	}
+	if len(tool.locations) > 0 {
+		detailMap["locations"] = tool.locations
+	}
+	if len(tool.content) > 0 {
+		content := any(contentWithoutImageData(tool.content))
+		if activityKind != domain.ActivityKindMCPTool {
+			// Only an MCP-style row renders its content, and for a read or a fetch that
+			// is all the timeline shows of the result. Other rows render other fields (a
+			// command its output, a file change its files), so their content is held to
+			// the tool payload cap.
+			content = cappedPayload(content)
+		}
+		detailMap["content"] = content
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -1029,12 +1041,16 @@ func acpPatch(path string, oldLines, newLines []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// cappedPayload keeps a tool payload (its input, or content its row does not
+// cappedPayload keeps a tool payload (its arguments, or content its row does not
 // render) only while it fits the tool payload cap, as the Codex driver does for
-// MCP arguments and results.
+// MCP arguments and results. A payload the provider never sent stays absent —
+// nil, never JSON null — so the detail carries no key whose value reads as data.
 func cappedPayload(raw any) any {
+	if raw == nil {
+		return nil
+	}
 	encoded, err := json.Marshal(raw)
-	if err != nil {
+	if err != nil || string(encoded) == "null" {
 		return nil
 	}
 	return commanddetail.TruncatedJSON(encoded)

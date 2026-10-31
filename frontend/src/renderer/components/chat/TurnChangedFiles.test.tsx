@@ -463,18 +463,18 @@ describe("ActivityRow command labels", () => {
 		expect(screen.queryByText(/sed -n/)).not.toBeInTheDocument();
 	});
 
-	it("describes execution compactly, then reveals the exact command", async () => {
+	it("names the command in the collapsed row, then repeats it verbatim with its output", async () => {
 		const user = userEvent.setup();
 		render(
 			<ActivityRow
 				activity={commandActivity({ command: "go test ./...", output: "ok" }, "completed")}
 			/>,
 		);
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
-		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
-
-		await user.click(screen.getByRole("button", { name: /Ran command/ }));
+		// The collapsed label is the command itself — "Ran command" said nothing.
 		expect(screen.getByText("go test ./...")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: /go test/ }));
+		expect(screen.getByText("go test ./...", { selector: "pre" })).toBeInTheDocument();
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
 
@@ -486,12 +486,52 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 
-		const row = screen.getByRole("button", { name: /Ran command/ });
+		const row = screen.getByRole("button", { name: /printf "%s" "hello world"/ });
 		expect(row).toBeEnabled();
-		expect(screen.queryByText(`printf "%s" "hello world"`)).not.toBeInTheDocument();
+		expect(
+			screen.queryByText(`printf "%s" "hello world"`, { selector: "pre" }),
+		).not.toBeInTheDocument();
 
 		await user.click(row);
-		expect(screen.getByText(`printf "%s" "hello world"`)).toBeInTheDocument();
+		expect(
+			screen.getByText(`printf "%s" "hello world"`, { selector: "pre" }),
+		).toBeInTheDocument();
+	});
+
+	it("truncates a long command with a single ellipsis and keeps the full text on hover and in the body", async () => {
+		const user = userEvent.setup();
+		const command =
+			"docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace builder:latest make test";
+		render(<ActivityRow activity={commandActivity({ command }, "completed")} />);
+
+		const label = screen.getByText(/…/);
+		expect(label.textContent?.length).toBeLessThanOrEqual(72);
+		expect(label.closest("strong")).toHaveAttribute("title", command);
+
+		await user.click(screen.getByRole("button", { name: /…/ }));
+		expect(screen.getByText(command, { selector: "pre" })).toBeInTheDocument();
+	});
+
+	it("keeps the friendly label for search commands", () => {
+		render(
+			<ActivityRow
+				activity={commandActivity(
+					{ command: "rg 'tool calls' src/renderer", output: "3 hits" },
+					"completed",
+				)}
+			/>,
+		);
+		expect(screen.getByText("Search")).toBeInTheDocument();
+		expect(screen.queryByText(/rg /)).not.toBeInTheDocument();
+	});
+
+	it("collapses a multiline command to one label line", () => {
+		render(
+			<ActivityRow
+				activity={commandActivity({ command: "echo one \\\n  && echo two" }, "completed")}
+			/>,
+		);
+		expect(screen.getByText("echo one \\ && echo two")).toBeInTheDocument();
 	});
 
 	it("uses the same compact treatment as a grouped command summary", () => {

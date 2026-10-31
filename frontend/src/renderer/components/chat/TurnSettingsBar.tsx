@@ -69,6 +69,17 @@ const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: str
 	"bypass-permissions": { label: "Auto-approve" },
 };
 
+// Hermes' default mode governs only its file-edit tool; ordinary shell commands
+// still run without asking, so the copy states what Default actually asks
+// about instead of reading stronger than Hermes behaves.
+const HERMES_APPROVAL_COPY: Record<ApprovalMode, { label: string; description: string }> = {
+	...APPROVAL_COPY,
+	default: {
+		label: "Use agent permissions",
+		description: "Asks before file edits; shell commands run without asking",
+	},
+};
+
 // Codex has three distinct permission profiles. Its default is already full
 // access in AO's isolated worktree posture, so expose it as that rather than a
 // fourth, ambiguous "default" option.
@@ -219,7 +230,11 @@ export function TurnSettingsBar({
 			? settings.reasoningEffort
 			: (selected ?? fallback)?.defaultEffort;
 	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
-	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
+	const approvalCopy =
+		harness === "codex" ? CODEX_APPROVAL_COPY
+		: harness === "agy" ? AGY_APPROVAL_COPY
+		: harness === "hermes" ? HERMES_APPROVAL_COPY
+		: APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const approvalUnavailable = (mode: ApprovalMode) =>

@@ -396,13 +396,13 @@ describe("ChatWorkspace steering", () => {
 		expect(screen.queryByText("Queue")).not.toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-1")).getAllByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toHaveLength(1);
 
 		await userEvent.click(
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		);
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-2");
@@ -543,12 +543,12 @@ describe("ChatWorkspace steering", () => {
 		expect(within(dock).queryByText("Queue")).not.toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toBeInTheDocument();
 	});

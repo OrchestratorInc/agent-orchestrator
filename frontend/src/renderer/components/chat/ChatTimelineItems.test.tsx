@@ -13,7 +13,7 @@ import {
 } from "./ChatTimelineItems";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -587,6 +587,87 @@ describe("ActivityRow", () => {
 		expect(screen.getByText("outcome unknown")).toBeInTheDocument();
 		expect(screen.queryByText("failed")).not.toBeInTheDocument();
 	});
+
+	// Historical daemon builds stored a tool call with no payload as JSON null,
+	// and `null !== undefined` made the row expandable onto a literal "null".
+	// A hermes delegate call ("Agent tool" with no content) is the live case.
+	// The cast is the point: the type does not admit what old daemons stored.
+	it("treats null tool payloads as absent instead of rendering them", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "agent-call", sequence: 1, revision: 1, createdAt: "2026-10-23T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+				detail: { arguments: null, result: null, content: null } as ConversationActivity["detail"],
+			}} />,
+		);
+		expect(screen.getByText("Agent tool")).toBeInTheDocument();
+		expect(screen.queryByText("null")).not.toBeInTheDocument();
+		expect(screen.getByRole("button")).toBeDisabled();
+		expect(screen.getByRole("button")).not.toHaveAttribute("aria-expanded");
+	});
+
+	it("opens an mcp_tool row onto its arguments when the daemon stored them", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "agent-call", sequence: 1, revision: 1, createdAt: "2026-10-23T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+				detail: { arguments: { task: "fix the flaky test" } },
+			}} />,
+		);
+		expect(screen.getByRole("button")).toBeEnabled();
+		act(() => screen.getByRole("button").click());
+		expect(screen.getByText("Arguments")).toBeInTheDocument();
+		expect(screen.getByText(/fix the flaky test/)).toBeInTheDocument();
+	});
+});
+
+describe("ActivityRow command labels", () => {
+	function commandActivity(
+		detail: ConversationActivity["detail"],
+		status: ConversationActivity["status"] = "completed",
+	): ConversationActivity {
+		return {
+			kind: "activity",
+			id: "cmd-1",
+			sequence: 1,
+			revision: 1,
+			activityKind: "command",
+			status,
+			summary: "go test ./...",
+			detail,
+			createdAt: "2026-08-24T00:00:00Z",
+		};
+	}
+
+	it("shows the command itself as the collapsed row label", () => {
+		render(
+			<ActivityRow activity={commandActivity({ command: "go test ./internal/..." }, "completed")} />,
+		);
+		expect(screen.getByText("go test ./internal/...")).toBeInTheDocument();
+		expect(screen.queryByText("Ran command")).not.toBeInTheDocument();
+	});
+
+	it("expands to the full command and its output while keeping the failed tag red", () => {
+		render(
+			<ActivityRow
+				activity={commandActivity({ command: "go test ./internal/...", output: "FAIL pkg" }, "failed")}
+			/>,
+		);
+		act(() => screen.getByRole("button", { name: /go test/ }).click());
+		expect(screen.getByText("go test ./internal/...", { selector: "pre" })).toBeInTheDocument();
+		expect(screen.getByText("FAIL pkg")).toBeInTheDocument();
+		expect(screen.getByText("failed")).toHaveClass("text-destructive");
+	});
+
+	it("truncates a long command to one line and keeps the full text on hover", () => {
+		const command =
+			"docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace builder:latest make test";
+		render(<ActivityRow activity={commandActivity({ command }, "completed")} />);
+
+		const label = screen.getByText(/…/);
+		expect(label.textContent?.length).toBeLessThanOrEqual(72);
+		expect(label.closest("strong")).toHaveAttribute("title", command);
+	});
 });
 
 describe("HumanMessage", () => {
@@ -625,5 +706,69 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+});
+
+describe("expand/collapse affordances", () => {
+	const commandActivity = {
+		kind: "activity" as const,
+		id: "cmd-1",
+		sequence: 1,
+		revision: 0,
+		createdAt: "2026-08-23T00:00:00Z",
+		activityKind: "command" as const,
+		status: "completed" as const,
+		summary: "Ran command",
+		detail: {
+			command: "npm run build -- --mode production --sourcemap true",
+			output: "built in 4.2s",
+		},
+	};
+
+	it("collapses an expanded command row on Escape", async () => {
+		render(<ActivityRow activity={commandActivity} />);
+		const toggle = screen.getByRole("button");
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("built in 4.2s")).toBeInTheDocument();
+
+		fireEvent.keyDown(toggle, { key: "Escape" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		// The exit animation unmounts the body a frame later.
+		await waitFor(() => expect(screen.queryByText("built in 4.2s")).not.toBeInTheDocument());
+	});
+
+	it("wraps and exposes the full command instead of scrolling it", () => {
+		render(<ActivityRow activity={commandActivity} />);
+		const toggle = screen.getByRole("button");
+		fireEvent.click(toggle);
+
+		const body = document.querySelector("pre.cursor-chat-explore-command");
+		expect(body).not.toBeNull();
+		expect(body?.className).toContain("whitespace-pre-wrap");
+		expect(body?.className).toContain("select-text");
+		expect(body?.className).not.toContain("overflow-x-auto");
+	});
+
+	it("keeps a failed row's destructive styling in both states", () => {
+		render(
+			<ActivityRow
+				activity={{
+					...commandActivity,
+					id: "cmd-failed",
+					status: "failed",
+					detail: { command: "cargo build --release", output: "error: could not compile" },
+				}}
+			/>,
+		);
+		const toggle = screen.getByRole("button");
+		const chip = () => toggle.querySelector(".text-destructive");
+		expect(chip()).not.toBeNull();
+		expect(chip()).toHaveTextContent("failed");
+
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(chip()).not.toBeNull();
+		expect(chip()).toHaveTextContent("failed");
 	});
 });

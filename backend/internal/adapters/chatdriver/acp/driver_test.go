@@ -887,7 +887,7 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 					"sessionCapabilities": map[string]any{"resume": map[string]any{}},
 				},
 			}
-		case "session/new":
+		case "session/new", "session/resume":
 			currentModel := agent.currentModel
 			availableModels := agent.availableModels
 			if currentModel == "" {
@@ -3066,8 +3066,8 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	if detail["rawCommand"] != "/bin/zsh -lc 'ao session ls'" {
 		t.Fatalf("detail.rawCommand = %#v, want the verbatim provider command", detail["rawCommand"])
 	}
-	if detail["input"] == nil {
-		t.Fatalf("detail.input dropped: %#v", detail)
+	if detail["arguments"] == nil {
+		t.Fatalf("detail.arguments dropped: %#v", detail)
 	}
 }
 
@@ -3095,15 +3095,26 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
 			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
 		}
-		var detail struct {
-			Input map[string]any `json:"input"`
-		}
-		if err := json.Unmarshal(raw, &detail); err != nil {
-			t.Fatal(err)
-		}
-		if detail.Input["truncated"] != true {
-			t.Fatalf("%s input = %v, want the truncation marker", name, detail.Input)
-		}
+	}
+	// The tool event stores the call's input under the neutral `arguments` key;
+	// the approval card keeps the provider-shaped `input`.
+	var toolDetail struct {
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal(event.Detail, &toolDetail); err != nil {
+		t.Fatal(err)
+	}
+	if toolDetail.Arguments["truncated"] != true {
+		t.Fatalf("tool arguments = %v, want the truncation marker", toolDetail.Arguments)
+	}
+	var approvalDetail struct {
+		Input map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(approval, &approvalDetail); err != nil {
+		t.Fatal(err)
+	}
+	if approvalDetail.Input["truncated"] != true {
+		t.Fatalf("approval input = %v, want the truncation marker", approvalDetail.Input)
 	}
 	var detail struct {
 		Content []json.RawMessage `json:"content"`
@@ -3119,6 +3130,27 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	}
 	if want := `[` + stub + `,{"text":"{\"width\":720}","type":"text"}]`; detail.Output != want {
 		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+// A tool call that carries no input and no content — hermes' delegate "Agent
+// tool" call is the live case — must not store JSON nulls in its detail: the
+// timeline expanded the row onto a literal "null" body, reading as data when
+// it is only absence.
+func TestACPToolDetailOmitsMissingInputAndContent(t *testing.T) {
+	tool := &toolState{id: "agent-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	var detail map[string]any
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"arguments", "input", "content", "locations"} {
+		if _, ok := detail[key]; ok {
+			t.Fatalf("detail.%s stored for a call with no input or content: %#v", key, detail)
+		}
+	}
+	if strings.Contains(string(event.Detail), "null") {
+		t.Fatalf("detail contains JSON null: %s", event.Detail)
 	}
 }
 
@@ -3157,16 +3189,16 @@ func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
 		content:  []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(file))},
 	}
 	var detail struct {
-		Input   map[string]any           `json:"input"`
-		Content []acpsdk.ToolCallContent `json:"content"`
+		Arguments map[string]any           `json:"arguments"`
+		Content   []acpsdk.ToolCallContent `json:"content"`
 	}
 	if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Input["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
+	if detail.Arguments["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
 		detail.Content[0].Content == nil || detail.Content[0].Content.Content.Text == nil ||
 		detail.Content[0].Content.Content.Text.Text != file {
-		t.Fatalf("read detail changed: input=%v content=%+v", detail.Input, detail.Content)
+		t.Fatalf("read detail changed: arguments=%v content=%+v", detail.Arguments, detail.Content)
 	}
 }
 
@@ -3357,6 +3389,65 @@ func TestACPDriverMapsCostRateLimitsAndAuthRecovery(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+// A binding may restate a session/prompt error in the user's terms, but an
+// authentication refusal keeps its sentinel so reauthentication still works.
+func TestACPDriverRestatesPromptErrorThroughBinding(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	var calls int
+	driver := New(Config{
+		Harness:      domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		PromptErrorFailure: func(err error, _ bool) error {
+			calls++
+			return ports.NewChatProviderFailure("The agent could not finish this turn", "", err)
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	completion := func(promptErr error) ports.ChatEvent {
+		t.Helper()
+		agent.mu.Lock()
+		agent.promptErr = promptErr
+		agent.mu.Unlock()
+		ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatalf("StartDeferredTurn: %v", err)
+		}
+		for {
+			if event := nextEvent(t, opened.Events()); event.Kind == ports.ChatEventTurnCompleted {
+				return event
+			}
+		}
+	}
+
+	failed := completion(acpsdk.NewInternalError(map[string]any{"details": "admitted_turn_failed"}))
+	if failed.TurnState != domain.TurnStateFailed || failed.Err == nil || failed.Err.Error() != "The agent could not finish this turn" {
+		t.Fatalf("completion = (%q, %v), want the binding's failure", failed.TurnState, failed.Err)
+	}
+	if calls != 1 {
+		t.Fatalf("PromptErrorFailure calls = %d, want 1", calls)
+	}
+
+	refused := completion(acpsdk.NewAuthRequired(nil))
+	if !errors.Is(refused.Err, ports.ErrChatAuthRequired) {
+		t.Fatalf("auth refusal completion error = %v, want ErrChatAuthRequired", refused.Err)
+	}
+	if calls != 1 {
+		t.Fatalf("PromptErrorFailure ran for an authentication refusal")
 	}
 }
 
@@ -3623,6 +3714,67 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	}
 }
 
+// A binding whose agent's session modes are pure approval policies suppresses
+// the provider mode list: AO renders its own permission picker instead, and the
+// dropped catalog must not shadow it with a second copy of the same setting.
+func TestACPDriverSuppressSessionModesDropsLegacyModeOption(t *testing.T) {
+	agent := &legacyKimiAgent{}
+	driver := New(Config{
+		Harness:              domain.HarnessKimi,
+		Capabilities:         ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:                func(context.Context) error { return nil },
+		Launch:               func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SuppressSessionModes: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "kimi-code/kimi-for-coding",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	options, err := conv.(ports.ChatConfigOptionController).ListConfigOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigOptions: %v", err)
+	}
+	if len(options) != 1 || options[0].ID != "model" {
+		t.Fatalf("suppressed options = %#v, want the model option only", options)
+	}
+}
+
+// The same approval policy often rides a proper config option too — current
+// Hermes sends `edit_approval_policy` under category "mode" beside its legacy
+// session-mode list — so the suppression must cover that surface as well, or
+// the composer still renders the provider's three policies beside AO's four
+// permission modes.
+func TestDriverSuppressSessionModesDropsModeCategoryConfigOptions(t *testing.T) {
+	mode := acpsdk.SessionConfigOptionCategoryMode
+	model := acpsdk.SessionConfigOptionCategoryModel
+	thought := acpsdk.SessionConfigOptionCategoryThoughtLevel
+	catalog := []acpsdk.SessionConfigOption{
+		{Select: &acpsdk.SessionConfigOptionSelect{
+			Category: &mode, Id: "edit_approval_policy", Name: "Edits", CurrentValue: "ask",
+		}},
+		{Select: &acpsdk.SessionConfigOptionSelect{
+			Category: &model, Id: "model", Name: "Model", CurrentValue: "zai:glm-5.3-flash",
+		}},
+		{Boolean: &acpsdk.SessionConfigOptionBoolean{
+			Category: &thought, Id: "reasoning", Name: "Reasoning", CurrentValue: false,
+		}},
+	}
+	driver := New(Config{SuppressSessionModes: true}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got := driver.suppressedModeOptions(catalog)
+	if len(got) != 2 || got[0].Select == nil || got[0].Select.Id != "model" || got[1].Boolean == nil {
+		t.Fatalf("suppressed catalog = %#v, want the mode-category select dropped and the rest kept", got)
+	}
+	if kept := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil))).suppressedModeOptions(catalog); len(kept) != 3 {
+		t.Fatalf("unsuppressed catalog = %#v, want every option kept", kept)
+	}
+}
+
 func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",
@@ -3833,6 +3985,101 @@ func TestResolveLegacyModelChoiceDistinguishesThinkingVariants(t *testing.T) {
 	}
 }
 
+// Hermes advertises provider-prefixed ids (auto:anthropic/claude-opus-4.6,
+// openrouter:anthropic/claude-opus-4.6) while its configuration names the bare
+// model. A bare value resolves through the provider-prefixed suffix, preferring
+// the auto: row when several providers list the same model.
+func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing.T) {
+	hermes := []ports.ChatConfigOptionChoice{
+		{Value: "auto:anthropic/claude-opus-4.6"},
+		{Value: "openrouter:anthropic/claude-opus-4.6"},
+		{Value: "gemini:gemini-3.8-flash"},
+		{Value: "auto:openrouter/gpt-5.6"},
+	}
+	tests := []struct {
+		name      string
+		choices   []ports.ChatConfigOptionChoice
+		requested string
+		want      string
+	}{
+		{
+			name:      "bare config model resolves to the auto-prefixed advertised id",
+			choices:   hermes,
+			requested: "anthropic/claude-opus-4.6",
+			want:      "auto:anthropic/claude-opus-4.6",
+		},
+		{
+			name:      "bare model with a single provider match resolves to it",
+			choices:   hermes,
+			requested: "gemini-3.8-flash",
+			want:      "gemini:gemini-3.8-flash",
+		},
+		{
+			name:      "an exact advertised id still wins",
+			choices:   hermes,
+			requested: "openrouter:anthropic/claude-opus-4.6",
+			want:      "openrouter:anthropic/claude-opus-4.6",
+		},
+		{
+			name:      "a partial suffix is not a match",
+			choices:   hermes,
+			requested: "claude-opus-4.5",
+			want:      "",
+		},
+		{
+			name: "two providers without an auto row stay ambiguous",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:gpt-5.6"},
+				{Value: "azure:gpt-5.6"},
+			},
+			requested: "gpt-5.6",
+			want:      "",
+		},
+		{
+			name: "an auto row wins over several provider collisions",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:gpt-5.6"},
+				{Value: "azure:gpt-5.6"},
+				{Value: "auto:gpt-5.6"},
+			},
+			requested: "gpt-5.6",
+			want:      "auto:gpt-5.6",
+		},
+		{
+			name: "a stored auto id resolves to the provider row a loaded session offers",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:anthropic/claude-opus-4.6"},
+				{Value: "gemini:gemini-3.8-flash"},
+			},
+			requested: "auto:anthropic/claude-opus-4.6",
+			want:      "openrouter:anthropic/claude-opus-4.6",
+		},
+		{
+			name: "a stored auto id with two provider rows stays ambiguous",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:anthropic/claude-opus-4.6"},
+				{Value: "copilot:anthropic/claude-opus-4.6"},
+			},
+			requested: "auto:anthropic/claude-opus-4.6",
+			want:      "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolveLegacyModelChoice(tt.choices, tt.requested)
+			if tt.want == "" {
+				if ok {
+					t.Fatalf("resolveLegacyModelChoice(%q) = %q, true; want rejection", tt.requested, got)
+				}
+				return
+			}
+			if !ok || got != tt.want {
+				t.Fatalf("resolveLegacyModelChoice(%q) = %q, %v; want %q, true", tt.requested, got, ok, tt.want)
+			}
+		})
+	}
+}
+
 func TestACPDriverRejectsLegacyModelAliasWithoutAdvertisedModelCatalog(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",
@@ -3899,6 +4146,79 @@ func TestACPDriverRejectsAmbiguousLegacyModelAlias(t *testing.T) {
 	agent.mu.Unlock()
 	if calls != 0 {
 		t.Fatalf("legacy model setter called %d times, want 0", calls)
+	}
+}
+
+// The composer sends Hermes' bare configured model while the legacy session
+// selector only advertises provider-prefixed ids. The launch must translate the
+// bare value to the auto:-prefixed advertised id before session/set_model.
+func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "openrouter:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "auto:anthropic/claude-opus-4.6", Name: "Anthropic · anthropic/claude-opus-4.6"},
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "OpenRouter · anthropic/claude-opus-4.6"},
+		},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "anthropic/claude-opus-4.6",
+	})
+	if err != nil {
+		t.Fatalf("Start with bare config model: %v", err)
+	}
+	defer conv.Close()
+	agent.mu.Lock()
+	model, calls := agent.model, agent.modelCalls
+	agent.mu.Unlock()
+	if calls != 1 || model != "auto:anthropic/claude-opus-4.6" {
+		t.Fatalf("session/set_model = (%q, %d calls), want the auto:-prefixed advertised id set once", model, calls)
+	}
+}
+
+// A composer start stores Hermes' auto:<model> id, but a restored session
+// offers the provider row auto: resolved to instead. Resume must re-resolve the
+// stored id rather than fail the restore with an unoffered model.
+func TestACPDriverResumesStoredAutoModelAgainstResolvedProviderRow(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "openrouter:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "OpenRouter · anthropic/claude-opus-4.6"},
+			{ModelID: "gemini:gemini-3.8-flash", Name: "Gemini · gemini-3.8-flash"},
+		},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+		},
+		Probe:  func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		WorkspacePath: t.TempDir(), ProviderConversationID: "kimi-session-1",
+		Model: "auto:anthropic/claude-opus-4.6",
+	})
+	if err != nil {
+		t.Fatalf("Resume with stored auto: model: %v", err)
+	}
+	defer conv.Close()
+	agent.mu.Lock()
+	calls := agent.modelCalls
+	agent.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("session/set_model calls = %d, want none: the restored provider row is already current", calls)
 	}
 }
 
@@ -4160,6 +4480,48 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 	if agent.promptParams.Prompt != nil {
 		t.Fatalf("discovery sent a prompt: %#v", agent.promptParams)
+	}
+}
+
+// Discovery must read the legacy `models` session/new field. Hermes sends no
+// configOptions and lists its whole catalog under `models`, so the composer's
+// picker offered only the configured model before launch (review comment
+// 4365736482 on PR #6635).
+func TestDiscoverConfigOptionsReadsLegacyModels(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "auto:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "auto:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (auto)"},
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (OpenRouter)"},
+		},
+	}
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "hermes", Args: []string{"acp"}}, nil
+		},
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model *ports.ChatConfigOption
+	for i := range got {
+		if got[i].ID == "model" {
+			model = &got[i]
+		}
+	}
+	if model == nil {
+		t.Fatalf("options = %#v, want the legacy model catalog", got)
+	}
+	if model.Current.Select != "auto:anthropic/claude-opus-4.6" || len(model.Choices) != 2 {
+		t.Fatalf("model option = %#v, want both advertised models with the current one selected", model)
+	}
+	if model.Choices[0].Value != "auto:anthropic/claude-opus-4.6" ||
+		model.Choices[1].Value != "openrouter:anthropic/claude-opus-4.6" {
+		t.Fatalf("model choices = %#v, want the advertised ids", model.Choices)
 	}
 }
 
@@ -5283,5 +5645,61 @@ func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 	want := []turn{{"Hi how are you", "Doing well."}, {"What did I ask?", "You asked how I am."}}
 	if !reflect.DeepEqual(turns, want) {
 		t.Fatalf("replayed turns = %+v, want %+v", turns, want)
+	}
+}
+
+// A shell-executing agent bound to the session workspace (hermes) reaches every
+// child directory from its cwd, so a multi-repo workspace's additional
+// directories need no ACP capability: they are dropped, not sent, and the
+// session starts instead of failing.
+func TestACPDriverImplicitWorkspaceDirectoriesStartsWithoutProviderSupport(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(Config{
+		Harness:                      domain.HarnessHermes,
+		Capabilities:                 ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:                        func(context.Context) error { return nil },
+		Launch:                       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ImplicitWorkspaceDirectories: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	root := t.TempDir()
+	extra := t.TempDir()
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath:         root,
+		AdditionalDirectories: []string{extra},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	newParams := agent.newParams
+	agent.mu.Unlock()
+	if len(newParams.AdditionalDirectories) != 0 {
+		t.Fatalf("additional directories = %#v, want none sent", newParams.AdditionalDirectories)
+	}
+}
+
+// An agent that sandboxes file access to its declared roots and does not
+// advertise additional-directories support still fails a multi-repo spawn:
+// silently dropping the directories would hide work the agent cannot reach.
+func TestACPDriverUnsupportedAdditionalDirectoriesStillFail(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath:         t.TempDir(),
+		AdditionalDirectories: []string{t.TempDir()},
+	})
+	if err == nil || !strings.Contains(err.Error(), "additional workspace directories") {
+		t.Fatalf("Start err = %v, want the additional-directories refusal", err)
 	}
 }

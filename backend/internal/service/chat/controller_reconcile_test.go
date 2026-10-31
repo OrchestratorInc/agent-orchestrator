@@ -76,3 +76,65 @@ func TestReconcileNativeHistoryUsesLegacyAliasForAttachmentOnlyUserTurn(t *testi
 		}
 	}
 }
+
+// Hermes' session/load replay carries id-less chunks, stripped reply text, and
+// the failed-turn boundary row on interrupted turns, under turn ids the live
+// projection never used. The stored completed turn must absorb the stripped
+// reply (boundary whitespace differs) without a duplicate, and the interrupted
+// turn must not gain a replayed reply on top.
+func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
+	const completedReply = "Answer one.\n"
+	const interruptedPrompt = "Do turn two."
+	events := []ports.ChatEvent{
+		{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "acp-history-turn:replay-1"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			ClientMessageID: "user-1", Text: "What is X?"},
+		{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			ProviderItemID: "assistant-1", Text: "Answer one."},
+		{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "acp-history-turn:replay-1",
+			TurnState: domain.TurnStateRecovered},
+		{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "acp-history-turn:replay-2"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "acp-history-turn:replay-2",
+			ClientMessageID: "user-2", Text: interruptedPrompt},
+		{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "acp-history-turn:replay-2",
+			TurnState: domain.TurnStateRecovered},
+	}
+	existingTurns := []domain.ConversationTurn{
+		{ID: "ao-turn-1", ProviderTurnID: "live-turn-1", State: domain.TurnStateCompleted},
+		{ID: "ao-turn-2", ProviderTurnID: "live-turn-2", State: domain.TurnStateInterrupted},
+	}
+	existingMessages := []domain.ConversationMessage{
+		{TurnID: "ao-turn-1", Role: domain.MessageRoleUser, ClientMessageID: "live-client-1", Text: "What is X?"},
+		{TurnID: "ao-turn-1", Role: domain.MessageRoleAssistant, ProviderItemID: "live-assistant-1", Text: completedReply},
+		{TurnID: "ao-turn-2", Role: domain.MessageRoleUser, ClientMessageID: "live-client-2", Text: interruptedPrompt},
+	}
+
+	got := reconcileNativeHistory(events, existingTurns, existingMessages, nil)
+	byTurn := map[string][]ports.ChatEvent{}
+	for _, event := range got {
+		byTurn[event.ProviderTurnID] = append(byTurn[event.ProviderTurnID], event)
+	}
+	if len(byTurn["live-turn-1"]) != 2 {
+		t.Fatalf("completed turn kept %d events, want only the boundaries: %#v",
+			len(byTurn["live-turn-1"]), byTurn["live-turn-1"])
+	}
+	for _, event := range byTurn["live-turn-1"] {
+		if event.Kind == ports.ChatEventTurnCompleted && event.TurnState != domain.TurnStateCompleted {
+			t.Fatalf("recovered completion not upgraded to AO's known state: %#v", event)
+		}
+	}
+	// The interrupted turn keeps its user prompt, its recovered completion is
+	// corrected, and no replayed reply is added on top.
+	if len(byTurn["live-turn-2"]) != 2 {
+		t.Fatalf("interrupted turn kept %d events, want only the boundaries: %#v",
+			len(byTurn["live-turn-2"]), byTurn["live-turn-2"])
+	}
+	for _, event := range byTurn["live-turn-2"] {
+		if event.Kind == ports.ChatEventTurnCompleted && event.TurnState != domain.TurnStateInterrupted {
+			t.Fatalf("interrupted completion rewritten to %q", event.TurnState)
+		}
+	}
+	if _, extra := byTurn["acp-history-turn:replay-2"]; extra {
+		t.Fatal("replay turn imported as a duplicate of the interrupted turn")
+	}
+}

@@ -6607,7 +6607,7 @@ export interface components {
             sessionPrefix: string;
         };
         PromoteQueuedTurnResponse: {
-            activityId: string;
+            interruptedTurnId?: string;
             providerTurnId: string;
             sourceTurnId: string;
         };
@@ -7652,6 +7652,7 @@ export interface components {
         SteerOrSendConversationResponse: {
             activityId?: string;
             duplicate: boolean;
+            interruptedTurnId?: string;
             /** @enum {string} */
             outcome: "steered" | "sent";
             providerTurnId?: string;

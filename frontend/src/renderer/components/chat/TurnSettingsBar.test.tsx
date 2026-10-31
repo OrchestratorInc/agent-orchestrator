@@ -834,8 +834,27 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
-	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {
+	// Hermes' default session mode governs only its file-edit tool; ordinary
+	// shell commands still run without asking, so the hint copy must not read
+	// stronger than Hermes behaves.
+	it("describes what Hermes' Default actually gates in the approval menu", async () => {
+		const user = userEvent.setup();
 		render(
+			<TurnSettingsBar
+				harness="hermes"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		expect(screen.getByText("Asks before file edits; shell commands run without asking")).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(
 			<TurnSettingsBar
 				harness="codex"
 				models={[{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }]}
