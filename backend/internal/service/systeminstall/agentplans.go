@@ -237,7 +237,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{manualPlan(target, "fx publishes this installer for macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetOMP:
-		official := s.officialByOS(target, "https://omp.sh/install", "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, ompInstallScriptURL, "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrew(target, "can1357/tap/omp"), s.planBun(target), official}
 		} else {
@@ -311,7 +311,7 @@ func (s *Service) resolveAgentMethod(target Target, method string) (Plan, error)
 
 func (s requestPlanner) resolveAgentMethod(target Target, method string, operation AgentOperation) (Plan, error) {
 	for _, plan := range s.agentMethodPlans(target, operation) {
-		if plan.Method != method {
+		if plan.ownershipMethod() != method {
 			continue
 		}
 		if plan.Unsupported {
@@ -372,11 +372,18 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
-		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method {
-			managed := plan
+		if record, ok := s.readManagedRecord(plan.Target); ok && s.managedRecordMatchesPlan(record, plan) {
+			managed := s.planManagedOMP(plan, record.Version)
+			if managed.Unsupported {
+				return managed
+			}
+			script := installScript
+			if managed.Script != nil {
+				script = managed.Script
+			}
 			// A release the vendor's installer put there is reinstalled with
 			// that installer (for a Codex cask, its official one, not brew).
-			if script, ok := s.officialManagedScript(plan, installScript); ok {
+			if script, ok := s.officialManagedScript(managed, script); ok {
 				managed.Script = script
 			}
 			if s.managedEligible(managed) {
@@ -415,6 +422,13 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	}
 
 	if operation == AgentOperationUpdate {
+		plan = s.planManagedOMP(plan, "")
+		if plan.Unsupported {
+			return plan
+		}
+		if plan.Script != nil {
+			installScript, plan.Script = plan.Script, nil
+		}
 		switch plan.Method {
 		case "homebrew":
 			// A cask whose upgrade would delete files running sessions load is
@@ -486,6 +500,31 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	}
 
 	return plan
+}
+
+// planManagedOMP discloses the standalone installer before a Bun-owned OMP
+// update or managed reinstall is approved. New OMP releases may require a
+// newer Bun; the isolated binary avoids changing the working copy's runtime.
+func (s requestPlanner) planManagedOMP(plan Plan, pin string) Plan {
+	if plan.Target != TargetOMP || plan.Method != "bun" || s.managedRoot == "" || (s.goos != "darwin" && s.goos != "linux") {
+		return plan
+	}
+	standalone := s.planShellInstaller(TargetOMP, ompInstallScriptURL, "sh")
+	standalone.sourceMethod, standalone.sourcePackage = plan.Method, plan.Package
+	standalone.DocsURL, standalone.Notice = plan.DocsURL, plan.Notice
+	if standalone.Unsupported {
+		return standalone
+	}
+	recipe, ok := s.officialManagedRecipeFor(standalone)
+	if !ok {
+		standalone.Unsupported = true
+		standalone.Reason = "OMP's standalone installer is unavailable."
+		return standalone
+	}
+	dir := filepath.Join(s.managedTargetDir(TargetOMP), "versions", "<next>")
+	standalone.Script.Args = recipe.args(dir, pin)
+	standalone.ExpectedDestination = filepath.Join(dir, recipe.binRel)
+	return standalone
 }
 
 // vendorUpdateCommands are the harnesses' own self-update commands, used only

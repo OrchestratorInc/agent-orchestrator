@@ -1300,6 +1300,16 @@ INSERT INTO conversation_messages (
     created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: IncrementUsageMessageSummary :exec
+INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
+SELECT sqlc.arg(session_id), 1, sqlc.arg(first_at), sqlc.arg(last_at) WHERE EXISTS (
+    SELECT 1 FROM sessions WHERE id = sqlc.arg(session_id) AND project_id IS NOT NULL
+)
+ON CONFLICT(session_id) DO UPDATE SET
+    pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
+    first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
+    last_at = excluded.last_at;
+
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key
 -- because AO does not know the message id the provider will use.

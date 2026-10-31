@@ -453,7 +453,7 @@ func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKin
 //
 // Whether the harness can run the result is checked afterwards. The cloud
 // control plane resolves a cloud session's interface with the same precedence
-// (cloud/internal/domain.StartInterface); both are tested against
+// (internal/domain.StartInterface in the private control plane); both are tested against
 // contracts/session-start-interface.json so they cannot drift.
 func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {

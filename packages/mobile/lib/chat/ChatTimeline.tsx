@@ -22,8 +22,10 @@ import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp, Spinning } from "../ui";
+import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { LatticeLoader } from "./LatticeLoader";
+import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
@@ -56,6 +58,7 @@ import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
@@ -376,7 +379,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
@@ -711,12 +714,20 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
+	// A plan activity is hidden when its turn carries a turn-level plan, so this row
+	// shows a plan whose turn has none: one AO could not match to a turn, such as a
+	// plan from before the controller started. With steps it is the same checklist,
+	// so it gets the same panel, drawn as the desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
+	// <step>", which repeats the header's count and current step. Not `live`
+	// either: the row is "running" while any step is unfinished, not while the
+	// turn runs, so an interrupted turn's plan would stay busy for good.
+	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />;
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			style={styles.planHeader}
 			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+			><Feather name="list-checks" size={17} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={16} color={t.textFaint} /></Pressable>{open ? <View style={styles.planBody}><Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text></View> : null}</View>;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
@@ -776,9 +787,10 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 }
 
 /**
- * The turn's status row, which sits between the prompt and the work: a ticking
- * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
- * there is folded work the settled row is the toggle that reveals it.
+ * The turn's status row, which sits between the prompt and the work: the lattice
+ * and a ticking "12s" while the turn runs (no "Working", like the desktop: the
+ * lattice is the liveness), then "Worked for 20s" once it settles. When there is
+ * folded work the settled row is the toggle that reveals it.
  */
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
@@ -801,8 +813,11 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ? `Working · ${workingDuration}` : "Working";
-	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+					: workingDuration ?? "";
+	const text = <Text
+		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
+		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
+	>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
 	// its place when the turn settles instead of the whole row remounting.
 	return <Pressable
@@ -812,14 +827,14 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		onPress={() => { haptics.tap(); onToggle(); }}
 		style={styles.statusRow}
 	>
-		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
-		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
+		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
+		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
 		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
 	</Pressable>;
 }
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?: ConversationPlan; onRollback?(turnId: string): Promise<number> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [confirming, setConfirming] = useState(false);
@@ -829,7 +844,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
+			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{canRollBack ? <View style={styles.turnLine}>
 				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
@@ -855,37 +870,6 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 					{rollbackError ? <Text style={styles.validation}>{rollbackError}</Text> : null}
 				</View>
 			) : null}
-		</View>
-	);
-}
-
-function TurnPlan({ turn }: { turn: ConversationTurn }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [open, setOpen] = useState(turn.state === "running");
-	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
-	return (
-		<View style={styles.planCard}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityState={{ expanded: open }}
-				style={styles.planHeader}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-				>
-				<Feather name="list" size={12} color={t.textTertiary} />
-				<Text style={styles.planTitle}>Plan</Text>
-				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
-				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
-			</Pressable>
-			{open ? <View style={styles.planBody}>
-				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
-					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
-					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
-					<Text style={styles.planStepState}>{step.status.replace("_", " ")}</Text>
-				</View>)}
-			</View> : null}
 		</View>
 	);
 }
@@ -1242,6 +1226,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// rows and the setup checklist header, so the line holds through the handoff.
 	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
+	// Even-width digits, so the ticking timer doesn't shift as it counts.
+	turnTimer: { fontVariant: ["tabular-nums"] },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
 	rollbackTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600", fontSize: type.footnote.fontSize },
@@ -1255,12 +1241,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
 	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
-	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
-	planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-	planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, textTransform: "uppercase" },
-	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	fileRowTap: { minHeight: 36 },

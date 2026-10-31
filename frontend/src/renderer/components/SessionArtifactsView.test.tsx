@@ -107,6 +107,21 @@ describe("SessionArtifactsView for a cloud session", () => {
 		sendSessionMessageMock.mockReset().mockResolvedValue({});
 	});
 
+	it("previews metadata-only HTML in the session gallery with at most four live pages", async () => {
+		const current = cloudSession();
+		current.artifactFiles = Array.from({ length: 6 }, (_, index) => ({
+			kind: "html",
+			name: `page-${index}.html`,
+			path: `page-${index}.html`,
+			size: 20,
+			updatedAt: "2026-09-23T00:00:00Z",
+		}));
+		renderView(<SessionArtifactsView session={current} />);
+
+		expect(await screen.findAllByTestId("cloud-frame")).toHaveLength(4);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
+	});
+
 	it("sends feedback on an html artifact to the worker through the control plane", async () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));

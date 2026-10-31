@@ -21,7 +21,9 @@ import { providerAuthFlow } from "./provider-auth-flow";
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
 // data dir so local claude sessions can authenticate with the SAME credential
 // pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
-// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir.
+// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir. This is not the
+// token chosen in AO's Claude login menu (harnesses/claude-code/setup-token):
+// that one outranks a native login, this one never does.
 async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
   const dir = path.join(dataDir, "harnesses", "claude-code");
   await mkdir(dir, { recursive: true, mode: 0o700 });

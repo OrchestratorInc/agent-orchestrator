@@ -1,4 +1,5 @@
 import type { WorkspaceSession } from "../types/workspace";
+import { FREESTYLE_PROVIDER } from "./cloud-offering";
 
 export type CloudLifecycleStage =
 	| "paused_by_coder"
@@ -12,6 +13,23 @@ export type CloudLifecycleStage =
 /** A stage where the sandbox is paused on purpose (no startup loader). */
 export function isCloudPausedStage(stage: CloudLifecycleStage | undefined): stage is "paused" | "paused_by_coder" {
 	return stage === "paused" || stage === "paused_by_coder";
+}
+
+/** Sandbox states of a session being created or woken, before its worker connects. */
+const STARTING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrapping", "stopped", "restoring"]);
+
+/**
+ * A Freestyle Chat session starting or waking: it stays on its conversation
+ * (no startup screen), its composer shimmers, and messages queue until its
+ * worker connects. Other providers start behind the startup screen, which
+ * shows a Coder start's steps and workspace link.
+ */
+export function cloudChatStartingInPlace(session?: WorkspaceSession): boolean {
+	const cloud = session?.cloud;
+	if (session?.mode !== "chat" || cloud?.sandboxProvider !== FREESTYLE_PROVIDER || session.runtimeConnected) return false;
+	// Only a session meant to run is starting: a paused one keeps its badge, and
+	// one being deleted (or archived) is going away, not getting ready.
+	return cloud.desiredState === "running" && STARTING_SANDBOX_STATES.has(cloud.observedState ?? "");
 }
 
 /**

@@ -5,6 +5,7 @@ import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
+import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
@@ -35,11 +36,11 @@ let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
 
-// Bounds how many captures of a single event (or exception) name reach
-// PostHog. Mirrors the daemon-side RateLimitedSink: a re-render loop or
-// repeatedly-thrown exception must not turn into an unbounded PostHog bill.
-// A per-minute cap alone doesn't bound the daily total — a loop paced just
-// under it would sit under the ceiling forever — so this pairs a small burst
+// Bounds how many captures of a single event or exception name leave the
+// renderer. Mirrors the daemon-side RateLimitedSink: a re-render loop or
+// repeatedly-thrown exception must not create an unbounded error stream.
+// A per-minute cap alone doesn't bound the daily total. A loop paced just
+// under it would sit under the ceiling forever, so this pairs a small burst
 // allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
@@ -250,9 +251,24 @@ export function buildTelemetryContext(
 	appVersion: string,
 	platform: string,
 	channel: ReleaseChannel = "unknown",
+	install?: TelemetryInstallContext,
 ): TelemetryProperties {
 	const version = appVersion.trim() || "unknown";
 	return {
+		// Same names and values as the daemon stamps (backend/internal/adapters/
+		// telemetry/environment.go), so desktop and CLI events segment alike.
+		...(install
+			? {
+					arch: install.arch,
+					// posthog-js reads the OS version from Chromium's user agent,
+					// which freezes macOS at 10.15.7; the real one replaces it.
+					...(install.osVersion ? { $os_version: install.osVersion } : {}),
+					install_source: install.installSource,
+					...(install.installedAt ? { installed_at: install.installedAt } : {}),
+					is_ci: install.isCi,
+					...(install.ciSignal ? { ci_signal: install.ciSignal } : {}),
+				}
+			: {}),
 		// Classifies this install as the desktop app across every event, so a
 		// shared event like ao.app.active splits cleanly by `client` alongside
 		// the mobile app (client="mobile") and the CLI (client="cli"), rather
@@ -1099,7 +1115,7 @@ export async function sanitizeRendererExceptionProperties(
 	return { ...safe, ...(await sanitizeRendererContextProperties(properties)) };
 }
 
-function bindErrorHandlers() {
+export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
 	window.addEventListener("error", (event) => {
@@ -1188,7 +1204,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
-		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
+		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install);
 		posthog = await loadPostHog();
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
@@ -1208,7 +1224,7 @@ export async function initTelemetry(): Promise<boolean> {
 			platform: bootstrap.platform,
 			distinctId: bootstrap.distinctId,
 		});
-		bindErrorHandlers();
+		bindRendererErrorHandlers();
 		startDailyActiveHeartbeat({
 			storage: telemetryStorage(),
 			window,
@@ -1321,15 +1337,15 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
-	// "$exception" is the name this lands under in PostHog, so that is what an
-	// operator would type to silence a crash loop.
+	try {
+		await initTelemetry();
+	} catch {
+		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
+	}
 	if (isDeniedEvent("$exception")) return;
 	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
-	if (!(await initTelemetry())) return;
-	const safeProperties = withTelemetryContext(await sanitizeRendererExceptionProperties(error, properties));
-	posthog.captureException(normalizeException(error), safeProperties);
-	// Mirror into Sentry (no-op unless a DSN is configured). Source drives the
-	// category so a boundary crash classifies as render_crash.
+	// The main-owned policy gate decides whether this reaches Sentry. Renderer
+	// exceptions no longer enter the PostHog product-analytics path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,
