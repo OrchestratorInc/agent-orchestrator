@@ -7583,13 +7583,15 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
             401: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope. */
+            404: components["responses"]["Error"];
             /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
             409: components["responses"]["Error"];
             /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
             429: components["responses"]["Error"];
             /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
             502: components["responses"]["Error"];
-            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. */
+            /** @description `fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error. */
             503: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };

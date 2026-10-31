@@ -549,7 +549,8 @@ function useSelection() {
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
-	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
+	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
+	const goConnectMobile = useCallback(() => openGlobalSettings("mobile", { startPairing: true }), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
@@ -1008,7 +1009,7 @@ export function Sidebar({
 					<span
 						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						<BuildInfoTooltip>Orchestrator.inc</BuildInfoTooltip>
+						<BuildInfoTooltip>Orchestrator</BuildInfoTooltip>
 					</span>
 				</button>
 				<Tooltip>

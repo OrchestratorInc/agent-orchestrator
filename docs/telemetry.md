@@ -11,8 +11,11 @@ account. Desktop and daemon events include a random installation identifier
 to group activity even when the event uses an account ID as `distinct_id`.
 Telemetry is not wholly anonymous.
 
-Remote telemetry is enabled in production desktop and mobile releases. A
-packaged desktop release also enables telemetry for the daemon it starts.
+Share usage analytics and Share error events are on by default in production
+desktop releases for fresh installs and existing users, unless a user turned
+either choice off or an environment setting disables it. Both can be turned
+off at any time in Settings > General > Privacy. A packaged desktop release
+also enables telemetry for the daemon it starts.
 Development builds and daemons started directly do not send remote telemetry by
 default.
 
@@ -27,14 +30,17 @@ Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
 builds use an empty Electron DSN. The renderer uses this main-owned sender
-and has no independent DSN override. The production release gate remains
-closed until the privacy policy names Sentry and its data categories.
-Once that gate opens, Electron main sends consented error events through its
-own Sentry transport.
+and has no independent DSN override. Packaged stable and nightly builds send
+error events through Electron main only when Share error events is enabled.
+On a fresh or existing packaged install, Share error events starts on unless
+it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own
-Sentry project and DSN. A desktop opt-in recorded while the Electron release
-gate was closed requires a fresh opt-in before this sender starts.
+Sentry project and DSN. Earlier error-sharing choices remain effective on
+upgrade. On Windows, the policy is saved with a flushed temporary file and
+an atomic replacement that retries temporary file locks, so the same Settings
+choice controls Electron and daemon Sentry there. Share usage analytics is a
+separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type and allowlisted in-app
