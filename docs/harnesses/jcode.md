@@ -89,10 +89,15 @@ lists and reasoning effort are rejected rather than silently ignored.
   message but not that message's model; AO attributes each message to the
   session's model when it exports it (on every hook), so a `/model` switch
   inside a single turn is attributed to the new model.
-- **Chat.** `jcode acp` exists, but AO does not register it: it ignores a
-  system prompt (`_meta.systemPrompt`), answers `session/load` for an unknown
-  id with success (a silent new conversation), sends no permission requests,
-  and its prompt, resume and cancel have not been proven end to end.
+- **Chat.** `jcode acp` was tested live with a signed-in provider. A project
+  `.jcode/prompt-overlay.md` does reach the model (an ACP session answered
+  with an instruction only the overlay contained), and `session/load` replays
+  the history and the model remembers it. AO still does not register Chat:
+  `session/cancel` returns `stopReason: "cancelled"` while the shell command
+  the turn started keeps running to completion; jcode sends no permission
+  requests at all, so only a no-approval mode could be offered; and
+  `session/load` succeeds for an unknown id (a new, empty conversation) or a
+  different folder.
 - **Code review.** Not registered: AO cannot enforce a read-only tool set.
 - **Effort.** jcode sets reasoning effort per provider in its own config, not
   per launch.
