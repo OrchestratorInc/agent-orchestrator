@@ -2,6 +2,7 @@ package sessionimport
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -71,6 +72,22 @@ func TestKimiDiscoverAndParse(t *testing.T) {
 	)
 	if got.title != "Add a README" || got.cwd != "/work/repo" || got.nativeID != kimiSession {
 		t.Fatalf("title=%q cwd=%q id=%q", got.title, got.cwd, got.nativeID)
+	}
+}
+
+func TestKimiStateReadThroughProviderRootAlias(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "provider-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	path := kimiFixture(t, alias, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
+	got, err := readTranscript(context.Background(), domain.HarnessKimi, alias, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.title != "Add a README" || got.cwd != "/work/repo" {
+		t.Fatalf("metadata through root alias: title=%q cwd=%q", got.title, got.cwd)
 	}
 }
 

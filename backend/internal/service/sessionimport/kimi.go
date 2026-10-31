@@ -341,6 +341,13 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 func readKimiState(providerRoot *os.Root, root, wirePath string) kimiState {
 	var state kimiState
 	statePath := filepath.Join(kimiSessionDir(wirePath), kimiStateFile)
+	// The root is canonical, while a discovered path may still use a home
+	// alias (including macOS's /var -> /private/var). Compare physical paths,
+	// retaining os.Root's confinement for the sidecar open.
+	statePath, err := filepath.EvalSymlinks(statePath)
+	if err != nil {
+		return state
+	}
 	rel, err := filepath.Rel(root, statePath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return state
