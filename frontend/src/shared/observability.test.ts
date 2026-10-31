@@ -79,6 +79,14 @@ describe("classifyError — code overrides", () => {
 		});
 	});
 
+	it("restoring a replaced orchestrator reports at P2 as the user's action", () => {
+		expect(classifyError({ category: "http_4xx", httpStatus: 409, code: "ORCHESTRATOR_REPLACED" })).toMatchObject({
+			severity: "P2",
+			owner: "user",
+			report: true,
+		});
+	});
+
 	it("a failed agent relaunch still reports although it answers 409", () => {
 		expect(classifyError({ category: "http_4xx", httpStatus: 409, code: "AGENT_RESUME_FAILED" })).toMatchObject({
 			severity: "P1",

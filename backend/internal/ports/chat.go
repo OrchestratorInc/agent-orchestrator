@@ -40,6 +40,10 @@ var (
 	// resumed. Callers must surface a recovery choice, never silently start a
 	// new provider conversation.
 	ErrChatResumeFailed = errors.New("chat conversation resume failed")
+	// ErrProjectConversationReplaced means the project's orchestrator
+	// conversation now belongs to a newer orchestrator, so an older one cannot
+	// reattach to it.
+	ErrProjectConversationReplaced = errors.New("project conversation belongs to a newer orchestrator")
 	// ErrChatRecoveryInconclusive means a detached provider host may still own
 	// live work, but this daemon could not safely attach to it. Startup recovery
 	// must preserve the durable session and worktree rather than treating the
