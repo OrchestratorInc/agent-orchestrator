@@ -127,9 +127,12 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 			if (!await current()) return;
 			if (existing && !existing.accountUserId) {
 				// Keep the original pairing password and private-network endpoints,
-				// but accept the host's newly published quick-tunnel address.
+				// but accept the host's newly published quick-tunnel address. A
+				// fixed address goes beside the pairing's tunnel, not in its place:
+				// a listing the machine no longer updates, after a new password or
+				// a link to another account, keeps a fixed address nothing serves.
 				const endpoints = [address, ...existing.endpoints.filter((candidate) =>
-					address.kind === "tunnel" ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
+					address.kind === "tunnel" && isQuickTunnelHost(address.host) ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
 				if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
 				return;
 			}

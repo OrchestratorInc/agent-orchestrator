@@ -696,7 +696,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (stopped) return;
 			const host = await activeHost().catch(() => null);
 			if (stopped) return;
-			if (!host || knowsRemoteAddress(host.endpoints) || Date.now() - started > LEARN_REMOTE_FOR_MS) {
+			// The active machine can change before this config does; its
+			// addresses must not be saved into another machine.
+			if (!host || (config.hostId && host.id !== config.hostId) || knowsRemoteAddress(host.endpoints) || Date.now() - started > LEARN_REMOTE_FOR_MS) {
 				stop();
 				return;
 			}
@@ -714,8 +716,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const hosts = await loadHosts().catch(() => null);
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
 		};
+		// The first ask waits one interval: connecting just read the addresses.
 		id = setInterval(() => void tick(), LEARN_REMOTE_EVERY_MS);
-		void tick();
 		return stop;
 	}, [config, appActive]);
 

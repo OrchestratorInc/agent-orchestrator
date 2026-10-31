@@ -76,9 +76,11 @@ it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN",
 		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [{ ...host(id), url }] }) })));
 	};
 
+	// A fixed address goes beside the pairing's tunnel: a listing the machine
+	// stopped updating must not take away the one that works.
 	pair("https://h-0d483066194a12a5dc17.useao.dev");
 	await syncAccountHosts(account);
-	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev", port: 443, secure: true }]);
+	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev", port: 443, secure: true }, quick]);
 
 	// A LAN name must not displace the pairing's tunnel, the only route off-network.
 	pair("http://studio.local:3011");
