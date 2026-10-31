@@ -1,9 +1,12 @@
 package conpty
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestRingAppendPartialThenComplete verifies partial-line accumulation and
@@ -131,6 +134,131 @@ func TestRingReplayIncludesPartialTUIOutput(t *testing.T) {
 
 	if got, want := string(r.Replay()), "complete\n\x1b[?1049h\rcurrent tui"; got != want {
 		t.Errorf("Replay = %q, want %q", got, want)
+	}
+}
+
+func TestRingPartialLineCapNoNewline(t *testing.T) {
+	const chunkBytes = 64 << 10
+	// Cap the test payload to 2 MiB (32 chunks). This provides ample iterations
+	// to exercise the 256 KiB truncation boundary while avoiding excessive memory
+	// allocation overhead under the race detector.
+	const chunks = (2 << 20) / chunkBytes
+	r := NewRing()
+	r.Append([]byte("complete\n"))
+	want := make([]byte, MaxPartialLineBytes)
+	for i := 0; i < chunks; i++ {
+		chunk := bytes.Repeat([]byte{byte('a' + i%26)}, chunkBytes)
+		r.Append(chunk)
+		if len(r.partialLine) > MaxPartialLineBytes {
+			t.Fatalf("append %d: partial line has %d bytes, cap is %d", i+1, len(r.partialLine), MaxPartialLineBytes)
+		}
+		if i >= chunks-len(want)/chunkBytes {
+			copy(want[(i-(chunks-len(want)/chunkBytes))*chunkBytes:], chunk)
+		}
+	}
+	if got := r.Replay(); !bytes.Equal(got, append([]byte("complete\n"), want...)) {
+		t.Fatalf("Replay has %d bytes and does not match the completed line plus the true input tail", len(got))
+	}
+	if got := string(r.Snapshot()); got != "complete\n" {
+		t.Fatalf("Snapshot = %q, want completed line only", got)
+	}
+}
+
+func TestRingPartialLineCapUTF8(t *testing.T) {
+	for _, runeText := range []string{"é", "界", "🙂"} {
+		for cut := 1; cut < len(runeText); cut++ {
+			for _, split := range []int{0, 9, MaxPartialLineBytes} {
+				t.Run(fmt.Sprintf("%s/cut%d/split%d", runeText, cut, split), func(t *testing.T) {
+					want := strings.Repeat("z", MaxPartialLineBytes-cut)
+					input := []byte(strings.Repeat("x", 8) + runeText + want)
+					r := NewRing()
+					if split > 0 {
+						// Split inside the rune or fill the old partial to its cap.
+						// The eventual cut falls on each continuation byte.
+						r.Append(input[:split])
+						r.Append(input[split:])
+					} else {
+						r.Append(input)
+					}
+					if got := r.Replay(); !utf8.Valid(got) || string(got) != want {
+						t.Fatalf("Replay valid UTF-8 = %t, bytes = %d, want %d-byte suffix", utf8.Valid(got), len(got), len(want))
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRingPartialLineCapControlBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset int
+		marker string
+		trim   bool
+	}{
+		{"carriage return", 123, "\r", true},
+		{"escape", 123, "\x1b[2J", true},
+		{"earliest marker", 17, "\rfirst\x1b[2J", true},
+		{"escape first", 17, "\x1b[2J\r", true},
+		{"at cut", 0, "\x1b[2J", true},
+		{"last searched byte", (4 << 10) - 1, "\r", true},
+		{"outside search", 4 << 10, "\x1b[2J", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tail := strings.Repeat("x", tc.offset) + tc.marker
+			tail += strings.Repeat("z", MaxPartialLineBytes-len(tail))
+			r := NewRing()
+			r.Append([]byte("discard" + tail))
+			want := tail
+			if tc.trim {
+				want = tail[tc.offset:]
+			}
+			if got := string(r.Replay()); got != want {
+				t.Fatalf("Replay has %d bytes, want %d-byte control-aligned suffix", len(got), len(want))
+			}
+		})
+	}
+}
+
+func TestRingPartialLineCapPreservesCompletedLines(t *testing.T) {
+	r := NewRing()
+	partial := strings.Repeat("a", MaxPartialLineBytes)
+	r.Append([]byte(partial))
+	completed := partial + strings.Repeat("b", 64<<10) + "\n"
+	tail := strings.Repeat("z", MaxPartialLineBytes)
+	// Completed lines keep their existing semantics, even in a large chunk.
+	r.Append([]byte(strings.Repeat("b", 64<<10) + "\n" + strings.Repeat("discard", 100000) + tail))
+	if got := string(r.Snapshot()); got != completed {
+		t.Fatalf("Snapshot has %d bytes, want %d-byte completed line", len(got), len(completed))
+	}
+	if got := string(r.Replay()); got != completed+tail {
+		t.Fatalf("Replay has %d bytes, want completed line plus capped suffix", len(got))
+	}
+	if got := r.Tail(1); got != completed {
+		t.Fatal("Tail changed completed-line content")
+	}
+	r.FlushPartial()
+	if got := string(r.Snapshot()); got != completed+tail {
+		t.Fatal("FlushPartial did not preserve the capped suffix")
+	}
+}
+
+func BenchmarkRingAppendNoNewline(b *testing.B) {
+	for _, mib := range []int{1, 16, 100} {
+		b.Run(fmt.Sprintf("%dMiB", mib), func(b *testing.B) {
+			const chunkBytes = 64 << 10
+			chunk := bytes.Repeat([]byte("x"), chunkBytes)
+			chunks := (mib << 20) / chunkBytes
+			b.SetBytes(int64(mib << 20))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				r := NewRing()
+				for j := 0; j < chunks; j++ {
+					r.Append(chunk)
+				}
+			}
+		})
 	}
 }
 
