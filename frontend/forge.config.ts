@@ -63,6 +63,37 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
+// Packager app name. It sets the bundle filename ("<name>.app"), which the
+// installed path, updater, and `ao start` keep using, so it is not the label
+// people see in Finder.
+const PACKAGER_NAME = "Agent Orchestrator";
+
+// Finder uses the localized label only when the base display name matches the
+// bundle filename, but the packager defaults it to the executable name. Set it,
+// then copy the localized label into every regional lproj Finder might pick.
+// Must run before signing so the plist and localized strings are sealed.
+// Throws on failure so the Forge hook can pass it to its callback.
+export function labelMacBundle(
+	buildPath: string,
+	setDisplayName: (plistPath: string, name: string) => void = setPlistDisplayName,
+): void {
+	const contents = path.join(buildPath, `${PACKAGER_NAME}.app`, "Contents");
+	setDisplayName(path.join(contents, "Info.plist"), PACKAGER_NAME);
+	const resources = path.join(contents, "Resources");
+	const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
+	for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
+		writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+	}
+}
+
+function setPlistDisplayName(plistPath: string, name: string): void {
+	const result = spawnSync("plutil", ["-replace", "CFBundleDisplayName", "-string", name, plistPath], {
+		encoding: "utf8",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`Setting macOS display name failed: ${result.stderr}`);
+}
+
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
@@ -129,7 +160,7 @@ const config: ForgeConfig = {
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
-		name: "Agent Orchestrator",
+		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
 		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
 		protocols: [AUTH_PROTOCOL],
@@ -141,22 +172,12 @@ const config: ForgeConfig = {
 		extraResource: extraResourcesForPlatform(process.platform),
 		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
 			if (platform !== "darwin") return callback();
-			// Finder uses the localized label only when the base display name
-			// matches the bundle filename. Packager defaults it to the executable.
-			// Run before signing so both the plist and localized name are sealed.
-			const result = spawnSync("plutil", [
-				"-replace", "CFBundleDisplayName", "-string", "Agent Orchestrator",
-				path.join(buildPath, "Agent Orchestrator.app", "Contents", "Info.plist"),
-			], { encoding: "utf8" });
-			if (result.error) return callback(result.error);
-			if (result.status !== 0) return callback(new Error(`Setting macOS display name failed: ${result.stderr}`));
-			const resources = path.join(buildPath, "Agent Orchestrator.app", "Contents", "Resources");
-			const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
-			// Finder can select any of Electron's existing regional localizations.
-			for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
-				writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+			try {
+				labelMacBundle(buildPath);
+				callback();
+			} catch (error) {
+				callback(error as Error);
 			}
-			callback();
 		}],
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8

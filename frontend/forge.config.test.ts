@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
@@ -29,7 +29,7 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	return { ...actual, checkMacDmgLayout };
 });
 
-import config, { extraResourcesForPlatform, macSignOptionsForFile } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -365,5 +365,39 @@ describe("packaged native dependencies", () => {
 		expect(ignore("/node_modules/react/index.js")).toBe(true);
 		expect(ignore("/src/main.ts")).toBe(true);
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
+	});
+});
+
+describe("macOS bundle display label", () => {
+	let buildPath: string;
+	beforeEach(() => {
+		buildPath = mkdtempSync(join(tmpdir(), "ao-label-"));
+	});
+	afterEach(() => rmSync(buildPath, { recursive: true, force: true }));
+
+	it("labels the bundle the packager builds and copies the label into every lproj", () => {
+		const packagerName = config.packagerConfig?.name;
+		expect(packagerName).toBeTypeOf("string");
+		const resources = join(buildPath, `${packagerName}.app`, "Contents", "Resources");
+		for (const locale of ["en", "fr", "zh_CN"]) mkdirSync(join(resources, `${locale}.lproj`), { recursive: true });
+		writeFileSync(join(resources, "en.lproj", "InfoPlist.strings"), 'CFBundleDisplayName = "Orchestrator";\n');
+		writeFileSync(join(resources, "fr.lproj", "InfoPlist.strings"), "stale");
+
+		const setDisplayName = vi.fn();
+		labelMacBundle(buildPath, setDisplayName);
+
+		expect(setDisplayName).toHaveBeenCalledWith(
+			join(buildPath, `${packagerName}.app`, "Contents", "Info.plist"),
+			packagerName,
+		);
+		for (const locale of ["en", "fr", "zh_CN"]) {
+			expect(readFileSync(join(resources, `${locale}.lproj`, "InfoPlist.strings"), "utf8")).toBe(
+				'CFBundleDisplayName = "Orchestrator";\n',
+			);
+		}
+	});
+
+	it("fails when the packaged bundle is missing instead of silently skipping the label", () => {
+		expect(() => labelMacBundle(buildPath, vi.fn())).toThrow();
 	});
 });
