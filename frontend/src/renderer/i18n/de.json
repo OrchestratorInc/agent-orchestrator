@@ -3693,5 +3693,9 @@
 	"newTask.cloudModelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
 	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
 	"newTask.cloudModelUnlisted": "{{model}} steht nicht in der Cloud-Modellliste für {{agent}} und läuft daher möglicherweise nicht.",
-	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden"
+	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden",
+	"chat.reminders.label": "Geplante Nachfassaktionen",
+	"chat.reminders.cancel": "Nachfassaktion abbrechen",
+	"chat.reminders.cancelFailed": "Die Nachfassaktion konnte nicht abgebrochen werden.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

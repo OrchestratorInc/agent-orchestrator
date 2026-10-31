@@ -2046,6 +2046,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a session's pending reminders */
+        get: operations["listReminders"];
+        put?: never;
+        /** Schedule a one-shot follow-up into a session */
+        post: operations["createReminder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reminders/{reminderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel a pending reminder */
+        delete: operations["cancelReminder"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/remote-host/account-token": {
         parameters: {
             query?: never;
@@ -5890,6 +5925,21 @@ export interface components {
         CreateConversationSideChatResponse: {
             side: components["schemas"]["SideConversation"];
         };
+        CreateReminderRequest: {
+            /**
+             * @description Who scheduled it. Defaults to agent.
+             * @enum {string}
+             */
+            createdBy?: "agent" | "user";
+            /**
+             * Format: date-time
+             * @description When to deliver the follow-up (RFC 3339), at least 1 minute and at most 30 days ahead.
+             */
+            dueAt: string;
+            message: string;
+            name?: string;
+            sessionId: string;
+        };
         CreateReportRequest: {
             message?: string;
             note?: string;
@@ -6310,6 +6360,9 @@ export interface components {
         ListProjectsResponse: {
             projects: components["schemas"]["ProjectSummary"][];
         };
+        ListRemindersResponse: {
+            reminders: components["schemas"]["ReminderResponse"][];
+        };
         ListReportsResponse: {
             reports: components["schemas"]["ReportResponse"][];
         };
@@ -6682,6 +6735,27 @@ export interface components {
         };
         ReloadConversationMCPServersResponse: {
             servers: components["schemas"]["ConversationMCPServerPayload"][];
+        };
+        ReminderEnvelope: {
+            reminder: components["schemas"]["ReminderResponse"];
+        };
+        ReminderResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            /** @enum {string} */
+            createdBy: "agent" | "user";
+            /** Format: date-time */
+            dueAt: string;
+            id: string;
+            message: string;
+            name?: string;
+            projectId: string;
+            /** Format: date-time */
+            resolvedAt?: null | string;
+            sessionId: string;
+            /** @enum {string} */
+            status: "pending" | "delivered" | "cancelled" | "dropped";
+            statusReason?: string;
         };
         RemoveProjectResult: {
             projectId: string;
@@ -14894,6 +14968,196 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listReminders: {
+        parameters: {
+            query: {
+                /** @description Session whose pending reminders to list. */
+                sessionId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListRemindersResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createReminder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReminderRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelReminder: {
+        parameters: {
+            query?: {
+                /** @description When set, only cancel the reminder if it belongs to this session. */
+                sessionId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Reminder identifier. */
+                reminderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
             };
             /** @description Internal Server Error */
             500: {

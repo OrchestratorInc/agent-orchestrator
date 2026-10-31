@@ -3693,5 +3693,9 @@
 	"newTask.cloudModelsUnavailable": "클라우드에 {{agent}} 모델 목록이 없습니다. 기본값을 사용하거나 모델 ID를 입력하세요.",
 	"newTask.cloudModelsVerified": "내 클라우드 워커에서 확인됨",
 	"newTask.cloudModelUnlisted": "{{model}}은(는) 클라우드의 {{agent}} 모델 목록에 없어 실행되지 않을 수 있습니다.",
-	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용"
+	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용",
+	"chat.reminders.label": "예약된 후속 작업",
+	"chat.reminders.cancel": "후속 작업 취소",
+	"chat.reminders.cancelFailed": "후속 작업을 취소할 수 없습니다.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

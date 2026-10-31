@@ -3762,5 +3762,9 @@
 	"newTask.cloudModelsUnavailable": "Le cloud n’a pas de liste de modèles pour {{agent}}. Utilisez la valeur par défaut ou saisissez un identifiant de modèle.",
 	"newTask.cloudModelsVerified": "Vérifié sur vos workers cloud",
 	"newTask.cloudModelUnlisted": "{{model}} ne figure pas dans la liste de modèles cloud de {{agent}} et risque de ne pas fonctionner.",
-	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent"
+	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent",
+	"chat.reminders.label": "Relances planifiées",
+	"chat.reminders.cancel": "Annuler la relance",
+	"chat.reminders.cancelFailed": "Impossible d'annuler la relance.",
+	"chat.reminders.item": "{{time}} : {{label}}"
 }
