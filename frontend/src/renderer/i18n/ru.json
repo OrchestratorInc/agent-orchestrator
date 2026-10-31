@@ -3640,7 +3640,7 @@
 	"settings.billing.freeAgents": "Claude Code, Codex и Cursor",
 	"settings.billing.freeOrchestrator": "Оркестратор, воркеры и ревью PR",
 	"settings.billing.freeDevices": "Одновременный вход с 2 устройств",
-	"settings.billing.freeNetwork": "Подключение в одной сети (без облачной ретрансляции)",
+	"settings.billing.freeNetwork": "Подключение в одной сети или откуда угодно через Tailscale или HTTPS-туннель",
 	"settings.billing.starterRelay": "Облачная ретрансляция для связи между устройствами",
 	"settings.billing.starterDevices": "Неограниченное число устройств, включая мобильные (ваши собственные)",
 	"settings.billing.cloudAway": "Агенты продолжают работу, когда компьютер спит",
