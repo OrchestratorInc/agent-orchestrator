@@ -68,6 +68,8 @@ jobs:
         run: go vet ./...
 
       - name: Test
+        env:
+          skip_global_compinit: "1"
         # -count=1 disables Go's test-result cache. The build cache restored
         # above also carries test results between runs, and without this a run
         # reported 158 of 170 packages as (cached) without executing them. The
