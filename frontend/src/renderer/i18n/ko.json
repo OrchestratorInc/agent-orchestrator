@@ -959,6 +959,7 @@
 	"inspector.terminateOnMergeShort": "병합 시 보관",
 	"inspector.archiveShort": "보관",
 	"inspector.timeline.createdWorkspace": "워크스페이스 생성됨",
+	"inspector.timeline.createdSession": "세션 생성됨",
 	"inspector.timeline.committed": "커밋",
 	"inspector.timeline.done": "완료",
 	"inspector.timeline.draft": "초안",

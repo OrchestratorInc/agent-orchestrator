@@ -1105,7 +1105,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
+			content: <>{appI18n.t(session.workspaceId === STANDALONE_WORKSPACE_ID ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace")}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
