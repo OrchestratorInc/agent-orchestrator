@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -298,6 +299,83 @@ func TestSessionList_EnrichesPRColumnsAndKeepsFallbackFacts(t *testing.T) {
 	}
 	if got.Data[1].PRs[0].Threads != nil || got.Data[1].PRs[0].CI != "failing" || got.Data[1].PRs[0].Review != "changes_requested" {
 		t.Fatalf("fallback entry = %#v, want basic facts and unknown thread count", got.Data[1])
+	}
+}
+
+func TestSessionList_CarriesPRStateAndMergeability(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/sessions":
+			if r.URL.Query().Get("active") == "false" {
+				_, _ = io.WriteString(w, `{"sessions":[]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"sessions":[
+				{"id":"demo-1","projectId":"demo","kind":"worker","activity":{"state":"idle","lastActivityAt":"2026-06-02T12:00:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"idle","prs":[{"url":"https://github.com/o/r/pull/123","number":123,"state":"merged","ci":"passing","review":"approved","mergeability":"unknown"},{"url":"https://github.com/o/r/pull/456","number":456,"state":"open","ci":"failing","review":"review_required","mergeability":"conflicting"}]},
+				{"id":"demo-2","projectId":"demo","kind":"worker","activity":{"state":"working","lastActivityAt":"2026-06-02T12:00:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"working","prs":[{"url":"https://github.com/o/r/pull/789","number":789,"state":"closed","ci":"unknown","review":"none","mergeability":"unknown"}]}
+			]}`)
+		case "/api/v1/sessions/demo-1/pr":
+			_, _ = io.WriteString(w, `{"sessionId":"demo-1","prs":[
+				{"url":"https://github.com/o/r/pull/123","number":123,"state":"merged","ci":{"state":"passing"},"review":{"decision":"approved","unresolvedThreadCount":0},"mergeability":{"state":"unknown","reasons":[]}},
+				{"url":"https://github.com/o/r/pull/456","number":456,"state":"open","ci":{"state":"failing"},"review":{"decision":"review_required","unresolvedThreadCount":1},"mergeability":{"state":"conflicting","reasons":["conflicts","ci_failing"]}}
+			]}`)
+		case "/api/v1/sessions/demo-2/pr":
+			// The summary endpoint failing must keep the list's stored facts.
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, `{"message":"SCM temporarily unavailable"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{
+		ProcessAlive: func(int) bool { return true },
+		Now:          func() time.Time { return time.Date(2026, 6, 2, 12, 5, 0, 0, time.UTC) },
+	}
+
+	out, errOut, err := executeCLI(t, deps, "session", "ls", "--project", "demo", "--json")
+	if err != nil {
+		t.Fatalf("session ls --json failed: %v\nstderr=%s", err, errOut)
+	}
+	var got sessionListOutput
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decode JSON: %v\noutput=%s", err, out)
+	}
+	if len(got.Data) != 2 || len(got.Data[0].PRs) != 2 || len(got.Data[1].PRs) != 1 {
+		t.Fatalf("unexpected data: %#v", got.Data)
+	}
+	merged, conflicting, closed := got.Data[0].PRs[0], got.Data[0].PRs[1], got.Data[1].PRs[0]
+	if merged.State != "merged" || merged.URL != "https://github.com/o/r/pull/123" || merged.Mergeability != "unknown" || len(merged.MergeBlockers) != 0 {
+		t.Fatalf("merged PR = %#v, want state merged with url", merged)
+	}
+	if conflicting.State != "open" || conflicting.Mergeability != "conflicting" || !reflect.DeepEqual(conflicting.MergeBlockers, []string{"conflicts", "ci_failing"}) {
+		t.Fatalf("conflicting PR = %#v, want open, conflicting, with blockers", conflicting)
+	}
+	if closed.State != "closed" || closed.URL != "https://github.com/o/r/pull/789" || closed.Mergeability != "unknown" {
+		t.Fatalf("fallback PR = %#v, want stored closed state and mergeability", closed)
+	}
+	// The wire keys are the contract scripts and agents read.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(out)); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"state":"merged"`, `"mergeability":"conflicting"`, `"mergeBlockers":["conflicts","ci_failing"]`, `"url":"https://github.com/o/r/pull/789"`} {
+		if !strings.Contains(compact.String(), key) {
+			t.Fatalf("JSON output missing %s:\n%s", key, out)
+		}
+	}
+
+	out, errOut, err = executeCLI(t, deps, "session", "ls", "--project", "demo")
+	if err != nil {
+		t.Fatalf("session ls failed: %v\nstderr=%s", err, errOut)
+	}
+	for _, want := range []string{"#123 merged,#456 conflicts", "#789 closed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("table missing %q:\n%s", want, out)
+		}
 	}
 }
 

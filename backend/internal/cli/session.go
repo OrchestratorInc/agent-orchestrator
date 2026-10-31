@@ -88,7 +88,9 @@ type sessionPRSummaryResponse struct {
 }
 
 type sessionPRSummaryDTO struct {
-	Number int `json:"number"`
+	URL    string `json:"url"`
+	Number int    `json:"number"`
+	State  string `json:"state"`
 	CI     struct {
 		State string `json:"state"`
 	} `json:"ci"`
@@ -98,6 +100,10 @@ type sessionPRSummaryDTO struct {
 		Decision              string `json:"decision"`
 		UnresolvedThreadCount *int   `json:"unresolvedThreadCount"`
 	} `json:"review"`
+	Mergeability struct {
+		State   string   `json:"state"`
+		Reasons []string `json:"reasons"`
+	} `json:"mergeability"`
 }
 
 type sessionResponse struct {
@@ -185,11 +191,21 @@ type sessionListEntry struct {
 	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
+// sessionListPR is the per-PR summary in `ao session ls --json`. State and
+// mergeability come from the daemon's stored SCM observation, so fleet
+// questions ("what merged?", "what conflicts?") need no provider calls.
 type sessionListPR struct {
 	Number  int    `json:"number"`
+	URL     string `json:"url,omitempty"`
+	State   string `json:"state,omitempty"`
 	CI      string `json:"ci,omitempty"`
 	Review  string `json:"review,omitempty"`
 	Threads *int   `json:"threads"`
+	// Mergeability is unknown, mergeable, conflicting, blocked, or unstable.
+	Mergeability string `json:"mergeability,omitempty"`
+	// MergeBlockers explains a conflicting, blocked, or unstable PR, for
+	// example conflicts, behind_base, ci_failing, or review_required.
+	MergeBlockers []string `json:"mergeBlockers,omitempty"`
 }
 
 type sessionListOutput struct {
@@ -936,7 +952,16 @@ func listPRsForSession(sess sessionDTO, summaries []sessionPRSummaryDTO) []sessi
 			// Threads stays nil (rendered as "-") when the daemon did not
 			// publish a count: an older daemon or an only-partially observed
 			// thread snapshot must read as unknown, not zero.
-			out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI.State, Review: pr.Review.Decision, Threads: pr.Review.UnresolvedThreadCount})
+			out = append(out, sessionListPR{
+				Number:        pr.Number,
+				URL:           pr.URL,
+				State:         pr.State,
+				CI:            pr.CI.State,
+				Review:        pr.Review.Decision,
+				Threads:       pr.Review.UnresolvedThreadCount,
+				Mergeability:  pr.Mergeability.State,
+				MergeBlockers: pr.Mergeability.Reasons,
+			})
 		}
 		return out
 	}
@@ -945,7 +970,7 @@ func listPRsForSession(sess sessionDTO, summaries []sessionPRSummaryDTO) []sessi
 	// snapshot has already been replaced.
 	out := make([]sessionListPR, 0, len(sess.PRs))
 	for _, pr := range sess.PRs {
-		out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI, Review: pr.Review})
+		out = append(out, sessionListPR{Number: pr.Number, URL: pr.URL, State: pr.State, CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability})
 	}
 	return out
 }
@@ -1029,7 +1054,7 @@ func sessionPRColumns(sess sessionDTO, summaries []sessionPRSummaryDTO) (prNumbe
 	threadCount := 0
 	threadsKnown := true
 	for _, pr := range prs {
-		prValues = append(prValues, fmt.Sprintf("#%d", pr.Number))
+		prValues = append(prValues, sessionPRLabel(pr))
 		ciValues = append(ciValues, emptyDash(pr.CI))
 		reviewValues = append(reviewValues, emptyDash(pr.Review))
 		if pr.Threads == nil {
@@ -1043,6 +1068,19 @@ func sessionPRColumns(sess sessionDTO, summaries []sessionPRSummaryDTO) (prNumbe
 		threads = fmt.Sprintf("%d", threadCount)
 	}
 	return strings.Join(prValues, ","), strings.Join(ciValues, ","), strings.Join(reviewValues, ","), threads
+}
+
+// sessionPRLabel renders a PR number with its lifecycle state when it is not a
+// plain open PR, or "conflicts" when an open PR cannot merge cleanly.
+func sessionPRLabel(pr sessionListPR) string {
+	label := fmt.Sprintf("#%d", pr.Number)
+	switch {
+	case pr.State == "merged" || pr.State == "closed" || pr.State == "draft":
+		label += " " + pr.State
+	case pr.Mergeability == "conflicting":
+		label += " conflicts"
+	}
+	return label
 }
 
 func emptyDash(value string) string {
