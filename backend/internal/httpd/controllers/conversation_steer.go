@@ -75,7 +75,6 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		response.TurnID = result.Turn.ID
 		response.ProviderTurnID = result.Turn.ProviderTurnID
 		response.State = result.Turn.State
-		response.InterruptedTurnID = result.InterruptedTurnID
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, response)
 }

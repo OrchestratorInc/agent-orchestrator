@@ -7648,7 +7648,6 @@ export interface components {
         SteerOrSendConversationResponse: {
             activityId?: string;
             duplicate: boolean;
-            interruptedTurnId?: string;
             /** @enum {string} */
             outcome: "steered" | "sent";
             providerTurnId?: string;

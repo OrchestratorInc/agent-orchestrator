@@ -2928,10 +2928,6 @@ type SteerOrSendConversationResponse struct {
 	ActivityID     string           `json:"activityId,omitempty"`
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 	Duplicate      bool             `json:"duplicate"`
-	// InterruptedTurnID names the running turn this request cut so the guidance
-	// could dispatch as its own turn (drivers without the steer capability).
-	// Empty when nothing was cut.
-	InterruptedTurnID string `json:"interruptedTurnId,omitempty"`
 }
 
 // EditConversationMessageRequest changes the readable text of one durable human

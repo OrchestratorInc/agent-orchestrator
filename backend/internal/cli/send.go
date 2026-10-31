@@ -39,13 +39,12 @@ type conversationMessageAPIRequest struct {
 }
 
 type steerOrSendAPIResponse struct {
-	Outcome           string `json:"outcome"`
-	TurnID            string `json:"turnId"`
-	ProviderTurnID    string `json:"providerTurnId"`
-	ActivityID        string `json:"activityId"`
-	State             string `json:"state"`
-	Duplicate         bool   `json:"duplicate"`
-	InterruptedTurnID string `json:"interruptedTurnId"`
+	Outcome        string `json:"outcome"`
+	TurnID         string `json:"turnId"`
+	ProviderTurnID string `json:"providerTurnId"`
+	ActivityID     string `json:"activityId"`
+	State          string `json:"state"`
+	Duplicate      bool   `json:"duplicate"`
 }
 
 func newSendCommand(ctx *commandContext) *cobra.Command {
@@ -142,12 +141,6 @@ func (c *commandContext) steerMessage(
 	}
 	if result.Duplicate {
 		_, _ = fmt.Fprintln(c.deps.Out, "Message was already accepted; delivery state is unchanged.")
-		return nil
-	}
-	if result.InterruptedTurnID != "" {
-		_, _ = fmt.Fprintf(c.deps.Out,
-			"Steered by cutting running turn %s; guidance dispatched as the next turn (%s) with delivery handle %s.\n",
-			result.InterruptedTurnID, result.State, clientMessageID)
 		return nil
 	}
 	_, _ = fmt.Fprintf(c.deps.Out,
