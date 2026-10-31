@@ -10,7 +10,7 @@
 // prompt and the reply are confirmed from jcode's own session file, not from AO.
 //
 // Usage: node scripts/ci-visual/jcode-new-task.mjs --out DIR --jcode-home DIR --run-file FILE --model ID
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 
@@ -105,6 +105,52 @@ function journalMessages(snapshotPath) {
 	});
 }
 
+// Where and how jcode stored each session, without prompt or tool text: file
+// sizes, journal entries, and per message its id, role, source file, content
+// block types and token_usage presence. Assistant text parts are kept so the
+// reply check can be audited. Keyless local CI state only.
+function nativeSessionStructure(jcodeHome) {
+	const dir = join(jcodeHome, "sessions");
+	let names = [];
+	try {
+		names = readdirSync(dir).sort();
+	} catch (error) {
+		return { dir, error: String(error.message) };
+	}
+	const files = names.map((name) => {
+		let size = -1;
+		try {
+			size = statSync(join(dir, name)).size;
+		} catch {}
+		return { name, size };
+	});
+	const sessions = names.filter((name) => /^session_.*\.json$/.test(name)).map((name) => {
+		let snapshot = {};
+		try {
+			snapshot = JSON.parse(readFileSync(join(dir, name), "utf8"));
+		} catch (error) {
+			return { name, error: `snapshot unreadable: ${error.message}` };
+		}
+		const describe = (source) => (message) => ({
+			id: message?.id,
+			role: message?.role,
+			source,
+			blocks: Array.isArray(message?.content) ? message.content.map((block) => block?.type) : typeof message?.content,
+			assistantText: message?.role === "assistant" ? assistantText(message) : undefined,
+			tokenUsage: Boolean(message?.token_usage),
+		});
+		return {
+			name,
+			id: snapshot.id,
+			provider: snapshot.provider_key,
+			model: snapshot.model,
+			snapshotMessages: (snapshot.messages ?? []).map(describe("snapshot")),
+			journalMessages: journalMessages(join(dir, name)).map(describe("journal")),
+		};
+	});
+	return { dir, files, sessions };
+}
+
 function nativeConversation(jcodeHome) {
 	const dir = join(jcodeHome, "sessions");
 	let files = [];
@@ -194,6 +240,19 @@ async function main() {
 		return { status: up ? "OK" : "FAIL", observed: up ? "Settings control visible" : "app never became ready" };
 	});
 	const base = daemonBase(options.runFile);
+
+	// The native TUI's light text is hard to read on AO's light theme, so pick
+	// AO's own Dark appearance in Settings first, as a user would.
+	await checkpoint("appearance-dark", "AO appearance set to Dark in Settings", async () => {
+		await page.getByRole("button", { name: "Settings" }).first().click();
+		const theme = page.getByRole("button", { name: "Theme", exact: true });
+		if (!(await visible(theme, 30_000))) return { status: "FAIL", observed: "no Theme control in Settings" };
+		await theme.first().click();
+		await page.getByRole("menuitem", { name: "Dark", exact: true }).first().click();
+		await sleep(1_000);
+		const applied = await page.evaluate(() => document.documentElement.dataset.theme);
+		return { status: applied === "dark" ? "OK" : "FAIL", observed: `document theme: ${applied}; Theme control shows: ${await textOf(theme)}` };
+	});
 
 	await checkpoint("readiness", "AO's own readiness for jcode before New Task", async () => {
 		let snapshot;
@@ -340,6 +399,7 @@ async function main() {
 		});
 	}
 
+	writeFileSync(join(options.out, "native-session-structure.json"), `${JSON.stringify(nativeSessionStructure(options.jcodeHome), null, 2)}\n`);
 	const summary = Object.fromEntries(["new-task-agent-picker", "new-task-model-picker", "running-tui", "reply"].map((id) => [id, results.find((item) => item.id === id)?.status ?? "NOT_RUN"]));
 	writeFileSync(join(options.out, "results.json"), `${JSON.stringify({ harness: HARNESS, model: options.model, appReady: ready.status, summary, results }, null, 2)}\n`);
 	console.log(JSON.stringify(summary));
