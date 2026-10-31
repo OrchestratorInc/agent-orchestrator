@@ -381,6 +381,56 @@ describe("CloudSessionChatSurface", () => {
 		expect(props().snapshot.settings.model).toBeUndefined();
 	});
 
+	it("names no Claude model from the device's own catalog before the session's messages load", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		// The control plane's catalog has not answered either.
+		cloudMocks.listUserAgentModels.mockReset().mockReturnValue(new Promise(() => {}));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models.length).toBeGreaterThan(0));
+		// The device's default (Opus) is not the session's: the composer has nothing to fall back to.
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+		expect(props().snapshot.settings.model).toBeUndefined();
+	});
+
+	it("names the control plane's default, not the device's, when the session's messages name no model", async () => {
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		let answer: (value: unknown) => void = () => {};
+		cloudMocks.listUserAgentModels.mockReset().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		await waitFor(() => expect(props().models.length).toBeGreaterThan(0));
+		// Messages loaded, no model named, the catalog still on its way: the device's Opus is not named.
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+		answer({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }, { id: "opus", displayName: "Opus" }] });
+		await waitFor(() => expect(props().snapshot.settings.model).toBe("sonnet"));
+	});
+
 	it("names the Claude model the session's messages last ran with once they load", async () => {
 		const message = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `message ${sequence}`, ...payload }, createdAt: "2026-10-31T07:00:00Z",

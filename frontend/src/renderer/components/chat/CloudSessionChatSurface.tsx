@@ -902,19 +902,23 @@ export function CloudSessionChatSurface({
 	// messages were sent with, else the agent's default (lastChosenChatSettings).
 	// While the catalog stands in for the worker's list, the composer names that
 	// model, as the worker does once it answers. Nothing is named until the
-	// session's messages have loaded, so the label does not switch from the
-	// catalog's default to the session's model: until then the catalog's default
-	// is not marked, and nothing falls back to it. It is only shown: it is not
-	// saved as a pick, and a turn still carries no model unless one is picked.
-	const catalogDefaultUnknown = !modelsQuery.data && !eventsQuery.data;
+	// session's messages have loaded, so the label does not switch from a
+	// catalog's default to the session's model: until then no default is marked
+	// (neither the control plane's nor the device's own, below), and nothing
+	// falls back to one. It is only shown: it is not saved as a pick, and a
+	// turn still carries no model unless one is picked.
+	const lastChosen = useMemo(() => lastChosenChatSettings(eventsQuery.data), [eventsQuery.data]);
+	// With no model named, the default is the control plane's catalog's, once it
+	// has answered (or failed): the device's own may differ.
+	const catalogDefaultUnknown = !modelsQuery.data &&
+		(!eventsQuery.data || (!lastChosen && catalogQuery.isPending && catalogQuery.fetchStatus !== "idle"));
 	const listedModels = useMemo(() => {
 		const models = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
 		return catalogDefaultUnknown ? models.map((model) => model.default ? { ...model, default: false } : model) : models;
 	}, [catalogDefaultUnknown, catalogQuery.data, modelsQuery.data]);
-	const lastChosen = useMemo(() => lastChosenChatSettings(eventsQuery.data), [eventsQuery.data]);
 	const pendingSettings: Pick<CloudTurnSettings, "model" | "reasoningEffort"> | undefined =
-		modelsQuery.data || !catalogQuery.data || !eventsQuery.data ? undefined
-			: lastChosen ?? { model: catalogQuery.data.models.find((model) => model.default)?.id };
+		modelsQuery.data || !eventsQuery.data ? undefined
+			: lastChosen ?? (catalogQuery.data && { model: catalogQuery.data.models.find((model) => model.default)?.id });
 	const pendingModel = pendingSettings?.model;
 	const pendingEffort = pendingSettings?.reasoningEffort;
 	const shownSettings = useMemo<CloudTurnSettings>(() => settings.model ? settings : {
@@ -1135,7 +1139,13 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
-	const { models, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model);
+	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model);
+	// Claude's choices come from the device's own catalog, which marks its own
+	// default: not the session's either until its messages have loaded.
+	const models = useMemo(
+		() => catalogDefaultUnknown ? choiceModels.map((model) => model.default ? { ...model, default: false } : model) : choiceModels,
+		[catalogDefaultUnknown, choiceModels],
+	);
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
