@@ -561,6 +561,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		[renderSnapshot?.harness, settingsLoading, uiSessionId],
 	);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
+	const turnStateKey = renderSnapshot?.turns.map((turn) => `${turn.id}:${turn.state}`).join("|") ?? "";
+	const dismissedTurnStateKey = useRef(turnStateKey);
+	const dismissCommandError = commands.dismissError;
+	useEffect(() => {
+		if (dismissedTurnStateKey.current === turnStateKey) return;
+		dismissedTurnStateKey.current = turnStateKey;
+		dismissCommandError();
+	}, [dismissCommandError, turnStateKey]);
 	useEffect(() => {
 		// Keep an ambiguous request's identity until durable progress confirms
 		// that intent ended. An undo can later make the same stop eligible again.
@@ -650,6 +658,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
 				newWorkDisabled={newWorkDisabled}
+				onComposerInput={commands.dismissError}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}

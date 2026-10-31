@@ -55,6 +55,7 @@ const {
 		busy: false,
 		send: vi.fn(),
 		chooseSettings: vi.fn(),
+		dismissError: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
 		echoBeforeSend: vi.fn(),
@@ -166,9 +167,11 @@ vi.mock("./ChatWorkspace", async () => {
 			snapshot,
 			shellTarget,
 			onSend,
+			onComposerInput,
 			composerNotice,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			onComposerInput?: (text: string, caret?: number) => void;
 			composerNotice?: ReactNode;
 			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
@@ -212,6 +215,7 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<button type="button" onClick={() => onComposerInput?.("typed")}>Type in composer</button>
 					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
@@ -276,6 +280,7 @@ beforeEach(() => {
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
 	conversationCommandState.echoBeforeSend.mockReset();
 	conversationCommandState.dropEcho.mockReset();
+	conversationCommandState.dismissError.mockReset();
 	catalogObserverState.enabled = [];
 	useUiStore.setState({ inspectorSessions: {}, developerMode: false });
 });
@@ -1363,5 +1368,44 @@ describe("SessionChatSurface startup recovery", () => {
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		expect(conversationRefreshes(invalidate)).toBe(0);
+	});
+});
+
+describe("SessionChatSurface stale composer errors", () => {
+	it("dismisses the composer error when the user types", async () => {
+		const user = userEvent.setup();
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await user.click(screen.getByRole("button", { name: "Type in composer" }));
+		expect(conversationCommandState.dismissError).toHaveBeenCalled();
+	});
+
+	it("dismisses the composer error when a turn changes state", async () => {
+		conversationState.snapshot = {
+			...snapshotFor(session.id),
+			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-10-12T00:00:00Z" }],
+		};
+		const client = new QueryClient();
+		const tree = () => <Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>;
+		const view = render(tree());
+		conversationCommandState.dismissError.mockClear();
+		conversationState.snapshot = {
+			...snapshotFor(session.id),
+			turns: [{ id: "turn-1", state: "completed", requestedAt: "2026-10-12T00:00:00Z" }],
+		};
+		view.rerender(tree());
+		await waitFor(() => expect(conversationCommandState.dismissError).toHaveBeenCalled());
+	});
+
+	it("leaves the composer error alone while the turn state is unchanged", () => {
+		conversationState.snapshot = {
+			...snapshotFor(session.id),
+			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-10-12T00:00:00Z" }],
+		};
+		const client = new QueryClient();
+		const tree = () => <Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>;
+		const view = render(tree());
+		conversationCommandState.dismissError.mockClear();
+		view.rerender(tree());
+		expect(conversationCommandState.dismissError).not.toHaveBeenCalled();
 	});
 });
