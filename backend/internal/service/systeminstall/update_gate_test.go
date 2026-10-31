@@ -82,28 +82,35 @@ func TestUpdateWhileRunningLevelMatrix(t *testing.T) {
 		target Target
 		method string
 		cask   bool
+		pkg    string
 		want   UpdateWhileRunning
 	}{
-		{"darwin", TargetClaudeCode, "official-installer", false, UpdateWhileRunningSafe},
-		{"linux", TargetCursor, "official-installer", false, UpdateWhileRunningSafe},
-		{"darwin", TargetGrok, "official-installer", false, UpdateWhileRunningSafe},
-		{"darwin", TargetCodex, "official-installer", false, UpdateWhileRunningWarn},
-		{"linux", TargetOpencode, "official-installer", false, UpdateWhileRunningWarn},
-		{"darwin", TargetKimi, "homebrew", false, UpdateWhileRunningSafe},
-		{"darwin", TargetOMP, "homebrew", false, UpdateWhileRunningSafe},
-		{"darwin", TargetCodex, "homebrew", true, UpdateWhileRunningWarn},
-		{"darwin", TargetClaudeCode, "homebrew", true, UpdateWhileRunningWarn},
-		{"darwin", TargetAuggie, "npm", false, UpdateWhileRunningWarn},
-		{"darwin", TargetOMP, "bun", false, UpdateWhileRunningWarn},
-		{"linux", TargetAider, "uv", false, UpdateWhileRunningWarn},
-		{"linux", TargetAider, "pipx", false, UpdateWhileRunningWarn},
-		{"windows", TargetClaudeCode, "official-installer", false, UpdateWhileRunningBlocked},
-		{"windows", TargetCodex, "winget", false, UpdateWhileRunningBlocked},
-		{"windows", TargetCodex, "npm", false, UpdateWhileRunningBlocked},
-		{"darwin", TargetCodex, "manual", false, UpdateWhileRunningBlocked},
+		{"darwin", TargetClaudeCode, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"linux", TargetCursor, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"darwin", TargetGrok, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"darwin", TargetCodex, "official-installer", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetOpencode, "official-installer", false, "", UpdateWhileRunningWarn},
+		{"darwin", TargetKimi, "homebrew", false, "kimi-cli", UpdateWhileRunningSafe},
+		{"darwin", TargetOMP, "homebrew", false, "oh-my-pi", UpdateWhileRunningSafe},
+		{"darwin", TargetCodex, "homebrew", true, "codex", UpdateWhileRunningWarn},
+		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code", UpdateWhileRunningSafe},
+		{"darwin", TargetCopilot, "homebrew", true, "copilot-cli", UpdateWhileRunningSafe},
+		{"darwin", TargetDroid, "homebrew", true, "droid", UpdateWhileRunningSafe},
+		// Only the audited cask is known to ship a single binary.
+		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code@latest", UpdateWhileRunningWarn},
+		{"darwin", TargetCopilot, "homebrew", true, "someone/tap/copilot-cli", UpdateWhileRunningWarn},
+		{"darwin", TargetDroid, "homebrew", true, "", UpdateWhileRunningWarn},
+		{"darwin", TargetAuggie, "npm", false, "", UpdateWhileRunningWarn},
+		{"darwin", TargetOMP, "bun", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetAider, "uv", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetAider, "pipx", false, "", UpdateWhileRunningWarn},
+		{"windows", TargetClaudeCode, "official-installer", false, "", UpdateWhileRunningBlocked},
+		{"windows", TargetCodex, "winget", false, "", UpdateWhileRunningBlocked},
+		{"windows", TargetCodex, "npm", false, "", UpdateWhileRunningBlocked},
+		{"darwin", TargetCodex, "manual", false, "", UpdateWhileRunningBlocked},
 	} {
-		if got := updateWhileRunningLevel(tt.goos, tt.target, tt.method, tt.cask); got != tt.want {
-			t.Errorf("%s %s %s cask=%t = %s, want %s", tt.goos, tt.target, tt.method, tt.cask, got, tt.want)
+		if got := updateWhileRunningLevel(tt.goos, tt.target, tt.method, tt.cask, tt.pkg); got != tt.want {
+			t.Errorf("%s %s %s cask=%t %q = %s, want %s", tt.goos, tt.target, tt.method, tt.cask, tt.pkg, got, tt.want)
 		}
 	}
 }
@@ -307,12 +314,15 @@ func TestAdvisoryUsesManagedUpdatePlan(t *testing.T) {
 		name   string
 		target Target
 	}{{"npm", TargetCodex}, {"bun", TargetOMP}, {"uv", TargetVibe}, {"pipx", TargetVibe}} {
-		for _, control := range []string{"managed", "disabled", "unmanaged", "old npm runtime", "missing installer runner", "capability probe failure"} {
+		for _, control := range []string{"managed", "disabled", "unmanaged", "old npm runtime", "missing installer runner", "missing script runner", "missing shell", "capability probe failure"} {
 			t.Run(method.name+"/"+control, func(t *testing.T) {
 				s := newTestService("linux", "npm", "bun", "uv", "pipx", "bash", "sh")
 				s.updateChecksDisabled = false
 				s.managedRoot = t.TempDir()
 				s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
+				s.installScripts = installScriptRunnerFunc(func(context.Context, ports.InstallScriptCommand, io.Writer, io.Writer) (ports.InstallScriptResult, error) {
+					return ports.InstallScriptResult{}, nil
+				})
 				s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "live", Harness: domain.AgentHarness(method.target)}}}
 				s.updateAdvisories = map[Target]UpdateAdvisory{method.target: {AgentID: string(method.target), Status: UpdateStatusBehindLatest, MaintenanceMethod: method.name, CheckedAt: time.Now()}}
 				want := UpdateWhileRunningSafe
@@ -325,7 +335,18 @@ func TestAdvisoryUsesManagedUpdatePlan(t *testing.T) {
 					want = UpdateWhileRunningBlocked
 				case "missing installer runner":
 					s.installCommands = nil
+					s.installScripts = nil
 					want = UpdateWhileRunningBlocked
+				case "missing script runner":
+					s.installScripts = nil
+					if method.name == "bun" {
+						want = UpdateWhileRunningBlocked
+					}
+				case "missing shell":
+					s.executables = executableFinderFunc(lookPathFound("npm", "bun", "uv", "pipx", "bash"))
+					if method.name == "bun" {
+						want = UpdateWhileRunningBlocked
+					}
 				case "capability probe failure":
 					s.installCapabilities = installCapabilitiesStub{probe: func(context.Context) error { return errors.New("unavailable") }}
 					want = UpdateWhileRunningBlocked

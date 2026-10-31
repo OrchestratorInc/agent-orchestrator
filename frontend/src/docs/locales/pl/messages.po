@@ -1,0 +1,179 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-10-20 13:54+0530\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: pl\n"
+
+msgid "{name} Docs"
+msgstr "Dokumentacja {name}"
+
+msgid "{title} | Orchestrator.inc Docs"
+msgstr "{title} | Dokumentacja Orchestrator.inc"
+
+msgctxt "sidebar section"
+msgid "Agents"
+msgstr "Agenci"
+
+msgid "Back to the docs home"
+msgstr "Wróć do strony głównej dokumentacji"
+
+msgctxt "sidebar section"
+msgid "Built-in capabilities"
+msgstr "Wbudowane funkcje"
+
+msgctxt "language switcher"
+msgid "Choose a language"
+msgstr "Wybierz język"
+
+msgctxt "search dialog"
+msgid "Close search"
+msgstr "Zamknij wyszukiwanie"
+
+msgctxt "sidebar"
+msgid "Close sidebar"
+msgstr "Zamknij panel boczny"
+
+msgctxt "sidebar"
+msgid "Collapse sidebar"
+msgstr "Zwiń panel boczny"
+
+msgctxt "sidebar section"
+msgid "Configuration"
+msgstr "Konfiguracja"
+
+msgctxt "code block"
+msgid "Copied"
+msgstr "Skopiowano"
+
+msgctxt "page actions"
+msgid "Copied"
+msgstr "Skopiowano"
+
+msgctxt "code block"
+msgid "Copy code"
+msgstr "Kopiuj kod"
+
+msgctxt "heading anchor"
+msgid "Copy link to this section"
+msgstr "Kopiuj link do tej sekcji"
+
+msgid "Copy Markdown"
+msgstr "Kopiuj Markdown"
+
+msgid "Docs"
+msgstr "Dokumentacja"
+
+msgctxt "sidebar section"
+msgid "Getting Started"
+msgstr "Pierwsze kroki"
+
+msgctxt "sidebar section"
+msgid "Guides"
+msgstr "Przewodniki"
+
+msgctxt "sidebar section"
+msgid "Help"
+msgstr "Pomoc"
+
+msgctxt "sidebar"
+msgid "Hide sidebar"
+msgstr "Ukryj panel boczny"
+
+msgid "Main site"
+msgstr "Strona główna"
+
+msgctxt "pagination"
+msgid "Next"
+msgstr "Dalej"
+
+msgctxt "table of contents"
+msgid "No headings"
+msgstr "Brak nagłówków"
+
+msgctxt "search dialog"
+msgid "No results found"
+msgstr "Nie znaleziono wyników"
+
+msgctxt "sidebar section"
+msgid "Notifications"
+msgstr "Powiadomienia"
+
+msgctxt "table of contents"
+msgid "On this page"
+msgstr "Na tej stronie"
+
+msgid "Open in"
+msgstr "Otwórz w"
+
+msgid "Open in {name}"
+msgstr "Otwórz w {name}"
+
+msgctxt "search"
+msgid "Open search"
+msgstr "Otwórz wyszukiwanie"
+
+msgctxt "sidebar"
+msgid "Open sidebar"
+msgstr "Otwórz panel boczny"
+
+msgid "Page not found"
+msgstr "Nie znaleziono strony"
+
+msgctxt "pagination"
+msgid "Previous"
+msgstr "Wstecz"
+
+msgid "Read {markdownUrl} and answer my questions about it."
+msgstr "Przeczytaj {markdownUrl} i odpowiedz na moje pytania na ten temat."
+
+msgctxt "sidebar section"
+msgid "Reference"
+msgstr "Dokumentacja techniczna"
+
+msgctxt "sidebar section"
+msgid "Runtimes"
+msgstr "Środowiska uruchomieniowe"
+
+msgctxt "search"
+msgid "Search"
+msgstr "Szukaj"
+
+msgctxt "sidebar"
+msgid "Show sidebar"
+msgstr "Pokaż panel boczny"
+
+msgctxt "table of contents"
+msgid "Table of contents"
+msgstr "Spis treści"
+
+msgctxt "sidebar section"
+msgid "Terminals"
+msgstr "Terminale"
+
+msgid "The page you are looking for might have been removed, had its name changed, or is temporarily unavailable."
+msgstr "Strona, której szukasz, mogła zostać usunięta, zmienić nazwę lub być tymczasowo niedostępna."
+
+msgid "This page is not translated yet, so it is shown in English."
+msgstr "Ta strona nie została jeszcze przetłumaczona, dlatego jest wyświetlana po angielsku."
+
+msgctxt "mobile menu"
+msgid "Toggle menu"
+msgstr "Przełącz menu"
+
+msgctxt "sidebar section"
+msgid "Trackers"
+msgstr "Systemy śledzenia zgłoszeń"
+
+msgctxt "sidebar section"
+msgid "Using Orchestrator"
+msgstr "Korzystanie z Orchestratora"
+
+msgid "View on GitHub"
+msgstr "Zobacz w GitHub"
+
+msgctxt "sidebar section"
+msgid "Workspaces"
+msgstr "Obszary robocze"

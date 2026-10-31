@@ -4,12 +4,18 @@ export type MarkdownBlock =
 	| { kind: "quote"; text: string }
 	| { kind: "list"; ordered: boolean; items: Array<{ text: string; checked?: boolean }> }
 	| { kind: "code"; language?: string; text: string }
-	| { kind: "table"; headers: string[]; rows: string[][] }
+	| { kind: "table"; headers: string[]; align: TableAlign[]; rows: string[][] }
 	| { kind: "image"; alt: string; url: string }
 	| { kind: "rule" };
 
+export type TableAlign = "left" | "center" | "right" | undefined;
+
 /** Pure GFM-shaped block parser; unknown syntax remains readable paragraph text. */
-export function parseBlocks(input: string): MarkdownBlock[] {
+/**
+ * `relativeImages` also reads `![alt](path/to.png)`, a link to a file beside a
+ * document (an artifact), as an image; a chat reply keeps to web images.
+ */
+export function parseBlocks(input: string, { relativeImages = false }: { relativeImages?: boolean } = {}): MarkdownBlock[] {
 	const lines = input.replace(/\r/g, "").split("\n");
 	const blocks: MarkdownBlock[] = [];
 	let paragraph: string[] = [];
@@ -33,20 +39,21 @@ export function parseBlocks(input: string): MarkdownBlock[] {
 			blocks.push({ kind: "heading", level: heading[1].length, text: heading[2] });
 			continue;
 		}
-		const image = /^!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/.exec(line.trim());
+		const image = (relativeImages ? /^!\[([^\]]*)\]\(([^\s)]+)\)\s*$/ : /^!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/).exec(line.trim());
 		if (image) {
 			flushParagraph();
 			blocks.push({ kind: "image", alt: image[1], url: image[2] });
 			continue;
 		}
-		if (line.includes("|") && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+		const align = line.includes("|") && i + 1 < lines.length ? tableDivider(lines[i + 1], tableCells(line).length) : null;
+		if (align) {
 			flushParagraph();
 			const headers = tableCells(line);
 			const rows: string[][] = [];
 			i += 2;
 			while (i < lines.length && lines[i].includes("|") && lines[i].trim()) { rows.push(tableCells(lines[i])); i++; }
 			i--;
-			blocks.push({ kind: "table", headers, rows });
+			blocks.push({ kind: "table", headers, align, rows });
 			continue;
 		}
 		if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
@@ -87,11 +94,14 @@ function taskItem(value: string): { text: string; checked?: boolean } {
 	return task ? { text: task[2], checked: task[1].toLowerCase() === "x" } : { text: value };
 }
 
-function isTableDivider(value: string): boolean {
+/** GFM delimiter row: one `-+` cell per header column, colons set alignment. */
+function tableDivider(value: string, columns: number): TableAlign[] | null {
 	const cells = tableCells(value);
-	return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+	if (cells.length !== columns || !cells.every((cell) => /^:?-+:?$/.test(cell))) return null;
+	return cells.map((cell) => cell.endsWith(":") ? (cell.startsWith(":") ? "center" : "right") : cell.startsWith(":") ? "left" : undefined);
 }
 
 function tableCells(value: string): string[] {
-	return value.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+	// `\|` is a literal pipe inside a cell, including inside inline code.
+	return value.trim().replace(/\\\|/g, "\u0000").replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim().replace(/\u0000/g, "|"));
 }

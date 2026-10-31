@@ -591,7 +591,13 @@ func (m *Manager) runInterfaceTransition(
 	// Native-history replay is the TUI -> Chat barrier; an account move resumes
 	// the same controller kind, so ordinary context resume applies.
 	replayHistory := !transition.AccountMove()
-	err = m.startTransitionTarget(ctx, rec.ID, transition.NativeConversationID == "", replayHistory, transition.HistoryPolicy)
+	// As in rollback: without an epoch commit (an account move) a Chat still owns
+	// its provider id durably, so it resumes, replacing a never-messaged provider
+	// in place. A fresh start would present an owner the database does not hold.
+	fresh := transition.NativeConversationID == "" &&
+		(modeChanged || transition.SourceMode != domain.SessionModeChat ||
+			!m.chatHoldsProviderConversation(ctx, rec.ID))
+	err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
 	if errors.Is(err, ports.ErrChatHistoryUnsettled) &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
 		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
@@ -608,7 +614,7 @@ func (m *Manager) runInterfaceTransition(
 			_ = m.retainUnconfirmedTransitionTarget(transition, errors.Join(err, stopErr))
 			return
 		}
-		err = m.startTransitionTarget(ctx, rec.ID, transition.NativeConversationID == "", replayHistory, transition.HistoryPolicy)
+		err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
 	}
 	if err != nil {
 		code := "TARGET_RESUME_FAILED"
@@ -634,6 +640,19 @@ func (m *Manager) runInterfaceTransition(
 		m.clearAccountOverride(rec.ID)
 		accountStarting = false
 		m.markAccountSwitch(ctx, rec, transition)
+	}
+	if transition.SourceMode == domain.SessionModeTUI && transition.TargetMode == domain.SessionModeChat &&
+		transition.NativeConversationID != "" {
+		// Chat resumed this provider thread and imported its history into the
+		// conversation tables, so the terminal copy of those turns would now be a
+		// duplicate. Turns of other threads were not imported and stay.
+		if cleaner, ok := m.store.(interface {
+			DeleteTerminalTurnsForThread(context.Context, domain.SessionID, domain.AgentHarness, string) error
+		}); ok {
+			if err := cleaner.DeleteTerminalTurnsForThread(ctx, rec.ID, rec.Harness, transition.NativeConversationID); err != nil {
+				m.logger.Warn("delete imported terminal turns", "sessionID", rec.ID, "error", err)
+			}
+		}
 	}
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed
@@ -932,10 +951,11 @@ func (m *Manager) preflightTerminalLaunch(
 		return err
 	}
 	config := restoredAgentConfig(rec, project.Config)
+	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true)
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "")
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
@@ -1464,6 +1484,10 @@ func (m *Manager) deliverTransitionMessages(
 			return fmt.Errorf("recheck transition %s delivery readiness: %w", transition.ID, err)
 		}
 	}
+	// These sends pass the unsent-draft check like any other. The input gate
+	// held above means no keystroke can land meanwhile, and a refusal returns an
+	// error that leaves the message pending in this durable outbox for the next
+	// delivery attempt, so nothing is lost or concatenated.
 	for _, message := range messages {
 		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID, ports.MessageDeliveryOptions{AuthoredByUser: message.AuthoredByUser, SenderSessionID: message.SenderSessionID, InteractionAt: message.CreatedAt}); err != nil {
 			return fmt.Errorf("deliver transition %s message %d: %w", transition.ID, message.ID, err)

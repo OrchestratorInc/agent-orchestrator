@@ -11,7 +11,8 @@ inherits a stunted environment (minimal `PATH`, no shell-exported credentials).
 The daemon then cannot find `git`/the agent CLIs, and the agents it launches
 cannot see API keys. Packaged macOS/Linux builds carry their own tmux and do
 not depend on a machine installation; development and standalone daemon runs
-still resolve tmux from `PATH`. The same app launched from a terminal works,
+still resolve tmux from `PATH`, and on macOS then from the Homebrew and MacPorts
+install paths a minimal `PATH` omits. The same app launched from a terminal works,
 because a terminal-started process inherits the shell's fully-populated
 environment. The fix is to resolve the user's login-shell environment once at
 startup and use it as the base for the daemon's environment.
@@ -207,8 +208,10 @@ it. We shell out once to the user's own shell and adopt its result.
 - `frontend/src/shared/bundled-tmux.ts` and `frontend/src/main.ts` - packaged
   resource resolution, durable versioned staging under the AO data directory,
   and `AO_TMUX_BINARY`/AO-owned socket injection.
-- `backend/internal/adapters/runtime/tmux/tmux.go` - honors
-  `AO_TMUX_BINARY`; standalone runs fall back to `exec.LookPath("tmux")`.
+- `backend/internal/tmuxbin/resolve.go` - shared tmux lookup for the runtime,
+  spawn gate, `ao doctor`, and system check: `AO_TMUX_BINARY` (fail-closed),
+  then the packaged `resources/tmux/bin/tmux`, then `PATH`, then on macOS
+  `/opt/homebrew/bin/tmux`, `/usr/local/bin/tmux`, and `/opt/local/bin/tmux`.
 - `backend/internal/observe/reaper/reaper.go`,
   `backend/internal/lifecycle/runtime.go` - liveness -> termination
   (`ProbeFailed` never terminates, so a daemon that cannot run `tmux` strands

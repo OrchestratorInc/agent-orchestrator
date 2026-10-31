@@ -6,7 +6,7 @@ import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
-import { deleteAccountRemoteHost, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, readAccountHostDirectory, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -16,6 +16,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThisComputerAccess } from "./ThisComputerAccess";
 
 type SavedHost = { hostId: string; label: string; url: string };
 
@@ -96,8 +97,12 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
 			if (current?.hostId && cloudBaseUrl) {
-				const token = await aoBridge.remotes.issueAccountToken(current.url);
-				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token });
+				// With the machine's host key AO Cloud needs its own signature; an AO
+				// Cloud that does not say it takes host keys refuses the field. Read
+				// first: issuing the token moves it from any other account.
+				const { hostKeys } = await readAccountHostDirectory(cloudBaseUrl);
+				const { token, hostKey } = await aoBridge.remotes.issueAccountToken(current.url);
+				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token, hostKey: hostKeys ? hostKey : undefined });
 			}
 			await load();
 			resetForm();
@@ -152,6 +157,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 				<Switch aria-label={t("remote.enable")} checked={enabled} onCheckedChange={setEnabled} />
 			</SettingsRow>
 		</SettingsSection>
+
+		<ThisComputerAccess />
 
 		<SettingsSection title={t("remote.savedHosts")} grouped>
 			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}

@@ -2,8 +2,6 @@ package controllers_test
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,24 +19,11 @@ import (
 )
 
 type fakeRoster struct {
-	setMutedErr error
-	devices     []mobilebridge.PushDevice
-	muted       map[string]bool
-	deleted     []string
+	devices []mobilebridge.PushDevice
+	deleted []string
 }
 
 func (f *fakeRoster) List() []mobilebridge.PushDevice { return f.devices }
-
-func (f *fakeRoster) SetMuted(installID string, muted bool) error {
-	if f.setMutedErr != nil {
-		return f.setMutedErr
-	}
-	if f.muted == nil {
-		f.muted = map[string]bool{}
-	}
-	f.muted[installID] = muted
-	return nil
-}
 
 func (f *fakeRoster) Delete(installID string) error {
 	f.deleted = append(f.deleted, installID)
@@ -71,7 +56,7 @@ func TestListDevicesMergesLiveFlag(t *testing.T) {
 	now := time.Now().UTC()
 	roster := &fakeRoster{devices: []mobilebridge.PushDevice{
 		{InstallID: "i1", Token: "ExponentPushToken[a]", DeviceName: "iPhone", CreatedAt: now, LastSeenAt: now},
-		{InstallID: "i2", Token: "ExponentPushToken[b]", DeviceName: "M31s", Muted: true, CreatedAt: now, LastSeenAt: now},
+		{InstallID: "i2", Token: "ExponentPushToken[b]", DeviceName: "M31s", CreatedAt: now, LastSeenAt: now},
 	}}
 	srv := newRosterServer(t, roster, fakeLive{"i1": true})
 
@@ -88,7 +73,6 @@ func TestListDevicesMergesLiveFlag(t *testing.T) {
 		Devices []struct {
 			InstallID string `json:"installId"`
 			Live      bool   `json:"live"`
-			Muted     bool   `json:"muted"`
 		} `json:"devices"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&env); err != nil {
@@ -97,18 +81,15 @@ func TestListDevicesMergesLiveFlag(t *testing.T) {
 	if len(env.Devices) != 2 {
 		t.Fatalf("devices = %d, want 2", len(env.Devices))
 	}
-	byID := map[string]struct{ live, muted bool }{}
+	live := map[string]bool{}
 	for _, d := range env.Devices {
-		byID[d.InstallID] = struct{ live, muted bool }{d.Live, d.Muted}
+		live[d.InstallID] = d.Live
 	}
-	if !byID["i1"].live {
+	if !live["i1"] {
 		t.Fatal("i1 should be live")
 	}
-	if byID["i2"].live {
+	if live["i2"] {
 		t.Fatal("i2 should be offline")
-	}
-	if !byID["i2"].muted {
-		t.Fatal("i2 should report muted")
 	}
 }
 
@@ -157,7 +138,7 @@ func TestListDevicesFallsBackToPresenceWhenDeviceLiveOmitted(t *testing.T) {
 
 // TestListDevicesReportsNotificationsEnabled pins the new wire field: a row
 // with a token reports notificationsEnabled true, and a row with none (an
-// identity-only announce) reports false, regardless of muted/live state.
+// identity-only announce) reports false, regardless of live state.
 func TestListDevicesReportsNotificationsEnabled(t *testing.T) {
 	now := time.Now().UTC()
 	roster := &fakeRoster{devices: []mobilebridge.PushDevice{
@@ -196,30 +177,10 @@ func TestListDevicesReportsNotificationsEnabled(t *testing.T) {
 	}
 }
 
-func TestMuteDevice(t *testing.T) {
-	roster := &fakeRoster{}
-	srv := newRosterServer(t, roster, fakeLive{})
-
-	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/v1/mobile/devices/i1",
-		strings.NewReader(`{"muted":true}`))
-	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("patch: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", res.StatusCode)
-	}
-	if !roster.muted["i1"] {
-		t.Fatalf("muted = %+v, want i1 true", roster.muted)
-	}
-}
-
 // TestMobileDeviceRoutesUnavailableWithoutRegistry pins the human ruling that
 // supersedes the brief's nil-guard: the roster routes always mount, and when
 // the device registry failed to load (deps.DeviceRoster is nil), each of
-// List/Mute/Remove answers 503 with code DEVICE_REGISTRY_UNAVAILABLE rather
+// List/Remove answers 503 with code DEVICE_REGISTRY_UNAVAILABLE rather
 // than 404 (route missing) or a panic (nil dereference). This lets the desktop
 // tell "your registry is broken" apart from "this daemon predates the roster
 // feature".
@@ -236,7 +197,6 @@ func TestMobileDeviceRoutesUnavailableWithoutRegistry(t *testing.T) {
 		body   string
 	}{
 		{"list", http.MethodGet, "/api/v1/mobile/devices", ""},
-		{"mute", http.MethodPatch, "/api/v1/mobile/devices/i1", `{"muted":true}`},
 		{"remove", http.MethodDelete, "/api/v1/mobile/devices/i1", ""},
 	}
 	for _, tc := range cases {
@@ -291,6 +251,22 @@ func TestDeleteDevice(t *testing.T) {
 	}
 }
 
+// Per-device mute was removed: the roster no longer accepts PATCH on a device,
+// so an old client gets 405 rather than a silent success.
+func TestMuteRouteIsGone(t *testing.T) {
+	srv := newRosterServer(t, &fakeRoster{}, fakeLive{})
+	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/v1/mobile/devices/i1", strings.NewReader(`{"muted":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", res.StatusCode)
+	}
+}
+
 // TestRosterRoutesBlockedOnLANListener pins isLANControlBlockedPath's decision
 // for these two literal paths, so it catches deletion of the "/api/v1/mobile"
 // entry from lanControlBlockedPrefixes. It is intentionally decoupled from
@@ -338,45 +314,6 @@ func TestRosterMountedRoutesAreLANBlocked(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no /api/v1/mobile/devices routes were mounted — router wiring changed?")
-	}
-}
-
-// The API must not describe a failed write as a missing device: 404 sends the
-// user looking for a device that is plainly listed, while a 500 says a fault
-// occurred and belongs in the logs.
-func TestMuteDeviceMapsErrorsToDistinctStatuses(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		err      error
-		wantCode int
-		wantBody string
-	}{
-		{"unknown device", fmt.Errorf("%w: %q", mobilebridge.ErrDeviceNotFound, "gone"), http.StatusNotFound, "DEVICE_NOT_FOUND"},
-		{"persist failure", errors.New("persist mute: no space left on device"), http.StatusInternalServerError, "DEVICE_MUTE_FAILED"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := newRosterServer(t, &fakeRoster{setMutedErr: tc.err}, fakeLive{})
-			req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/v1/mobile/devices/i1", strings.NewReader(`{"muted":true}`))
-			req.Header.Set("Content-Type", "application/json")
-			res, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("patch: %v", err)
-			}
-			defer res.Body.Close()
-
-			if res.StatusCode != tc.wantCode {
-				t.Fatalf("status = %d, want %d", res.StatusCode, tc.wantCode)
-			}
-			var env struct {
-				Code string `json:"code"`
-			}
-			if err := json.NewDecoder(res.Body).Decode(&env); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if env.Code != tc.wantBody {
-				t.Fatalf("code = %q, want %q", env.Code, tc.wantBody)
-			}
-		})
 	}
 }
 

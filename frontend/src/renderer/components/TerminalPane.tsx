@@ -109,6 +109,13 @@ type CachedTerminalEntry = TerminalCacheDescriptor & {
 	terminal?: AttachableTerminal;
 };
 
+// isUnlisted reports whether the last workspace snapshot (listed; null before
+// one arrived) does not list an entry's session. Such an entry is kept only
+// while it is on screen (see the snapshot reconcile).
+function isUnlisted(entry: CachedTerminalEntry, listed: Set<string> | null): boolean {
+	return Boolean(entry.sessionId) && listed !== null && !listed.has(entry.sessionId ?? "");
+}
+
 type ActiveTerminalEntry = {
 	key: string;
 	slot: HTMLDivElement;
@@ -339,6 +346,11 @@ export function TerminalCacheProvider({
 	const entriesRef = useRef(new Map<string, CachedTerminalEntry>());
 	const activeRef = useRef<ActiveTerminalEntry | null>(null);
 	const parkingRef = useRef<HTMLDivElement | null>(null);
+	// The sessions the last workspace snapshot listed (null before one
+	// arrived). A terminal kept on screen while its session was not listed is
+	// disposed once it is parked (disposeIfUnlistedOnceParked), since a later
+	// snapshot (which would dispose it then) may never come.
+	const listedSessionsRef = useRef<Set<string> | null>(null);
 	const muxPoolRef = useRef<TerminalMuxPool | null>(null);
 	if (!muxPoolRef.current) {
 		muxPoolRef.current = createTerminalMuxPool(() =>
@@ -433,6 +445,22 @@ export function TerminalCacheProvider({
 		[rerender],
 	);
 
+	// A terminal that left the screen while the snapshot does not list its
+	// session is disposed, as the snapshot reconcile disposes a parked one: it
+	// was kept only while on screen, and no later snapshot may come. The check
+	// waits for the commit to finish, so a slot that re-activates the same
+	// entry in it (its effect re-running) keeps it on screen without a remount.
+	const disposeIfUnlistedOnceParked = useCallback(
+		(cacheKey: string) => {
+			queueMicrotask(() => {
+				const entry = entriesRef.current.get(cacheKey);
+				if (!entry || activeRef.current?.key === cacheKey) return;
+				if (isUnlisted(entry, listedSessionsRef.current)) removeEntry(cacheKey);
+			});
+		},
+		[removeEntry],
+	);
+
 	const activate = useCallback(
 		(descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => {
 			const parking = parkingRef.current;
@@ -447,6 +475,8 @@ export function TerminalCacheProvider({
 					if (previousEntry.discardOnDeactivate) {
 						entriesRef.current.delete(previous.key);
 						previousEntry.container.remove();
+					} else {
+						disposeIfUnlistedOnceParked(previous.key);
 					}
 				}
 			}
@@ -487,7 +517,7 @@ export function TerminalCacheProvider({
 			activeRef.current = { key: entry.cacheKey, slot };
 			rerender();
 		},
-		[muxPool, rerender],
+		[disposeIfUnlistedOnceParked, muxPool, rerender],
 	);
 
 	const deactivate = useCallback(
@@ -505,9 +535,10 @@ export function TerminalCacheProvider({
 				return;
 			}
 			parkTerminal(entry, parking);
+			disposeIfUnlistedOnceParked(cacheKey);
 			rerender();
 		},
-		[rerender],
+		[disposeIfUnlistedOnceParked, rerender],
 	);
 
 	const update = useCallback(
@@ -570,9 +601,18 @@ export function TerminalCacheProvider({
 				workspace.sessions.map((session) => [session.id, session] as const),
 			),
 		);
+		listedSessionsRef.current = new Set(sessions.keys());
 		for (const entry of entriesRef.current.values()) {
 			const session = entry.sessionId ? sessions.get(entry.sessionId) : undefined;
 			if (entry.sessionId && !session) {
+				// The terminal on screen is kept: its slot activates an entry only
+				// when it mounts, so disposing it would leave the pane empty for as
+				// long as the session stays open. A session can be on screen before
+				// the snapshot lists it (opened right after it was created, or in a
+				// project created elsewhere that the project list has not fetched
+				// yet). Once it leaves the screen it is disposed unless a snapshot
+				// lists it by then (disposeIfUnlistedOnceParked).
+				if (activeRef.current?.key === entry.cacheKey) continue;
 				removeEntry(entry.cacheKey);
 				continue;
 			}
@@ -1101,7 +1141,9 @@ function AttachedTerminal({
 		exitNotice:
 			terminalTarget?.kind === "reviewer"
 				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
-				: undefined,
+				: terminalTarget?.kind === "shell"
+					? undefined
+					: "",
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1491,6 +1533,18 @@ type TerminalEndedStripProps = {
 function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const terminated = variant === "session" && session && !sessionIsActive(session);
+	const agentExited = variant === "session" && sessionAgentExited(session);
+	const startupFailed = variant === "session" && session?.provisionState === "failed";
+	const heading = reviewDelivered
+		? t("terminal.reviewCompleted")
+		: startupFailed
+			? t("terminal.startupFailed")
+			: terminated
+				? t("terminal.sessionTerminated")
+				: agentExited
+					? t("terminal.agentExited")
+					: t("terminal.ended");
 	const message = reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: canRestore
@@ -1503,12 +1557,19 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 
 	return (
 		<div className="shrink-0 border-b border-border bg-surface/80 px-4 py-2">
-			<div className="flex min-h-control-board items-center gap-3">
-				<div className="min-w-0 flex-1">
-					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
+			<div className="flex min-h-control-board flex-wrap items-center gap-3">
+				<div className="min-w-0">
+					<div
+						className={cn(
+							"font-mono text-caption font-medium uppercase tracking-wide-md",
+							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+						)}
+					>
+						{heading}
 					</div>
-					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
+					<div className="mt-0.5 text-xs text-muted-foreground">
+						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
@@ -1519,11 +1580,12 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 								<button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex size-control-form shrink-0 items-center justify-center rounded-md border border-border bg-raised text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
+									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
+									{t("terminal.restoreSession")}
 								</button>
 							</span>
 						</TooltipTrigger>

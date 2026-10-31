@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -14,9 +17,33 @@ import (
 const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
+// IdleBeforeHibernate is how long a quiet provider stays parked, prompt
+// cache and all, before idle hibernation may stop it. Most follow-ups arrive
+// within a minute or two; stopping the process after 30 s made each of them
+// pay a full cold start for a few hundred megabytes of memory saved.
+const IdleBeforeHibernate = 90 * time.Second
+
 type wakeRun struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	err     error
+	started time.Time
+}
+
+// wakeCallers names the call chain that started a wake, nearest first. Wakes
+// are rare, so walking the stack costs nothing that matters.
+func wakeCallers() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	var names []string
+	for {
+		frame, more := frames.Next()
+		if frame.Function != "" {
+			names = append(names, path.Base(frame.Function))
+		}
+		if !more {
+			return strings.Join(names, " < ")
+		}
+	}
 }
 
 type hibernationStore interface {
@@ -175,9 +202,10 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if o.forUpdate && candidate.Kind == domain.KindOrchestrator {
-		// Idle hibernation keeps orchestrators running. An update must stop
-		// them too, under the same turn, queue and approval checks.
+	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+		// Idle hibernation keeps orchestrators running. An update or a move to
+		// a new release stops them only to start them again, so they go too,
+		// under the same turn, queue and approval checks.
 		candidate.Kind = ""
 	}
 	if !candidate.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {
@@ -193,7 +221,7 @@ func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: chatHibernateGrace})
+	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: IdleBeforeHibernate})
 }
 
 // HibernateChatForVersionRefresh stops an idle provider that still runs a
@@ -453,9 +481,20 @@ func (s *Service) readingController(ctx context.Context, id domain.SessionID) (*
 	return controller, rec, release, nil
 }
 
+// errAsleep tells a caller that must not wake a session inline that the
+// session is hibernated, so it can queue instead.
+var errAsleep = errors.New("chat session is asleep")
+
 // workingController admits provider work under the start/stop gate, then
 // releases that gate so explicit Kill can interrupt a stuck provider call.
 func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*Controller, func(), error) {
+	return s.admitController(ctx, id, true)
+}
+
+// admitController is workingController. With wakeAsleep false, a hibernated
+// session returns errAsleep instead of being woken inline: the caller may hold
+// the session's input lease, which the resume waits to drain.
+func (s *Service) admitController(ctx context.Context, id domain.SessionID, wakeAsleep bool) (*Controller, func(), error) {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	for {
 		if !gate.tryLock() {
@@ -514,6 +553,9 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 			}
 		}
 		gate.unlock()
+		if rec.HibernatedAt != nil && !wakeAsleep {
+			return nil, nil, errAsleep
+		}
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			return nil, nil, err
 		}
@@ -559,8 +601,15 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 	s.wakeMu.Lock()
 	if run := s.wakeRuns[id]; run != nil {
 		s.wakeMu.Unlock()
+		joined := time.Now()
+		s.log.Info("chat wake joined an in-flight wake", "session", id,
+			"wakeRunningFor", joined.Sub(run.started).Round(time.Millisecond))
 		select {
 		case <-run.done:
+			if run.err != nil {
+				s.log.Warn("joined chat wake failed", "session", id,
+					"waited", time.Since(joined).Round(time.Millisecond), "err", run.err)
+			}
 			return run.err
 		case <-ctx.Done():
 			return ctx.Err()
@@ -580,11 +629,20 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		}
 		return ErrNoController
 	}
-	run := &wakeRun{done: make(chan struct{})}
+	run := &wakeRun{done: make(chan struct{}), started: time.Now()}
 	s.wakeRuns[id] = run
 	s.waking[id]++
 	s.wakeMu.Unlock()
+	// The caller chain tells a user's view or send apart from an automated relay.
+	s.log.Info("chat wake started", "session", id, "callers", wakeCallers())
 	finish := func(resultErr error) error {
+		if resultErr != nil {
+			s.log.Warn("chat wake failed", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+		} else {
+			s.log.Info("chat wake finished", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond))
+		}
 		s.wakeMu.Lock()
 		run.err = resultErr
 		delete(s.wakeRuns, id)
@@ -633,6 +691,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			if s.versionSwitchFailed(ctx, id, err) {
 				return
 			}
+			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
 		}
@@ -640,6 +699,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.observeVersionSwitch(id, version, "succeeded")
 		}
 		if err := s.DrainQueued(ctx, id); err != nil {
+			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()

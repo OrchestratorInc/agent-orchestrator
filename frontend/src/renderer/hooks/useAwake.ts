@@ -106,6 +106,7 @@ export function useAwake(enabled = true, detailed = false) {
 		error: mutation.error,
 		busy,
 		act: mutation.mutate,
+		actAsync: mutation.mutateAsync,
 	};
 }
 

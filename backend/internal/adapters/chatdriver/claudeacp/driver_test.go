@@ -281,6 +281,39 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	if prompt["type"] != "preset" || prompt["preset"] != "claude_code" || prompt["append"] != "AO standing instructions" {
 		t.Fatalf("systemPrompt = %#v", prompt)
 	}
+	if options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options"); options["tools"] != nil {
+		t.Fatalf("ordinary session received a tool restriction: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+	for _, window := range []string{"", "50000"} {
+		t.Run("compact window "+window, func(t *testing.T) {
+			meta := claudeSessionMeta(acpdriver.LaunchConfig{
+				SystemPrompt: "Return only task title and slug JSON.", DisableTools: true,
+				Env: map[string]string{claudeAutoCompactWindowEnv: window},
+			})
+			prompt := meta["systemPrompt"].(map[string]any)
+			if prompt["append"] != "Return only task title and slug JSON." {
+				t.Fatalf("text-only task received tool-use guidance: %#v", prompt)
+			}
+			options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+			tools, ok := options["tools"].([]string)
+			if !ok || tools == nil || len(tools) != 0 {
+				t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+			}
+			if options["strictMcpConfig"] != true || !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+				t.Fatalf("background task can inherit MCP tools: %#v", options)
+			}
+			if window != "" {
+				env, ok := options["env"].(map[string]string)
+				if !ok || env[claudeAutoCompactWindowEnv] != window {
+					t.Fatalf("lost compaction environment: %#v", options)
+				}
+			}
+		})
+	}
 }
 
 func TestClaudeSessionMetaNeverIncludesReplayContext(t *testing.T) {
@@ -311,6 +344,22 @@ func TestClaudeSessionOptionsUseACPConfigIDs(t *testing.T) {
 	want := []acpdriver.SessionOption{{ID: "model", Value: "sonnet"}, {ID: "effort", Value: "high"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeSessionOptionsNeverSwapAFullIDForAnAlias(t *testing.T) {
+	got := claudeSessionOptions(ports.ChatTurnSettings{Model: "claude-haiku-5-5"})
+	want := []acpdriver.SessionOption{{ID: "model", Value: "claude-haiku-5-5", Optional: true, Name: "Haiku 5.5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeModelNameReadsTheVersion(t *testing.T) {
+	for id, want := range map[string]string{"claude-opus-5-5": "Opus 5.5", "claude-sonnet-5": "Sonnet 5", "claude-opus-4-5-20251101": "Opus 4.5", "opus": ""} {
+		if got := claudeModelName(id); got != want {
+			t.Errorf("claudeModelName(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 

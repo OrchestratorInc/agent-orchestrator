@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
@@ -9,6 +11,26 @@ import { addRemote, readRemotes, updateRemote, type RemoteChanges, type RemoteEn
 // Without an override, keep the existing ~/.ao location.
 export function remotesFilePath(): string {
 	return path.join(process.env.AO_DATA_DIR?.trim() || path.join(os.homedir(), ".ao"), "remotes.json");
+}
+
+type RunFile = (file: string, args: string[], options: { timeout: number }) => Promise<{ stdout: string }>;
+
+/** The name other devices list this machine under: macOS's Computer Name
+ * ("Dhruv’s Mac mini"), else the host name without its mDNS suffix. */
+export async function computerName(
+	run: RunFile = promisify(execFile),
+	platform: NodeJS.Platform = process.platform,
+	hostname: () => string = os.hostname,
+): Promise<string> {
+	if (platform === "darwin") {
+		try {
+			const name = (await run("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 })).stdout.trim();
+			if (name) return name;
+		} catch {
+			// No Computer Name set; the host name still identifies the machine.
+		}
+	}
+	return hostname().replace(/\.local$/i, "");
 }
 
 // The slice of Electron's ipcMain these handlers need, so tests need no Electron.
@@ -200,11 +222,14 @@ export function registerRemotesIpc(
 			signal: AbortSignal.timeout(8_000),
 		});
 		if (!response.ok) throw new Error("The host did not accept account linking. Check its password and version.");
-		const result = await response.json() as { hostId?: string; token?: string };
+		const result = await response.json() as { hostId?: string; token?: string; hostKey?: string };
 		if (result.hostId !== entry.hostId || !/^[0-9a-f]{64}$/.test(result.token ?? "")) throw new Error("The host returned an invalid account credential.");
-		return result.token;
+		// The machine's host key, for an AO Cloud that then needs its signature; an older machine sends none.
+		const hostKey = /^[A-Za-z0-9_-]{43}$/.test(result.hostKey ?? "") ? result.hostKey : undefined;
+		return { token: result.token!, hostKey };
 	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
+	ipcMain.handle("remotes:computerName", () => computerName());
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {
 		const account = await accountID();
 		refuseSelf(hostId, await localIdentity());

@@ -25,7 +25,16 @@ func pipeNameFromRunFile(runFilePath string) string {
 
 // Listen creates the local daemon-to-Electron browser bridge listener.
 func Listen(runFilePath string) (net.Listener, string, error) {
+	return ListenNamed(runFilePath, "browser")
+}
+
+// ListenNamed creates a browser bridge listener for the named runtime. The
+// Electron runtime keeps its historical pipe name.
+func ListenNamed(runFilePath, runtimeName string) (net.Listener, string, error) {
 	name := pipeNameFromRunFile(runFilePath)
+	if runtimeName != "browser" {
+		name += "-" + unsafePipeChars.ReplaceAllString(runtimeName, "-")
+	}
 	ln, err := winio.ListenPipe(name, &winio.PipeConfig{
 		// Protected DACL: the creating owner and LocalSystem only. This prevents
 		// another local account from connecting to or squatting the runtime pipe.

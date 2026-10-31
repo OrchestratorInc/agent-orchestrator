@@ -49,6 +49,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -62,7 +63,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{s.planNPM(target, "@anthropic-ai/claude-code"), official}
 		}
 	case TargetCodex:
-		official := s.officialByOS(target, "https://chatgpt.com/codex/install.sh", "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, codexInstallScriptURL, "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrewCask(target, "codex"), s.planNPM(target, "@openai/codex"), official}
 		} else {
@@ -236,7 +237,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{manualPlan(target, "fx publishes this installer for macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetOMP:
-		official := s.officialByOS(target, "https://omp.sh/install", "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, ompInstallScriptURL, "sh", "https://omp.sh/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrew(target, "can1357/tap/omp"), s.planBun(target), official}
 		} else {
@@ -273,6 +274,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		} else {
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
+	case TargetHermes:
+		// Homebrew ships prebuilt release bottles; the official installer clones
+		// the GitHub repository, so it stays the fallback (lastResortInstallers).
+		plans = []Plan{s.planHermesInstaller(target)}
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planBrew(target, "hermes-agent"), plans[0]}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -303,7 +311,7 @@ func (s *Service) resolveAgentMethod(target Target, method string) (Plan, error)
 
 func (s requestPlanner) resolveAgentMethod(target Target, method string, operation AgentOperation) (Plan, error) {
 	for _, plan := range s.agentMethodPlans(target, operation) {
-		if plan.Method != method {
+		if plan.ownershipMethod() != method {
 			continue
 		}
 		if plan.Unsupported {
@@ -364,14 +372,30 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
-		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
-			// Sessions run AO's managed copy, so a reinstall repairs that one:
-			// the same release, installed fresh beside it.
-			plan.managed = true
-			plan.managedPin = record.Version
-			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
-			plan.Command, plan.Prepare = argv, nil
-			return plan
+		if record, ok := s.readManagedRecord(plan.Target); ok && s.managedRecordMatchesPlan(record, plan) {
+			managed := s.planManagedOMP(plan, record.Version)
+			if managed.Unsupported {
+				return managed
+			}
+			script := installScript
+			if managed.Script != nil {
+				script = managed.Script
+			}
+			// A release the vendor's installer put there is reinstalled with
+			// that installer (for a Codex cask, its official one, not brew).
+			if script, ok := s.officialManagedScript(managed, script); ok {
+				managed.Script = script
+			}
+			if s.managedEligible(managed) {
+				// Sessions run AO's managed copy, so a reinstall repairs that one:
+				// the same release, installed fresh beside it.
+				plan = managed
+				plan.managed = true
+				plan.managedPin = record.Version
+				argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+				plan.Command, plan.Prepare = argv, nil
+				return plan
+			}
 		}
 		switch plan.Method {
 		case "homebrew":
@@ -398,8 +422,21 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	}
 
 	if operation == AgentOperationUpdate {
+		plan = s.planManagedOMP(plan, "")
+		if plan.Unsupported {
+			return plan
+		}
+		if plan.Script != nil {
+			installScript, plan.Script = plan.Script, nil
+		}
 		switch plan.Method {
 		case "homebrew":
+			// A cask whose upgrade would delete files running sessions load is
+			// updated with the vendor's installer into a release of AO's own.
+			if script, ok := s.officialManagedScript(plan, nil); ok {
+				plan.Script = script
+				break
+			}
 			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
 			// live Homebrew API, so refresh local metadata before upgrading.
 			plan.Prepare = [][]string{{"brew", "update"}}
@@ -420,6 +457,13 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
+			// A vendor installer AO can run into a release of its own updates
+			// beside the copy sessions run (officialManagedRecipes).
+			if script, ok := s.officialManagedScript(plan, installScript); ok {
+				plan.Command = nil
+				plan.Script = script
+				break
+			}
 			// These self-updaters do not reliably replace the installed binary
 			// headlessly: installerUpdateTargets on every platform, and these
 			// Windows ones. Re-run the vendor's installer instead; ownership and
@@ -442,7 +486,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Reason = "This installation method does not provide a supported update command."
 		}
 		if !plan.Unsupported {
-			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask, plan.Package)
 		}
 		if s.managedEligible(plan) {
 			// Installed side by side, so no session's files are touched, on any
@@ -458,6 +502,31 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	return plan
 }
 
+// planManagedOMP discloses the standalone installer before a Bun-owned OMP
+// update or managed reinstall is approved. New OMP releases may require a
+// newer Bun; the isolated binary avoids changing the working copy's runtime.
+func (s requestPlanner) planManagedOMP(plan Plan, pin string) Plan {
+	if plan.Target != TargetOMP || plan.Method != "bun" || s.managedRoot == "" || (s.goos != "darwin" && s.goos != "linux") {
+		return plan
+	}
+	standalone := s.planShellInstaller(TargetOMP, ompInstallScriptURL, "sh")
+	standalone.sourceMethod, standalone.sourcePackage = plan.Method, plan.Package
+	standalone.DocsURL, standalone.Notice = plan.DocsURL, plan.Notice
+	if standalone.Unsupported {
+		return standalone
+	}
+	recipe, ok := s.officialManagedRecipeFor(standalone)
+	if !ok {
+		standalone.Unsupported = true
+		standalone.Reason = "OMP's standalone installer is unavailable."
+		return standalone
+	}
+	dir := filepath.Join(s.managedTargetDir(TargetOMP), "versions", "<next>")
+	standalone.Script.Args = recipe.args(dir, pin)
+	standalone.ExpectedDestination = filepath.Join(dir, recipe.binRel)
+	return standalone
+}
+
 // vendorUpdateCommands are the harnesses' own self-update commands, used only
 // when the vendor installer, not a package manager, owns the running binary.
 // Each updates the stable channel without a terminal: Kimchi's "self" leaves
@@ -470,6 +539,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetCodex:      {"codex", "update"},
 	TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
 	TargetGoose:      {"goose", "update"},
+	TargetHermes:     {"hermes", "update", "--yes"},
 	TargetKimchi:     {"kimchi", "update", "self", "--force"},
 	TargetOMP:        {"omp", "update"},
 	TargetAutohand:   {"autohand", "update"},
@@ -526,6 +596,26 @@ func (s *Service) officialByOS(target Target, unixURL, unixShell, windowsURL, do
 	default:
 		return manualPlan(target, fmt.Sprintf("The official installer does not support %s.", s.goos), docsURL)
 	}
+}
+
+// planHermesInstaller runs Hermes's official installer for the latest release.
+// Its setup and gateway stages need a terminal, so they are skipped; provider
+// setup runs afterwards through the harness's own setup action.
+func (s *Service) planHermesInstaller(target Target) Plan {
+	plan := s.officialByOS(target,
+		"https://hermes-agent.nousresearch.com/install.sh", "bash",
+		"https://hermes-agent.nousresearch.com/install.ps1",
+		agentDocumentationURLs[target],
+	)
+	if plan.Script == nil {
+		return plan
+	}
+	if s.goos == "windows" {
+		plan.Script.Args = []string{"-NonInteractive"}
+	} else {
+		plan.Script.Args = []string{"--non-interactive"}
+	}
+	return plan
 }
 
 func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
