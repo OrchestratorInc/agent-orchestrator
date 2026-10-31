@@ -801,9 +801,11 @@ func (m *memorySideStore) UpsertSideActivity(sideID, generation string, activity
 			activity.Input = old.Input
 		}
 		activity.CreatedAt = old.CreatedAt
+		activity.Revision = old.Revision + 1
 		m.activities[sideID][i] = activity
 		return nil
 	}
+	activity.Revision = 1
 	m.activities[sideID] = append(m.activities[sideID], activity)
 	return nil
 }
@@ -866,6 +868,7 @@ func (m *memorySideStore) SetSideReference(_ context.Context, sideID string, ref
 		s.ReferencePending = true
 		s.SourceMessageID = ref.MessageID
 		s.SourceRevision = ref.Revision
+		s.SourceSegments = append([]domain.ExcerptSegment(nil), ref.Segments...)
 		s.UpdatedAt = now
 	})
 }

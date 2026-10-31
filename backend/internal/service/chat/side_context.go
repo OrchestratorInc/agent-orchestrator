@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -190,6 +191,45 @@ func (s *Service) sideSelfReferenceContext(ctx context.Context, side domain.Side
 	messages, err := s.sides.store.SideMessages(ctx, side.ID, nil)
 	if err != nil {
 		return "", "", err
+	}
+	if ref.Segments != nil {
+		if validateExcerptShape(ref) != nil || ref.ConversationID != side.ID {
+			return "", "", ErrExcerptInvalid
+		}
+		rows := ConversationRows{}
+		turnIDs := map[string]bool{}
+		for _, message := range messages {
+			rows.Messages = append(rows.Messages, domain.ConversationMessage{ID: message.ID, ConversationID: side.ID, TurnID: message.TurnID,
+				Revision: message.Revision, Text: message.Text, Role: domain.MessageRole(message.Role), Streaming: message.Streaming})
+			turnIDs[message.TurnID] = true
+		}
+		ids := make([]string, 0, len(turnIDs))
+		for id := range turnIDs {
+			ids = append(ids, id)
+			turn, readErr := s.sides.store.SideTurn(ctx, side.ID, id)
+			if readErr != nil {
+				return "", "", readErr
+			}
+			rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: id, ConversationID: side.ID, State: domain.TurnState(turn.State)})
+		}
+		for _, activity := range s.sides.store.SideActivities(side.ID, ids) {
+			var detail map[string]json.RawMessage
+			_ = json.Unmarshal(activity.Detail, &detail)
+			if detail == nil {
+				detail = map[string]json.RawMessage{}
+			}
+			if activity.Kind == "command" && activity.Text != "" {
+				detail["output"], _ = json.Marshal(activity.Text)
+			}
+			raw, _ := json.Marshal(detail)
+			rows.Activities = append(rows.Activities, domain.ConversationActivity{ID: activity.ID, ConversationID: side.ID, TurnID: activity.TurnID,
+				Revision: activity.Revision, Kind: domain.ActivityKind(activity.Kind), Status: domain.ActivityStatus(activity.Status), Detail: raw})
+		}
+		content, verifyErr := hydrateSegmentedExcerpt(rows, ref)
+		if verifyErr != nil {
+			return "", "", verifyErr
+		}
+		return fmt.Sprintf("user:\n---\n%s\n---\nassistant:\n---\n%s\n---\n", content.Excerpt.UserMessage, content.Excerpt.AssistantMessage), "assistant", nil
 	}
 	var selected *domain.SideMessage
 	for i := range messages {

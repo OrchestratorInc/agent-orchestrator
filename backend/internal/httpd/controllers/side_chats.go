@@ -171,7 +171,7 @@ func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *htt
 	}
 	excerpts := make([]ports.ChatExcerptReference, 0, len(req.References))
 	for _, ref := range req.References {
-		excerpts = append(excerpts, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Text})
+		excerpts = append(excerpts, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Text, Segments: ref.Segments, ID: ref.ID, Order: ref.Order})
 	}
 	turn, err := svc.SendSideQuestion(r.Context(), sideSession(r), sideID(r), ports.ChatUserMessage{
 		Text: req.Text, ClientMessageID: req.ClientMessageID, Content: content, Excerpts: excerpts, Origin: domain.MessageOriginHuman})

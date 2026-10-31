@@ -8,7 +8,7 @@ vi.mock("../../hooks/useChatSelectionPosition", () => ({ useChatSelectionPositio
 function setup() {
 	const range = document.createRange();
 	const excerpt = { id: "selection", conversationId: "parent", messageId: "message", revision: 4, text: "exact selected text", role: "assistant" as const };
-	return { selection: { range, excerpt }, viewportRef: { current: null }, onInvalid: vi.fn(), onAdd: vi.fn() };
+	return { selection: { kind: "supported" as const, range, excerpt }, viewportRef: { current: null }, onInvalid: vi.fn(), onAdd: vi.fn() };
 }
 
 describe("chat selection actions", () => {
@@ -36,7 +36,7 @@ describe("chat selection actions", () => {
 		const button = screen.getByRole("button", { name: "Add to side chat" });
 		expect(fireEvent.mouseDown(button)).toBe(false);
 		fireEvent.click(button); fireEvent.click(button);
-		expect(onSide).toHaveBeenCalledExactlyOnceWith(props.selection.excerpt);
+		expect(onSide).toHaveBeenCalledExactlyOnceWith(props.selection.excerpt, expect.objectContaining({ shouldActivate: expect.any(Function) }));
 		expect(screen.getByRole("button", { name: "Add to chat" })).toBeDisabled();
 		await act(async () => finish());
 		expect(props.onInvalid).toHaveBeenCalledTimes(1);
@@ -57,4 +57,15 @@ describe("chat selection actions", () => {
 		expect(screen.getByRole("button", { name: "Add to side chat" })).toBeEnabled();
 		expect(props.onInvalid).not.toHaveBeenCalled();
 	});
+});
+
+it("explains unsupported selections without alerts or attachment actions", async () => {
+	const props = setup(); const onSide = vi.fn();
+	render(<ChatSelectionActions {...props} selection={{kind:"unsupported",reason:"diagram",range:props.selection.range}} onSide={onSide} />);
+	expect(screen.getByRole("button", {name:"Add to chat"})).toBeDisabled();
+	expect(screen.getByRole("button", {name:"Add to side chat"})).toBeDisabled();
+	expect(screen.getByText(/Switch the diagram/)).toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", {name:"Add to chat"}));
+	expect(props.onAdd).not.toHaveBeenCalled(); expect(onSide).not.toHaveBeenCalled();
 });

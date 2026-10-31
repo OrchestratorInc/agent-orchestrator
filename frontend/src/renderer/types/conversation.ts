@@ -179,6 +179,7 @@ export interface ConversationContentSummary {
 	sourceConversationId?: string;
  sourceMessageId?: string;
 	sourceRevision?: number;
+	sourceSegments?: import("../../shared/chat-excerpt").ChatExcerptSegment[];
 }
 
 export interface QueuedMessageEditOptions {

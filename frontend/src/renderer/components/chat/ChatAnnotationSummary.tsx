@@ -9,6 +9,7 @@ import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 
 export interface ChatAnnotationSummaryItem {
+	segments?: import("../../../shared/chat-excerpt").ChatExcerptSegment[];
 	kind?: "chat" | "file";
 	fileReference?: ChatFileReference;
 	order?: number;

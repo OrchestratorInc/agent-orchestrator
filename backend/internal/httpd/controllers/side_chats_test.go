@@ -22,9 +22,10 @@ import (
 
 type sideHTTPService struct {
 	*chatsvc.Service
-	calls   int
-	created chatsvc.SideCreateRequest
-	sent    ports.ChatUserMessage
+	calls    int
+	created  chatsvc.SideCreateRequest
+	sent     ports.ChatUserMessage
+	snapshot *domain.SideSnapshot
 }
 
 func (s *sideHTTPService) ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error) {
@@ -43,6 +44,9 @@ func (s *sideHTTPService) SendSideQuestion(_ context.Context, _ domain.SessionID
 }
 func (s *sideHTTPService) SideSnapshot(context.Context, domain.SessionID, string, time.Time, int) (domain.SideSnapshot, error) {
 	s.calls++
+	if s.snapshot != nil {
+		return *s.snapshot, nil
+	}
 	return domain.SideSnapshot{}, chatsvc.ErrSideUnavailable
 }
 func sideHTTPRouter(s *sideHTTPService) http.Handler {
@@ -71,6 +75,30 @@ func TestSideChatHTTPForwardsReferencesAndKeepsSummariesSafe(t *testing.T) {
 	}
 	if !strings.Contains(send.Body.String(), `"messageId":"source"`) {
 		t.Fatal("navigation identity omitted")
+	}
+}
+
+func TestSideHTTPMixedReferencesPreserveRawActivityDetail(t *testing.T) {
+	svc := &sideHTTPService{Service: chatsvc.New(chatsvc.Options{}), snapshot: &domain.SideSnapshot{Activities: []domain.SideActivity{{ID: "cmd", Kind: "command", Revision: 2, Detail: json.RawMessage(`{"output":{"z":"<x>","a":"😀","large":9223372036854775807}}`)}}}}
+	handler := sideHTTPRouter(svc)
+	ref := `{"conversationId":"main","messageId":"","revision":0,"text":"Code","segments":[{"kind":"command","sourceId":"cmd","revision":2,"field":"output","text":"Code"}]}`
+	create := httptest.NewRecorder()
+	handler.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats", strings.NewReader(`{"idempotencyKey":"mixed","reference":`+ref+`}`)))
+	if create.Code != http.StatusCreated || svc.created.Reference == nil || len(svc.created.Reference.Segments) != 1 {
+		t.Fatalf("create lost provenance: %d %s", create.Code, create.Body.String())
+	}
+	send := httptest.NewRecorder()
+	handler.ServeHTTP(send, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats/side/messages", strings.NewReader(`{"text":"Explain","clientMessageId":"mixed","references":[`+ref+`]}`)))
+	if send.Code != http.StatusAccepted || len(svc.sent.Excerpts) != 1 || len(svc.sent.Excerpts[0].Segments) != 1 {
+		t.Fatalf("send lost provenance: %d %s", send.Code, send.Body.String())
+	}
+	snapshot := httptest.NewRecorder()
+	handler.ServeHTTP(snapshot, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/session/conversation/side-chats/side", nil))
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("snapshot: %d %s", snapshot.Code, snapshot.Body.String())
+	}
+	if !strings.Contains(snapshot.Body.String(), `"output":{"z":`) || !strings.Contains(snapshot.Body.String(), `"large":9223372036854775807`) {
+		t.Fatalf("activity detail was rewritten: %s", snapshot.Body.String())
 	}
 }
 func TestSideChatHTTPRejectsLANWithoutCallingLocalService(t *testing.T) {

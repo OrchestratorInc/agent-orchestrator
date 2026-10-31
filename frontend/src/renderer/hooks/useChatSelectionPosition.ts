@@ -13,8 +13,9 @@ export function useChatSelectionPosition(
 		const viewport = viewportRef.current;
 		const button = buttonRef.current;
 		if (!range || !viewport || !button) return;
-		const anchor = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
-		const source = anchor?.closest("[data-chat-message-id]");
+		const anchor = range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+		const source = anchor?.closest("[data-chat-message-id], [data-chat-activity-id], [data-chat-navigation-turn-id]")
+			?? (anchor && viewport.contains(anchor) ? anchor : undefined);
 		if (!source) {
 			onInvalid();
 			return;
@@ -24,7 +25,7 @@ export function useChatSelectionPosition(
 			frame = undefined;
 			const selection = window.getSelection();
 			const current = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
-			if (!source?.isConnected || !viewport.contains(source) || !current || selection?.isCollapsed ||
+			if (!source?.isConnected || !range.startContainer.isConnected || !range.endContainer.isConnected || !viewport.contains(source) || !current || selection?.isCollapsed ||
 				current.startContainer !== range.startContainer || current.startOffset !== range.startOffset ||
 				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset) {
 				onInvalid();

@@ -417,6 +417,9 @@ type ChatExcerptReference struct {
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
 	Text           string `json:"text"`
+	// Segmented references leave the legacy MessageID empty and Revision zero.
+	// Keeping the legacy fields and their tags preserves old request hashes.
+	Segments []domain.ExcerptSegment `json:"segments,omitempty"`
 }
 
 // ChatExcerptContext is the server-verified context delivered for one selected

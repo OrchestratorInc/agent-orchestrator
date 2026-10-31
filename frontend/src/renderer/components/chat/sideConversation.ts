@@ -59,6 +59,7 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 					sourceConversationId: ref.conversationId,
 					sourceMessageId: ref.messageId,
 					sourceRevision: ref.revision,
+					sourceSegments: ref.segments,
 				}))
 			: undefined,
 	};
@@ -83,7 +84,7 @@ export function sideConversationActivity(activity: SideActivity): ConversationAc
 		id: activity.id,
 		turnId: activity.turnId,
 		sequence: 0,
-		revision: 1,
+		revision: activity.revision ?? 0,
 		activityKind: (ACTIVITY_KINDS.has(kind) ? kind : "system") as ConversationActivity["activityKind"],
 		status: activity.status as ConversationActivity["status"],
 		summary: activity.summary || activity.kind,

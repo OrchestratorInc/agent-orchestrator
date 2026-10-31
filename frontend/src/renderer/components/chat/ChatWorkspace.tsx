@@ -1,12 +1,3 @@
-import { FileAnnotationContext } from "./FileAnnotationPreview";
-import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
-import { TurnWorkSummary } from "./TurnWorkSummary";
-import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
-import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
-import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
-import { useLatestCallback, useStableSet } from "../../hooks/useStable";
-import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
  *
@@ -20,6 +11,16 @@ import { useTabListTabStop } from "../../hooks/useTabListTabStop";
  * a turn the user stopped, a controller that died mid-turn, and history the user
  * has scrolled away from.
  */
+import type { ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
+import { FileAnnotationContext } from "./FileAnnotationPreview";
+import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
+import { TurnWorkSummary } from "./TurnWorkSummary";
+import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
+import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
+import { useLatestCallback, useStableSet } from "../../hooks/useStable";
+import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 
 import {
 	memo,
@@ -43,6 +44,8 @@ import {
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
+import { captureChatExcerptSelection, type ChatExcerptSelection } from "../../lib/chat-excerpt-selection";
+import { excerptSourceIdentity, MAX_EXCERPT_BYTES, type ChatExcerptActivation } from "../../../shared/chat-excerpt";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
@@ -55,7 +58,7 @@ import {
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation, excerptSegmentElement } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -342,9 +345,9 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 }
 
 export interface ChatWorkspaceProps {
-	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	onAddToSideChat?: (excerpt: ChatDraftExcerptReference, options?: ChatExcerptActivation) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
-	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	annotationNavigationRequest?: ChatAnnotationSummaryItem & { id: string };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
@@ -1288,8 +1291,8 @@ function ChatWorkspaceContent({
 		const { composer } = readChatSessionDraft(draftScope);
 		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
 	});
-	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
-	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+	const annotationNavigationRef = useRef<((annotation: ChatAnnotationSummaryItem) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: ChatAnnotationSummaryItem) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
 	// This content remounts per session (it is keyed by the draft scope), so a
@@ -2711,8 +2714,8 @@ export function Timeline({
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
 	/** Handles annotations whose source is another conversation. */
-	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
-	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
+	onForeignAnnotation?: (annotation: ChatAnnotationSummaryItem) => void;
+	annotationNavigationRef: MutableRefObject<((annotation: ChatAnnotationSummaryItem) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -2814,17 +2817,22 @@ export function Timeline({
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
 	}, []);
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
-	const [selectionAction, setSelectionAction] = useState<{
-		excerpt: ChatDraftExcerptReference;
-		range: Range;
-	} | null>(null);
+	const [selectionAction, setSelectionAction] = useState<(ChatExcerptSelection & { range: Range; id: string }) | null>(null);
+	const selectionOwner = useRef<{ active: boolean } | null>(null);
+	useLayoutEffect(() => { const owner = { active: true }; selectionOwner.current = owner; return () => { owner.active = false; }; }, [snapshot.conversationId]);
+	const validateSelection = () => {
+		if (!selectionAction || selectionAction.kind !== "supported" || !scrollContent.current) throw new Error(t("sideChat.excerpt.stale"));
+		const latest = captureChatExcerptSelection(selectionAction.range, scrollContent.current, snapshot.conversationId,
+			new Set(snapshot.turns.filter(turn => turn.state === "completed" && !turn.rolledBack).map(turn => turn.id)));
+		if (!latest || latest.kind !== "supported" || excerptSourceIdentity(latest.excerpt) !== excerptSourceIdentity(selectionAction.excerpt)) throw new Error(t("sideChat.excerpt.stale"));
+	};
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
 	const selectionActionRef = useRef(selectionAction);
 	selectionActionRef.current = selectionAction;
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
 	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
-	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
+	const [annotationTarget, setAnnotationTarget] = useState<ChatAnnotationSummaryItem>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
@@ -2833,7 +2841,7 @@ export function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => {
+	const selectAnnotation = useCallback((annotation: ChatAnnotationSummaryItem) => {
 		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
 			// The source lives in another conversation (a side chat quoting the main
 			// chat); its host navigates there instead of searching this transcript.
@@ -2844,6 +2852,11 @@ export function Timeline({
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
 		annotationOlderRequestGroups.current = undefined;
+		if (annotation.segments?.length) {
+			const first = annotation.segments[0];
+			setAnnotationTarget({ ...annotation, messageId: first.sourceId, revision: first.revision, text: first.text });
+			return;
+		}
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 				.find((element) => annotationTextMatches(annotationBody(element), annotation.text));
@@ -2914,60 +2927,27 @@ export function Timeline({
 			setSelectionAction(null);
 			return;
 		}
-		const anchor = selection.anchorNode instanceof Element
-			? selection.anchorNode
-			: selection.anchorNode?.parentElement;
-		const focus = selection.focusNode instanceof Element
-			? selection.focusNode
-			: selection.focusNode?.parentElement;
-		const source = anchor?.closest<HTMLElement>("[data-chat-message-id]");
-		if (
-			!source ||
-			source !== focus?.closest<HTMLElement>("[data-chat-message-id]") ||
-			!scrollContent.current?.contains(source)
-		) {
-			setSelectionAction(null);
-			return;
-		}
-		const text = selection.toString().trim();
-		const messageId = source.dataset.chatMessageId;
-		const revision = Number(source.dataset.chatMessageRevision);
-		const role = source.dataset.chatMessageRole;
-		if (
-			!text ||
-			!messageId ||
-			!Number.isSafeInteger(revision) ||
-			(role !== "user" && role !== "assistant")
-		) {
-			setSelectionAction(null);
-			return;
-		}
-		const selectedRange = selection.getRangeAt(0).cloneRange();
+		const range = selection.getRangeAt(0).cloneRange();
+		const root = scrollContent.current;
+		if (!root) return;
+		const result = captureChatExcerptSelection(range, root, snapshot.conversationId,
+			new Set(snapshot.turns.filter(turn => turn.state === "completed" && !turn.rolledBack).map(turn => turn.id)));
+		if (!result) { setSelectionAction(null); return; }
+		const identity = (value: ChatExcerptSelection) => value.kind === "supported" ? excerptSourceIdentity(value.excerpt) : value.reason;
 		const dismissed = dismissedSelection.current;
-		if (dismissed && dismissed.excerpt.messageId === messageId && dismissed.excerpt.revision === revision &&
-			dismissed.excerpt.text === text && selectionRangesEqual(dismissed.range, selectedRange)) return;
+		if (dismissed && identity(dismissed) === identity(result) && selectionRangesEqual(dismissed.range, range)) return;
 		dismissedSelection.current = null;
-		const next = {
-			excerpt: {
-				id: crypto.randomUUID(),
-				conversationId: snapshot.conversationId,
-				messageId,
-				revision,
-				text,
-				role: role as "user" | "assistant",
-			},
-			range: selectedRange,
-		};
-		setSelectionAction((previous) => previous && previous.excerpt.messageId === messageId &&
-			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
-			? previous : next);
-	}, [excerptsEnabled, snapshot.conversationId]);
+		setSelectionAction(previous => previous && identity(previous) === identity(result) && selectionRangesEqual(previous.range, range)
+			? previous : { ...result, range, id: crypto.randomUUID() });
+	}, [excerptsEnabled, snapshot.conversationId, snapshot.turns]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
 		const selectionChanged = () => {
 			const current = window.getSelection();
-			if (!current || current.isCollapsed || !current.rangeCount || !selectionRangesEqual(current.getRangeAt(0), dismissedSelection.current?.range)) dismissedSelection.current = null;
+			if (!current || current.isCollapsed || !current.rangeCount) { dismissedSelection.current = null; clearSelectionAction(); }
+			else if (!selectionRangesEqual(current.getRangeAt(0), dismissedSelection.current?.range)) dismissedSelection.current = null;
+			if (current?.rangeCount && !selectionRangesEqual(current.getRangeAt(0), selectionActionRef.current?.range)) clearSelectionAction();
 		};
 		const escape = (event: KeyboardEvent) => {
 			if (event.key !== "Escape" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isDialogOrMenuOpen()) return;
@@ -3006,7 +2986,7 @@ export function Timeline({
 	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async () => {
-		if (!selectionAction) return;
+		if (!selectionAction || selectionAction.kind !== "supported") return;
 		if (onAddToChat) {
 			// A host with its own composer (a side chat) owns where references go.
 			onAddToChat(selectionAction.excerpt);
@@ -3022,17 +3002,14 @@ export function Timeline({
 			return;
 		}
 		const current = composer.excerpts ?? [];
-		const duplicate = current.some(
-			(item) =>
-				item.messageId === selectionAction.excerpt.messageId &&
-				item.revision === selectionAction.excerpt.revision &&
-				item.text === selectionAction.excerpt.text,
-		);
+		const duplicate = current.some(item => excerptSourceIdentity(item) === excerptSourceIdentity(selectionAction.excerpt));
+		if (!duplicate && new TextEncoder().encode([...current.map(item => item.text), selectionAction.excerpt.text].join("")).length > MAX_EXCERPT_BYTES) throw new Error(t("sideChat.excerptBytes"));
 		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
   const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
   const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		if (!result.ok) throw new Error(t("sideChat.attachFailed"));
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction]);
@@ -3574,6 +3551,7 @@ export function Timeline({
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
+					sourceSegments: excerpt.segments,
 					sourceRevision: excerpt.revision,
 				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
@@ -3758,6 +3736,14 @@ export function Timeline({
 		},
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
+			// A logical turn can be split into several visual groups by steers.
+			// Keep every referenced group mounted while revealing the annotation.
+			if (annotationTarget?.segments) {
+				const sources = new Set(annotationTarget.segments.map(part => part.sourceId));
+				groups.forEach((group, index) => {
+					if (group.items.some(item => sources.has(item.id)) && !indexes.includes(index)) indexes.push(index);
+				});
+			}
 			// Keep an in-progress inline edit mounted while its row leaves view.
 			const editing = messageEdit ? groups.findIndex((group) => group.turnId === messageEdit.turnId) : -1;
 			if (editing >= 0 && !indexes.includes(editing)) indexes.push(editing);
@@ -3774,8 +3760,10 @@ export function Timeline({
 		: groups.map((group, index) => ({ group, row: undefined, index }));
 	useEffect(() => {
 		if (!annotationTarget) return;
-		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
-		if (index < 0) {
+		const sourceIds = annotationTarget.segments?.map(part => part.sourceId) ?? [annotationTarget.messageId];
+		const targetIndexes = [...new Set(sourceIds.map(id => groups.findIndex(group => group.items.some(item => item.id === id))))];
+		const index = targetIndexes[0];
+		if (targetIndexes.includes(-1)) {
 			if (loadingOlder) return;
 			if (hasOlder && onLoadOlder && annotationOlderRequestGroups.current !== groups.length) {
 				annotationOlderRequestGroups.current = groups.length;
@@ -3786,12 +3774,18 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 			return;
 		}
-		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
-			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
-		if (!source) {
-			const disclosureKey = `${groups[index].key}:worked`;
-			if (!activityDisclosureOverrides[disclosureKey]) {
-				setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+		const root = scrollContent.current;
+		const source = Array.from(root?.querySelectorAll<HTMLElement>("[data-chat-message-id], [data-chat-activity-id]") ?? [])
+			.find((element) => (element.dataset.chatMessageId ?? element.dataset.chatActivityId) === annotationTarget.messageId);
+		const missing = annotationTarget.segments?.filter(part => !root || !excerptSegmentElement(root, part)) ?? [];
+		if (!source || missing.length) {
+			for (const part of missing) {
+				const activity = [...(root?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])].find(element => element.dataset.chatActivityId === part.sourceId);
+				activity?.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')?.click();
+			}
+			const disclosureKeys = targetIndexes.map(target => `${groups[target].key}:worked`);
+			if (disclosureKeys.some(key => !activityDisclosureOverrides[key])) {
+				setActivityDisclosureOverrides(current => ({ ...current, ...Object.fromEntries(disclosureKeys.map(key => [key, true])) }));
 			}
 			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 			if (annotationRetryCount.current++ >= 20) {
@@ -3808,9 +3802,10 @@ export function Timeline({
 		const frame = requestAnimationFrame(() => {
 			window.clearTimeout(annotationHighlightTimer.current);
 			annotationHighlightCleanup.current?.();
-			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision);
+			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision, annotationTarget.segments, root ?? undefined);
 			const scrollerNode = scroller.current;
-			let range = annotationTextRange(annotationBody(source), annotationTarget.text);
+			const body = annotationTarget.segments?.[0] && root ? excerptSegmentElement(root, annotationTarget.segments[0]) ?? annotationBody(source) : annotationBody(source);
+			let range = annotationTextRange(body, annotationTarget.text);
 			if (range && scrollerNode) {
 				const rangeRect = range.getBoundingClientRect();
 				const scrollerRect = scrollerNode.getBoundingClientRect();
@@ -3820,7 +3815,7 @@ export function Timeline({
 					source.scrollIntoView({ behavior: "auto", block: "center" });
 					// Re-read after the source jump; layout may have moved the selected
 					// range before the final centering adjustment.
-					range = annotationTextRange(annotationBody(source), annotationTarget.text);
+					range = annotationTextRange(body, annotationTarget.text);
 					if (range) {
 						const nextRect = range.getBoundingClientRect();
 						const delta = nextRect.top + nextRect.height / 2 - (scrollerRect.top + scrollerRect.height / 2);
@@ -4383,9 +4378,13 @@ export function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
-			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
+			{selectionAction ? <ChatSelectionActions key={selectionAction.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
-				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
+				onValidate={validateSelection}
+				onSide={onAddToSideChat ? (excerpt, options) => {
+					const owner = selectionOwner.current;
+					return onAddToSideChat(excerpt, { isCurrent: () => Boolean(owner?.active && selectionOwner.current === owner), shouldActivate: () => Boolean(owner?.active && (options?.shouldActivate() ?? true)) });
+				} : undefined} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
 				ref={scroller}
 				onScroll={onScroll}
@@ -4758,7 +4757,7 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: ChatAnnotationSummaryItem) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
 }) {
@@ -4999,16 +4998,16 @@ const TurnGroup = memo(function TurnGroup({
 	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
 	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
+		<div data-chat-navigation-turn-id={group.turnId} className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}
 			{/* Both of these are current state of the turn rather than steps in it, which
 			    is why they sit at its end: a checklist that ticks itself off and a file
 			    list that grows both change while the reader watches, and at the end of a
 			    turn neither pushes anything the reader is already looking at. */}
-			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
+			{group.plan ? unsupportedExcerpt(<TurnPlan plan={group.plan} live={group.live} />) : null}
 			{/* Changed-files review is a settled result, not live activity. Keep it
 			    below the completed assistant response and its bottom action row. */}
-			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
+			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? unsupportedExcerpt(
 				<TurnChangedFiles
 					diff={group.diff}
 					items={group.items}
@@ -5147,7 +5146,7 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: ChatAnnotationSummaryItem) => void;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
 }) {
@@ -5166,7 +5165,7 @@ function TimelineItem({
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
 		// not write it: mark where the turn picked back up instead of a bubble.
-		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
+		if (item.origin === "human" && item.continuation) return unsupportedExcerpt(<ContinuedMarker />);
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently. So is one an outside tool
 		// sent through the API, which AO can store as the human's.
@@ -5203,7 +5202,7 @@ function TimelineItem({
 				/>
 			);
 		}
-		return (
+		return unsupportedExcerpt(
 			<FromAgent item={item} queued={queued}>
 				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
@@ -5213,23 +5212,23 @@ function TimelineItem({
 		// Pending approval owns the composer. Keeping it in the grouping model still
 		// marks the live turn as blocked, while omitting the timeline card itself.
 		if (item.status === "pending") return null;
-		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
+		return unsupportedExcerpt(<ApprovalCard activity={item} onDecide={onDecide} busy={busy} />);
 	}
 	if (item.activityKind === "user_input") {
-		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+		return item.status === "pending" ? null : unsupportedExcerpt(<ElicitationHistory activity={item} />);
 	}
 	if (isCompaction(item)) {
-		return <CompactionMarker activity={item} />;
+		return unsupportedExcerpt(<CompactionMarker activity={item} />);
 	}
 	if (item.detail?.event === "provider_switch") {
-		return <ProviderSwitchMarker activity={item} />;
+		return unsupportedExcerpt(<ProviderSwitchMarker activity={item} />);
 	}
 	// Read by the event, not the kind: a steer is stored as a `system` activity
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
 		const annotations = steeredBrowserFeedback(item);
-		return (
+		return unsupportedExcerpt(
 			<FromAgent item={item}>
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
@@ -5244,9 +5243,13 @@ function TimelineItem({
 	// the row carries it. AO cannot tell when such work stops, so its step never spins.
 	if (item.activityKind === "plan") {
 		const plan = activityPlan(item);
-		return plan ? <TurnPlan plan={plan} /> : <ActivityRow activity={item} />;
+		return plan ? unsupportedExcerpt(<TurnPlan plan={plan} />) : <ActivityRow activity={item} />;
 	}
 	return <ActivityRow activity={item} />;
+}
+
+function unsupportedExcerpt(content: ReactNode) {
+	return <div data-chat-selection-unsupported="activity" className="contents">{content}</div>;
 }
 
 /* -------------------------------------------------------------------------- */
