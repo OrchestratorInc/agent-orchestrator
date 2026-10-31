@@ -337,7 +337,7 @@ func workOSPost(ctx context.Context, client *http.Client, path, contentType stri
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return err
@@ -385,7 +385,7 @@ func cloudJSON(ctx context.Context, client *http.Client, method, target, bearer 
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return err

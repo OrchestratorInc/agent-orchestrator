@@ -18,12 +18,13 @@ Cloudflare tunnel.
 2. Install AO:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly
+   curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash
    ```
 
-   This installs the prerequisites, the newest nightly AO, a user service that
-   keeps running after you log out, and the tunnel. On an image without curl,
-   run `sudo apt-get install -y curl` first.
+   This installs the prerequisites, the latest stable AO, a user service that
+   keeps running after you log out, and the tunnel. For the newest nightly
+   instead, end the command with `bash -s -- --nightly`. On an image without
+   curl, run `sudo apt-get install -y curl` first.
 
 3. Sign in. The installer ends with a sign-in link and a QR code. Open the link
    on any device, or scan the QR code with your phone, check that the page
@@ -51,17 +52,17 @@ it. Re-run the install command to upgrade without deleting sessions. The
 installer uses `~/.ao/host`; it does not copy agent or GitHub credentials from
 your laptop.
 
-Use a nightly desktop app with a nightly host. Updating your laptop alone does
-not update the VM. Until stable includes account linking, use the nightly
-command above. Nightlies are experimental.
+Use the same channel on the VM and your desktop: stable with stable, nightly
+with nightly. Updating your laptop alone does not update the VM. A release
+without `ao remote-host link` prints an address and password instead of the
+sign-in link; pair it by hand, or install nightly.
 
 ### Other install options
 
-**Stable** (the latest published stable binary; it prints a pairing address
-and password instead of a sign-in link):
+**Nightly** (the newest published nightly; experimental):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly
 ```
 
 **An unreleased branch** (builds from that branch): replace both
@@ -72,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/cod
 ```
 
 **A trusted LAN/VPN** instead of the tunnel: append `--lan` to the script
-arguments (`bash -s -- --nightly --lan`). This uses plaintext HTTP and pairing
+arguments (`bash -s -- --lan`, or `bash -s -- --nightly --lan`). This uses plaintext HTTP and pairing
 by hand; never expose the port publicly. The VM must stay powered on.
 
 ## Set up a VM as an agent
@@ -85,8 +86,10 @@ in the background and read its output:
 1. Install:
 
    ```bash
-   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly'
+   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
+
+   For nightly, end it with `bash -s -- --nightly`.
 
    `pipefail` makes a failed download exit non-zero. The output ends with a
    `Password:` line. Do not repeat it to the user or write it anywhere.
@@ -151,7 +154,7 @@ only if you want to replace that local credential with an account-scoped one.
 | Not listed on the laptop | Open the AO window: the desktop looks for new machines only while it is visible. Sign in to the same AO account as the VM. On the VM, `remote-host status` shows `Fixed address`. |
 | Listed but does not connect, after you paired it by hand | That desktop keeps the password it paired with. If the VM's password changed since, remove the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
 | The sign-in link expired | Run `~/.local/bin/ao remote-host link` again. |
-| No sign-in link at the end of the install | You ran it without a terminal, pressed Ctrl-C, or installed stable or with `--lan`. Run `~/.local/bin/ao remote-host link` on a nightly install. On a `--lan` machine this adds a Cloudflare tunnel next to the LAN listener. |
+| No sign-in link at the end of the install | You ran it without a terminal, pressed Ctrl-C, or used `--lan`. Run `~/.local/bin/ao remote-host link`; on a `--lan` machine this adds a Cloudflare tunnel next to the LAN listener. A release without `link` needs an update, or nightly. |
 
 ## Status and other hosts
 

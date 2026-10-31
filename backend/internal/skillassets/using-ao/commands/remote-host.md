@@ -41,8 +41,10 @@ The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
    a failed download exit non-zero:
 
    ```bash
-   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly'
+   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
+
+   This installs stable. For nightly, end it with `bash -s -- --nightly`.
 
 2. Start the sign-in in the background, then read the link:
 
