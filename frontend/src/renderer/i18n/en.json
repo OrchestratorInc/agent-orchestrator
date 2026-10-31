@@ -3502,7 +3502,7 @@
 	"settings.billing.freeAgents": "Any supported coding agent, including Claude Code, Codex and Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrator, workers and PR reviews",
 	"settings.billing.freeDevices": "2 devices logged in at once",
-	"settings.billing.freeNetwork": "Same-network connectivity (no cloud relay)",
+	"settings.billing.freeNetwork": "Connect on the same network, or from anywhere with Tailscale or the HTTPS tunnel",
 	"settings.billing.starterRelay": "Cloud relay for seamless connectivity across devices",
 	"settings.billing.starterDevices": "Unlimited devices, including mobile (bring your own)",
 	"settings.billing.cloudAway": "Agents keep working when your computer sleeps",
