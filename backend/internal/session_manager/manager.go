@@ -3037,6 +3037,17 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	// unresumable non-orchestrator (a worker with no task and no native id to resume).
 	// Orchestrators always relaunch fresh with the system prompt only.
 
+	// A terminated session can still own a runtime: its agent may have exited
+	// on its own, so Kill never destroyed it. conpty keeps the pty-host
+	// registry entry until Destroy, and Create refuses an id it still knows.
+	// Destroy is idempotent and fails closed when ownership is unproven, so a
+	// failure here stops the restore instead of starting a competing process.
+	if handle := runtimeHandle(rec.Metadata); handle.ID != "" {
+		if err := m.runtime.Destroy(ctx, handle); err != nil {
+			return RestoreResult{}, relaunchFailed("runtime cleanup", fmt.Errorf("restore %s: destroy leftover runtime: %w", id, err))
+		}
+	}
+
 	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
 	defer releaseWorkspaceGate()
 
@@ -3829,6 +3840,12 @@ func (m *Manager) restartRuntime(ctx context.Context, handle ports.RuntimeHandle
 		// killed). Restore/restart is exactly the recovery path for that
 		// outage, so proceed as "no existing runtime" and create a fresh one.
 		alive = false
+	} else if !alive {
+		// A definitive "not alive" can still leave a registered but dead host
+		// (conpty), which makes Create refuse the id. Destroy is idempotent.
+		if err := m.runtime.Destroy(ctx, handle); err != nil {
+			return ports.RuntimeHandle{}, fmt.Errorf("destroy stale runtime: %w", err)
+		}
 	}
 	if alive {
 		if restarter, ok := m.runtime.(ports.RuntimeRestarter); ok {
