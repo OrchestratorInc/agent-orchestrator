@@ -3637,7 +3637,7 @@
 	"settings.billing.featureAgents_few": "{{count}} облачных агента одновременно",
 	"settings.billing.featureAgents_many": "{{count}} облачных агентов одновременно",
 	"settings.billing.featureAgents_other": "{{count}} облачного агента одновременно",
-	"settings.billing.freeAgents": "Claude Code, Codex и Cursor",
+	"settings.billing.freeAgents": "Любой поддерживаемый агент разработки, включая Claude Code, Codex и Cursor",
 	"settings.billing.freeOrchestrator": "Оркестратор, воркеры и ревью PR",
 	"settings.billing.freeDevices": "Одновременный вход с 2 устройств",
 	"settings.billing.freeNetwork": "Подключение в одной сети (без облачной ретрансляции)",
