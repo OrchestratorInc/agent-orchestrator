@@ -84,10 +84,10 @@ body { letter-spacing: -0.5px; }
   header > div[class*="border-b"] { display: none !important; }
   header > div[class*="bg-background"] { display: none !important; }
 
-  /* logo + "Docs" wordmark at the original position: logo x15 y21 20x20, text x43 fs14 fw500 */
+  /* logo + "Docs" wordmark centered in the 48px header bar (icon buttons center at y23.5): logo x15 y14 20x20, text x43 fs14 fw500 */
   header a:has(img.nav-logo) {
     display: flex !important; align-items: center !important;
-    position: fixed !important; top: 21px !important; left: 15px !important;
+    position: fixed !important; top: 14px !important; left: 15px !important;
     height: 20px !important; padding: 0 !important; margin: 0 !important;
   }
   header a:has(img.nav-logo) img.nav-logo { width: 20px !important; height: 20px !important; }
