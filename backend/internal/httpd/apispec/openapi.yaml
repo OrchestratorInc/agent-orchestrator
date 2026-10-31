@@ -15663,11 +15663,14 @@ components:
       properties:
         hostId:
           type: string
+        hostKey:
+          type: string
         token:
           type: string
       required:
       - hostId
       - token
+      - hostKey
       type: object
     ControllersRequestRereviewRequest:
       properties:
@@ -18395,6 +18398,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinked:
+          type: boolean
         browserRemoteAccess:
           type: boolean
         enabled:
@@ -18427,6 +18432,7 @@ components:
           type: string
       required:
       - enabled
+      - accountLinked
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
@@ -18443,8 +18449,12 @@ components:
       type: object
     MobileTunnelStatus:
       properties:
+        fixed:
+          type: boolean
         hostname:
           type: string
+        installing:
+          type: boolean
         lastError:
           type: string
         location:
@@ -18457,8 +18467,10 @@ components:
           type: boolean
       required:
       - supported
+      - installing
       - running
       - ready
+      - fixed
       - hostname
       - location
       - lastError

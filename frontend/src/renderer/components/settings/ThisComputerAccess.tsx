@@ -2,50 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
-import { deleteAccountRemoteHost, listAccountRemoteHosts, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, listAccountRemoteHosts } from "../../lib/account-remote-hosts";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
-import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
+import { linkThisComputer } from "../../lib/link-this-computer";
 import { Switch } from "../ui/switch";
-import { fetchMobileStatus, mobileStatusQueryKey, mobileStatusRefetchInterval } from "./ConnectMobileContent";
+import { fetchMobileStatus, mobileStatusQueryKey, mobileStatusRefetchInterval, tunnelUrl, waitForTunnel } from "./ConnectMobileContent";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 type MobileStatus = Awaited<ReturnType<typeof fetchMobileStatus>>;
-
-const TUNNEL_POLL_MS = 2_000;
-// A quick tunnel usually has its address within half a minute.
-const TUNNEL_WAIT_MS = 90_000;
-// AO Cloud rejects host labels longer than 64 bytes.
-const LABEL_MAX_BYTES = 64;
-
-/** The tunnel address in the form the daemon's address publisher sends, so a
- * later publish never rewrites the record and reconnects every device. */
-function tunnelUrl(status: MobileStatus): string | null {
-	const tunnel = status.endpoints?.find((endpoint) => endpoint.kind === "tunnel" && endpoint.secure);
-	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
-}
-
-function fitLabel(name: string): string {
-	let chars = Array.from(name.trim());
-	while (new TextEncoder().encode(chars.join("")).length > LABEL_MAX_BYTES) chars = chars.slice(0, -1);
-	return chars.join("").trim();
-}
-
-/** Polls until the quick tunnel has a public address; null when no connector is installed. */
-async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
-	const deadline = Date.now() + TUNNEL_WAIT_MS;
-	for (;;) {
-		const status = await fetchMobileStatus();
-		const url = tunnelUrl(status);
-		if (url) return { status, url };
-		if (status.tunnel?.supported === false) return null;
-		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
-		if (Date.now() >= deadline) throw new Error(timeoutMessage);
-		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
-	}
-}
 
 async function disableRemoteAccess() {
 	const stopped = await apiClient.POST("/api/v1/mobile/disable");
@@ -105,32 +72,41 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
-		let linked = false;
+		// Only a listing this turn-on added is taken back when it fails: one Connect Mobile or an earlier turn-on made stays.
+		let hostId = "";
+		let added = false;
+		let shared = false;
 		try {
-			// remote-access keeps the password, so a phone paired over Connect Mobile stays paired.
-			const started = before.enabled
-				? await apiClient.POST("/api/v1/mobile/remote-access")
-				: await apiClient.POST("/api/v1/mobile/enable");
-			if (started.error) throw new Error(apiErrorMessage(started.error));
+			// A running bridge keeps its password, so a phone paired over Connect Mobile stays paired.
+			let password = before.password ?? "";
+			// Started with its tunnel, as before fixed addresses: an app that quits
+			// while the link runs leaves remote access on, not a LAN-only computer.
+			if (!before.enabled) {
+				const started = await apiClient.POST("/api/v1/mobile/enable");
+				if (started.error || !started.data) throw new Error(apiErrorMessage(started.error));
+				password = started.data.password ?? "";
+			}
+			// remote-access then moves the tunnel to the fixed address the link gave this computer. When
+			// AO Cloud cannot give it one, it is listed at the quick tunnel's address below, as before.
+			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch(
+				() => ({ hostId: "", added: false }),
+			));
+			const access = await apiClient.POST("/api/v1/mobile/remote-access");
+			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
 			if (!ready) {
 				setNeedsConnector(true);
 				return;
 			}
-			const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
-				headers: { Authorization: `Bearer ${ready.status.password}`, "X-AO-Account-ID": accountId },
-			});
-			if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
-			await saveAccountRemoteHost(cloudBaseUrl, {
-				hostId: issued.data.hostId,
-				label: fitLabel(await aoBridge.remotes.computerName()),
-				url: ready.url,
-				token: issued.data.token,
-			});
-			linked = true;
+			// No fixed address: listed at the quick tunnel's, as before fixed addresses.
+			if (!hostId) ({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url }));
+			shared = true;
 		} finally {
-			// Unlinked, the switch shows off; leaving access on would keep this computer reachable while the switch says it is not.
-			if (!linked) await restoreRemoteAccess(before);
+			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.
+			if (!shared) {
+				if (hostId && added) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
+				await restoreRemoteAccess(before);
+			}
 		}
 	};
 

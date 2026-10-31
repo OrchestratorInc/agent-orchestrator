@@ -3,7 +3,7 @@ import { MacDifferentialV2Updater } from "./mac-differential-v2-updater";
 import macV2TrustedKeys from "../../scripts/mac-differential-v2-trust.json";
 import macDifferentialRollout from "../../scripts/mac-differential-rollout.json";
 import { CancellationToken } from "builder-util-runtime";
-import { app, dialog, autoUpdater as nativeAutoUpdater } from "electron";
+import { app, dialog, powerMonitor, autoUpdater as nativeAutoUpdater } from "electron";
 import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
 import { createUpdateDiagnostics } from "./update-diagnostics";
@@ -210,6 +210,9 @@ let nativePreparationError: Error | undefined;
 // give up only after a stretch of no progress; fall back to a fixed cap when the
 // growth signal can't be read.
 const STAGE_POLL_INTERVAL_MS = 10_000;
+// Power events can be missed (including during DarkWake). A delayed JS timer
+// is a fallback sleep signal, not evidence that staging worked for that gap.
+const STAGE_TIMER_GAP_MS = 3 * STAGE_POLL_INTERVAL_MS;
 const STAGE_INACTIVITY_TIMEOUT_MS = 90_000;
 // After ditto finishes extracting, ShipIt verifies the code signature: a
 // read-only phase where the staging bytes plateau while real work continues.
@@ -236,15 +239,24 @@ function requiredFreeBytesToStage(archiveBytes: number | undefined): number {
   return Math.min(STAGE_FREE_BYTES_CAP, Math.max(STAGE_FREE_BYTES_FLOOR, derived));
 }
 // Short user-facing lines; the raw ditto/pkzip/codesign detail is logged, not shown.
-const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open, so nothing changed. Retry to try again.";
-const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then retry.";
+const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open. Relaunch AO to try again.";
+const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then try again.";
 let nativePreparationBlocked: Error | undefined;
 // A stage refused by the disk preflight. Unlike a stall nothing reached
 // Squirrel, so this is not sticky: every updater operation re-probes the disk,
 // and checks keep running meanwhile so a newer build stays visible (#6607).
 let stagingDiskShortfall: { requiredBytes: number; error: Error } | undefined;
 let rejectNativeOperation: ((error: Error) => void) | undefined;
-let nativePreparation: { version: string; promise: Promise<void>; finish(error?: Error): void } | undefined;
+let nativePreparation: { version: string; promise: Promise<void>; resume(): void; finish(error?: Error): void } | undefined;
+// A timed-out native request continues in Squirrel. Keep its ownership until
+// success or a native error arrives; only success for this target may unblock it.
+let timedOutNativePreparation: { version: string; error: Error } | undefined;
+let preparationSuspendedAt: number | undefined;
+let preparationSuspendedMs = 0;
+
+function preparationNow(): number {
+  return (preparationSuspendedAt ?? Date.now()) - preparationSuspendedMs;
+}
 
 // Squirrel.Mac stages into ~/Library/Caches/<bundleId>.ShipIt. This is the OS
 // updater's own working area: AO only READS it (never writes, keeps no AO state
@@ -381,9 +393,16 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
   void promise.catch(() => undefined);
   const preparation = {
     version, promise,
+    resume() {
+      // Re-resolve the native cache after wake and give active verification a
+      // fresh inactivity window. Total active work still has the absolute cap.
+      stagingDir = macShipItDir();
+      lastProgressAt = preparationNow();
+      lastTickAt = Date.now();
+    },
     finish(error?: Error) {
       if (nativePreparation !== preparation) return;
-      recordUpdateDiagnostic("native-preparation-finished", { version, elapsedMs: Date.now() - startedAt, succeeded: error === undefined }, error);
+      recordUpdateDiagnostic("native-preparation-finished", { version, elapsedMs: preparationNow() - startedAt, succeeded: error === undefined }, error);
       clearInterval(watchdog);
       nativePreparation = undefined;
       nativePreparationError = error;
@@ -400,7 +419,8 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
   // at this point. Keep re-resolving it until it appears, otherwise the growth
   // signal never engages and every stage falls back to the flat no-signal cap.
   let stagingDir = macShipItDir();
-  const startedAt = Date.now();
+  const startedAt = preparationNow();
+  let lastTickAt = Date.now();
   let lastBytes = readStagingBytes(stagingDir);
   let lastProgressAt = startedAt;
   recordUpdateDiagnostic("native-preparation-started", {
@@ -411,19 +431,39 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
   });
   const trip = (reason: string): void => {
     recordUpdateDiagnostic("native-preparation-watchdog", {
-      version, reason, elapsedMs: Date.now() - startedAt,
-      inactiveMs: Date.now() - lastProgressAt, lastProgressBytes: lastBytes ?? null,
+      version, reason, elapsedMs: preparationNow() - startedAt,
+      inactiveMs: preparationNow() - lastProgressAt, lastProgressBytes: lastBytes ?? null,
       ...stagingDiagnosticSnapshot(),
     });
-    // No cancel API, so never stage again on top of a stalled request even if
-    // its JS transfer settles later; recovery is a clean relaunch.
-    console.error(`native update preparation stalled after ${Math.round((Date.now() - startedAt) / 1000)}s with no staging progress`);
+    // No cancel API: do not start another native request on top of this one.
+    // A matching late success can recover it; otherwise offer a plain relaunch.
+    console.error(`native update preparation stalled after ${Math.round((preparationNow() - startedAt) / 1000)}s with no staging progress`);
     blockNativePreparation(STAGE_STALL_MESSAGE);
+    timedOutNativePreparation = { version, error: nativePreparationBlocked! };
     preparation.finish(nativePreparationBlocked);
     broadcast(stagedDownloadedStatus());
   };
   const watchdog = setInterval(() => {
-    const now = Date.now();
+    const wallNow = Date.now();
+    const tickGapMs = wallNow - lastTickAt;
+    lastTickAt = wallNow;
+    if (preparationSuspendedAt !== undefined) {
+      // Executing JS is itself proof we are awake. Never leave the clock
+      // frozen forever waiting for a resume event that may not arrive.
+      const suspendedMs = Math.max(0, wallNow - preparationSuspendedAt);
+      preparationSuspendedMs += suspendedMs;
+      preparationSuspendedAt = undefined;
+      preparation.resume();
+      recordUpdateDiagnostic("native-preparation-resumed", { suspendedMs, source: "watchdog-tick" });
+    } else if (tickGapMs > STAGE_TIMER_GAP_MS || tickGapMs < 0) {
+      // Credit one normal poll after a long gap; exclude the rest. The same
+      // adjustment keeps a backwards wall-clock change from extending budgets.
+      const excludedMs = tickGapMs < 0 ? tickGapMs : tickGapMs - STAGE_POLL_INTERVAL_MS;
+      preparationSuspendedMs += excludedMs;
+      preparation.resume();
+      recordUpdateDiagnostic("native-preparation-clock-gap", { tickGapMs, excludedMs });
+    }
+    const now = preparationNow();
     if (stagingDir === undefined) stagingDir = macShipItDir();
     const bytes = readStagingBytes(stagingDir);
     if (bytes !== undefined && (lastBytes === undefined || bytes > lastBytes)) {
@@ -1205,6 +1245,7 @@ function stagedBuildIsStale(
 let awaitingStagedReplacement = false;
 
 function discardStagedBuild(): void {
+  timedOutNativePreparation = undefined;
   // Nothing valid is installable until the replacement lands: the only build in
   // the cache belongs to a channel the user has left.
   awaitingStagedReplacement = true;
@@ -1895,16 +1936,44 @@ function wireUpdaterEvents(): void {
   if (eventsWired) return;
   eventsWired = true;
   if (process.platform === "darwin") {
+    powerMonitor.on("suspend", () => {
+      if (preparationSuspendedAt === undefined) preparationSuspendedAt = Date.now();
+    });
+    powerMonitor.on("resume", () => {
+      if (preparationSuspendedAt === undefined) return;
+      const suspendedMs = Math.max(0, Date.now() - preparationSuspendedAt);
+      preparationSuspendedMs += suspendedMs;
+      preparationSuspendedAt = undefined;
+      nativePreparation?.resume();
+      recordUpdateDiagnostic("native-preparation-resumed", { suspendedMs });
+    });
     nativeAutoUpdater.on("update-downloaded", (_event, _notes, releaseName) => {
+      const timedOut = timedOutNativePreparation;
+      const recoverable = timedOut !== undefined &&
+        nativePreparation === undefined && nativePreparationBlocked === timedOut.error &&
+        stagedVersion === timedOut.version && stagedChannel === autoUpdater.channel &&
+        !awaitingStagedReplacement && (!releaseName || releaseName === timedOut.version);
       recordUpdateDiagnostic("native-update-downloaded", {
-        releaseName, accepted: !!nativePreparation && (!releaseName || releaseName === nativePreparation.version),
+        releaseName, accepted: recoverable || (!!nativePreparation && (!releaseName || releaseName === nativePreparation.version)),
         hasPendingPreparation: nativePreparation !== undefined,
       });
+      if (recoverable) {
+        nativePreparationBlocked = undefined;
+        timedOutNativePreparation = undefined;
+        nativePreparationError = undefined;
+        nativeReadyVersion = timedOut.version;
+        stagedInCurrentProcess = true;
+        applyInstallOnQuitPolicy();
+        recordUpdateDiagnostic("native-preparation-recovered", { version: timedOut.version });
+        broadcast(stagedDownloadedStatus());
+        return;
+      }
       if (!nativePreparation || (releaseName && releaseName !== nativePreparation.version)) return;
       nativePreparation.finish();
       broadcast(lastStatus.state === "downloading" ? lastStatus : stagedDownloadedStatus());
     });
     nativeAutoUpdater.on("error", (error) => {
+      timedOutNativePreparation = undefined;
       recordUpdateDiagnostic("native-error", { userMessage: shortStagingMessage(error) }, error);
       // Log the full detail; surface only a short line.
       console.error("native macOS updater error during staging:", error);
@@ -1912,6 +1981,9 @@ function wireUpdaterEvents(): void {
       nativePreparation?.finish(short);
       nativeReadyVersion = undefined;
       nativePreparationError = short;
+      // Preparation may already be ready while install awaits the helper or
+      // relaunch marker. Reject that request too, so late waits cannot quit AO.
+      if (activeUpdaterOperation === "manual-install") rejectNativeOperation?.(short);
       if (macRestartRequested) {
         macRestartRequested = false;
         macRestartPreparation = undefined;
@@ -2911,7 +2983,16 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   }
   if (macRestartPreparation) return macRestartPreparation;
   let confirmation: UpdateInstallResult;
+  // Promise.race releases the queue on a native timeout, but the underlying
+  // cache transfer has no cancellation guarantee. Never let its late resolution
+  // continue an install request whose caller already received a failure.
+  let installAbandoned = false;
   macRestartPreparation = runSerializedUpdaterOperation("manual-install", async () => {
+    const previousPreparationError = nativePreparationError;
+    const assertInstallActive = () => {
+      if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
+      if (nativePreparationError && nativePreparationError !== previousPreparationError) throw nativePreparationError;
+    };
     let progress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
     try {
       if (!escalationStateDir || !hasStagedBuild()) {
@@ -2919,6 +3000,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       }
       if (!stagedInCurrentProcess) {
         confirmation = await prepareRememberedMacUpdate(confirmedVersion);
+        assertInstallActive();
         if (confirmation) return;
       }
       if (confirmedVersion !== undefined && stagedVersion && confirmedVersion !== stagedVersion) {
@@ -2929,6 +3011,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       const version = stagedVersion;
       if (!version) throw new Error("The update is no longer ready to install. Check for updates again.");
       await waitForNativePreparation(version);
+      assertInstallActive();
       // The helper must acknowledge it is up (its READY handshake) before AO
       // quits. It stays hidden on the normal path and only shows a window if the
       // update stalls or fails.
@@ -2938,6 +3021,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         appPath: path.resolve(process.execPath, "..", "..", ".."),
         version,
       });
+      assertInstallActive();
       progress.assertAlive();
       macRestartProgress = progress;
       macRestartRequested = true;
@@ -2952,10 +3036,15 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         }),
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
+      assertInstallActive();
       recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
       if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
     } catch (err) {
+      if (installAbandoned) {
+        await progress?.fail(errorMessage(err)).catch(() => undefined);
+        return;
+      }
       recordUpdateDiagnostic("install-preparation-failed", {}, err);
       macRestartRequested = false;
       stagedInCurrentProcess = false;
@@ -2965,7 +3054,10 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       broadcast({ state: "error", message: errorMessage(err) });
       throw err;
     }
-  }).then(() => confirmation).finally(() => { if (!macRestartRequested) macRestartPreparation = undefined; });
+  }).then(() => confirmation, err => {
+    installAbandoned = true;
+    throw err;
+  }).finally(() => { if (!macRestartRequested) macRestartPreparation = undefined; });
   return macRestartPreparation;
 }
 

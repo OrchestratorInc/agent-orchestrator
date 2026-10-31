@@ -427,7 +427,7 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			importAccountHost: async () => undefined,
 			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => "",
+			issueAccountToken: async () => ({ token: "" }),
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
