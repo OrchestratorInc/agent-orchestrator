@@ -1854,6 +1854,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 				resetsAt: turn.usageLimit.resetsAt ?? undefined,
 				autoResume: turn.usageLimit.autoResume,
 				resumeError: turn.usageLimit.resumeError,
+				accountChanged: turn.usageLimit.accountChanged,
 			} : undefined,
 			requestedAt: turn.requestedAt,
 			startedAt: turn.startedAt ?? undefined,

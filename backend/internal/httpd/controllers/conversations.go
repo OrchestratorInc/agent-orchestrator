@@ -1446,7 +1446,10 @@ func usageLimitPayload(limit *domain.ConversationUsageLimit) *ConversationUsageL
 	if limit == nil {
 		return nil
 	}
-	return &ConversationUsageLimitResponse{ResetsAt: optionalTimestamp(limit.ResetsAt), AutoResume: limit.AutoResume, ResumeError: limit.ResumeError}
+	return &ConversationUsageLimitResponse{
+		ResetsAt: optionalTimestamp(limit.ResetsAt), AutoResume: limit.AutoResume, ResumeError: limit.ResumeError,
+		AccountChanged: limit.AccountChanged,
+	}
 }
 
 func branchMaterializationPayload(branch domain.ConversationBranch) *ConversationBranchMaterializationResponse {

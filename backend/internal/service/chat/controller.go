@@ -1019,10 +1019,18 @@ func (c *Controller) projectNativeHistory(ctx context.Context, events []ports.Ch
 type nativeHistoryTurn struct {
 	providerTurnID string
 	state          domain.TurnState
-	clientMessage  string
-	providerItem   string
-	text           string
-	messages       map[string]int
+	// errorMessage is the failure AO recorded for the turn; a replay never
+	// carries one of its own.
+	errorMessage  string
+	clientMessage string
+	providerItem  string
+	text          string
+	// replayText is text as an ACP replay renders it when the prompt carried
+	// attachments: the text followed by one placeholder per attachment.
+	replayText string
+	messages   map[string]int
+	// messageAliases maps a replay-rendered user fingerprint to the stored one.
+	messageAliases map[string]string
 	activities     map[string]int
 }
 
@@ -1108,7 +1116,9 @@ func indexNativeHistoryTurns(
 		candidate := &nativeHistoryTurn{
 			providerTurnID: turn.ProviderTurnID,
 			state:          turn.State,
+			errorMessage:   turn.ErrorMessage,
 			messages:       make(map[string]int),
+			messageAliases: make(map[string]string),
 			activities:     make(map[string]int),
 		}
 		if turn.ProviderInputText != "" {
@@ -1143,10 +1153,17 @@ func indexNativeHistoryTurns(
 		if candidate == nil {
 			continue
 		}
-		candidate.messages[nativeHistoryMessageFingerprint(message.Role, nativeHistoryMessageText(message))]++
+		text := nativeHistoryMessageText(message)
+		fingerprint := nativeHistoryMessageFingerprint(message.Role, text)
+		candidate.messages[fingerprint]++
+		replayText := nativeHistoryReplayText(message, text)
+		if replayText != "" {
+			candidate.messageAliases[nativeHistoryMessageFingerprint(message.Role, replayText)] = fingerprint
+		}
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
-			candidate.text = nativeHistoryMessageText(message)
+			candidate.text = text
+			candidate.replayText = replayText
 			candidate.clientMessage = message.ClientMessageID
 			candidate.providerItem = message.ProviderItemID
 		}
@@ -1257,7 +1274,7 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		if match == nil && event.Text != "" {
 			for _, candidate := range ordered {
-				if !used[candidate] && candidate.text == event.Text {
+				if !used[candidate] && (candidate.text == event.Text || (candidate.replayText != "" && candidate.replayText == event.Text)) {
 					match = candidate
 					break
 				}
@@ -1332,8 +1349,19 @@ func reconcileNativeHistory(
 			// new outer id.
 			matched = true
 		}
-		if fingerprint, ok := nativeHistoryEventMessageFingerprint(event); ok && candidate.messages[fingerprint] > 0 {
-			candidate.messages[fingerprint]--
+		if fingerprint, ok := nativeHistoryEventMessageFingerprint(event); ok {
+			if stored, aliased := candidate.messageAliases[fingerprint]; aliased && candidate.messages[fingerprint] == 0 {
+				fingerprint = stored
+			}
+			if candidate.messages[fingerprint] > 0 {
+				candidate.messages[fingerprint]--
+				matched = true
+			}
+		}
+		if candidate.errorMessage != "" && replayedTurnFailure(event, candidate.errorMessage) {
+			// The replay restores the turn's provider failure as an activity. AO
+			// already shows that failure as the turn's own error, such as the
+			// usage limit; a second, red copy would read as a new problem.
 			matched = true
 		}
 		if event.Kind == ports.ChatEventActivityCompleted {
@@ -1368,13 +1396,66 @@ func reconcileNativeHistory(
 		// A replay may have no portable turn-outcome field. Preserve AO's stronger
 		// known result only when the adapter reports recovered. Conversely, a known
 		// replay outcome upgrades an older recovered observation.
-		if event.Kind == ports.ChatEventTurnCompleted &&
-			event.TurnState == domain.TurnStateRecovered && knownTurnOutcome(candidate.state) {
-			event.TurnState = candidate.state
+		if event.Kind == ports.ChatEventTurnCompleted && knownTurnOutcome(candidate.state) {
+			if event.TurnState == domain.TurnStateRecovered {
+				event.TurnState = candidate.state
+			}
+			// A replay has no failure text. Settling without it would erase the
+			// reason AO recorded, and with it the usage limit the chat shows.
+			if event.Err == nil && event.TurnState == candidate.state && candidate.errorMessage != "" {
+				event.Err = errors.New(candidate.errorMessage)
+			}
 		}
 		reconciled = append(reconciled, event)
 	}
 	return reconciled
+}
+
+// nativeHistoryReplayText is how an ACP agent replays a user message that
+// carried attachments: its text followed by one placeholder per attachment, as
+// the ACP adapter's historicalUserContent renders them. AO stores only the
+// typed text, so without this an attachment prompt never matches its replay
+// and comes back as a second, recovered turn. Empty when nothing was attached.
+func nativeHistoryReplayText(message domain.ConversationMessage, text string) string {
+	if message.Role != domain.MessageRoleUser || message.DeliveryContentJSON == "" {
+		return ""
+	}
+	var content []ports.ChatContent
+	if json.Unmarshal([]byte(message.DeliveryContentJSON), &content) != nil {
+		return ""
+	}
+	var placeholders strings.Builder
+	for _, block := range content {
+		switch block.Type {
+		case "image":
+			placeholders.WriteString("[Image]")
+		case "resource_link":
+			placeholders.WriteString("[File: " + block.Name + "]")
+		case "resource":
+			if !ports.IsInternalReplayContent(block) {
+				placeholders.WriteString("[Embedded context]")
+			}
+		}
+	}
+	if placeholders.Len() == 0 {
+		return ""
+	}
+	return text + placeholders.String()
+}
+
+// replayedTurnFailure reports whether a replayed activity is the provider
+// failure AO already recorded as the turn's error.
+func replayedTurnFailure(event ports.ChatEvent, turnError string) bool {
+	if event.Kind != ports.ChatEventActivityStarted && event.Kind != ports.ChatEventActivityCompleted {
+		return false
+	}
+	if event.ActivityKind != domain.ActivityKindSystem || strings.TrimSpace(event.Summary) != strings.TrimSpace(turnError) {
+		return false
+	}
+	var detail struct {
+		Event string `json:"event"`
+	}
+	return json.Unmarshal(event.Detail, &detail) == nil && detail.Event == "provider.failure"
 }
 
 func knownTurnOutcome(state domain.TurnState) bool {
