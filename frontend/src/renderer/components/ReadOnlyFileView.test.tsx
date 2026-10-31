@@ -87,9 +87,7 @@ describe("ReadOnlyFileView", () => {
 		const view=render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail()} sessionId="sess-1" source={{kind:"snapshot",label:"Commit",commitShas:[sha]}}/>);
 		const args=hook.mock.lastCall!;
 		expect(args[2]).toBe(true);
-		const selectionHost=document.createElement("div"),selectionRow=document.createElement("div");
-		const selectionEnd={column:selectionHost,row:selectionRow,rowIndex:0,offset:0};
-		act(()=>{args[1]({host:selectionHost,point:{x:0,y:0},dragging:false,range:{start:1,end:1},rows:[{kind:"context",oldNo:1,newNo:1,text:"captured();"}],snapshot:{anchor:selectionEnd,focus:selectionEnd}})});
+		act(()=>{args[1]({host:document.createElement("div"),point:{x:0,y:0},dragging:false,range:{start:1,end:1},rows:[{kind:"context",oldNo:1,newNo:1,text:"captured();"}]})});
 		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"},scope:"committed"}));
 		view.unmount();hook.mockRestore();remove();
 	});

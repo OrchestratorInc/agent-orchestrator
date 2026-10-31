@@ -167,8 +167,7 @@ describe("WorkspaceReviewPane", () => {
 		const view=renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false}/>);
 		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
 		const host=document.createElement("div"),header=document.createElement("div");header.setAttribute("data-review-item-id",`${target.key}:src/App.tsx`);host.append(header);
-		const selectionEnd={column:host,row:header,rowIndex:0,offset:0};
-		act(()=>{args[1]({host,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"additions"},rows:[{kind:"add",side:"new",oldNo:null,newNo:1,text:"new code"}],snapshot:{anchor:selectionEnd,focus:selectionEnd}})});
+		act(()=>{args[1]({host,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"additions"},rows:[{kind:"add",side:"new",oldNo:null,newNo:1,text:"new code"}]})});
 		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"}}));
 		view.unmount();hook.mockRestore();remove();
 	});

@@ -60,9 +60,7 @@ describe("AoDiffFile", () => {
 		const hook=vi.spyOn(codeSelection,"useCodeSelection"),sha="a".repeat(40);
 		const view=render(<QueryClientProvider client={new QueryClient()}><AoDiffFile annotation={annotation()} detail={{...detail(),previousPath:"old.ts"}} fallback={null} onActiveSelectionChange={vi.fn()} sessionId="sess-1" split={false} scope="committed" source={{kind:"snapshot",label:"PR",commitShas:[sha],view:{prNumber:42,sourceUrl:"https://example.test/repo/pull/42",expectedTipSha:sha}}}/></QueryClientProvider>);
 		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
-		const selectionHost=document.createElement("div"),selectionRow=document.createElement("div");
-		const selectionEnd={column:selectionHost,row:selectionRow,rowIndex:0,offset:0};
-		args[1]({host:selectionHost,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"deletions"},rows:[{kind:"del",side:"old",oldNo:1,newNo:null,text:"old code"}],snapshot:{anchor:selectionEnd,focus:selectionEnd}});
+		args[1]({host:document.createElement("div"),point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"deletions"},rows:[{kind:"del",side:"old",oldNo:1,newNo:null,text:"old code"}]});
 		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,previousPath:"old.ts",side:"old",source:expect.objectContaining({kind:"pull_request",number:42,snapshot:sha})}));
 		view.unmount();hook.mockRestore();remove();
 	});
