@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactRow } from "../lib/artifacts";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
@@ -18,6 +18,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../lib/cloud-cp/renderer-client", () => ({ cloudCpFetch: mocks.fetch }));
+vi.mock("./PdfPreview", () => ({
+	PdfPreview: ({ cloud, onError, src }: { cloud?: boolean; onError: () => void; src: string }) => <button data-cloud={String(cloud)} data-src={src} data-testid="pdf-thumbnail" onClick={onError} type="button" />,
+}));
 
 const ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
 const VERSION = "2026-10-28T10:00:00Z";
@@ -215,13 +218,47 @@ describe("cloud artifact thumbnails", () => {
 	});
 
 	it("does not request access for unsupported cloud file types", async () => {
-		const { client } = renderThumbnails([artifact("report.pdf"), artifact("events.jsonl"), artifact("archive.zip")]);
+		const { client } = renderThumbnails([artifact("archive.zip"), artifact("data.bin")]);
 
 		await act(async () => {});
-		expect(screen.getAllByTitle("No preview available")).toHaveLength(3);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
 		expect(client.isFetching()).toBe(0);
 		expect(mocks.access).not.toHaveBeenCalled();
 		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("renders a cloud PDF's first page from its signed link through the main process", async () => {
+		renderThumbnails([artifact("report.pdf")]);
+
+		const preview = await screen.findByTestId("pdf-thumbnail");
+		expect(preview).toHaveAttribute("data-src", `${ROOT}report.pdf?v=${encodeURIComponent(VERSION)}`);
+		expect(preview).toHaveAttribute("data-cloud", "true");
+		expect(mocks.access).toHaveBeenCalledTimes(1);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("keeps a cloud PDF card's link when the access prefix is renewed", async () => {
+		const { client } = renderThumbnails([artifact("report.pdf")]);
+		await screen.findByTestId("pdf-thumbnail");
+		mocks.access.mockResolvedValue({ filesPrefix: "/api/cloud/v1/artifact-files/renewed/", expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() });
+
+		await act(async () => { await client.refetchQueries({ queryKey: ["cloud-artifact-access"] }); });
+		expect(mocks.access).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId("pdf-thumbnail")).toHaveAttribute("data-src", `${ROOT}report.pdf?v=${encodeURIComponent(VERSION)}`);
+	});
+
+	it("takes one fresh link for a failed cloud PDF card, then shows the placeholder", async () => {
+		renderThumbnails([artifact("report.pdf")]);
+		const fresh = "https://cp.test/api/cloud/v1/artifact-files/fresh/";
+		mocks.access.mockResolvedValue({ filesPrefix: "/api/cloud/v1/artifact-files/fresh/", expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() });
+
+		fireEvent.click(await screen.findByTestId("pdf-thumbnail"));
+		await waitFor(() => expect(screen.getByTestId("pdf-thumbnail")).toHaveAttribute("data-src", `${fresh}report.pdf?v=${encodeURIComponent(VERSION)}`));
+		expect(mocks.access).toHaveBeenCalledTimes(2);
+
+		fireEvent.click(screen.getByTestId("pdf-thumbnail"));
+		expect(await screen.findByTitle("No preview available")).toBeInTheDocument();
+		expect(mocks.access).toHaveBeenCalledTimes(2);
 	});
 
 });
