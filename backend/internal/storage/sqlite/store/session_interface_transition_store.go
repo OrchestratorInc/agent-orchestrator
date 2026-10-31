@@ -518,10 +518,3 @@ func transitionDomain(
 		NoticeAcknowledgedAt: nullTimeToTime(noticeAcknowledgedAt),
 	}
 }
-
-func interfaceTransitionToDomain(row gen.SessionInterfaceTransition) domain.SessionInterfaceTransition {
-	return transitionDomain(row.ID, row.SessionID, row.SourceMode, row.TargetMode, row.Policy,
-		row.HistoryPolicy, row.Phase, row.NativeConversationID, row.DegradedKind,
-		row.ErrorCode, row.ErrorDetail, row.CreatedAt, row.UpdatedAt, row.CompletedAt,
-		row.NoticeAcknowledgedAt, row.SourceAccountID, row.TargetAccountID)
-}
