@@ -505,7 +505,7 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getAllByText("plan.md")).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
-		expect(items).toEqual(["Version history", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
+		expect(items).toEqual(["Version history", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Sign in to share", "Copy as Markdown", "Delete artifact"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Show in (?!Terminal)/ }));
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Show in Terminal" }));
@@ -527,10 +527,10 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it.each([
-		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Delete artifact"] },
+		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Sign in to share", "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "chart.png", separators: 0, actions: ["Delete artifact"] },
 		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 1, actions: ["Download", "Delete artifact"] },
-		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
+		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Sign in to share", "Copy as Markdown", "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Delete artifact"] },
 		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Download", "Delete artifact"] },
 	])("separates only populated action groups for $location $path", async ({ hostId, cloud, path, separators, actions }) => {

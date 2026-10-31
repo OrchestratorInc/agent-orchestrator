@@ -26,6 +26,9 @@ export function cloudCpStreamChannel(streamId: string): string {
 /** Only CP API paths may be proxied; anything else is rejected before fetch. */
 const API_PREFIX = "/api/cloud/v1";
 
+/** The share link routes, read-only through this proxy. */
+const SHARE_LINKS_ROUTE = "/me/artifact-shares";
+
 /** Upper bound on live SSE streams per renderer WebContents. */
 export const MAX_STREAMS_PER_WEBCONTENTS = 8;
 
@@ -161,6 +164,14 @@ function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
 		(target.pathname === expectedPrefix || target.pathname.startsWith(`${expectedPrefix}/`));
 	if (!inBounds) {
 		throw invalid(`path must stay under ${API_PREFIX} after URL normalization.`);
+	}
+	// Share links are published, updated and revoked only through the main
+	// process's cloudShare flow, which a person confirms in a native dialog;
+	// through this proxy the renderer may only read them.
+	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
+	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`);
+	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {
+		throw invalid("share links can only be changed from the desktop's share flow.");
 	}
 	return target.toString();
 }
