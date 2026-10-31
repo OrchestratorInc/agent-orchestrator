@@ -416,13 +416,15 @@ export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
 /**
- * Refreshes the cloud sessions list and the direct session lookups. A view
- * that learns a session's worker connected calls it, so the session reads as
- * connected at once instead of after the list's next poll.
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
  */
 export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
 	return Promise.all([
 		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
 		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
 	]).then(() => undefined);
 }
