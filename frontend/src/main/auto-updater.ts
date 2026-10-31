@@ -3076,7 +3076,14 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     }
   }).then(() => confirmation, err => {
     installAbandoned = true;
-    throw err;
+    // A native failure can reject the queued operation before the catch above
+    // runs (while the progress helper starts, say), so rewrite it here too, and
+    // tell Settings unless it already shows this failure (#5755).
+    const failure = describeUpdateFailure(err, "install");
+    if (lastStatus.state !== "error" || lastStatus.message !== failure.message) {
+      broadcast({ state: "error", ...failureFields(failure) });
+    }
+    throw userFacingInstallError(err);
   }).finally(() => { if (!macRestartRequested) macRestartPreparation = undefined; });
   return macRestartPreparation;
 }

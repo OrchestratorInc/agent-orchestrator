@@ -3851,6 +3851,28 @@ describe("quitAndInstallUpdate", () => {
     } finally { restore(); }
   });
 
+  it("rewrites a raw native failure that rejects the install while the progress helper is starting (#5755)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const expected = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+      const assertion = expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(expected);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+      nativeAutoUpdater.emit("error", new Error("The request timed out."));
+      await assertion;
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: expected, errorInfo: { kind: "timeout", phase: "install" } });
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
   it("requires a visible helper before quitting an already native-ready update", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
