@@ -1391,3 +1391,30 @@ describe("toSnapshot", () => {
 		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });
+
+it("keeps a live refresh that is in flight when older history starts loading", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const page = (latestSequence: number, older = false) => ({
+		data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence, oldestSequence: older ? 1 : 20, hasMoreBefore: !older, turns: [], messages: [], activities: [],
+		},
+		error: undefined,
+	});
+	const refresh = deferred<ReturnType<typeof page>>();
+	getMock.mockReset()
+		.mockResolvedValueOnce(page(20))
+		.mockReturnValueOnce(refresh.promise)
+		.mockResolvedValue(page(20, true));
+	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(20));
+
+	// A conversation event starts a refresh; the reader scrolls to the top before it lands.
+	void queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }, { cancelRefetch: false });
+	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	act(() => result.current.loadOlder());
+	await act(async () => { refresh.resolve(page(21)); });
+
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+});

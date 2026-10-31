@@ -43,7 +43,8 @@ type ControlDeps struct {
 //	RequestID     → attach a request id for correlation
 //	requestLogger → slog-backed access log + 5xx telemetry, carries the request id
 //	recoverer     → turn a handler panic into 500 instead of crashing the daemon
-//	accountOrigin → exact renderer-origin boundary for Codex account management
+//	rendererOrigin → exact renderer-origin boundary for Codex account management
+//	                 and computer use
 //	cors          → CORS allowlist for the Electron renderer / dev origins
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
@@ -58,9 +59,11 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
-	// Credential routes retain their exact renderer-only boundary even for
-	// authenticated LAN callers. Check before CORS can answer a preflight.
-	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
+	// Account-management and computer-use routes retain their exact
+	// renderer-only boundary, even for authenticated LAN callers, and so do
+	// mobile controls. Check before CORS can answer a preflight.
+	r.Use(rendererOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
@@ -74,6 +77,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountUsageFlush(r, deps.UsageFlush)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
@@ -82,6 +86,22 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	api.Register(r)
 
 	return r
+}
+
+func mountUsageFlush(r chi.Router, flush func(context.Context)) {
+	if flush == nil {
+		return
+	}
+	r.Post("/internal/telemetry/usage-flush", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{
+				"status": "forbidden", "service": daemonmeta.ServiceName,
+			})
+			return
+		}
+		flush(req.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func previewOriginMiddleware(sessions *controllers.SessionsController) func(http.Handler) http.Handler {
@@ -155,7 +175,8 @@ func mountControl(r chi.Router, deps ControlDeps) {
 // on the LAN listener instead, by lanControlBlock, which 404s /api/v1/mobile on
 // the 0.0.0.0 socket the phone reaches — a transport-based check that cannot be
 // spoofed with a forged Host header. On the loopback listener these routes are
-// protected by the same CORS allowlist as every other app route.
+// protected by mobileControlOriginMiddleware: exact renderer origins or native
+// requests without browser metadata, independent of general preview CORS.
 func mountMobile(r chi.Router, c *controllers.MobileController) {
 	if c == nil {
 		return

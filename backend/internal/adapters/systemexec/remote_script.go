@@ -120,7 +120,9 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 		argv = append(argv, scriptPath)
 		argv = append(argv, command.Args...)
 	}
-	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env}, stdout, stderr)
+	// The job directory is the working directory too, so files an installer
+	// writes to relative paths stay private and are removed with it.
+	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env, Dir: jobDir, Isolated: command.Isolated}, stdout, stderr)
 	return result, err
 }
 

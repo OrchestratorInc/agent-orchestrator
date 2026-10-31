@@ -185,6 +185,14 @@ function renderNotificationCenter(
 	);
 }
 
+function rowOf(title: string) {
+	return screen.getByText(title).closest<HTMLElement>("[role=listitem]")!;
+}
+
+function swipeRight(element: HTMLElement) {
+	for (const deltaX of [-20, -40, -60]) element.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaMode: WheelEvent.DOM_DELTA_PIXEL }));
+}
+
 async function clickOpen() {
 	const trigger = screen.getByRole("button", { name: /unread notifications/ });
 	await userEvent.click(trigger);
@@ -406,7 +414,7 @@ describe("NotificationCenter", () => {
 		expect(localClear.closest("[title='Open session']")).not.toBeNull();
 		expect(localClear).toHaveAttribute("title", "");
 		expect(screen.getByRole("button", { name: "Clear notification: Pull request ready to merge" })).toHaveAttribute("title", "");
-		expect(screen.getByRole("button", { name: "Restore session" })).toHaveAttribute("title", "");
+		expect(screen.getByRole("button", { name: "This session was archived. Restore it?" })).toHaveAttribute("title", "");
 	});
 
 	it("clears one notification without opening its session", async () => {
@@ -460,6 +468,43 @@ describe("NotificationCenter", () => {
 
 		expect(await screen.findByText("single clear failed")).toBeInTheDocument();
 		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
+	});
+
+	it("clears a notification swiped right without opening its session", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+
+		swipeRight(rowOf("Checkout flow needs input"));
+
+		await waitFor(() => expect(clearOneMock).toHaveBeenCalledWith(expect.objectContaining({ id: "ntf_1" })));
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("brings a swiped row back when its clear fails", async () => {
+		clearOneMock.mockRejectedValueOnce(new Error("single clear failed"));
+		renderNotificationCenter();
+		await clickOpen();
+		const row = rowOf("Checkout flow needs input");
+
+		swipeRight(row);
+
+		expect(await screen.findByText("single clear failed")).toBeInTheDocument();
+		await waitFor(() => expect(row.style.height).toBe(""));
+		expect(row.style.opacity).toBe("");
+		expect(row.style.transform).toBe("");
+	});
+
+	it("does not open the session when a row drag ends", async () => {
+		renderNotificationCenter();
+		await clickOpen();
+		const body = screen.getByText("The agent is waiting for your response.");
+
+		fireEvent.pointerDown(body, { pointerId: 1, clientX: 10, clientY: 10 });
+		fireEvent.pointerMove(window, { pointerId: 1, clientX: 40, clientY: 10 });
+		fireEvent.pointerUp(window, { pointerId: 1, clientX: 40, clientY: 10 });
+		fireEvent.click(body);
+
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps the panel contents when clear-all fails", async () => {
@@ -792,7 +837,7 @@ describe("NotificationCenter", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 		expect(restoreSessionMock).not.toHaveBeenCalled();
 
-		await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+		await userEvent.click(screen.getByRole("button", { name: "This session was archived. Restore it?" }));
 		await waitFor(() => expect(restoreSessionMock).toHaveBeenCalledWith("sess-dead"));
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
@@ -837,7 +882,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("The agent session has ended."));
 		expect(restoreSessionMock).not.toHaveBeenCalled();
@@ -860,7 +905,7 @@ describe("NotificationCenter", () => {
 
 		await userEvent.click(screen.getByText("The agent is waiting for your response."));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 	});
 
 	it("does not treat terminated sessions as live when the workspace query fails", async () => {
@@ -881,7 +926,7 @@ describe("NotificationCenter", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByText("The agent session has ended."));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);

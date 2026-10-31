@@ -1969,7 +1969,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				{copiedToast && props.isVisible !== false ? (
 					<div
 						aria-live="polite"
-						className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+						className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
 						role="status"
 					>
 						{t("terminal.copiedToClipboard")}

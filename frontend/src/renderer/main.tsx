@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import { preloadMarkdownFonts } from "./hooks/useMarkdownFontsReady";
 import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
@@ -24,6 +25,7 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
+void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 
 // Main owns consent and only acknowledges opt-out after every live AO shell

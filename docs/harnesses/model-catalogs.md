@@ -47,3 +47,35 @@ discovery does not add device-local provider catalogs. Settings omits the
 session-history recency lookup that task pickers use, so frontend query keys
 can differ while the underlying catalog stays shared. Existing picker display
 ordering is preserved.
+
+## Cloud tasks
+
+New Task in a Cloud project lists the control plane's catalog for the agent
+(`GET /api/cloud/v1/orgs/{orgId}/providers/{agent}/models`), never this
+computer's, so a missing or expired local login does not empty the picker. The
+list is what the next task's worker runs: either a Cloud worker on the same
+CLI version and the user's current credential reported it (`source: worker`,
+"Verified on your Cloud workers"), or it is the list the control plane's pinned
+CLI version supports (`source: release`, "Models for Claude Code 2.1.287"). It
+needs no live worker.
+
+The picker opens on the project's or the agent's default, which sends no
+model; no listed model is picked for the user. A configured, remembered or
+typed model stays selectable even when the catalog does not list it, with a
+warning that it may not run in Cloud. Any model ID can be entered.
+
+A listed model takes only the effort levels the catalog reports for it, so a
+model that reports none (Claude's Haiku) starts with no effort; Claude refuses
+a turn whose effort its model does not offer. A model the catalog does not
+list keeps the chosen effort.
+
+When the control plane has no catalog:
+
+- 409 `MODEL_CATALOG_UNAVAILABLE` (OpenCode today): OpenCode keeps its
+  discovery scoped to the connected provider's credential type; other agents
+  offer the default and manual entry.
+- 404 or 501 without an error code (a control plane that predates the route):
+  this computer's models appear as unverified suggestions, never selected
+  automatically.
+- Any other failure: the default and manual entry, with choices already made
+  kept.

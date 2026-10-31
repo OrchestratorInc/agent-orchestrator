@@ -1,5 +1,5 @@
+import { BrowserIcon } from "./icons";
 import { useState } from "react";
-import { Globe } from "lucide-react";
 import { cn } from "../lib/utils";
 import { openLinkInSystemBrowser } from "../lib/external-link-policy";
 import type { LinkPreview } from "../hooks/useLinkPreview";
@@ -71,7 +71,7 @@ export function LinkPreviewCard({ url, preview, onBrowserOpen }: {
 					{preview.faviconUrl ? (
 						<PreviewImage src={preview.faviconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
 					) : (
-						<Globe aria-hidden="true" className="size-3.5 shrink-0" />
+						<BrowserIcon aria-hidden="true" className="size-3.5 shrink-0" />
 					)}
 					<span className="truncate">{siteLabel}</span>
 				</div>

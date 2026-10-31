@@ -20,7 +20,7 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {} } },
+	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
 }));
 
 describe("side delivery draft ownership", () => {

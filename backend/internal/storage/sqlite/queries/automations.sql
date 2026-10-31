@@ -1,18 +1,18 @@
 -- name: InsertAutomation :exec
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort
 FROM automations
 WHERE id = ?;
 
 -- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort
 FROM automations
 WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
   AND (sqlc.arg(enabled_filter) < 0 OR enabled = sqlc.arg(enabled_filter))
@@ -27,7 +27,7 @@ WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
 
 -- name: UpdateAutomation :execrows
 UPDATE automations
-SET display_name = ?, prompt = ?, kind = ?, harness = ?, rrule_text = ?,
+SET display_name = ?, prompt = ?, kind = ?, harness = ?, model = ?, mode = ?, effort = ?, rrule_text = ?,
     timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
 WHERE id = ?;
 
@@ -41,7 +41,7 @@ WHERE id = ? AND enabled = 1 AND next_run_at = ?;
 
 -- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort
 FROM automations
 WHERE enabled = 1 AND next_run_at <= ?
 ORDER BY next_run_at, id

@@ -92,6 +92,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/providers/{agent}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether a Cloud worker running the same CLI version with the user's current credential reported it, or it is the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
+        get: operations["listUserAgentModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -743,7 +763,249 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. */
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403. */
+        post: operations["composerAcquire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease. */
+        post: operations["composerRenew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing. */
+        post: operations["composerRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open. */
+        post: operations["composerRequestTurn"];
+        /** @description Leave the line for the composer lease. */
+        delete: operations["composerLeaveQueue"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403. */
+        post: operations["composerTakeOver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false. */
+        post: operations["composerPublishDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream. */
+        put: operations["sessionSetChatSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the owner of a shared project to merge one of the session's pull requests. Only someone the project or session was shared with, who may write in the session, asks; a merge by them is refused with MERGE_NEEDS_APPROVAL. Asking again while a request is pending returns it. The session's creator is notified. */
+        post: operations["requestPullRequestMerge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description A project's merge requests, pending first, then newest first. A member of the organization sees them all; someone the project was shared with sees their own. */
+        get: operations["listProjectMergeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Merge the requested pull request as the approving owner (the session's creator, or an organization owner or admin), through the same readiness checks as their own merge, and tell the guest. A pull request that cannot merge leaves the request pending. */
+        post: operations["approveMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Decline a pending merge request and tell the guest. */
+        post: operations["rejectMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/session-participants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Who is in each of the named sessions that someone has shared, for a board. Sessions the caller may not open, or that nobody has shared, are left out. Reading this does not make the caller present in any session. */
+        get: operations["listSessionParticipants"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -783,6 +1045,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Answer an approval prompt. Allowed for the same people who may stop its turn (see cancelTurn); anyone else gets 403. */
         post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
@@ -854,7 +1117,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Upgrade to a terminal WebSocket using a short-lived ticket. */
+        /**
+         * Upgrade to a terminal WebSocket using a short-lived ticket.
+         * @description On the agent terminal, keystrokes are talking to the agent, so they need
+         *     the session's composer lease: typing takes it when it is free and nobody
+         *     is waiting, and renews it while the typist keeps typing. While someone
+         *     else holds it or is waiting for it, input is dropped and the server
+         *     sends `{"type":"input_refused","inputId":...,"message":...}` instead of
+         *     `input_ack`; the connection stays open.
+         *
+         */
         get: operations["connectTerminal"];
         put?: never;
         post?: never;
@@ -1680,10 +1952,153 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRemoteHosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/hosts/{hostId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Lists a machine in the account, or updates its listing. A new `token`,
+         *     or listing a removed machine again, retires its standing fixed tunnel:
+         *     a run token fetched with the old credential stops working, and the
+         *     machine gets a new tunnel at the same address. A registration that
+         *     makes a tunnel can take more than a minute.
+         *      */
+        put: operations["putRemoteHost"];
+        post?: never;
+        /** @description Removes the machine from the account and deletes its fixed tunnel;
+         *     when Cloudflare fails, a later cleanup deletes it. The fixed address
+         *     counts against the account's limit until that cleanup, usually within
+         *     15 minutes.
+         *      */
+        delete: operations["deleteRemoteHost"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine publishes the address it serves now to every account that
+         *     lists it under this credential.
+         *      */
+        post: operations["publishRemoteHostAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine fetches the run token of the fixed tunnel an account gives
+         *     it: the account that lists the machine under the credential it
+         *     presents. If several do, one with a standing tunnel is preferred. The
+         *     deployment makes the tunnel when there is none. A deployment that
+         *     predates this route answers 404 without an error envelope.
+         *      */
+        post: operations["ensureRemoteHostTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RemoteHost: {
+            hostId: string;
+            label: string;
+            /** @description The address devices reach the machine at. */
+            url: string;
+            /** @description The credential a device presents to the machine. */
+            token: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RemoteHostList: {
+            hosts: components["schemas"]["RemoteHost"][];
+            /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
+            fixedAddresses?: boolean;
+            /** @description Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one. */
+            hostKeys?: boolean;
+        };
+        RemoteHostRegistration: {
+            /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
+            label: string;
+            /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
+            url?: string;
+            token: string;
+            /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
+            hostKey?: string;
+        };
+        RemoteHostAddress: {
+            /**
+             * Format: uri
+             * @description An https origin with no path, query, fragment or user info.
+             */
+            url: string;
+        };
+        RemoteHostTunnelRequest: {
+            /** @description Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset. */
+            repair?: boolean;
+        };
+        RemoteHostTunnel: {
+            /** @description The fixed address's host name. */
+            hostname: string;
+            /** @description The Cloudflare run token for the machine's connector. */
+            runToken: string;
+            /**
+             * Format: date-time
+             * @description When the address was made; it may not resolve for a short time after.
+             */
+            since: string;
+            /** @description Set when a repair request got a new tunnel. */
+            repaired?: boolean;
+        };
         EmptyObject: Record<string, never>;
         AgentNotificationEvent: {
             eventId: string;
@@ -2580,6 +2995,11 @@ export interface components {
             mode?: components["schemas"]["SessionMode"];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -2591,12 +3011,28 @@ export interface components {
             default: boolean;
             efforts?: string[];
             defaultEffort?: string;
+            /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
+            approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
+            /**
+             * @description Where the list came from. worker: reported by a Cloud worker running this CLI version with the user's current credential. release: the models the control plane's pinned CLI version supports.
+             * @enum {string}
+             */
+            source?: "worker" | "release";
+            /** @description The harness CLI version the list is for. */
+            cliVersion?: string;
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            accountListed?: boolean;
         };
         SendMessageInput: {
             text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         WorkerWorkspaceListPayload: {
             path: string;
@@ -2801,6 +3237,8 @@ export interface components {
                 /** @constant */
                 desiredState: "deleted";
             };
+            /** @description Whether the session's artifact files were deleted. */
+            artifactsDeleted?: boolean;
         };
         SessionResponse: {
             session: components["schemas"]["Session"];
@@ -2879,6 +3317,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
+            requestedBy?: {
+                userId: string;
+                name: string;
+            };
             outputType?: components["schemas"]["SessionOutputType"];
             /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
             artifactCount?: number;
@@ -3218,6 +3661,143 @@ export interface components {
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
+        SessionViewer: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /**
+             * @description member is an organization member; editor and viewer are share-grant roles.
+             * @enum {string}
+             */
+            role: "member" | "editor" | "viewer";
+        };
+        /** @description Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log. */
+        SessionLiveState: {
+            /** @constant */
+            type: "session.live";
+            chatSettings: components["schemas"]["SessionChatSettings"];
+            /** @description Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings). */
+            canConfigure: boolean;
+            /** @description Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none. */
+            mergeRequestsVersion?: string;
+            /**
+             * Format: uuid
+             * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
+             */
+            you: string;
+            /** @description Whether the person reading this stream may take the composer lease from its holder (composerTakeOver). */
+            canTakeOver: boolean;
+            /** @description Everyone with the session open right now, once each, in the order they joined. */
+            viewers: components["schemas"]["SessionViewer"][];
+            composer: components["schemas"]["ComposerLeaseState"];
+        };
+        /** @description A guest's request that a shared project's owner merge a pull request. */
+        MergeRequest: {
+            /** Format: uuid */
+            id: string;
+            projectId: string;
+            sessionId: string;
+            sessionName: string;
+            pullRequest: {
+                id: string;
+                number: number;
+                url: string;
+                title: string;
+                repository: string;
+            };
+            requestedBy: components["schemas"]["MergeRequestPerson"];
+            /** @enum {string} */
+            status: "pending" | "merged" | "rejected";
+            decidedBy?: components["schemas"]["MergeRequestPerson"];
+            /** Format: date-time */
+            decidedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MergeRequestPerson: {
+            userId: string;
+            name: string;
+        };
+        SharedSessionParticipants: {
+            /** Format: uuid */
+            sessionId: string;
+            /** @description The session's creator first, then each person a share link let in, in the order they joined, then any other organization member who has it open. */
+            participants: components["schemas"]["SessionParticipant"][];
+        };
+        SessionParticipant: {
+            userId: string;
+            /** @description Display name, never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /** @enum {string} */
+            role: "owner" | "member" | "editor" | "viewer";
+            /** @description Whether they have the session open now. */
+            present: boolean;
+            /**
+             * @description working while they hold the composer, waiting while in line for it, otherwise idle.
+             * @enum {string}
+             */
+            state: "working" | "waiting" | "idle";
+        };
+        /** @description The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults. */
+        SessionChatSettings: {
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ComposerParticipant: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+        };
+        /** @description The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer. */
+        ComposerLeaseState: {
+            /** @description Who holds the lease, or null while it is free. */
+            holder: components["schemas"]["ComposerParticipant"] | null;
+            /**
+             * Format: int64
+             * @description Increases with every grant. A holder presents it to send, steer, renew, or release.
+             */
+            epoch: number;
+            /** @description Everyone waiting for the lease, first in line first. */
+            waitlist: components["schemas"]["ComposerParticipant"][];
+            /** @description What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends. */
+            draft?: components["schemas"]["ComposerDraft"] | null;
+        };
+        ComposerDraft: {
+            text: string;
+            /** @description The caret's offset into text, in UTF-16 code units as the writing client counts them. */
+            cursor: number;
+        };
+        ComposerLeaseAnswer: {
+            composer: components["schemas"]["ComposerLeaseState"] & {
+                /**
+                 * Format: int64
+                 * @description How long the caller's grant has left; 0 unless granted.
+                 */
+                expiresInMs: number;
+            };
+            /** @description Whether the caller holds the lease after the request. */
+            granted: boolean;
+        };
+        ComposerGrantInput: {
+            /** Format: int64 */
+            epoch: number;
+            /** @description renew only. True when the holder typed since the last renewal. */
+            typing?: boolean;
+            /** @description draft only. The holder's draft. */
+            text?: string;
+            /** @description draft only. The caret's offset into text. */
+            cursor?: number;
+        };
         UserMessageEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -3228,6 +3808,13 @@ export interface components {
                 text: string;
                 /** Format: uuid */
                 turnId?: string;
+                /**
+                 * Format: uuid
+                 * @description The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+                 */
+                authorUserId?: string;
+                /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
+                authorName?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -3548,6 +4135,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The machine's stable identity, `h_` followed by a UUID. */
+        RemoteHostId: string;
         /** @description The file name, without a directory. */
         ArtifactShareName: string;
         /** @description Lowercase hex SHA-256 of the body. */
@@ -3791,6 +4380,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserAgentModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The model catalog for the next task. It lists at least one model. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
+                };
+            };
+            /** @description MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -4410,7 +5032,10 @@ export interface operations {
     };
     deleteSession: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete the session's artifact files. A restored session comes back without them. */
+                deleteArtifacts?: boolean;
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -4939,6 +5564,361 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    composerAcquire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRenew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRequestTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerLeaveQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerTakeOver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerPublishDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sessionSetChatSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionChatSettings"];
+            };
+        };
+        responses: {
+            /** @description The session's chat settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chatSettings: components["schemas"]["SessionChatSettings"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    requestPullRequestMerge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    prUrl: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The pending merge request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectMergeRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merge requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequests: components["schemas"]["MergeRequest"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expectedHeadSha: string;
+                };
+            };
+        };
+        responses: {
+            /** @description GitHub accepted the merge; the request is recorded as merged. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rejectMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declined request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionParticipants: {
+        parameters: {
+            query?: {
+                /** @description A session to describe; repeat for each, at most 100. */
+                sessionId?: string[];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shared sessions among those asked for, in the order asked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        sessions: components["schemas"]["SharedSessionParticipants"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     steerTurn: {
         parameters: {
             query?: never;
@@ -5041,6 +6021,12 @@ export interface operations {
                 after?: components["parameters"]["After"];
                 /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
                 types?: components["parameters"]["EventTypes"];
+                /** @description 1 opts this stream in to the session's live state. The caller is
+                 *     listed as a viewer while the stream stays open, and the stream also
+                 *     carries session.live frames (see SessionLiveState) whenever that
+                 *     state changes. Omitted, the stream carries only ClientEvents.
+                 *      */
+                live?: "1";
             };
             header?: never;
             path: {
@@ -5052,7 +6038,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Replay followed by live client-visible events. Each SSE data field
-             *     contains a ClientEvent; the SSE id is its sequence.
+             *     contains a ClientEvent; the SSE id is its sequence. With live=1 the
+             *     stream also carries `event: session.live` frames whose data is a
+             *     SessionLiveState. Those frames have no SSE id and never move the
+             *     replay cursor; each one replaces the previous state.
              *      */
             200: {
                 headers: {
@@ -6453,6 +7442,157 @@ export interface operations {
                 };
                 content?: never;
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    listRemoteHosts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's machines. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostRegistration"];
+            };
+        };
+        responses: {
+            /** @description Listed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
+            422: components["responses"]["ValidationError"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working. */
+            502: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    publishRemoteHostAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostAddress"];
+            };
+        };
+        responses: {
+            /** @description Published. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    ensureRemoteHostTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description The machine's fixed tunnel. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostTunnel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
+            401: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope. */
+            404: components["responses"]["Error"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
+            502: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error. */
+            503: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

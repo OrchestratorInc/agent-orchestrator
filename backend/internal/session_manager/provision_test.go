@@ -975,3 +975,37 @@ func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeEnvInjectsAgentBrowserConfigOnRemoteHosts(t *testing.T) {
+	manager := &Manager{
+		dataDir:           "/data",
+		agentBrowserURL:   "http://127.0.0.1:8080",
+		agentBrowserToken: "shared-secret",
+		executable:        func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
+		EnvAgentBrowserURL: "http://hacked:1",
+	})
+	if env[EnvAgentBrowserURL] != "http://127.0.0.1:8080" || env[EnvAgentBrowserToken] != "shared-secret" {
+		t.Fatalf("agent browser env = %q / %q, want daemon-configured service", env[EnvAgentBrowserURL], env[EnvAgentBrowserToken])
+	}
+}
+
+func TestRuntimeEnvOmitsAgentBrowserConfigOnDesktopHosts(t *testing.T) {
+	manager := &Manager{
+		dataDir:    "/data",
+		executable: func() (string, error) { return filepath.Join("/opt", "aod", "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	env := manager.runtimeEnv("mer-1", "mer", "", map[string]string{
+		EnvAgentBrowserURL:   "http://project-supplied:8080",
+		EnvAgentBrowserToken: "project-secret",
+	})
+	if value, ok := env[EnvAgentBrowserURL]; ok && value != "" {
+		t.Fatalf("%s = %q on a desktop host; project env must not select a remote browser", EnvAgentBrowserURL, value)
+	}
+	if value, ok := env[EnvAgentBrowserToken]; ok && value != "" {
+		t.Fatalf("%s = %q on a desktop host", EnvAgentBrowserToken, value)
+	}
+}
