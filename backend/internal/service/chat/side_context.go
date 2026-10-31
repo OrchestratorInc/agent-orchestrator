@@ -44,7 +44,7 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if !found {
 		return "", ErrSideAnchorUnavailable
 	}
-	var b strings.Builder
+	var entries []string
 	for _, message := range rows.Messages {
 		if !allowed[message.TurnID] || message.Streaming || strings.TrimSpace(message.Text) == "" {
 			continue
@@ -52,13 +52,26 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 		if message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant {
 			continue
 		}
-		fmt.Fprintf(&b, "%s:\n---\n%s\n---\n", message.Role, message.Text)
-		if b.Len() > 512*1024 {
-			return "", fmt.Errorf("side history exceeds reconstruction limit")
-		}
+		entries = append(entries, fmt.Sprintf("%s:\n---\n%s\n---\n", message.Role, message.Text))
 	}
-	return b.String(), nil
+	// Long-lived chats, such as a project orchestrator, outgrow the budget. Keep
+	// the newest messages that fit instead of refusing to open the side chat.
+	start, size := len(entries), 0
+	for start > 0 && size+len(entries[start-1]) <= sideSeedHistoryLimit {
+		start--
+		size += len(entries[start])
+	}
+	history := strings.Join(entries[start:], "")
+	if start > 0 {
+		history = sideSeedHistoryOmitted + history
+	}
+	return history, nil
 }
+
+const (
+	sideSeedHistoryLimit   = 512 * 1024
+	sideSeedHistoryOmitted = "[Earlier main-chat history omitted: it exceeds the side-chat reconstruction limit.]\n"
+)
 
 const sidePolicyVersion = 1
 

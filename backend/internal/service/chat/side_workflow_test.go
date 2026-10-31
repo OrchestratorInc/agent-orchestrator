@@ -280,6 +280,32 @@ func TestSideFreshAndReconstructedContext(t *testing.T) {
 	}
 }
 
+func TestSideReconstructedContextKeepsNewestHistoryPastLimit(t *testing.T) {
+	h := newSideWorkflow(t, "", domain.HarnessClaudeCode)
+	for i, reply := range []string{"oldest " + strings.Repeat("o", 300*1024), "newest " + strings.Repeat("n", 300*1024)} {
+		turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: fmt.Sprint("ask ", i), ClientMessageID: fmt.Sprint("ask-", i), Origin: domain.MessageOriginHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: fmt.Sprint("reply-", i), Text: reply}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			return len(s.Messages) == 2*(i+1) && s.Turns[i].State == domain.TurnStateCompleted
+		})
+	}
+	side := h.side(t, "long", true)
+	if side.ContextMode != "reconstructed" {
+		t.Fatalf("mode=%s", side.ContextMode)
+	}
+	if _, err := h.svc.SendSideQuestion(context.Background(), testSession, side.ID, ports.ChatUserMessage{Text: "Explain it.", ClientMessageID: "question"}); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+	delivered := h.provider(0).sentTexts()[0]
+	if strings.Contains(delivered, "oldest ") || !strings.Contains(delivered, "newest ") || !strings.Contains(delivered, "ask 1") || !strings.Contains(delivered, "Earlier main-chat history omitted") {
+		t.Fatalf("history not trimmed to newest messages (len %d)", len(delivered))
+	}
+}
+
 func TestSideProviderFailurePausesQueueUntilExplicitRetry(t *testing.T) {
 	h := newSideWorkflow(t, "")
 	h.source(t)
