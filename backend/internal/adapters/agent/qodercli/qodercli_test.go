@@ -249,13 +249,15 @@ func TestSettingsArgFallsBackToInlineJSONWithoutDataDir(t *testing.T) {
 }
 
 func TestSessionUUIDIsStableAndDistinct(t *testing.T) {
-	if SessionUUID("abc") != SessionUUID("abc") {
+	first := SessionUUID("abc")
+	again := SessionUUID("abc")
+	if first != again {
 		t.Fatal("session uuid must be deterministic")
 	}
 	if SessionUUID("abc") == SessionUUID("abd") {
 		t.Fatal("distinct sessions must not share a native id")
 	}
-	if !isUUID(SessionUUID("abc")) {
+	if !isUUID(first) {
 		t.Fatal("derived id must be a UUID")
 	}
 }
@@ -281,13 +283,6 @@ func containsPair(cmd []string, flag, value string) bool {
 		}
 	}
 	return false
-}
-
-func tailFlags(cmd []string, n int) []string {
-	if n > len(cmd) {
-		return cmd
-	}
-	return cmd[len(cmd)-n:]
 }
 
 // containsSeq reports whether want appears as a contiguous run inside cmd.

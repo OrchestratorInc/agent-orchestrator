@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -41,9 +40,6 @@ const (
 	// adapterID is the registry id, the domain.AgentHarness value, and the
 	// value users pass to `ao spawn --agent`.
 	adapterID = "qodercli"
-
-	// qoderDirName is Qoder CLI's user-level state directory under $HOME.
-	qoderDirName = ".qoder"
 )
 
 // qodercliSessionNamespace derives a stable native session UUID from an AO
@@ -288,7 +284,7 @@ func appendPermissionFlag(cmd []string, permissions ports.PermissionMode) []stri
 
 // appendToolFlags scopes a session to a tool allowlist/denylist. Qoder CLI takes
 // one rule per flag occurrence, unlike Claude Code's comma-joined value.
-func appendToolFlags(cmd []string, allowed, disallowed []string) []string {
+func appendToolFlags(cmd, allowed, disallowed []string) []string {
 	for _, rule := range allowed {
 		if rule = strings.TrimSpace(rule); rule != "" {
 			cmd = append(cmd, "--allowed-tools", rule)
@@ -370,32 +366,4 @@ func (p *Plugin) qodercliBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
-}
-
-// configRoot resolves Qoder CLI's user-level state directory: QODER_CONFIG_DIR
-// names it outright, QODER_CLI_HOME replaces the home directory, and the default
-// is ~/.qoder.
-func configRoot(env map[string]string) (string, error) {
-	if dir := lookupEnv(env, "QODER_CONFIG_DIR"); dir != "" {
-		return filepath.Clean(dir), nil
-	}
-	if home := lookupEnv(env, "QODER_CLI_HOME"); home != "" {
-		return filepath.Join(home, qoderDirName), nil
-	}
-	home := lookupEnv(env, "HOME")
-	if home == "" {
-		resolved, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("qodercli: resolve home directory: %w", err)
-		}
-		home = resolved
-	}
-	return filepath.Join(home, qoderDirName), nil
-}
-
-func lookupEnv(env map[string]string, key string) string {
-	if value, ok := env[key]; ok {
-		return strings.TrimSpace(value)
-	}
-	return strings.TrimSpace(os.Getenv(key))
 }

@@ -2161,7 +2161,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsQoderCLI := !strings.Contains(schema, "'qodercli'")
+	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsQoderCLI {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2175,6 +2176,16 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+		if !needsQoderCLI {
+			// Qoder CLI rides the same normalization as Hermes: every historical
+			// anchor below is a Qoder-CLI-free shape, so a constraint that already
+			// carries it would silently match nothing. Remove it for the repairs,
+			// then append it back below.
+			if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''qodercli'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+				return fmt.Errorf("schema repair: normalize qodercli constraint: %w", err)
+			}
+			needsQoderCLI = true
+		}
 	}
 	type replacement struct {
 		old string
@@ -2288,6 +2299,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
 	}
+	if needsQoderCLI {
+		repairs = append(repairs, replacement{"'fake'))", "'qodercli', 'fake'))"})
+	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
@@ -2345,6 +2359,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'qodercli'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing qodercli")
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")

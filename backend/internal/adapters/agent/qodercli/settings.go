@@ -135,14 +135,13 @@ func SettingsArg(dataDir, sessionKey, workspacePath string) (string, error) {
 		return payload, nil
 	}
 	settingsDir := filepath.Join(dir, "agent-runtime", "qodercli", key)
-	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
-		return payload, nil
+	if err := os.MkdirAll(settingsDir, 0o700); err == nil {
+		path := filepath.Join(settingsDir, "settings.json")
+		if err := os.WriteFile(path, []byte(payload), 0o600); err == nil {
+			return path, nil
+		}
 	}
-	path := filepath.Join(settingsDir, "settings.json")
-	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		return payload, nil
-	}
-	return path, nil
+	return payload, nil
 }
 
 // safeSessionKey keeps an id usable as a single path segment.
