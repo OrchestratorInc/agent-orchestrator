@@ -172,66 +172,135 @@ func TestAuthDiagnosticsDescribeTheProviderCheck(t *testing.T) {
 	}
 }
 
-// jcode set up with `jcode login ollama` reports the active provider as a
-// keyless local endpoint. AO asks that loopback endpoint for one token with
-// jcode's selected model; only an answered completion is authorized.
-func TestAuthStatusVerifiesAKeylessLocalProviderWithACompletion(t *testing.T) {
+// fakeOllama serves Ollama's native model inventory and records each request.
+func fakeOllama(t *testing.T, installed ...string) (server *httptest.Server, requests func() []string, setStatus func(int)) {
+	t.Helper()
 	var mu sync.Mutex
-	var gotModel, gotAuth string
-	answer := http.StatusOK
-	seen := func() (string, string) {
+	var seen []string
+	status := http.StatusOK
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		defer mu.Unlock()
-		return gotModel, gotAuth
-	}
-	setAnswer := func(code int) {
-		mu.Lock()
-		defer mu.Unlock()
-		answer, gotModel, gotAuth = code, "", ""
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Model string `json:"model"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		gotModel, gotAuth = body.Model, r.Header.Get("Authorization")
-		ok := r.URL.Path == "/v1/chat/completions" && answer == http.StatusOK
+		seen = append(seen, r.Method+" "+r.URL.Path+" auth="+r.Header.Get("Authorization"))
+		code := status
 		mu.Unlock()
-		if !ok {
-			w.WriteHeader(http.StatusServiceUnavailable)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/tags" || code != http.StatusOK {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+		models := make([]map[string]string, 0, len(installed))
+		for _, name := range installed {
+			models = append(models, map[string]string{"name": name, "model": name})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 	}))
-	defer server.Close()
-	status := func(method string) string {
-		return `{"any_available":true,"providers":[{"id":"claude","status":"not_configured","method":"not configured"},{"id":"ollama","status":"available","method":"` + method + `"}]}`
+	t.Cleanup(server.Close)
+	requests = func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
 	}
-	current := `{"requested_provider":"auto","resolved_provider":"Ollama","selected_model":"qwen3:1.7b"}`
+	setStatus = func(code int) {
+		mu.Lock()
+		defer mu.Unlock()
+		status = code
+	}
+	return server, requests, setStatus
+}
 
-	binary, _ := fakeJCodeProvider(t, status("local endpoint (`"+server.URL+"/v1`)"), `{"providers":[]}`, current)
+func ollamaStatus(method string) string {
+	return `{"any_available":true,"providers":[{"id":"claude","status":"not_configured","method":"not configured"},{"id":"ollama","status":"available","method":"` + method + `"}]}`
+}
+
+const ollamaCurrent = `{"requested_provider":"auto","resolved_provider":"Ollama","selected_model":"qwen3:1.7b"}`
+
+// jcode's keyless Ollama mode (`jcode login ollama`, no key) is available only
+// when the loopback Ollama server jcode reports answers its read-only
+// inventory with jcode's selected model installed. Nothing runs a model and no
+// credential is sent.
+func TestAuthStatusVerifiesKeylessOllamaFromItsInstalledModels(t *testing.T) {
+	server, requests, _ := fakeOllama(t, "llama3.2:latest", "qwen3:1.7b")
+	binary, _ := fakeJCodeProvider(t, ollamaStatus("local endpoint (`"+server.URL+"/v1`)"), `{"providers":[]}`, ollamaCurrent)
 	ctx, evidence := ports.WithAuthEvidence(context.Background())
 	got, err := (&Plugin{resolvedBinary: binary}).AuthStatus(ctx)
-	if model, auth := seen(); err != nil || got != ports.AgentAuthStatusAuthorized || model != "qwen3:1.7b" || auth != "" {
-		t.Fatalf("AuthStatus = %q, %v (model %q, auth header %q); want authorized after a keyless completion", got, err, model, auth)
+	if err != nil || got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("AuthStatus = %q, %v; want authorized", got, err)
 	}
-	if last := evidence.Diagnostics()[len(evidence.Diagnostics())-1]; last.Code != "provider_accepted" || last.Provider != "Ollama" {
+	if seen := requests(); len(seen) != 1 || seen[0] != "GET /api/tags auth=" {
+		t.Fatalf("requests = %v; want one credential-free GET /api/tags", seen)
+	}
+	diagnostics := evidence.Diagnostics()
+	last := diagnostics[len(diagnostics)-1]
+	if last.Code != "local_provider_available" || last.Provider != "Ollama" || last.Method != "GET "+server.URL+"/api/tags" {
 		t.Fatalf("diagnostic = %+v", last)
 	}
-
-	setAnswer(http.StatusServiceUnavailable)
-	if got, _ := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background()); got != ports.AgentAuthStatusConfigured {
-		t.Fatalf("AuthStatus with a failing local server = %q, want configured", got)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == "provider_accepted" {
+			t.Fatalf("a keyless local provider must not report an accepted credential: %+v", diagnostic)
+		}
 	}
+}
 
-	// An entry with a stored optional key is not a keyless route.
-	binary, _ = fakeJCodeProvider(t, status("local endpoint (`"+server.URL+"/v1`) + optional API key (`OLLAMA_API_KEY`)"), `{"providers":[]}`, current)
-	setAnswer(http.StatusOK)
-	if got, _ := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background()); got != ports.AgentAuthStatusConfigured {
-		t.Fatalf("AuthStatus with an optional key = %q, want configured", got)
+func TestAuthStatusKeepsKeylessOllamaConfiguredWhenUnavailable(t *testing.T) {
+	server, _, setStatus := fakeOllama(t, "llama3.2:latest")
+	local := ollamaStatus("local endpoint (`" + server.URL + "/v1`)")
+	for name, tc := range map[string]struct {
+		status, current string
+		serverStatus    int
+		code            string
+	}{
+		"model not installed": {local, ollamaCurrent, http.StatusOK, "model_selection_unresolved"},
+		"server error":        {local, ollamaCurrent, http.StatusInternalServerError, "provider_unreachable"},
+		"server down":         {ollamaStatus("local endpoint (`http://127.0.0.1:1/v1`)"), ollamaCurrent, http.StatusOK, "provider_unreachable"},
+		"no selected model":   {local, `{"resolved_provider":"Ollama","selected_model":""}`, http.StatusOK, "model_selection_unresolved"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setStatus(tc.serverStatus)
+			binary, _ := fakeJCodeProvider(t, tc.status, `{"providers":[]}`, tc.current)
+			ctx, evidence := ports.WithAuthEvidence(context.Background())
+			got, err := (&Plugin{resolvedBinary: binary}).AuthStatus(ctx)
+			diagnostics := evidence.Diagnostics()
+			if err != nil || got != ports.AgentAuthStatusConfigured || diagnostics[len(diagnostics)-1].Code != tc.code {
+				t.Fatalf("AuthStatus = %q, %v, diagnostics %+v; want configured with %s", got, err, diagnostics, tc.code)
+			}
+		})
 	}
-	if model, _ := seen(); model != "" {
-		t.Fatalf("an entry with an optional key was probed with model %q", model)
+	setStatus(http.StatusOK)
+}
+
+// Only the keyless local Ollama mode is checked this way: a stored (possibly
+// cloud) API key, a remote or non-Ollama endpoint, or another active provider
+// keeps the existing behavior and never touches the Ollama server.
+func TestAuthStatusDoesNotTreatOtherModesAsKeylessOllama(t *testing.T) {
+	server, requests, _ := fakeOllama(t, "qwen3:1.7b")
+	local := ollamaStatus("local endpoint (`" + server.URL + "/v1`)")
+	lmStudio := `{"providers":[{"id":"lmstudio","status":"available","method":"local endpoint (` + "`" + server.URL + "/v1`" + `)"}]}`
+	for name, tc := range map[string]struct{ status, current string }{
+		"optional API key stored": {ollamaStatus("local endpoint (`" + server.URL + "/v1`) + optional API key (`OLLAMA_API_KEY`)"), ollamaCurrent},
+		"remote endpoint":         {ollamaStatus("local endpoint (`https://ollama.example.com/v1`)"), ollamaCurrent},
+		"not the /v1 endpoint":    {ollamaStatus("local endpoint (`" + server.URL + "/api`)"), ollamaCurrent},
+		"another local provider":  {lmStudio, `{"resolved_provider":"LM Studio","selected_model":"qwen3:1.7b"}`},
+		"another active provider": {local, `{"resolved_provider":"OpenAI-compatible","selected_model":"qwen3:1.7b"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			binary, _ := fakeJCodeProvider(t, tc.status, `{"providers":[]}`, tc.current)
+			if got, err := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusConfigured {
+				t.Fatalf("AuthStatus = %q, %v; want configured", got, err)
+			}
+		})
+	}
+	if seen := requests(); len(seen) != 0 {
+		t.Fatalf("Ollama server was probed for another mode: %v", seen)
+	}
+}
+
+func TestOllamaModelInstalledMatchesOllamaNames(t *testing.T) {
+	installed := []string{"qwen3:1.7b", "llama3.2:latest", "hf.co/org/model:Q4"}
+	for model, want := range map[string]bool{
+		"qwen3:1.7b": true, "llama3.2": true, "llama3.2:latest": true, "hf.co/org/model:Q4": true,
+		"qwen3": false, "qwen3:4b": false, "": false, "claude-opus-5-5": false,
+	} {
+		if got := OllamaModelInstalled(installed, model); got != want {
+			t.Errorf("OllamaModelInstalled(%q) = %v, want %v", model, got, want)
+		}
 	}
 }

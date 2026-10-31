@@ -16,6 +16,7 @@ on:
       - ".github/workflows/jcode-new-task.yml"
       - "frontend/scripts/ci-visual/jcode-new-task.mjs"
       - "backend/internal/adapters/agent/jcode/**"
+      - "backend/internal/adapters/agent/modelcatalog/jcode*.go"
   workflow_dispatch:
 
 permissions:

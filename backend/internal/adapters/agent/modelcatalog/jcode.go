@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/jcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -44,8 +45,12 @@ func discoverJCodeCatalog(ctx context.Context, request ports.AgentModelDiscovery
 	if err := json.Unmarshal(output, &listed); err != nil {
 		return base, fmt.Errorf("jcode model discovery: %w", err)
 	}
-	models := make([]ports.AgentModelInfo, 0, len(listed.Models))
-	for _, id := range listed.Models {
+	ids, err := jcodeLocalOllamaModels(runCtx, request, env, listed.Provider, listed.Models)
+	if err != nil {
+		return base, fmt.Errorf("jcode model discovery: %w", err)
+	}
+	models := make([]ports.AgentModelInfo, 0, len(ids))
+	for _, id := range ids {
 		if id = strings.TrimSpace(id); id != "" {
 			models = append(models, ports.AgentModelInfo{ID: id, Label: id, Provider: listed.Provider, IsDefault: id == listed.SelectedModel})
 		}
@@ -58,4 +63,34 @@ func discoverJCodeCatalog(ctx context.Context, request ports.AgentModelDiscovery
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
+}
+
+// jcodeLocalOllamaModels narrows jcode's list to the models the local Ollama
+// server has installed when jcode runs in its keyless local Ollama mode.
+// jcode's list mixes the server's models with its built-in hosted model names,
+// which a local Ollama server does not serve. IDs stay exactly as jcode lists
+// them. Any other provider or mode keeps jcode's own list.
+func jcodeLocalOllamaModels(ctx context.Context, request ports.AgentModelDiscoveryRequest, env map[string]string, provider string, listed []string) ([]string, error) {
+	if !strings.EqualFold(strings.TrimSpace(provider), "ollama") {
+		return listed, nil
+	}
+	status, err := modelCommand(ctx, request.Binary, []string{"--no-update", "auth", "status", "--json"}, request.WorkingDir, env).Output()
+	if err != nil {
+		return listed, nil //nolint:nilerr // without jcode's mode report, its own list stands
+	}
+	inventory, ok := jcode.OllamaInventoryURL(status)
+	if !ok {
+		return listed, nil
+	}
+	installed, err := jcode.InstalledOllamaModels(ctx, inventory)
+	if err != nil {
+		return nil, fmt.Errorf("local Ollama server at %s: %w", inventory, err)
+	}
+	served := make([]string, 0, len(listed))
+	for _, id := range listed {
+		if jcode.OllamaModelInstalled(installed, id) {
+			served = append(served, id)
+		}
+	}
+	return served, nil
 }

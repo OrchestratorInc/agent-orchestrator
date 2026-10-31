@@ -44,12 +44,16 @@ model tokens:
 | --- | --- |
 | No provider configured | Not signed in |
 | Configured, and the active provider's usage report has no error | Connected |
-| The active provider is a keyless local endpoint (for example `jcode login ollama`, no key stored) and that loopback endpoint answers a one-token chat completion with jcode's selected model | Connected |
+| The active provider is jcode's keyless local Ollama mode (`jcode login ollama`, no key stored) and the loopback Ollama server jcode reports lists jcode's selected model as installed (`GET /api/tags`) | Connected; the diagnostic says the local provider is available and that no credential was involved |
 | Configured, but the usage check failed (quota, rejected, timeout) or the active provider has no usage API (most API-key providers) | Credentials configured, not verified |
 
-For a keyless local provider AO uses the endpoint `jcode auth status` reports
-for it, only when that is `localhost`, `127.0.0.1` or `::1`, and sends no
-credential. A local entry that also stores an optional API key is not probed.
+For keyless Ollama AO reads the endpoint `jcode auth status` reports, only
+when it is `localhost`, `127.0.0.1` or `::1` at Ollama's `/v1` path, and asks
+the same server's read-only model inventory. It sends no credential and runs
+no model. An Ollama entry with a stored (possibly cloud) API key, a remote
+endpoint, or another local provider stays configured. In this mode the model
+list is the jcode-listed models that Ollama has installed: jcode's list also
+carries its built-in hosted model names, which a local server does not serve.
 
 AO does not use `jcode auth-test`: its refresh step rotates OAuth refresh
 tokens and its smoke steps send prompts.

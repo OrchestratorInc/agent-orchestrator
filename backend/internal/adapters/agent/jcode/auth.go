@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -31,10 +30,11 @@ const (
 // credential was accepted. `jcode auth-test` is not used: it rotates OAuth
 // refresh tokens, and its smoke steps send prompts.
 //
-// A keyless local provider (Ollama, LM Studio) has no credential and no usage
-// API. When jcode reports the active provider as a plain local endpoint, AO
-// asks that loopback endpoint for one token with jcode's selected model; an
-// answered completion proves the provider jcode will use can run the model.
+// jcode's keyless local Ollama mode has no account and no usage API. When it
+// is the active provider, AO reads the inventory of the loopback Ollama server
+// jcode reports and is authorized only when that server answers with jcode's
+// selected model installed. No credential is involved, so the diagnostic says
+// the local provider is available, never that a credential was accepted.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -69,11 +69,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	method := strings.Join(append([]string{filepath.Base(binary)}, usageArgs...), " ")
 	provider, model, usagePrefix, err := p.activeUsageProvider(ctx, binary)
 	if errors.Is(err, errNoUsageCheck) {
-		if base, ok := localEndpoint(status.Providers, provider); ok {
-			verdict, step := authprobe.VerifyConnection(ctx, authprobe.Connection{Provider: provider, BaseURL: base, Model: model, Keyless: true}, nil)
-			step.Method = "local endpoint completion"
-			ports.RecordAuthDiagnostic(ctx, step)
-			return verdict, nil
+		if inventory, ok := ollamaInventoryURL(status.Providers); ok && strings.EqualFold(provider, "ollama") {
+			return localOllamaAvailability(ctx, inventory, provider, model), nil
 		}
 		ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, "provider_unsupported", provider, time.Now()))
 		return ports.AgentAuthStatusConfigured, nil
@@ -97,6 +94,30 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, "provider_accepted", provider, started))
 	return ports.AgentAuthStatusAuthorized, nil
+}
+
+// localOllamaAvailability checks the local Ollama server behind jcode's
+// keyless Ollama mode for the model jcode will use.
+func localOllamaAvailability(ctx context.Context, inventory, provider, model string) ports.AgentAuthStatus {
+	started := time.Now()
+	method := "GET " + inventory
+	installed, err := InstalledOllamaModels(ctx, inventory)
+	switch {
+	case err != nil:
+		code := "provider_unreachable"
+		if ctx.Err() != nil {
+			code = "probe_cancelled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			code = "probe_timeout"
+		}
+		ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, code, provider, started))
+		return ports.AgentAuthStatusConfigured
+	case !OllamaModelInstalled(installed, model):
+		ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, "model_selection_unresolved", provider, started))
+		return ports.AgentAuthStatusConfigured
+	}
+	ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, "local_provider_available", provider, started))
+	return ports.AgentAuthStatusAuthorized
 }
 
 func providerDiagnostic(method, code, provider string, started time.Time) domain.AgentAuthDiagnostic {
@@ -143,35 +164,6 @@ func (p *Plugin) activeUsageProvider(ctx context.Context, binary string) (provid
 		return provider, model, "", errNoUsageCheck
 	}
 	return provider, model, prefix, nil
-}
-
-type jcodeProviderStatus struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Method string `json:"method"`
-}
-
-// localEndpointMethod is how `jcode auth status` describes a keyless local
-// provider set up with `jcode login`, e.g. "local endpoint (`http://localhost:11434/v1`)".
-// An entry that also stores an optional API key says "+ optional API key" and
-// does not match: that key is not AO's to send.
-var localEndpointMethod = regexp.MustCompile("^local endpoint \\(`(https?://[^`]+)`\\)$")
-
-// localEndpoint returns the base URL jcode reports for the active provider
-// when that provider is an available keyless local endpoint.
-func localEndpoint(providers []jcodeProviderStatus, active string) (string, bool) {
-	normalize := func(value string) string {
-		return strings.NewReplacer(" ", "", "-", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(value)))
-	}
-	for _, provider := range providers {
-		if provider.Status != "available" || normalize(provider.ID) != normalize(active) {
-			continue
-		}
-		if match := localEndpointMethod.FindStringSubmatch(strings.TrimSpace(provider.Method)); match != nil {
-			return match[1], true
-		}
-	}
-	return "", false
 }
 
 // usageVerifies reports whether the active provider's usage report came back
