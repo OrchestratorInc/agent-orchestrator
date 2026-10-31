@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { captureFileReference } from "../../../shared/chat-file-reference";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -44,6 +45,23 @@ const session = {
 
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => localStorage.clear());
+	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
+		cloudMocks.listChatModels.mockResolvedValue({models:[]});
+		cloudMocks.sendSessionMessage.mockReset().mockRejectedValueOnce(new Error("offline")).mockResolvedValue({event:{}});
+		const queryClient=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}});
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{...session,cloud:{orgId:"org-1"}}}/></QueryClientProvider>);
+		const props=cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.fileReferenceDelivery).toBe("text");
+		const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_PROVIDER_MARKER"}]},session.id);
+		await expect(props.onSend("question",undefined,"capture-retry",undefined,[ref])).rejects.toThrow("offline");
+		await props.onSend("question",undefined,"capture-retry",undefined,[ref]);
+		const calls=cloudMocks.sendSessionMessage.mock.calls;
+		expect(calls[1]).toEqual(calls[0]);
+		expect(calls[0][2].text.match(/CLOUD_PROVIDER_MARKER/g)).toHaveLength(1);
+		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
+		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
+	});
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -1335,5 +1353,12 @@ describe("CloudSessionChatSurface", () => {
 		expect(toSnapshot(session, [...base, {
 			sessionId: session.id, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "turn-1", steering: true }, createdAt: session.updatedAt,
 		}]).capabilities).toEqual(["steer"]);
+	});
+});
+
+describe("cloudStartupChecklist", () => {
+	it("shows no checklist while a new Freestyle session's worker connects: its composer shimmers instead", () => {
+		const starting = { ...session, mode: "chat" as const, runtimeConnected: false, cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" } };
+		expect(cloudStartupChecklist(starting, [], undefined, false)).toBeUndefined();
 	});
 });

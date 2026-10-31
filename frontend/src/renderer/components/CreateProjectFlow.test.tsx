@@ -414,7 +414,7 @@ beforeEach(() => {
 	githubDaemonMocks.saveGitHubPAT.mockReset().mockResolvedValue(undefined);
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
-	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false });
+	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false, autoStartOrchestratorProjectIds: new Set() });
 });
 
 describe("CreateProjectFlow remote host", () => {
@@ -2621,6 +2621,8 @@ describe("CreateProjectFlow project import validation", () => {
 			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
 			expect(config).not.toHaveProperty("coder");
 			expect(config).not.toHaveProperty("sandboxProvider");
+			// A Freestyle project opens on its orchestrator, already starting.
+			await waitFor(() => expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("cp-1")).toBe(true));
 		});
 
 		it("a B2B org gets the template picker without a sandbox choice", async () => {
@@ -2658,6 +2660,8 @@ describe("CreateProjectFlow project import validation", () => {
 			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
 			expect(config.sandboxProvider).toBe("coder");
 			expect(config.coder.templateId).toBe("tpl-1");
+			// A Coder project opens on its board; nothing starts on its own.
+			expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("cp-1")).toBe(false);
 		});
 	});
 

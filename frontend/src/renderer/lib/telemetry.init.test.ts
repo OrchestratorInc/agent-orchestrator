@@ -222,12 +222,14 @@ describe("PostHog identity and opt-out", () => {
 
 	function mockBridge(getBootstrap: () => Promise<unknown>) {
 		mockPosthog();
+		const capture = vi.fn(async () => true);
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture: vi.fn(async () => undefined) },
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
+		return capture;
 	}
 
 	beforeEach(() => {
@@ -236,7 +238,7 @@ describe("PostHog identity and opt-out", () => {
 	});
 
 	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
-		mockBridge(async () => bootstrap);
+		const captureToMain = mockBridge(async () => bootstrap);
 		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
@@ -258,10 +260,27 @@ describe("PostHog identity and opt-out", () => {
 		expect(captured[1]).not.toHaveProperty("$process_person_profile");
 		expect(captured[1].install_id).toBe("ins_test");
 		await captureRendererException(new Error("test"), { install_id: "spoofed" });
-		expect((posthogStub.captureException.mock.calls.at(-1) as unknown as [Error, Record<string, unknown>])[1].install_id).toBe("ins_test");
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception" }));
 		const init = posthogStub.init.mock.calls[0] as unknown as [string, { before_send: (event: Record<string, unknown>) => Record<string, unknown> }];
 		const sent = init[1].before_send({ event: "ao.test", properties: { install_id: "spoofed" } });
 		expect((sent.properties as Record<string, unknown>).install_id).toBe("ins_test");
+	});
+
+	it("forwards renderer crashes even when PostHog initialization is unavailable", async () => {
+		const captureToMain = mockBridge(async () => null);
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new Error("resume agent ai-sports-coach-113"), { source: "react-error-boundary" });
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception", tags: expect.objectContaining({ category: "render_crash" }) }));
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+	});
+
+	it("honors the remote exception deny list before forwarding to Electron", async () => {
+		const captureToMain = mockBridge(async () => ({ ...bootstrap, disabledEvents: ["$exception"] }));
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new TypeError("private project"));
+		expect(captureToMain).not.toHaveBeenCalled();
 	});
 
 	it("keeps events anonymous before sign-in and after sign-out", async () => {

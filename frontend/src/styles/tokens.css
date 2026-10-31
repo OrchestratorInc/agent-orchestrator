@@ -265,7 +265,6 @@
 	--size-icon-sm: 13px;
 	--size-icon-md: 14px;
 	--size-icon-base: 16px;
-	--size-terminal-agent-icon: 11px;
 	--size-icon-lg: 15px;
 	--size-icon-xl: 18px;
 	--size-dot-sm: 7px;
@@ -303,7 +302,7 @@
 	--size-sidebar-icon: 48px;
 	--size-sidebar-default: 240px;
 	--size-sidebar-mobile: 288px;
-	--size-titlebar-cluster-left: calc(80px / var(--ao-window-zoom, 1));
+	--size-titlebar-cluster-left: calc(84px / var(--ao-window-zoom, 1));
 	/* Linux has no traffic lights: with the sidebar open the cluster sits at the
 	 * sidebar's own left inset (TitlebarNav `left-titlebar-cluster-left-linux`). */
 	--size-titlebar-cluster-left-linux: 6px;
@@ -325,10 +324,20 @@
 			var(--size-titlebar-content-gap)
 	);
 
-	/* Keep macOS traffic-light chrome aligned with the shared route topbar. */
-	--size-traffic-light-clearance: var(--size-toolbar);
-	/* Fullscreen removes native controls, not the shared header row. */
-	--size-traffic-light-clearance-fullscreen: var(--size-traffic-light-clearance);
+	/* macOS traffic-light row: the route topbar plus the framed panel's top
+	 * offset (inset + 1px border) above and below, so the native buttons, the
+	 * sidebar brand, and the in-panel title share one centreline. Keep in sync
+	 * with MAC_TRAFFIC_LIGHT_ROW_HEIGHT in shared/window-chrome.ts. */
+	--size-traffic-light-clearance: calc(var(--size-toolbar) + 2 * (var(--size-center-panel-inset-mac) + 1px));
+	/* Fullscreen drops the panel frame, so the row matches the flush topbar. */
+	--size-traffic-light-clearance-fullscreen: var(--size-toolbar);
+	/* Bottom edge of the framed panel's header row: window chrome (drag strips)
+	 * that overlaps the panel must stop here so it never covers panel content. */
+	--size-mac-panel-header-bottom: calc(var(--size-traffic-light-clearance) - var(--size-center-panel-inset-mac) - 1px);
+	/* The same cluster clearance, measured from the framed panel's inner edge. */
+	--size-titlebar-content-offset-mac-panel: calc(
+		var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac) - 1px
+	);
 	/* Resize handle straddles the sidebar-panel boundary: offset = half the width
 	 * so the hairline lands exactly at the junction and the drag zone covers 6px
 	 * on each side of it. */
@@ -361,9 +370,6 @@
 	--size-shell-tab-min: 64px;
 	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
 	--size-session-pane-tab-max: 112px;
-	/* Compact connected shell tab in a session's terminal strip. This includes
-	   the terminal glyph and close action, not only the truncated label. */
-	--size-shell-tab-connected: 148px;
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
 	--size-shell-tab-max: 140px;
@@ -372,14 +378,20 @@
 	--size-dialog-orchestrator: 460px;
 	--size-dialog-xl: 560px;
 
+	/* Glass overlay: Cmd+K and the New task modal show the app through a
+	 * blurred, see-through modal surface. The see-through share is low enough
+	 * that body text keeps its contrast over any content. */
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 60%, transparent);
+	--blur-overlay-glass: 28px;
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 10%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
-	--radius-command-palette: 12px;
+	--radius-command-palette: var(--radius-panel);
 	--radius-command-item: 6px;
 	--shadow-command-palette: var(--shadow-popover);
 	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
@@ -393,8 +405,8 @@
 	--size-command-palette-list-max: 420px;
 	--size-command-palette-list-vh: 50vh;
 	--size-command-subtitle-max: 45%;
-	--size-command-pad-x: 20px;
-	--size-command-item-inset: 8px;
+	--size-command-pad-x: 16px;
+	--size-command-item-inset: 6px;
 	--size-command-item-pad-l: 14px;
 	--font-size-command-input: 16px;
 	--leading-command-item: 22px;
@@ -771,10 +783,12 @@
 		0 1px 0 color-mix(in oklch, var(--foreground) 3%, transparent),
 		0 20px 50px color-mix(in oklch, var(--foreground) 14%, transparent);
 
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 68%, transparent);
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 9%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);

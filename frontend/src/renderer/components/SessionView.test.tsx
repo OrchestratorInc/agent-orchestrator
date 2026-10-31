@@ -20,6 +20,7 @@ import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 
 const navigateMock = vi.hoisted(() => vi.fn());
+const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const adoptedShellHandles = vi.hoisted(() => new Map<string, string>());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
@@ -288,6 +289,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		session,
 		onOpenShell,
 		onOpenFile,
+		onOpenFileAnnotation,
 		headerActions,
 		sessionTabAction,
 		interfaceSwitch,
@@ -312,6 +314,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
 		onOpenFile?: (path: string, line?: number) => void;
+		onOpenFileAnnotation?: import("../../shared/chat-file-reference").OpenFileAnnotation;
 		headerActions?: ReactNode;
 		sessionTabAction?: ReactNode;
 		interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
@@ -334,6 +337,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
+		annotationOpen.current=onOpenFileAnnotation;
 		chatSurfaceTransitionRenders.push(Boolean(controllerTransitioning || agentResuming));
 		return (
 		<div
@@ -609,7 +613,7 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, scope, split }: {
+	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
@@ -622,11 +626,12 @@ vi.mock("./SessionFileWorkspace", () => ({
 		initialRequestKey?: number;
 		onInitialLineConsumed?: (path: string, requestKey: number) => void;
 		path: string;
+		previousPath?: string;
 		scope?: string;
 		split: boolean;
 	}) => {
 		return (
-			<div data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -1126,6 +1131,15 @@ describe("SessionView", () => {
 		view.rerender(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
 		await act(async () => {});
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains the previous path when opening an old-side renamed PR annotation", async () => {
+		workerSession("sess-1").mode="chat";
+		render(<SessionView sessionId="sess-1"/>);
+		const reference:import("../../shared/chat-file-reference").ChatFileReference={id:"pr-rename",sessionId:"sess-1",order:1,path:"new.ts",previousPath:"old.ts",source:{kind:"pull_request",number:42,url:"https://example.test/repo/pull/42",snapshot:"head"},scope:"committed",side:"old",endSide:"old",line:2,endLine:2,lines:[{kind:"del",side:"old",oldNo:2,newNo:null,text:"old code"}],truncated:false};
+		await act(async()=>{annotationOpen.current!(reference,{state:"unchanged",path:"new.ts",line:2,endLine:2})});
+		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-previous-path","old.ts");
+		expect(screen.getByTestId("session-file-workspace")).toHaveTextContent("new.ts");
 	});
 
 	it("hides the stopped Chat banner from the first render until automatic resume settles", async () => {
@@ -2027,22 +2041,69 @@ describe("SessionView", () => {
 		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
 	});
 
-	it("keeps the restored Chat-mode session's loader while its workspace comes back", () => {
+	it("opens a new Chat-mode cloud session on its conversation while the worker starts", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+
+		// The sandbox reports running a moment before its worker connects; the
+		// startup screen must not flash in over the conversation then.
+		session.cloud = { ...session.cloud, observedState: "running" };
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+	});
+
+	it("keeps the startup screen for a new Coder Chat session", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("keeps the startup screen for a new terminal-mode cloud session", () => {
+		const session = workerSession("sess-2");
+		session.mode = "tui";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("keeps a waking Freestyle Chat session on its conversation, with its paused badge until the worker is back", () => {
 		const session = workerSession("sess-2");
 		session.mode = "chat";
 		session.runtimeConnected = false;
 		session.cloud = {
 			orgId: "cloud-org",
 			sandboxProvider: "freestyle",
-			desiredState: "running",
-			observedState: "restoring",
+			desiredState: "paused",
+			observedState: "stopped",
 		};
-		useTerminalResetStore.getState().bump("sess-2", 1);
 
-		render(<SessionView sessionId="sess-2" />);
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByRole("status")).toHaveAttribute("data-cloud-lifecycle-stage", "paused");
 
-		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
-		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+		// Opening it wakes it: still no startup screen, and the badge stays.
+		for (const observedState of ["restoring", "bootstrapping", "running"]) {
+			session.cloud = { ...session.cloud, desiredState: "running", observedState };
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(document.querySelector("[data-cloud-lifecycle-stage=paused]")).toBeInTheDocument();
+		}
+
+		session.runtimeConnected = true;
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-cloud-lifecycle-stage=paused]")).not.toBeInTheDocument();
 	});
 
 	it("keeps a restored Coder Chat session's loader while its workspace comes back", () => {

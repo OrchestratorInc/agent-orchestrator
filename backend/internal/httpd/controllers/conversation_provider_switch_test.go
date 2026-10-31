@@ -16,7 +16,29 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
+
+func TestProviderSwitchRefusesForeignCaptureBeforeCallingService(t *testing.T) {
+	svc := &fakeConversationService{}
+	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"codex","message":{"text":"why","fileReferences":[{"id":"r","sessionId":"other","path":"a.ts","side":"file","line":1,"endLine":1,"source":{"kind":"workspace"},"lines":[{"kind":"context","newNo":1,"text":"code"}]}]}}`)
+	if status != http.StatusBadRequest || !bytes.Contains(body, []byte("CHAT_FILE_REFERENCE_INVALID")) || svc.switchRequest.TargetHarness != "" || svc.sent.Text != "" {
+		t.Fatalf("status=%d body=%s switched=%+v", status, body, svc.switchRequest)
+	}
+}
+
+func TestConversationFileReferenceErrorsHaveValidationEnvelopes(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{{chatsvc.ErrFileReferenceInvalid, "CHAT_FILE_REFERENCE_INVALID"}, {chatsvc.ErrAnnotationLimit, "CHAT_ANNOTATION_LIMIT"}} {
+		svc := &fakeConversationService{sendErr: fmt.Errorf("wrapped: %w", tc.err)}
+		rec := serveConversations(svc, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/conversation/messages", bytes.NewBufferString(`{"text":"question"}`)))
+		if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte(tc.code)) {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+}
 
 func serveConversations(svc controllers.ConversationService, req *http.Request) *httptest.ResponseRecorder {
 	r := chi.NewRouter()

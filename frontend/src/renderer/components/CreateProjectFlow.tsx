@@ -46,7 +46,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
-import { CODER_PROVIDER } from "../lib/cloud-offering";
+import { CODER_PROVIDER, FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useCloudSession } from "../lib/cloud-session";
@@ -1168,7 +1168,9 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 				<motion.div
 					aria-hidden="true"
 					className="dialog-overlay z-[calc(var(--z-overlay)-1)]"
-					initial={{ opacity: 0 }}
+					// Arriving from another modal (lib/modal-handoff.ts), it shows at
+					// full strength so the dim never dips.
+					initial={document.documentElement.dataset.modalHandoff ? false : { opacity: 0 }}
 					animate={{ opacity: 1, transition: { duration: 0.08 } }}
 					exit={{ opacity: 0, transition: { duration: 0.06 } }}
 				/>
@@ -1712,6 +1714,11 @@ function CloudProjectCard({
 				});
 			useSidebarOrderStore.getState().moveProjectToTop(project.id);
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+			// A Freestyle project opens on its orchestrator, already starting; a
+			// Coder one opens on its board as before.
+			if (projectSandboxProvider(project.config, offering) === FREESTYLE_PROVIDER) {
+				useUiStore.getState().setAutoStartOrchestrator(project.id, true);
+			}
 			onCreated(project.id);
 		} catch (err) {
 			// A repository backs at most one active project per workspace; the

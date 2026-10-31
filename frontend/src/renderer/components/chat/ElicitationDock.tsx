@@ -402,14 +402,18 @@ function FormRequest({
 			/>
 			{collapsed ? null : (
 				<>
+				{/* A focused row's ring draws 2px outside it, and the Other row's field sits 4px
+				    inside its row. The padding keeps that ring clear at either end of the list, and
+				    the scroll padding wherever focus scrolls a row in. Both leave room to spare,
+				    because scroll offsets round to whole pixels. */}
 				<div
 					data-testid="elicitation-scroll-body"
-					className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
 				>
 					{!questionGroups && schema?.description ? (
 						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 					) : null}
-					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3")}>
 						{visibleProperties.map(([name, property], index) => (
 							<FormField
 								key={name}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
@@ -29,7 +30,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
-import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./pierreTheme";
 import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
 import { SelectionAskButton } from "./SelectionAskButton";
@@ -356,12 +357,13 @@ export function WorkspaceReviewPane({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
+	const captureSource = fileReferenceSource(target.source, target.sha);
 	const codeSelection = useCodeSelection(reviewRef, (selection) => {
 		// Pierre portals the custom header into this host's light DOM; the selected
 		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
-		if (file) askInChat?.(codeReference(file.path, selection, true));
-	}, askInChat !== undefined);
+		return file && captureSource ? askInChat?.({ ...codeReference(file.path, selection, true), ...captureSource, scope, previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion }) ?? false : false;
+	}, askInChat !== undefined && captureSource !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {
@@ -727,6 +729,7 @@ export function WorkspaceReviewPane({
 							maxLineDiffLength: 400,
 							onPostRender: gutterHover.restoreAfterRender,
 							overflow: "wrap",
+							preferredHighlighter: PIERRE_HIGHLIGHTER,
 							stickyHeaders: true,
 							theme: REVIEW_CODE_VIEW_THEME,
 							themeType: resolvedTheme,
@@ -734,7 +737,7 @@ export function WorkspaceReviewPane({
 							tokenizeMaxLineLength: 2_000,
 							unsafeCSS: AO_PIERRE_SURFACE_CSS + AO_PIERRE_FILES_REVIEW_CSS,
 						}}
-						renderAnnotation={(line, item) => {
+						renderAnnotation={(line, _file, item) => {
 							const path = summaryById.get(item.id)?.path;
 							const side = "side" in line ? line.side : undefined;
 							const target = annotation.targets.find((open) => open.surface !== "focused" && open.path === path && open.side !== "file" && open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === side);

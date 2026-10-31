@@ -1,4 +1,4 @@
-import { Check, Circle, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -55,10 +55,14 @@ export function SessionStartup({
 							key={step.id}
 							data-step={step.id}
 							data-status={status}
-							className={cn("flex min-h-7 items-center gap-1.5 text-xs", stagger && "session-startup-step-in")}
+							className={cn("flex min-h-7 items-center gap-2 text-xs", stagger && "session-startup-step-in")}
 							style={stagger ? { animationDelay: `${index * 90}ms` } : undefined}
 						>
-							<StepIcon status={status} />
+							{/* The same 20px slot and gap as the live row's mark above, so every
+							    mark sits on one centre line and the labels start together. */}
+							<span className="flex size-5 shrink-0 items-center justify-center">
+								<StepIcon status={status} />
+							</span>
 							<span className="sr-only">{t(`chat.startup.status.${status}`)}:</span>
 							<span
 								className={cn(
@@ -76,7 +80,7 @@ export function SessionStartup({
 				})}
 			</ol>
 			{failed ? (
-				<div className="mt-1 flex flex-col items-start gap-2 pl-[18px]">
+				<div className="mt-1 flex flex-col items-start gap-2 pl-7">
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (
@@ -101,7 +105,12 @@ function StepIcon({ status }: { status: StepStatus }) {
 		case "failed":
 			return <X aria-hidden="true" className={cn(className, "text-destructive")} />;
 		case "pending":
-			return <Circle aria-hidden="true" className={cn(className, "text-passive")} />;
+			// Not started: a dashed ring, the same mark the plan uses for a step still to come.
+			return (
+				<svg aria-hidden="true" viewBox="0 0 16 16" className={cn(className, "text-passive")}>
+					<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.6 2.7" strokeLinecap="round" />
+				</svg>
+			);
 	}
 }
 

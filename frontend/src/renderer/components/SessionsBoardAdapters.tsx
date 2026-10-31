@@ -16,6 +16,9 @@ import {
 import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
+import { renameSession } from "../lib/rename-session";
+import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
@@ -34,6 +37,10 @@ import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionContextMenuItems } from "./SessionContextMenuItems";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
+import { Input } from "./ui/input";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -205,6 +212,7 @@ function DesktopSessionCard({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [renameOpen, setRenameOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
@@ -265,7 +273,7 @@ function DesktopSessionCard({
 		</Tooltip>
 	) : undefined;
 
-	return (
+	const card = (
 		<SessionCardView
 			action={action}
 			artifacts={
@@ -322,6 +330,104 @@ function DesktopSessionCard({
 			}
 			translate={translate}
 		/>
+	);
+	if (!interactive) return card;
+	return (
+		<>
+			<ContextMenu>
+				<ContextMenuTrigger asChild>
+					<div>{card}</div>
+				</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-44">
+					<SessionContextMenuItems
+						onArchive={showTerminate ? () => {
+							clearTerminateSessionState(queryClient, session.id, session.hostId);
+							setConfirmOpen(true);
+						} : undefined}
+						onRename={() => setRenameOpen(true)}
+						session={session}
+					/>
+				</ContextMenuContent>
+			</ContextMenu>
+			<SessionRenameDialog onOpenChange={setRenameOpen} open={renameOpen} session={session} />
+		</>
+	);
+}
+
+/** A card has no title to edit in place, so the board renames through a small dialog. */
+function SessionRenameDialog({
+	onOpenChange,
+	open,
+	session,
+}: {
+	onOpenChange: (open: boolean) => void;
+	open: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const [draft, setDraft] = useState(session.title);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Start each opening from the current title, but keep what is typed if the
+	// title changes while the dialog is open.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) {
+			setDraft(session.title);
+			setError(null);
+		}
+	}
+	useEffect(() => {
+		if (!open) return;
+		// The confirm dialog focuses its button on open; the name field should win.
+		const frame = requestAnimationFrame(() => inputRef.current?.select());
+		return () => cancelAnimationFrame(frame);
+	}, [open]);
+	const name = draft.trim();
+	const save = async () => {
+		if (name === session.title) {
+			onOpenChange(false);
+			return;
+		}
+		setBusy(true);
+		try {
+			await renameSession(session.id, name, session.hostId);
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			onOpenChange(false);
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<ConfirmDialog
+			busy={busy}
+			confirmDisabled={!name}
+			confirmLabel={t("shell.rename")}
+			description={null}
+			error={error}
+			onConfirm={() => void save()}
+			onOpenChange={onOpenChange}
+			open={open}
+			title={t("shell.renameSession", { title: session.title })}
+		>
+			<Input
+				aria-label={t("shell.renameSession", { title: session.title })}
+				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+				onChange={(event) => setDraft(event.target.value)}
+				onKeyDown={(event) => {
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					event.preventDefault();
+					void save();
+				}}
+				ref={inputRef}
+				value={draft}
+			/>
+		</ConfirmDialog>
 	);
 }
 

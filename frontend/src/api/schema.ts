@@ -1048,6 +1048,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/computer-use/agent-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the Cua Driver tools AO offers agents as MCP tools, with their input schemas */
+        get: operations["listComputerUseAgentTools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/call": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one Cua Driver tool; screenshots are saved to files and returned as paths */
+        post: operations["callComputerUseTool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/daemon/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Cua Driver's background service and wait briefly for it to answer */
+        post: operations["startComputerUseDaemon"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run Cua Driver's environment report */
+        get: operations["getComputerUseDoctor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/permissions/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask macOS for Cua Driver's Accessibility and Screen Recording permissions; progress shows in status */
+        post: operations["grantComputerUsePermissions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/computer-use/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether Cua Driver is installed, its version and update, its background service, and macOS permissions */
+        get: operations["getComputerUseStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/search": {
         parameters: {
             query?: never;
@@ -2510,6 +2612,23 @@ export interface paths {
         head?: never;
         /** Choose one provider-advertised session configuration value */
         patch: operations["setSessionConversationConfigOption"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/file-references/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve the current source of a captured file annotation without modifying it */
+        post: operations["resolveFileReference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve": {
@@ -4007,6 +4126,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/computer-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether new chat sessions get tools to drive desktop apps through Cua Driver */
+        patch: operations["updateComputerUse"];
+        trace?: never;
+    };
     "/api/v1/settings/harness-defaults/{agent}": {
         parameters: {
             query?: never;
@@ -4910,6 +5046,22 @@ export interface components {
             agent: string;
             modes: string[];
         };
+        ChatFileReferenceLine: {
+            /** @enum {string} */
+            kind: "context" | "add" | "del";
+            newNo: null | number;
+            oldNo: null | number;
+            /** @enum {string} */
+            side?: "file" | "old" | "new";
+            text: string;
+        };
+        ChatFileReferenceSource: {
+            /** @enum {string} */
+            kind: "workspace" | "pull_request" | "artifact";
+            number?: number;
+            snapshot?: string;
+            url?: string;
+        };
         ChatPermissionModesResponse: {
             agents: components["schemas"]["ChatAgentPermissionModes"][];
         };
@@ -5168,6 +5320,79 @@ export interface components {
              */
             totalTokens: number;
         };
+        ComputerUseAgentTool: {
+            description: string;
+            /** @description The tool's JSON Schema input, without the arguments AO sets itself. */
+            inputSchema: {
+                [key: string]: unknown;
+            } | null;
+            name: string;
+        };
+        ComputerUseAgentToolsResponse: {
+            tools: components["schemas"]["ComputerUseAgentTool"][];
+        };
+        ComputerUseCallRequest: {
+            /** @description Tool arguments as a JSON object. */
+            arguments?: {
+                [key: string]: unknown;
+            };
+            /** @description AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another. */
+            sessionId?: string;
+            /** @description Driver tool name, e.g. list_windows or get_window_state. */
+            tool: string;
+        };
+        ComputerUseCallResult: {
+            /** @description Screenshots this call saved. Open them with an image viewer. */
+            images: components["schemas"]["ComputerUseImage"][];
+            /** @description The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file. */
+            result: unknown;
+            tool: string;
+        };
+        ComputerUseDoctorResponse: {
+            /** @description Cua Driver's own environment report (cua-driver doctor). */
+            report: string;
+        };
+        ComputerUseImage: {
+            mimeType: string;
+            path: string;
+        };
+        ComputerUsePermissions: {
+            /**
+             * @description Accessibility, needed to read and operate app controls.
+             * @enum {string}
+             */
+            accessibility: "granted" | "missing" | "unknown";
+            /** @description Why the last permission request failed. */
+            grantError?: string;
+            /** @description A permission request is waiting on the user in System Settings. */
+            granting: boolean;
+            /**
+             * @description Screen Recording, needed for screenshots.
+             * @enum {string}
+             */
+            screenRecording: "granted" | "missing" | "unknown";
+        };
+        ComputerUseStatus: {
+            /** @description The cua-driver executable AO runs. */
+            binaryPath?: string;
+            /**
+             * @description Whether Cua Driver's background service answers.
+             * @enum {string}
+             */
+            daemon: "running" | "stopped" | "unknown";
+            /** @description Where screenshots from computer-use calls are saved. */
+            imageDirectory: string;
+            installed: boolean;
+            /** @description Newest release on the driver's update channel, when it could be checked. */
+            latestVersion?: string;
+            /** @description macOS only. */
+            permissions?: components["schemas"]["ComputerUsePermissions"];
+            /** @description Operating system the daemon runs on: darwin, linux, or windows. */
+            platform: string;
+            releaseNotesUrl?: string;
+            updateAvailable: boolean;
+            version?: string;
+        };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
         };
@@ -5213,6 +5438,7 @@ export interface components {
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
+            hostKey: string;
             token: string;
         };
         ControllersRequestRereviewRequest: {
@@ -5398,6 +5624,10 @@ export interface components {
             options: components["schemas"]["ConversationConfigOptionResponse"][];
         };
         ConversationContentSummaryResponse: {
+            annotationId?: string;
+            /** Format: int64 */
+            annotationOrder?: number;
+            fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
             sourceConversationId?: string;
@@ -5419,10 +5649,35 @@ export interface components {
         };
         ConversationExcerptReferenceRequest: {
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             text: string;
+        };
+        ConversationFileReferenceRequest: {
+            commitSha?: string;
+            endLine: number;
+            /** @enum {string} */
+            endSide?: "file" | "old" | "new";
+            fileFingerprint?: string;
+            hostId?: string;
+            id: string;
+            line: number;
+            lines: components["schemas"]["ChatFileReferenceLine"][];
+            /** Format: int64 */
+            order?: number;
+            path: string;
+            previousPath?: string;
+            scope?: string;
+            sessionId: string;
+            /** @enum {string} */
+            side: "file" | "old" | "new";
+            source: components["schemas"]["ChatFileReferenceSource"];
+            truncated: boolean;
+            workspaceVersion?: string;
         };
         ConversationImageContentRequest: {
             data: string;
@@ -5565,6 +5820,7 @@ export interface components {
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
             supportsExcerpts?: boolean;
+            supportsFileReferences?: boolean;
             threadState?: components["schemas"]["ConversationThreadStatePayload"];
             title?: string;
             turns: components["schemas"]["ConversationTurnResponse"][];
@@ -5946,8 +6202,10 @@ export interface components {
             method?: string;
             /** @description Fixed user-visible consequence to acknowledge before running this install. */
             notice?: string;
-            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
+            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs. */
             output?: string;
+            /** @description While installing, the phase and percentage the installer's output reports. Absent in every other status. */
+            progress?: components["schemas"]["InstallProgress"];
             /** Format: date-time */
             startedAt?: null | string;
             /**
@@ -5959,11 +6217,22 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
             waitingOn?: components["schemas"]["SessionWait"][];
+        };
+        InstallProgress: {
+            /** @description The installer's latest output line. */
+            detail?: string;
+            /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
+            percent?: null | number;
+            /**
+             * @description Installer phase the output names. Absent until a line names one.
+             * @enum {string}
+             */
+            phase?: "downloading" | "installing";
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -6182,6 +6451,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
             endpoints: components["schemas"]["MobileEndpoint"][];
@@ -6198,7 +6468,9 @@ export interface components {
             warning: string;
         };
         MobileTunnelStatus: {
+            fixed: boolean;
             hostname: string;
+            installing: boolean;
             lastError: string;
             location: string;
             ready: boolean;
@@ -6323,6 +6595,7 @@ export interface components {
             };
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
+            orchestratorRulesFile?: string;
             postCreate?: string[];
             preRemove?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
@@ -6527,6 +6800,17 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ResolveFileReferenceResponse: {
+            endLine?: number;
+            line?: number;
+            newLineOffset?: number;
+            oldLineOffset?: number;
+            path?: string;
+            reason?: string;
+            side?: string;
+            /** @enum {string} */
+            state: "unchanged" | "changed" | "unavailable" | "moved";
+        };
         RestoreArtifactVersionRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
             path: string;
@@ -6614,6 +6898,7 @@ export interface components {
             clientMessageId?: string;
             continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
+            fileReferences?: components["schemas"]["ConversationFileReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
         };
@@ -7094,6 +7379,8 @@ export interface components {
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
             cloudOffering: boolean;
+            /** @description New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents). */
+            computerUse: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
             harnessDefaults?: {
@@ -7568,6 +7855,9 @@ export interface components {
             timezone?: null | string;
         };
         UpdateChatHibernationRequest: {
+            enabled: null | boolean;
+        };
+        UpdateComputerUseRequest: {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
@@ -11235,6 +11525,346 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listComputerUseAgentTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseAgentToolsResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    callComputerUseTool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComputerUseCallRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseCallResult"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startComputerUseDaemon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseStatus"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseDoctor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseDoctorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    grantComputerUsePermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseStatus"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getComputerUseStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputerUseStatus"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16666,6 +17296,60 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveFileReference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationFileReferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveFileReferenceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -22711,6 +23395,66 @@ export interface operations {
             };
         };
     };
+    updateComputerUse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateComputerUseRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateHarnessDefault: {
         parameters: {
             query?: never;
@@ -23306,8 +24050,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
             };
             cookie?: never;
         };
@@ -23356,8 +24100,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared";
+                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
+                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
             };
             cookie?: never;
         };
