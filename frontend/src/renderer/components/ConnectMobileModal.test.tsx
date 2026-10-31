@@ -695,7 +695,7 @@ test("turns Connect Mobile on once per opening, not again when the page comes ba
 	renderMobileSettings();
 	await screen.findByRole("button", { name: "Generate" });
 	await new Promise((resolve) => setTimeout(resolve, 50));
-	expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/mobile/enable")).toHaveLength(1);
+	expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/mobile/enable")).toHaveLength(1);
 });
 
 test("does not turn Connect Mobile on from a cached off status", async () => {
