@@ -5058,6 +5058,46 @@ func TestRestore_ForwardsManagerDataDir(t *testing.T) {
 	}
 }
 
+func TestRestore_DestroysLeftoverRuntimeBeforeCreate(t *testing.T) {
+	m, st, rt, _ := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeHandleID: "old-handle"})
+	rt.onDestroy = func(_ int, _ ports.RuntimeHandle) {
+		if rt.created != 0 {
+			t.Fatal("leftover runtime must be destroyed before Create")
+		}
+	}
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.destroyedIDs) == 0 || rt.destroyedIDs[0] != "old-handle" || rt.created != 1 {
+		t.Fatalf("destroyed=%v created=%d, want old-handle destroyed then one create", rt.destroyedIDs, rt.created)
+	}
+}
+
+func TestRestore_LeftoverRuntimeDestroyFailureStopsRelaunch(t *testing.T) {
+	m, st, rt, _ := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeHandleID: "old-handle"})
+	rt.destroyErr = errors.New("pty-host still alive")
+	_, err := m.RestoreWithMode(ctx, "mer-1")
+	var relaunchErr *RelaunchError
+	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime cleanup" {
+		t.Fatalf("want runtime cleanup RelaunchError, got %v", err)
+	}
+	if rt.created != 0 {
+		t.Fatal("must not start a competing runtime when the old one cannot be destroyed")
+	}
+}
+
+func TestRestartRuntime_DestroysStaleNotAliveRuntime(t *testing.T) {
+	m, _, rt, _ := newManager()
+	if _, err := m.restartRuntime(ctx, ports.RuntimeHandle{ID: "stale"}, ports.RuntimeConfig{SessionID: "mer-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.destroyedIDs) != 1 || rt.destroyedIDs[0] != "stale" || rt.created != 1 {
+		t.Fatalf("destroyed=%v created=%d", rt.destroyedIDs, rt.created)
+	}
+}
+
 func TestRestore_RefusesLiveSession(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
