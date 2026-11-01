@@ -541,6 +541,7 @@ describe("side panel navigation and recovery", () => {
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([
 			new DOMRect(40, 150, 100, 20),
 		] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
 		fireEvent.mouseUp(log);
 		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
