@@ -18,6 +18,7 @@ import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 
 export type QueuedMessage = {
 	turnId: string;
@@ -106,7 +107,21 @@ function QueuedMessageRowContent({
 	dragHandleProps?: Record<string, unknown>;
 }) {
 	const { t } = useTranslation();
-	const text = labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
+	// Lead with what the user wrote: page titles and counts alone leave two
+	// batches from the same page indistinguishable.
+	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
+		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
+	const text = annotations
+		? [annotations.items[0] ? annotationLabel(annotations.items[0]) : annotations.pageTitle,
+			t("browser.annotationCount", { count: annotations.items.length })].join(" · ")
+		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const tooltip = annotations
+		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
+		: text;
+	// Relayed user-authored text is generated, so it can be steered or cancelled
+	// but not edited.
+	const editable = message.origin === "human";
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -121,7 +136,7 @@ function QueuedMessageRowContent({
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
 					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
-					title={text}
+					title={tooltip}
 				>
 					{text}
 				</p>
@@ -163,7 +178,7 @@ function QueuedMessageRowContent({
 						Steer
 					</button>
 				) : null}
-				{onBeginQueuedEdit ? (
+				{onBeginQueuedEdit && editable ? (
 					<button
 						type="button"
 						disabled={busy}

@@ -1,6 +1,7 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
+import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -150,7 +151,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage } from "./AutomationMessage";
+import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -163,7 +164,6 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
-import { LiveActivityWindow } from "./LiveActivityWindow";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -177,7 +177,9 @@ import {
 	can,
 	isCompaction,
 	isSteer,
+	fullQueuedTurnOrder,
 	hiddenTimelineTurnIds,
+	isUserQueuePrompt,
 	queuedTurnIds,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -313,13 +315,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 	return useMemo(() => {
 		const messagesByTurn = new Map(
 			snapshot.items
-				.filter(
-					(item): item is ConversationMessage =>
-						item.kind === "message" &&
-						item.role === "user" &&
-						item.origin === "human" &&
-						Boolean(item.turnId),
-				)
+				.filter((item): item is ConversationMessage => isUserQueuePrompt(item) && Boolean(item.turnId))
 				.map((message) => [message.turnId as string, message]),
 		);
 		const next = snapshot.turns.flatMap((queuedTurn) => {
@@ -1072,6 +1068,12 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages],
 	);
+	// The dock omits queued turns that are not the user's own; the daemon needs
+	// the whole queue, with those turns left where they were.
+	const reorderQueuedTurns = useCallback(
+		(dockOrder: string[]) => onReorderQueuedTurns?.(fullQueuedTurnOrder(snapshot, dockOrder)) ?? Promise.resolve(),
+		[onReorderQueuedTurns, snapshot],
+	);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
@@ -1565,7 +1567,7 @@ function ChatWorkspaceContent({
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
-					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
+					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
 				/>
@@ -1579,6 +1581,7 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
+			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
@@ -2592,6 +2595,8 @@ const WELCOME_FADE_MS = 150;
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
+/** A settled turn holds the reader's row still this long, while "Worked for" opens (240ms). */
+const SETTLE_HOLD_MS = 400;
 /**
  * A reader who nudges the view up a little and then stops has paused, not left.
  * After this long with no further input, while the turn is still live and they are
@@ -3878,6 +3883,69 @@ export function Timeline({
 		updateScrollbar();
 	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
+	// Keeps a settled turn's row still under the reader while "Worked for" opens.
+	const settleHold = useRef<{ observer: ResizeObserver; timer: number } | undefined>(undefined);
+	const releaseSettleHold = useCallback(() => {
+		const hold = settleHold.current;
+		if (!hold) return;
+		hold.observer.disconnect();
+		window.clearTimeout(hold.timer);
+		settleHold.current = undefined;
+	}, []);
+	useEffect(() => releaseSettleHold, [releaseSettleHold]);
+	// A settling turn folds all of its steps under "Worked for" in one commit. Following
+	// the end, syncStreamedGrowth puts the view back; a reader who scrolled up into the
+	// turn would instead see what they were reading vanish and the reply slide up under
+	// them. So note the turn's row at the top of their view just before the fold...
+	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
+		const node = scroller.current;
+		if (!node || pinnedRef.current || !initialLayoutDone.current) return undefined;
+		if (!groups.some((group) => group.key === key && !group.live)) return undefined;
+		const wrapper = Array.from(virtualContent.current?.children ?? [])
+			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
+		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
+		if (!turn) return undefined;
+		const top = node.getBoundingClientRect().top;
+		const rows = Array.from(turn.children) as HTMLElement[];
+		const index = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
+		if (index < 0) return undefined;
+		return { turn, rows, index, offset: rows[index]!.getBoundingClientRect().top - top };
+	}, [groups]);
+	// ...and put it back right after, before paint. A row still in the turn (the prompt,
+	// a steer, the reply) holds its place. A step that folded away hands its place to
+	// "Worked for", which lands at the top of the view with the reply under it.
+	const restoreSettle = useCallback(({ turn, rows, index, offset }: SettleAnchor) => {
+		const node = scroller.current;
+		if (!node) return;
+		// The fold changed what the end can reach, so size the spacer before moving.
+		syncPromptSpacer();
+		const anchor = rows[index]!;
+		const kept = anchor.isConnected && !anchor.hasAttribute("data-turn-live-row");
+		const target = kept
+			? anchor
+			: Array.from(turn.children).find((child) => child.hasAttribute("data-turn-worked"))
+				?? rows.slice(index + 1).find((row) => row.isConnected);
+		if (!target) return;
+		const landing = kept ? offset : 0;
+		const place = () => {
+			const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
+			if (Math.abs(delta) < 0.5) return;
+			node.scrollTop += delta;
+			markWritten(node.scrollTop);
+			lastScrollTop.current = node.scrollTop;
+		};
+		place();
+		updateScrollbar();
+		// "Worked for" then opens from zero height above a row the reader kept, and the
+		// log has no scroll anchoring of its own: re-place the row after each layout
+		// step until it has opened, or until the reader scrolls.
+		releaseSettleHold();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(place);
+		observer.observe(turn);
+		settleHold.current = { observer, timer: window.setTimeout(releaseSettleHold, SETTLE_HOLD_MS) };
+	}, [syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
 	// that during a height animation makes the whole chat jump under the reader.
@@ -3976,6 +4044,8 @@ export function Timeline({
 		// releases the follow once it is away from the end, or whenever it moves up
 		// (so a small nudge up is not pulled straight back). A scroll that only clamps
 		// to the end after content shrank is not the reader leaving.
+		// Any scroll of the reader's own ends a settled turn's hold on their row.
+		if (!isOwnScroll(top)) releaseSettleHold();
 		if (isOwnScroll(top)) {
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
@@ -4181,6 +4251,7 @@ export function Timeline({
 				aria-label="Conversation"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
+				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
 				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
@@ -4235,6 +4306,7 @@ export function Timeline({
 									transform: `translateY(${row.start - virtualScrollMargin}px)`,
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
+								data-chat-turn={group.key}
 							>
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
@@ -4718,11 +4790,11 @@ const TurnGroup = memo(function TurnGroup({
 	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// "Worked for" is the fold for the turn's work, so it appears only when there is
 	// work to fold: a turn that went straight to its answer has nothing to open and
-	// shows the answer alone. It opens where the live window was, over the same beat
-	// the window folds, so the top of the turn reads as the work collapsing into its
-	// summary rather than one line appearing while another vanishes. A settled turn
-	// loaded from history mounts it without the animation. The wrapper's own gutter
-	// keeps the summary's hover wash, which overhangs by 4px, inside the clip.
+	// shows the answer alone. It opens from zero height as the live steps leave, so
+	// the top of the turn reads as the work collapsing into its summary rather than
+	// one line appearing while the steps vanish. A settled turn loaded from history
+	// mounts it without the animation. The wrapper's own gutter keeps the summary's
+	// hover wash, which overhangs by 4px, inside the clip.
 	const disclosureKey = `${group.key}:worked`;
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
@@ -4733,6 +4805,7 @@ const TurnGroup = memo(function TurnGroup({
 					animate={{ height: "auto", opacity: 1 }}
 					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
 					className="-mx-1 overflow-hidden px-1"
+					data-turn-worked=""
 				>
 					<TurnWorkSummary
 						durationMs={outcome.durationMs}
@@ -4745,53 +4818,13 @@ const TurnGroup = memo(function TurnGroup({
 			) : null}
 		</AnimatePresence>,
 	);
-	// While the agent works, its steps scroll in a window that follows the newest one.
-	// The reply being written stays outside at full size, so streaming text is never
-	// squeezed into the window. Once the turn settles the window folds away beneath
-	// "Worked for", which holds the same work.
-	const windowed = group.live;
+	// While the agent works, its steps draw in the conversation itself as they arrive,
+	// with no scroll box of their own. They go straight into the turn's flat list, so
+	// a step keeps its element as later ones land under it and an image the reader
+	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
-	body.push(
-		<AnimatePresence key="live-activity" initial={false}>
-			{windowRuns.length > 0 ? (
-				<motion.div
-					key="live-activity-window"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1 }}
-					exit={{ height: 0, opacity: 0 }}
-					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-					className="overflow-hidden"
-				>
-					<LiveActivityWindow>{windowRuns.flatMap(renderWorkerRun)}</LiveActivityWindow>
-				</motion.div>
-			) : null}
-		</AnimatePresence>,
-	);
-	if (!outcome) {
-		if (!windowed) body.push(...workedRuns.flatMap(renderWorkerRun));
-		else {
-			// The first chunks of a reply open a row where there was none. Growing it
-			// from zero keeps the live row under it (and the transcript's end) gliding
-			// down instead of jumping by a line. Clipped only while it opens; a reply
-			// already streaming when the chat opens mounts at full height.
-			body.push(
-				<AnimatePresence key="live-reply" initial={false}>
-					{tailIsReply ? (
-						<motion.div
-							key={tail.key}
-							initial={{ height: 0, opacity: 0, overflow: "hidden" }}
-							animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
-							transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-						>
-							{renderRun(tail)}
-						</motion.div>
-					) : null}
-				</AnimatePresence>,
-			);
-		}
-	}
+	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (quietReply && finalRun) {
 		body.push(
@@ -4841,6 +4874,8 @@ const TurnGroup = memo(function TurnGroup({
 						// Under a reply, sit where that reply's action row will (its 4px
 						// gap, not the turn's 10px).
 						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
+						// Kept in the DOM while it fades, but it never outlasts the turn.
+						data-turn-live-row=""
 					>
 						{workingRow}
 					</motion.div>
@@ -5034,9 +5069,14 @@ function TimelineItem({
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
+		const annotations = steeredBrowserFeedback(item);
 		return (
 			<FromAgent item={item}>
-				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				{annotations ? (
+					<SteeredBrowserFeedback annotations={annotations} />
+				) : (
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				)}
 			</FromAgent>
 		);
 	}
@@ -5228,6 +5268,9 @@ function useStableValue<T>(value: T): T {
 	if (!sameContent(previous.current, value)) previous.current = value;
 	return previous.current;
 }
+
+/** A settling turn's rows from just before the fold, and the one at the top of the view. */
+type SettleAnchor = { turn: HTMLElement; rows: HTMLElement[]; index: number; offset: number };
 
 type TimelineGroup = {
 	key: string;

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ReviewBranchMenu, type ReviewBranchMenuProps, type ReviewBranchRow } from "./ReviewBranchMenu";
@@ -57,7 +57,7 @@ describe("ReviewBranchMenu", () => {
 		]);
 		expect(rows[0]).toHaveAttribute("aria-checked", "true");
 		expect(rows[1]).toHaveAttribute("aria-checked", "false");
-		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.getByRole("searchbox", { name: "Search branches" })).toBeInTheDocument();
 	});
 
 	it("reports a pick of another branch but not of the selected one", async () => {
@@ -94,16 +94,27 @@ describe("ReviewBranchMenu", () => {
 		expect(screen.getAllByRole("menuitemradio")[0]).toHaveTextContent("Detached HEADChecked out · Updated 5m ago");
 	});
 
-	it("adds search once the list outgrows its 7 rows, filters by name or PR number, and ArrowDown enters the list", async () => {
+	it("adds search once there are two branches, filters by name or PR number, and ArrowDown enters the list", async () => {
+		const one = renderMenu({ rows: baseRows.slice(0, 1) });
+		await openMenu();
+		// A lone branch has nothing to search.
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		one.view.unmount();
+
+		const two = renderMenu({ rows: baseRows.slice(0, 2) });
+		await openMenu();
+		expect(screen.getByRole("searchbox", { name: "Search branches" })).toBeInTheDocument();
+		two.view.unmount();
+
 		const seven = renderMenu({ rows: manyRows(7) });
 		await openMenu();
-		// Seven fit the box: no search, no Show more.
+		// Seven fit the box: no Show more.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(7);
-		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /^Show \d+ more$/ })).not.toBeInTheDocument();
 		seven.view.unmount();
 
-		renderMenu({ rows: manyRows(9) });
+		renderMenu();
 		await openMenu();
 		const search = screen.getByRole("searchbox", { name: "Search branches" });
 		await userEvent.type(search, "FEATURE");
@@ -121,6 +132,24 @@ describe("ReviewBranchMenu", () => {
 		await userEvent.type(search, "nothing-like-this");
 		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "No matching branches" })).toBeInTheDocument();
+	});
+
+	it("shows a cut-off branch name in full on hover, and only when it is cut off", async () => {
+		const longName = "origin/ao/dev/market-place-13/root-orchestrator";
+		// jsdom has no layout: a name wider than 20 characters overflows its row.
+		const scrollWidth = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+			return (this.textContent?.length ?? 0) * 7;
+		});
+		const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(140);
+		try {
+			renderMenu({ rows: [...baseRows, branchRow({ id: `remote:${longName}`, kind: "remote", name: longName })] });
+			await openMenu();
+			expect(screen.getByText(longName)).toHaveAttribute("title", longName);
+			expect(within(screen.getByRole("menu")).getByText("main")).not.toHaveAttribute("title");
+		} finally {
+			scrollWidth.mockRestore();
+			clientWidth.mockRestore();
+		}
 	});
 
 	it("clears the search when the menu closes", async () => {
