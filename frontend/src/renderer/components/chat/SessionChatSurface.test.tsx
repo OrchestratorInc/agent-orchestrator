@@ -1208,6 +1208,26 @@ describe("controller catalogs during an interface handoff", () => {
 		}
 	});
 
+	it("waits for a ready controller during native and imported resumes", () => {
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "connecting" } };
+		const client = new QueryClient();
+		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+		}
+
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+		}
+
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+		}
+	});
+
 	it("does not poll an unavailable controller after a failed handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);

@@ -31,7 +31,7 @@ const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 function definition(model) {
 	const kept = { id: model.id };
 	for (const key of ["name", "api", "baseUrl", "reasoning", "contextWindow", "maxTokens"]) {
-		if (model[key] !== undefined) kept[key] = model[key];
+		if (model[key] !== undefined && model[key] !== "") kept[key] = model[key];
 	}
 	if (Array.isArray(model.input)) kept.input = model.input.filter((kind) => kind === "text" || kind === "image");
 	const costKeys = ["input", "output", "cacheRead", "cacheWrite"];
@@ -43,13 +43,23 @@ function definition(model) {
 			Object.entries(model.thinkingLevelMap).filter(([level]) => thinkingLevels.includes(level)),
 		);
 	}
+	if (model.compat && typeof model.compat === "object") {
+		// Keep request-format requirements, but not newer schema fields such
+		// as zaiToolStream that make the adapter reject the entire file.
+		const keys = ["supportsStore", "supportsDeveloperRole", "supportsReasoningEffort", "supportsUsageInStreaming",
+			"maxTokensField", "requiresToolResultName", "requiresAssistantAfterToolResult", "requiresThinkingAsText",
+			"requiresReasoningContentOnAssistantMessages", "thinkingFormat", "cacheControlFormat", "supportsStrictMode",
+			"supportsLongCacheRetention", "sendSessionIdHeader", "supportsEagerToolInputStreaming",
+			"sendSessionAffinityHeaders", "supportsCacheControlOnTools", "forceAdaptiveThinking"];
+		kept.compat = Object.fromEntries(Object.entries(model.compat).filter(([key]) => keys.includes(key)));
+	}
 	return kept;
 }
 
 // listed holds, per provider in the store, the model ids it serves now.
 const listed = new Map();
 
-function mergedModelsPath(modelsJsonPath) {
+function mergedModelsPath(modelsJsonPath, authStorage, builtInProviders) {
 	const store = join(dirname(modelsJsonPath), "models-store.json");
 	if (!existsSync(store)) return undefined;
 	const current = JSON.parse(readFileSync(store, "utf-8"));
@@ -63,6 +73,16 @@ function mergedModelsPath(modelsJsonPath) {
 		const own = Array.isArray(declared.models) ? declared.models : [];
 		const ids = new Set(own.map((model) => model.id));
 		declared.models = [...own, ...models.filter((model) => !ids.has(model.id)).map(definition)];
+		// A provider added after the adapter's Pi release is custom to that
+		// runtime. It requires provider-level endpoint/auth even when every
+		// model has an endpoint and auth.json already holds its API key.
+		if (!builtInProviders.has(provider)) {
+			declared.baseUrl ??= models.find((model) => model.baseUrl)?.baseUrl;
+			const credential = authStorage.get(provider);
+			if (!declared.apiKey && credential?.type === "api_key") declared.apiKey = credential.key;
+			// An unavailable new provider must not invalidate other providers.
+			if (!config.providers[provider] && (!declared.baseUrl || !declared.apiKey)) continue;
+		}
 		config.providers[provider] = declared;
 		listed.set(provider, new Set(declared.models.map((model) => model.id)));
 	}
@@ -75,12 +95,13 @@ function mergedModelsPath(modelsJsonPath) {
 if (out && own) {
 	try {
 		const { ModelRegistry, getAgentDir } = await import(Bun.resolveSync("@earendil-works/pi-coding-agent", dirname(entry)));
+		const { getProviders } = await import(Bun.resolveSync("@earendil-works/pi-ai", dirname(entry)));
 		if (ModelRegistry && typeof ModelRegistry.create === "function" && typeof getAgentDir === "function") {
 			const create = ModelRegistry.create;
 			ModelRegistry.create = function (authStorage, modelsJsonPath = join(getAgentDir(), "models.json")) {
 				let path = modelsJsonPath;
 				try {
-					path = mergedModelsPath(modelsJsonPath) ?? modelsJsonPath;
+					path = mergedModelsPath(modelsJsonPath, authStorage, new Set(getProviders())) ?? modelsJsonPath;
 				} catch (error) {
 					warn(error);
 				}

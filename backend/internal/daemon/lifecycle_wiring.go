@@ -251,6 +251,9 @@ type sessionLifecycle interface {
 	// SetHarnessUseGate prevents lifecycle operations from racing a harness
 	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
+	// SetImportArchiveRefresher rereads an imported conversation before its
+	// first open, using the same import service the REST surface serves.
+	SetImportArchiveRefresher(refresher sessionmanager.ImportArchiveRefresher)
 	// PersistChatModel records the model the user picked in ChatUI onto the
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
@@ -736,6 +739,12 @@ func (c chatLauncher) PreflightChat(
 	permissions ports.PermissionMode,
 ) error {
 	return c.svc.PreflightChat(ctx, harness, permissions)
+}
+
+// PermissionModes lists the permission modes harness can run a chat in,
+// strictest first, so an imported chat opens in one its harness accepts.
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
 }
 
 func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {

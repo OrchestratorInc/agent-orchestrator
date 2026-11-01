@@ -961,6 +961,21 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
+		// Known conditions (open elsewhere, resume in progress, terminated) keep
+		// their codes; any other failure of a pending import is logged in full
+		// and reported by importResumeAPIError. The record is read even after
+		// the request's budget ran out, so a timeout is still recognized.
+		var known *apierr.Error
+		if !errors.As(mapSessionError(err), &known) {
+			if rec, ok, readErr := s.store.GetSession(context.WithoutCancel(ctx), id); readErr == nil && ok && rec.NeedsImportResume() {
+				if s.logger != nil {
+					s.logger.Warn("resume imported session", "session", id, "err", err)
+				}
+				apiErr := importResumeAPIError(err)
+				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
+				return ResumeAgentOutcome{}, apiErr
+			}
+		}
 		apiErr := toAPIError(err)
 		s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 		return ResumeAgentOutcome{}, apiErr
@@ -970,6 +985,20 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// importResumeAPIError reports a pending import's failure without its raw
+// text: a reason written for the user (or a failed Setup step, as a native
+// spawn shows it) is a conflict the user can act on, a timeout asks for a
+// retry, and anything else is a server fault with a fixed message.
+func importResumeAPIError(err error) *apierr.Error {
+	if message, ok := sessionmanager.ImportFailureNotice(err); ok {
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", message, nil)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apierr.Unavailable("SESSION_IMPORT_RESUME_TIMEOUT", "Preparing this imported chat took too long. Try again.")
+	}
+	return apierr.Internal("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureFallback)
 }
 
 // StartAccountTransition moves the session's agent to another provider account
@@ -1641,6 +1670,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SessionRecord:    rec,
 		WorkspaceCleanup: cleanup,
 		StatusReadiness:  readiness,
+		NeedsResume:      rec.NeedsImportResume(),
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1697,6 +1727,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentNotExited):
 		return apierr.Conflict("AGENT_NOT_EXITED",
 			"The agent is still running; only exited agents can be resumed", nil)
+	case errors.Is(err, sessionmanager.ErrSessionOpenElsewhere):
+		return apierr.Conflict("SESSION_OPEN_ELSEWHERE", sessionmanager.ErrSessionOpenElsewhere.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrResumeInProgress):
 		return apierr.Conflict("AGENT_RESUME_IN_PROGRESS",
 			"The agent is already being resumed", nil)

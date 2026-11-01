@@ -3,7 +3,7 @@ import {
 	type SessionInterfaceTransition,
 	useSessionInterfaceTransitionStatus,
 } from "./useSessionInterfaceTransition";
-import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
+import { sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { appI18n } from "../i18n";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -31,7 +31,7 @@ export function resumeAgentOnOpen(sessionId: string): Promise<void> {
 		const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
-		if (error) throw new Error(resumeAgentErrorMessage(error, response.status));
+		if (error) throw Object.assign(new Error(resumeAgentErrorMessage(error, response.status)), { code: apiErrorCode(error) });
 	});
 }
 
@@ -50,7 +50,7 @@ export function canResumeAgent(
 ): boolean {
 	return Boolean(
 		session &&
-			sessionAgentExited(session) &&
+			(session.needsResume && sessionIsActive(session) || sessionAgentExited(session)) &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),
 	);

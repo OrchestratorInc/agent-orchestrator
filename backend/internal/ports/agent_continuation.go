@@ -81,3 +81,35 @@ type AgentNativeSessionProber interface {
 type AgentTranscriptLocator interface {
 	LocateTranscript(ctx context.Context, ref NativeSessionRef) (path string, ok bool, err error)
 }
+
+// ImportedSessionRelocation describes an imported native session that AO is
+// about to resume for the first time, from a different directory than the one
+// the provider recorded it in.
+type ImportedSessionRelocation struct {
+	NativeSessionID string
+	// ConfigDir is the provider state root that holds the imported session.
+	ConfigDir string
+	// TranscriptPath is the provider file the import read, when known.
+	TranscriptPath string
+	// SourceCWD is the directory the provider recorded for the session.
+	SourceCWD string
+	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
+	// provider's own path normalization, such as resolving symlinks.
+	LaunchCWD string
+}
+
+// AgentImportedSessionRelocator is implemented by adapters whose provider finds
+// a native session by the directory it runs in, not by id alone. Before AO
+// first resumes an imported session, it calls RelocateImportedSession so the
+// provider can load the same native id from LaunchCWD. AO then launches every
+// later open of that session in LaunchCWD (SessionImportSource.ResumeCwd), so
+// it is called once per import and never has to move a copy that already holds
+// AO's turns. Providers that find a session by id from any directory do not
+// implement it.
+//
+// Implementations must leave the source session untouched, write atomically
+// with private permissions, and keep a copy that already exists: once AO has
+// resumed, that copy holds AO's later turns.
+type AgentImportedSessionRelocator interface {
+	RelocateImportedSession(ctx context.Context, r ImportedSessionRelocation) error
+}

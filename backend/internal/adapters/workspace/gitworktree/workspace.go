@@ -280,7 +280,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	repo, err := w.repoPath(cfg.ProjectID)
+	repo, err := w.repoPathForConfig(cfg)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -334,12 +334,19 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	}
 	seedRef := ""
 	seedSHA := ""
-	if cfg.FreshBranch {
+	if cfg.FreshBranch && cfg.StartRef == "" {
 		refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, cfg.Branch, cfg.BaseBranch)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		seedSHA, err = w.revParse(ctx, repo, seedRef)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+	}
+	if cfg.FreshBranch && cfg.StartRef != "" {
+		seedRef = cfg.StartRef
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -365,7 +372,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if cfg.FreshBranch {
 		baseSHA = seedSHA
 	}
-	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
+	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
 // rollbackPreparedAdd cleans only the exact registered worktree, without
@@ -500,6 +507,10 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
 	defer cancelRemote()
 	for i := range repos {
+		if i == 0 && cfg.StartRef != "" {
+			repos[i].seedRef, repos[i].baseRef = cfg.StartRef, cfg.StartRef
+			continue
+		}
 		if i == 0 {
 			refs, err := w.resolveWorkspaceRootRefs(ctx, repos[i].repoPath, repos[i].baseBranch)
 			if err != nil {

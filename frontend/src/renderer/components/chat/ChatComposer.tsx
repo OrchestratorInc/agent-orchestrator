@@ -217,6 +217,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onContinue,
 	canSteer,
 	sendPending,
+	waitingForAgent,
 	steerPending,
 	steerRefusal,
 	draftSeed,
@@ -330,6 +331,8 @@ export const ChatComposer = memo(function ChatComposer({
 	canSteer?: boolean;
 	/** A send mutation is in flight for this session. */
 	sendPending?: boolean;
+	/** The agent is resuming: a send waits and goes out once it is ready. */
+	waitingForAgent?: boolean;
 	steerPending?: boolean;
 	/** Why the last steer was refused. */
 	steerRefusal?: string;
@@ -452,6 +455,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
+	const sendWhenReady = useRef(false);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
 	const restoreFocusAfterSubmission = useRef(false);
@@ -804,6 +808,14 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
+
+	// A send held while the agent resumed goes out once it is ready. If the resume
+	// failed, the composer is disabled and the draft simply stays.
+	useEffect(() => {
+		if (waitingForAgent || !sendWhenReady.current) return;
+		sendWhenReady.current = false;
+		if (!disabled) void submit();
+	}, [waitingForAgent, disabled]);
 
 	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
@@ -1261,6 +1273,11 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
+		// The draft stays here; the effect below sends it once the agent is ready.
+		if (waitingForAgent) {
+			sendWhenReady.current = true;
+			return Promise.resolve();
+		}
 		// React cannot publish the next busy prop until after this event returns. A
 		// second Enter in that gap joins the accepted submission instead of opening a
 		// second transport whose local admission rejection would look like a real
