@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collapseModelVariants, findModelVariant, groupModelsByVendor, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
+import { collapseModelVariants, findModelVariant, groupModelsByVendor, modelGroupLabel, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
 
 // Shapes taken from a real Cursor catalog.
 const catalog = [
@@ -94,6 +94,15 @@ describe("collapseModelVariants", () => {
 });
 
 describe("providerQualifiedChoice", () => {
+	it("formats provider headings independently of harness-specific group suppression", () => {
+		expect(modelGroupLabel("opencode", "opencode")).toBeUndefined();
+		expect(modelGroupLabel("managed:kimi-code", "kimi")).toBeUndefined();
+		expect(modelGroupLabel("opencode-go", "pi")).toBe("OpenCode Go");
+		expect(modelGroupLabel("OpenRouter Custom", "pi")).toBe("OpenRouter Custom");
+		expect(providerQualifiedChoice({ value: "opencode/model", name: "Model" }, "opencode"))
+			.toMatchObject({ group: "opencode", groupName: "OpenCode" });
+	});
+
 	it("names a running Pi's model as its catalog does, under its provider", () => {
 		expect(providerQualifiedChoice({ value: "openai-codex/gpt-6.1-sol", name: "openai-codex/GPT-6.1 Sol" }, "pi"))
 			.toEqual({ value: "openai-codex/gpt-6.1-sol", name: "GPT-6.1 Sol", group: "OpenAI Codex" });
@@ -104,6 +113,26 @@ describe("providerQualifiedChoice", () => {
 		const grouped = { value: "anthropic/claude-opus", name: "anthropic/claude-opus", group: "Anthropic" };
 		expect(providerQualifiedChoice(grouped, "pi")).toBe(grouped);
 		const plain = { value: "anthropic/claude-opus", name: "Claude Opus" };
-		expect(providerQualifiedChoice(plain, "opencode")).toBe(plain);
+		expect(providerQualifiedChoice(plain, "pi")).toBe(plain);
+	});
+
+	it.each(["opencode", "opencode-v2"])("keeps %s provider identities even when model names match", (harness) => {
+		for (const [provider, groupName] of [
+			["opencode", "OpenCode"],
+			["opencode-go", "OpenCode Go"],
+			["opencode-zen", "OpenCode Zen"],
+			["zai-coding-plan", "Z.ai Coding Plan"],
+			["custom-provider", "Custom Provider"],
+		]) {
+			const choice = { value: `${provider}/deepseek-v4-flash`, name: "DeepSeek V4 Flash" };
+			expect(providerQualifiedChoice(choice, harness)).toEqual({ ...choice, group: provider, groupName });
+			expect(providerQualifiedChoice({ ...choice, name: `${provider}/${choice.name}` }, harness))
+				.toEqual({ ...choice, group: provider, groupName });
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("preserves %s's own provider grouping", (harness) => {
+		const choice = { value: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash", group: "go", groupName: "OpenCode Go" };
+		expect(providerQualifiedChoice(choice, harness)).toBe(choice);
 	});
 });
