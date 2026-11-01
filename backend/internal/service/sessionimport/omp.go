@@ -124,7 +124,7 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 			}
 			sawMeta = true
 			if r.ID != "" && !strings.EqualFold(r.ID, t.nativeID) {
-				return errNativeIdentityMismatch
+				return errors.New("native identity mismatch")
 			}
 			t.cwd = r.CWD
 			return nil // The header id is the session uuid, not a node in the parent tree.
@@ -247,10 +247,10 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 	}
 
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted {
-		return t, errNoReadableConversation
+		return t, errors.New("invalid native session id or no user prompt")
 	}
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errNoReadableConversation
+		return t, errors.New("session cwd is not absolute")
 	}
 	if t.last.IsZero() {
 		if info, err := os.Stat(t.path); err == nil {
