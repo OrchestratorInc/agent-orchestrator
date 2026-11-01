@@ -2,8 +2,9 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useMigrationOffer } from "../hooks/useMigrationOffer";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
@@ -163,8 +164,19 @@ function HomePageContent() {
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
 	const { cloudEnabled } = useCloudGate();
 	const workspaceQuery = useWorkspaceQuery();
+	const migrationOffer = useMigrationOffer();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
+	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
+	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
+	const firstRunOfferedThisMount = useRef(false);
 	const projects = workspaceQuery.data ?? [];
+	useEffect(() => {
+		let mounted = true;
+		void aoBridge.appState.getFirstRunProjectPrompt()
+			.then((status) => { if (mounted) setFirstRunStatus(status); })
+			.catch(() => { if (mounted) setFirstRunStatus("seen"); });
+		return () => { mounted = false; };
+	}, []);
 	const recentProjects = useMemo(
 		() =>
 			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
@@ -182,6 +194,27 @@ function HomePageContent() {
 			workspaceStartupState === "loading" ||
 			(!workspaceQuery.isSuccess && !workspaceQuery.isError) ||
 			requirementsBlocked);
+	useEffect(() => {
+		if (showStartup || !workspaceQuery.isSuccess || firstRunStatus !== "pending") return;
+		if (!usesPreviewWorkspaceData && migrationOffer.isPending) return;
+		if (projects.length > 0 || migrationOffer.data?.show) {
+			void aoBridge.appState.markFirstRunProjectPromptSeen().then(() => setFirstRunStatus("seen")).catch(() => undefined);
+			return;
+		}
+		if (!firstRunOfferedThisMount.current) {
+			firstRunOfferedThisMount.current = true;
+			setFirstRunPromptOpen(true);
+			setSourceSignal({ source: "clone", nonce: Date.now() });
+		}
+	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
+
+	const finishFirstRunPrompt = () => {
+		setFirstRunPromptOpen(false);
+		setFirstRunStatus("seen");
+		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
+			// A failed write leaves the durable offer pending for the next launch.
+		});
+	};
 
 	if (showStartup) return <DaemonStartupLoader />;
 
@@ -209,7 +242,7 @@ function HomePageContent() {
 		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
-					<section className="space-y-3 px-3">
+					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
@@ -283,11 +316,17 @@ function HomePageContent() {
 				</div>
 
 				<CreateProjectFlow
+					firstRunClone={firstRunPromptOpen}
+					onFirstRunDismiss={finishFirstRunPrompt}
+					onFirstRunProgress={() => setFirstRunPromptOpen(false)}
 					existingProjectNames={projects.map((project) => project.name)}
 					existingProjectPaths={projects.map((project) => project.path)}
 					mode="choose"
 					onCloneProject={cloneProject}
-					onCreateProject={createProject}
+					onCreateProject={async (input) => {
+						await createProject(input);
+						if (firstRunStatus === "pending") finishFirstRunPrompt();
+					}}
 					onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 					onInitializeProject={initializeProjectRepository}
 					onOpenExistingProject={openExistingProject}

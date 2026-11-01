@@ -244,13 +244,16 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ disabled, error, open, onBack, onChange, onClose, onContinue, onUseExisting, value }: {
+	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onUseExisting, value }: {
 		disabled?: boolean;
 		error?: string | null;
+		firstRun?: boolean;
 		onBack?: () => void;
 		onChange?: (value: { remoteUrl: string; destinationParent: string }) => void;
 		onClose?: () => void;
 		onContinue?: (selection: { remoteUrl: string; destinationParent: string; targetPath: string }) => void;
+		onOpenLocalFolder?: () => void;
+		onStartStandaloneAgent?: () => void;
 		onUseExisting?: (path: string) => void;
 		open: boolean;
 		value: { remoteUrl: string; destinationParent: string };
@@ -265,6 +268,8 @@ vi.mock("./CloneRepositoryDialog", () => ({
 				/>
 				<button type="button" onClick={onBack}>Back clone</button>
 				<button type="button" onClick={onClose}>Close clone</button>
+				{firstRun ? <button type="button" onClick={onOpenLocalFolder}>Open a local folder</button> : null}
+				{firstRun ? <button type="button" onClick={onStartStandaloneAgent}>Start a standalone agent</button> : null}
 				<button type="button" disabled={disabled} onClick={() => onUseExisting?.("/repo/existing")}>Use existing checkout</button>
 				<button type="button" onClick={() => onContinue?.({ remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo", targetPath: "/repo/empty-repository" })}>
 					Continue clone
@@ -418,6 +423,33 @@ beforeEach(() => {
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
 	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false, autoStartOrchestratorProjectIds: new Set() });
+});
+
+describe("first run project actions", () => {
+	it("opens the first run clone dialog without cloning and routes local folder to the native picker", async () => {
+		const onFirstRunDismiss = vi.fn();
+		bridgeMocks.chooseDirectory.mockResolvedValue(null);
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		expect(await screen.findByTestId("clone-dialog")).toBeInTheDocument();
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Open a local folder" }));
+		await waitFor(() => expect(bridgeMocks.chooseDirectory).toHaveBeenCalledOnce());
+		expect(onFirstRunDismiss).toHaveBeenCalledOnce();
+	});
+
+	it("routes standalone and close through their real callbacks", async () => {
+		const onFirstRunDismiss = vi.fn();
+		const onCreateStandaloneAgent = vi.fn();
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss, onCreateStandaloneAgent };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Start a standalone agent" }));
+		expect(onCreateStandaloneAgent).toHaveBeenCalledOnce();
+		expect(onFirstRunDismiss).toHaveBeenCalledOnce();
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+	});
 });
 
 describe("CreateProjectFlow remote host", () => {
@@ -635,7 +667,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		const { rerender } = render(<CreateProjectFlow mode="choose" {...noop} openSignal={0} />);
 		rerender(<CreateProjectFlow mode="choose" {...noop} openSignal={1} />);
 		await user.click(await screen.findByRole("button", { name: "Clone a repo" }));
-		expect(await screen.findByTestId("clone-dialog")).toHaveAttribute("data-destination", saved ?? "~/ao/projects");
+			expect(await screen.findByTestId("clone-dialog")).toHaveAttribute("data-destination", saved ?? "~/ao/projects");
 		window.localStorage.removeItem("ao.clone.lastDestinationParent");
 	});
 

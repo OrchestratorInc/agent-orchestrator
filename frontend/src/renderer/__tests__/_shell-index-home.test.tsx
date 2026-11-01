@@ -1,6 +1,7 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -12,6 +13,10 @@ vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <
 
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
+		firstRunClone?: boolean;
+		onFirstRunDismiss?: () => void;
+		onFirstRunProgress?: () => void;
+		onCreateProject?: (input: never) => Promise<void>;
 		existingProjectPaths?: readonly string[];
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
 		sourceSignal?: { source: string; nonce: number } | null;
@@ -23,7 +28,9 @@ const routeMocks = vi.hoisted(() => ({
 	startGitHubAuth: vi.fn(),
 	markAutoLoginOffered: vi.fn(),
 	closeTerminal: vi.fn(),
+	createProject: vi.fn(),
 	cloudEnabled: false,
+	migrationOfferShown: false,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -37,6 +44,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: routeMocks.cloudEnabled }),
+}));
+
+vi.mock("../hooks/useMigrationOffer", () => ({
+	useMigrationOffer: () => ({ isPending: false, data: { show: routeMocks.migrationOfferShown } }),
 }));
 
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
@@ -56,7 +67,7 @@ vi.mock("../lib/shell-context", () => ({
 		daemonStatus: { state: "ready" },
 		workspaceStartupState: "ready",
 		cloneProject: vi.fn(),
-		createProject: vi.fn(),
+		createProject: routeMocks.createProject,
 		initializeProjectRepository: vi.fn(),
 	}),
 	useShellMaybe: () => ({ daemonStatus: { state: "ready" } }),
@@ -85,6 +96,7 @@ const standaloneSession = (overrides: Partial<WorkspaceSession>): WorkspaceSessi
 });
 
 beforeEach(() => {
+	vi.restoreAllMocks();
 	useUiStore.setState({ developerMode: false, newTaskRequest: null });
 	routeMocks.navigate.mockReset();
 	routeMocks.workspaces = [];
@@ -94,10 +106,76 @@ beforeEach(() => {
 	routeMocks.startGitHubAuth.mockReset();
 	routeMocks.markAutoLoginOffered.mockReset();
 	routeMocks.closeTerminal.mockReset();
+	routeMocks.createProject.mockReset().mockResolvedValue(undefined);
 	routeMocks.cloudEnabled = false;
+	routeMocks.migrationOfferShown = false;
 });
 
 describe("shell index route", () => {
+	it("offers the clone prompt once to a fresh empty install", async () => {
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
+		expect(markSeen).not.toHaveBeenCalled();
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.());
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+		expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
+	});
+
+	it("keeps dismissal across a home remount", async () => {
+		let status: "pending" | "seen" = "pending";
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockImplementation(async () => status);
+		vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockImplementation(async () => { status = "seen"; });
+		const view = render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunDismiss?.());
+		await waitFor(() => expect(status).toBe("seen"));
+		view.unmount();
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getFirstRunProjectPrompt).toHaveBeenCalledTimes(2));
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
+
+	it("marks a clone complete only after project registration succeeds", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		routeMocks.createProject.mockRejectedValueOnce(new Error("registration failed"));
+		render(<HomePage />);
+		await waitFor(() => expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(true));
+		act(() => routeMocks.createProjectFlowProps?.onFirstRunProgress?.());
+		await expect(routeMocks.createProjectFlowProps?.onCreateProject?.({} as never)).rejects.toThrow("registration failed");
+		expect(markSeen).not.toHaveBeenCalled();
+		await routeMocks.createProjectFlowProps?.onCreateProject?.({} as never);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+	});
+
+	it("does not offer the prompt to existing users with no projects", async () => {
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("seen");
+		render(<HomePage />);
+		await waitFor(() => expect(aoBridge.appState.getFirstRunProjectPrompt).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
+
+	it("marks a preexisting project as seen without opening the prompt", async () => {
+		routeMocks.workspaces = [{ id: "project", name: "Project", kind: "single_repo", path: "/repo", sessions: [] }];
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
+
+	it("lets the legacy import offer take priority", async () => {
+		routeMocks.migrationOfferShown = true;
+		vi.spyOn(aoBridge.appState, "getFirstRunProjectPrompt").mockResolvedValue("pending");
+		const markSeen = vi.spyOn(aoBridge.appState, "markFirstRunProjectPromptSeen").mockResolvedValue();
+		render(<HomePage />);
+		await waitFor(() => expect(markSeen).toHaveBeenCalledOnce());
+		expect(routeMocks.createProjectFlowProps?.firstRunClone).toBe(false);
+	});
 	it("shows the home actions when no projects exist", () => {
 		render(<HomePage />);
 
