@@ -843,7 +843,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
-	if discoverErr != nil && errors.Is(binaryResolveErr, ports.ErrAgentBinaryNotFound) {
+	if discoverErr != nil && errors.Is(binaryResolveErr, ports.ErrAgentBinaryNotFound) && !errors.Is(discoverErr, ports.ErrAgentBinaryNotFound) {
 		// Some discovery adapters report an empty executable as an untyped error.
 		// Retain the resolver's definitive cause even after readiness expires.
 		discoverErr = errors.Join(binaryResolveErr, discoverErr)
