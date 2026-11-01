@@ -177,7 +177,8 @@ describe("uploadShare", () => {
 		const progress: number[] = [];
 		const result = await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, (sent) => progress.push(sent));
 		expect(result.share.id).toBe("s-1");
-		expect([...stored.entries()].map(([number, body]) => [number, Buffer.from(body).toString()])).toEqual([[1, "0123"], [2, "4567"], [3, "89"]]);
+		// Parts upload concurrently, so they can arrive in any order.
+		expect([...stored.entries()].sort(([a], [b]) => a - b).map(([number, body]) => [number, Buffer.from(body).toString()])).toEqual([[1, "0123"], [2, "4567"], [3, "89"]]);
 		expect(progress.at(-1)).toBe(10);
 
 		const start = JSON.parse(calls[0].body as string);
