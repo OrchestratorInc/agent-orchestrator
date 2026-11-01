@@ -10,7 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPRSectionExpansion, SessionInspector } from "./SessionInspector";
+import { resetPRFocus, SessionInspector } from "./SessionInspector";
 import { resetPRMergeMethods } from "./PRActions";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -319,7 +319,7 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 });
 
 beforeEach(() => {
-  resetPRSectionExpansion();
+  resetPRFocus();
   resetPRMergeMethods();
   cloudCpMock.cancelSessionReviews.mockReset();
   cloudCpMock.getSessionReviewState.mockReset();
@@ -596,7 +596,7 @@ describe("SessionInspector PR section", () => {
     );
   // The card shows only the merge-readiness line; its status rows open on click.
   const openReadiness = () => {
-    for (const toggle of document.querySelectorAll<HTMLElement>("[data-testid='pr-sections'] button[aria-expanded='false'][title]")) {
+    for (const toggle of document.querySelectorAll<HTMLElement>("[data-testid='pr-card'] button[aria-expanded='false'][title]")) {
       fireEvent.click(toggle);
     }
   };
@@ -655,7 +655,7 @@ describe("SessionInspector PR section", () => {
     expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
   });
 
-  it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
+  it("shows one PR at a time when a session owns a stack, the actionable one first, the rest behind the switcher", async () => {
     renderWithQuery(
       <SessionInspector
         session={session([pr(40, "merged"), pr(41, "open"), pr(42, "draft")])}
@@ -663,11 +663,19 @@ describe("SessionInspector PR section", () => {
     );
 
     expect(screen.getByText("Pull requests (3)")).toBeInTheDocument();
-    const cards = prSection("Pull requests (3)")
-      .getAllByText(/^PR #\d+$/)
-      .map((el) => el.textContent);
-    // open (41), draft (42), merged (40)
-    expect(cards).toEqual(["PR #41", "PR #42", "PR #40"]);
+    const card = within(screen.getByTestId("pr-card"));
+    expect(card.getAllByText(/^PR #\d+$/).map((el) => el.textContent)).toEqual(["PR #41"]);
+
+    await userEvent.click(card.getByRole("button", { name: "Show another of this session's PRs (2 more)" }));
+    const items = screen.getAllByRole("menuitemradio");
+    // open (41), draft (42), then Earlier: merged (40)
+    expect(items.map((item) => item.textContent)).toEqual([
+      expect.stringContaining("#41"),
+      expect.stringContaining("#42"),
+      expect.stringContaining("#40"),
+    ]);
+    expect(items[0]).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Earlier")).toBeInTheDocument();
   });
 
   it("uses the singular heading and shows enriched facts for a single PR", () => {
@@ -1068,9 +1076,9 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("section") as HTMLElement;
-    // A lone merged PR still starts open; the header icon and its label carry the state.
+    // The header icon and its label carry the state; a lone PR has no switcher.
     expect(within(card).getByText("merged", { exact: true })).toHaveClass("sr-only");
-    expect(within(card).getByText("PR #7").closest("button")).toHaveAttribute("aria-expanded", "true");
+    expect(within(card).queryByTestId("pr-switcher")).not.toBeInTheDocument();
     expect(
       within(card).queryByText("Pull request merged"),
     ).not.toBeInTheDocument();
@@ -1254,33 +1262,33 @@ describe("SessionInspector PR section", () => {
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
   });
 
-  it("puts several PRs in one card and opens only the one new commits update", async () => {
-    renderWithQuery(
+  it("switches the card to another of the session's PRs and remembers the pick", async () => {
+    const view = renderWithQuery(
       <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
     );
-    const sections = screen.getByTestId("pr-sections");
-    const header = (n: number) => within(sections).getByText(`PR #${n}`).closest("button") as HTMLElement;
-    expect(header(41)).toHaveAttribute("aria-expanded", "true");
-    expect(header(42)).toHaveAttribute("aria-expanded", "false");
+    const card = () => within(screen.getByTestId("pr-card"));
+    expect(card().getByText("PR #41")).toBeInTheDocument();
+    expect(card().getByTestId("pr-switcher")).toHaveTextContent("1 other");
 
-    await userEvent.click(header(42));
+    await userEvent.click(card().getByTestId("pr-switcher"));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /#42/ }));
+    expect(card().getByText("PR #42")).toBeInTheDocument();
+    expect(card().queryByText("PR #41")).not.toBeInTheDocument();
 
-    expect(header(42)).toHaveAttribute("aria-expanded", "true");
-    expect(header(41)).toHaveAttribute("aria-expanded", "true");
+    view.unmount();
+    renderWithQuery(<SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />);
+    expect(card().getByText("PR #42")).toBeInTheDocument();
   });
 
-  it("links each PR to its url", () => {
+  it("links the PR on screen to its url", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
     );
-    const links = [
-      prSection("Pull requests (2)").getByRole("link", { name: "Open PR #41" }),
-      prSection("Pull requests (2)").getByRole("link", { name: "Open PR #42" }),
-    ];
-    expect(links.map((a) => a.getAttribute("href"))).toEqual([
-      "https://example.com/pr/41",
-      "https://example.com/pr/42",
-    ]);
+    const card = within(screen.getByTestId("pr-card"));
+    expect(card.getByRole("link", { name: "Open PR #41" })).toHaveAttribute("href", "https://example.com/pr/41");
+    await userEvent.click(card.getByTestId("pr-switcher"));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /#42/ }));
+    expect(within(screen.getByTestId("pr-card")).getByRole("link", { name: "Open PR #42" })).toHaveAttribute("href", "https://example.com/pr/42");
   });
 });
 
@@ -5210,55 +5218,28 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
   });
 
-  it("puts the branch rows inside the PR new commits update and keeps them in sight when folded", async () => {
+  it("puts the branch rows inside the PR new commits update, and says where they are from another PR", async () => {
     mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
-    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
+    renderWithQuery(<SessionInspector session={session([pr(7, "open"), pr(9, "open")], { branchState: pushed(3) })} />);
 
-    const sections = await screen.findByTestId("pr-sections");
-    expect(await within(sections).findByText("1 uncommitted file")).toBeInTheDocument();
-    expect(within(sections).getByRole("button", { name: "Commit & push to #7" })).toBeInTheDocument();
+    const card = () => within(screen.getByTestId("pr-card"));
+    expect(await card().findByText("1 uncommitted file")).toBeInTheDocument();
+    expect(card().getByRole("button", { name: "Commit & push to #7" })).toBeInTheDocument();
 
-    const header = within(sections).getByText("PR #7").closest("button") as HTMLElement;
-    await userEvent.click(header);
+    await userEvent.click(card().getByTestId("pr-switcher"));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: /#9/ }));
+    // Another PR on screen: the branch's work stays with #7, and the card says so.
+    const elsewhere = within(card().getByTestId("branch-work-elsewhere"));
+    expect(elsewhere.getByText("Git actions are on #7, the PR the branch updates.")).toBeInTheDocument();
+    expect(elsewhere.getByText("1 uncommitted file")).toBeInTheDocument();
+    expect(card().queryByRole("button", { name: "Commit & push to #7" })).not.toBeInTheDocument();
 
-    expect(header).toHaveAttribute("aria-expanded", "false");
-    // Folded, a line under the header still says there is work to commit.
-    expect(within(sections).getByText("1 uncommitted file", { selector: "p" })).toBeInTheDocument();
-
+    await userEvent.click(elsewhere.getByRole("button", { name: "Show #7" }));
+    expect(card().getByText("PR #7")).toBeInTheDocument();
+    expect(card().getByRole("button", { name: "Commit & push to #7" })).toBeInTheDocument();
   });
 
-  it("gives every PR its own lineage: the checked-out one from the worktree, the rest from the provider", async () => {
-    const checkedOut = prSummary(7, "open", { sourceBranch: "feat/ns" });
-    const other = prSummary(8, "open", {
-      commits: [{ sha: "c1", headline: "add search" }, { sha: "c2", headline: "fix the search shortcut" }],
-      commitCount: 2,
-    });
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"], prs: [checkedOut, other] });
-    renderWithQuery(
-      <SessionInspector session={session([pr(7, "open"), pr(8, "open")], { branchState: lineageBranch })} />,
-      undefined,
-      (client) => seedPRSummaries(client, [checkedOut, other]),
-    );
-
-    await within(await screen.findByTestId("pr-sections")).findByText("PR #8");
-    expect(await screen.findByRole("button", { name: /^Lineage.*2 branches/ })).toBeInTheDocument();
-    const footer = await openLineage();
-    const lineages = await within(footer).findAllByTestId("session-lineage");
-    expect(lineages).toHaveLength(2);
-    const [own, theirs] = lineages;
-    expect(within(own).getAllByRole("button")[0]).toHaveTextContent(`#7 ${checkedOut.title}`);
-    expect(await within(own).findByText("second change")).toBeInTheDocument();
-    expect(within(theirs).getAllByRole("button")[0]).toHaveTextContent(`#8 ${other.title}`);
-    expect(within(theirs).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "main",
-      "fix the search shortcut",
-      "add search",
-      "split from main",
-    ]);
-    expect(within(screen.getByTestId("pr-sections")).queryByTestId("session-lineage")).not.toBeInTheDocument();
-  });
-
-  it("opens the checked-out PR once its details load, not the first one listed", async () => {
+  it("shows the checked-out PR once its details load, not the first one listed", async () => {
     const other = prSummary(7, "open");
     const checkedOut = prSummary(8, "open", { sourceBranch: "feat/ns" });
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [other, checkedOut] });
@@ -5267,10 +5248,9 @@ describe("SessionInspector branch summary", () => {
     const facts = [other, checkedOut].map((summary) => pr(summary.number, "open", { url: summary.url }));
     renderWithQuery(<SessionInspector session={session(facts, { branch: "feat/renamed", branchState: behindBranch })} />);
 
-    const sections = await screen.findByTestId("pr-sections");
-    const header = (label: string) => within(sections).getByText(label).closest("button") as HTMLElement;
-    await waitFor(() => expect(header("PR #8")).toHaveAttribute("aria-expanded", "true"));
-    expect(header("PR #7")).toHaveAttribute("aria-expanded", "false");
+    const card = await screen.findByTestId("pr-card");
+    await waitFor(() => expect(within(card).getByText("PR #8")).toBeInTheDocument());
+    expect(within(card).queryByText("PR #7")).not.toBeInTheDocument();
   });
 
   it("keeps the branch rows under the cards when no PR is open", async () => {
@@ -5278,7 +5258,7 @@ describe("SessionInspector branch summary", () => {
     renderWithQuery(<SessionInspector session={session([pr(7, "merged")])} />);
 
     expect(await branch().findByText("1 uncommitted file")).toBeInTheDocument();
-    expect(within(screen.getByTestId("pr-sections")).queryByText("1 uncommitted file")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("pr-card")).queryByText("1 uncommitted file")).not.toBeInTheDocument();
   });
 
   it("shows no git action when the PR already has every commit", async () => {
