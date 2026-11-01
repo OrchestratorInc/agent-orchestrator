@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/reviewerror"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -1730,7 +1731,10 @@ func (s *Store) SettleTurnWithFailureCode(
 		return fmt.Errorf("settle running activities for turn %s: %w", turn.ID, err)
 	}
 	if turn.HandledByReviewID.Valid {
-		if err := q.FailUnsubmittedReviewBatchForChatTurn(ctx, turn.ID); err != nil {
+		if err := q.FailUnsubmittedReviewBatchForChatTurn(ctx, gen.FailUnsubmittedReviewBatchForChatTurnParams{
+			ErrorSummary: reviewerror.Summary(errMessage),
+			TurnID:       turn.ID,
+		}); err != nil {
 			return fmt.Errorf("settle unsubmitted review batch for turn %s: %w", turn.ID, err)
 		}
 	}

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -741,13 +742,27 @@ func TestSettleReviewChatWorkClearsOrphanedEpoch(t *testing.T) {
 
 func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state domain.TurnState
-		stale bool
-		human bool
+		name         string
+		errorMessage string
+		wantBody     string
+		state        domain.TurnState
+		stale        bool
+		human        bool
 	}{
 		{name: "completed", state: domain.TurnStateCompleted},
 		{name: "failed", state: domain.TurnStateFailed},
+		{name: "provider failure", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"}}`, wantBody: "HTTP 400: invalid_request_error: Model unavailable for this account"},
+		{name: "discard request diagnostics", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"},"request":{"api_key":"synthetic-secret"},"diagnostics":"private payload"}`, wantBody: "HTTP 400: invalid_request_error: Model unavailable for this account"},
+		{name: "secret in message", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Authorization: Bearer synthetic-secret"}}`, wantBody: "HTTP 400: invalid_request_error: provider error details withheld"},
+		{name: "malformed failure", state: domain.TurnStateFailed, errorMessage: `{"message":"synthetic-secret`},
+		{name: "bounded multibyte failure", state: domain.TurnStateFailed, errorMessage: strings.Repeat("模 ", 1000), wantBody: strings.Repeat("模 ", 255) + "…"},
+		{name: "oversized multibyte failure", state: domain.TurnStateFailed, errorMessage: strings.Repeat("模 ", 5000)},
+		{name: "unicode whitespace failure", state: domain.TurnStateFailed, errorMessage: "\u2003"},
+		{name: "blank failure", state: domain.TurnStateFailed, errorMessage: "   "},
+		{name: "whitespace failure", state: domain.TurnStateFailed, errorMessage: "\t\n\r\v\f "},
+		{name: "completed with stale error", state: domain.TurnStateCompleted, errorMessage: "not a failed turn"},
+		{name: "obsolete failed controller", state: domain.TurnStateFailed, stale: true, errorMessage: "obsolete failure"},
+		{name: "human failed chat", state: domain.TurnStateFailed, human: true, errorMessage: "unrelated human failure"},
 		{name: "interrupted", state: domain.TurnStateInterrupted},
 		{name: "obsolete controller", state: domain.TurnStateCompleted, stale: true},
 		{name: "human chat", state: domain.TurnStateCompleted, human: true},
@@ -774,7 +789,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			}
 			for _, run := range []domain.ReviewRun{
 				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
-				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result API_KEY=legitimate-review-text"},
 				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
 			} {
 				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
@@ -797,7 +812,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 					t.Fatalf("replacement: %v %v", ok, err)
 				}
 			}
-			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, "", now.Add(time.Second)); err != nil {
+			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, tc.errorMessage, now.Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
 			missing, _, err := s.GetReviewRun(ctx, "missing")
@@ -811,11 +826,15 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			if missing.Status != want {
 				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
 			}
-			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
+			wantBody := tc.wantBody
+			if wantBody == "" && want == domain.ReviewRunFailed {
+				wantBody = "reviewer Chat turn ended without submitting a result"
+			}
+			if missing.Body != wantBody {
 				t.Fatalf("failure explanation = %q", missing.Body)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
-			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result API_KEY=legitimate-review-text" {
 				t.Fatalf("submitted result changed: %+v %v", submitted, err)
 			}
 			next, _, err := s.GetReviewRun(ctx, "next")

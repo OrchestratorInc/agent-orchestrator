@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/reviewerror"
 )
 
 const (
@@ -177,6 +179,7 @@ func newReviewListCommand(ctx *commandContext) *cobra.Command {
 			if err := ctx.getJSON(cmd.Context(), path, &res); err != nil {
 				return err
 			}
+			res = reviewListPayload(res)
 			if opts.json {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
@@ -479,6 +482,30 @@ func (c *commandContext) stopReview(cmd *cobra.Command, args []string, opts revi
 	return err
 }
 
+// Older daemons may return unsanitized historical failures. Apply the same
+// policy before either JSON or table output, without changing submitted bodies.
+func reviewListPayload(res listReviewsResponse) listReviewsResponse {
+	if res.Reviews == nil {
+		return res
+	}
+	reviews := make([]reviewState, len(res.Reviews))
+	for i, review := range res.Reviews {
+		for _, target := range []**reviewRun{&review.LatestRun, &review.PreviousRun} {
+			if *target == nil {
+				continue
+			}
+			run := **target
+			if reviewerror.Eligible(run.Status, run.Verdict, run.GithubReviewID) {
+				run.Body = reviewerror.Summary(run.Body)
+			}
+			*target = &run
+		}
+		reviews[i] = review
+	}
+	res.Reviews = reviews
+	return res
+}
+
 func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse) error {
 	out := cmd.OutOrStdout()
 	if len(res.Reviews) == 0 {
@@ -487,7 +514,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE\tERROR"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -495,7 +522,12 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		failure := "-"
+		if run := review.LatestRun; run != nil && run.Status == "failed" && strings.TrimSpace(run.Body) != "" {
+			// Keep multiline provider errors in one row and escape terminal controls.
+			failure = fmt.Sprintf("%q", run.Body)
+		}
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title, failure); err != nil {
 			return err
 		}
 	}
