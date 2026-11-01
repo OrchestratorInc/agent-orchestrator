@@ -23,6 +23,7 @@ import (
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	activityobserver "github.com/aoagents/agent-orchestrator/backend/internal/observe/activity"
@@ -74,6 +75,9 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 	lcm := lifecycle.New(store, messenger,
 		lifecycle.WithNotificationSink(notifier),
 		lifecycle.WithTelemetry(telemetry),
+		// One delivery recorder for every owner of a session end; services
+		// reach it through lcm.DeliveryTelemetry().
+		lifecycle.WithDeliveryTelemetry(deliverytelemetry.New(telemetry, store)),
 		lifecycle.WithContainerReaper(dockerreap.New(), store),
 		lifecycle.WithActiveSteering(activeTurnSteering(agents)),
 		lifecycle.WithStartupSignalGate(startupSignalGatesInput(agents)),
@@ -352,6 +356,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Tracker:           tracker,
 		Telemetry:         telemetry,
 		Milestones:        installMilestones(cfg),
+		Delivery:          lcm.DeliveryTelemetry(),
 		Logger:            log,
 		BackgroundContext: ctx,
 		AgentReadiness:    agentReadiness,

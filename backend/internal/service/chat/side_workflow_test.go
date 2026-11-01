@@ -144,6 +144,72 @@ func TestSideExplicitNewSharesAnchorAndKeepsMainIndependent(t *testing.T) {
 	}
 }
 
+func TestSideCreationRetryRecoversReusedAnchorAfterMainAdvances(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	ref := h.source(t)
+	original := h.side(t, "original", true)
+	ctx := t.Context()
+	request := chatsvc.SideCreateRequest{IdempotencyKey: "unconfirmed-alias", Reference: &ref}
+	accepted, err := h.svc.CreateIndependentSideChat(ctx, testSession, request)
+	if err != nil || accepted.ID != original.ID {
+		t.Fatalf("anchor reuse: %+v %v", accepted, err)
+	}
+	// The response is lost to the caller. The main completes another turn before retry.
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "advance", ClientMessageID: "advance"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "advance", Text: "advanced"}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		for _, value := range snapshot.Turns {
+			if value.ID == turn.ID {
+				return value.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	recovered, err := h.svc.CreateIndependentSideChat(ctx, testSession, request)
+	if err != nil || recovered.ID != original.ID {
+		t.Fatalf("retry: %+v %v", recovered, err)
+	}
+	sides, err := h.svc.ListIndependentSideChats(ctx, testSession)
+	if err != nil || len(sides) != 1 {
+		t.Fatalf("duplicate destinations: %+v %v", sides, err)
+	}
+	other := h.side(t, "intentional-new", true)
+	if other.ID == original.ID {
+		t.Fatal("explicit New reused the recovered destination")
+	}
+}
+
+func TestBtwRetryAfterLostSendReplyAndClosedPrimary(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	h.source(t)
+	ctx := t.Context()
+	// The composer retains this ID for creation and question delivery on Retry.
+	const key = "btw-client-message"
+	first := h.side(t, key, true)
+	message := ports.ChatUserMessage{Text: "Explain this", ClientMessageID: key}
+	if _, err := h.svc.SendSideQuestion(ctx, testSession, first.ID, message); err != nil {
+		t.Fatal(err)
+	}
+	// Lose the send reply, close its destination, then retry with the frozen ID.
+	if err := h.svc.CloseIndependentSideChat(ctx, testSession, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	retried := h.side(t, key, true)
+	if retried.ID == first.ID {
+		t.Fatal("retry reused a closed destination")
+	}
+	if _, err := h.svc.SendSideQuestion(ctx, testSession, retried.ID, message); err != nil {
+		t.Fatalf("retry remains stuck: %v", err)
+	}
+	h.awaitSide(t, retried.ID, func(s domain.SideSnapshot) bool { return h.provider(1).sendCallCount() == 1 })
+	if sides, err := h.svc.ListIndependentSideChats(ctx, testSession); err != nil || len(sides) != 1 || sides[0].ID != retried.ID {
+		t.Fatalf("retry destinations: %+v %v", sides, err)
+	}
+}
+
 func TestSideExcerptOnlyFallbackAndFrozenReceipt(t *testing.T) {
 	for _, n := range []int{1, 2} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {

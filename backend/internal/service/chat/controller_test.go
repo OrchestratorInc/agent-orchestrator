@@ -3431,6 +3431,30 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	}
 }
 
+func TestProviderPromptFailurePersistsConfigurationCodeWithoutReauth(t *testing.T) {
+	h := newHarness(t)
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "missing-key-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("ACP internal detail"),
+		FailureCode: domain.ConversationFailureProviderKeyMissing,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureProviderKeyMissing {
+		t.Fatalf("failure code = %q", got)
+	}
+	if snapshot.Turns[0].ErrorMessage != "ACP internal detail" || snapshot.Conversation.Account != nil && snapshot.Conversation.Account.ReauthRequiredAt != nil {
+		t.Fatalf("turn/account = %+v / %+v", snapshot.Turns[0], snapshot.Conversation.Account)
+	}
+}
+
 func TestStandaloneProviderFailurePreservesOpaqueText(t *testing.T) {
 	h := newHarness(t)
 	h.conv.emit(ports.ChatEvent{

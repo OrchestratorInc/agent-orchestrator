@@ -1133,12 +1133,21 @@ func TestOpenShellTerminalPinsPATHToDaemonBinary(t *testing.T) {
 			rt := newFakeShellRuntime()
 			svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 			svc.executable = tc.executable
+			svc.dataDir = t.TempDir()
 
 			if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{}); err != nil {
 				t.Fatalf("OpenShellTerminal: %v", err)
 			}
 			if got := rt.created[0].Env["PATH"]; got != tc.want {
 				t.Fatalf("PATH = %q, want %q", got, tc.want)
+			}
+			// A terminal is a login shell: its startup files run after the pin,
+			// so it re-pins afterwards, and only when there is a pin.
+			pinned := tc.want != "" && runtime.GOOS != "windows"
+			if env := rt.created[0].Env; (env["AO_PATH_PIN"] == filepath.Dir(daemonExe) &&
+				env["ZDOTDIR"] == filepath.Join(svc.dataDir, "runtime", "login-shell") &&
+				strings.Contains(env["PROMPT_COMMAND"], "_AO_PATH_REPINNED")) != pinned {
+				t.Fatalf("terminal env = %v, want the login-shell re-pin %v", env, pinned)
 			}
 		})
 	}
