@@ -2138,7 +2138,7 @@ function ImportSourcePicker({
 	};
 	const choiceClass = "group flex min-h-[76px] w-full items-center gap-3 border-b border-[var(--color-border-import-modal)] px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50 last:border-b-0";
 	// One icon chip for both steps so the tiles and the source rows read as one family.
-	const choiceIcon = (icon: ReactNode) => <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground transition-colors duration-fast group-hover:text-foreground">{icon}</span>;
+	const choiceIcon = (icon: ReactNode) => <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground group-hover:text-foreground">{icon}</span>;
 	const choiceText = (label: string, description: string) => (
 		<span className="min-w-0">
 			<span className="block text-[14px] font-medium text-foreground">{label}</span>
@@ -2208,7 +2208,7 @@ function ImportSourcePicker({
 						<button
 							key={id}
 							type="button"
-							className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-4 text-left transition-colors duration-fast hover:border-[var(--color-border-strong)] hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
+							className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
 							aria-label={label}
 							disabled={disabled}
 							onClick={onClick}
