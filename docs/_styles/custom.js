@@ -21,9 +21,14 @@ function aoCurLangName() {
    components differ structurally. Runs after hydration; re-runs on
    Mintlify SPA navigations and resize across breakpoints. */
 (function () {
-  /* Source lives on the fork preview branch until PR #7529 merges; after merge,
-     switch this base to .../OrchestratorInc/agent-orchestrator/blob/main/docs/ */
-  var GH_BASE = "https://github.com/atul-upadhyay-7/agent-orchestrator/blob/mintlify-preview/docs/";
+  /* "View on GitHub" targets the canonical upstream main source. While PR #7529
+     is unmerged those paths do not exist upstream yet, so at build time we probe
+     the upstream raw file (raw.githubusercontent.com allows cross-origin reads)
+     and fall back to the fork preview branch. After merge the upstream probe
+     succeeds and every link switches over with no code change. */
+  var GH_UPSTREAM = "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs";
+  var GH_UPSTREAM_RAW = "https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/docs";
+  var GH_FALLBACK = "https://github.com/atul-upadhyay-7/agent-orchestrator/blob/mintlify-preview/docs";
   /* Routes served by a directory index.mdx (route itself has no <route>.mdx file). */
   var GH_INDEX_ROUTES = {"":1,"archive":1,"archive/performance/chat-responsiveness":1,"archive/screenshots":1,"archive/screenshots/issue-5280":1,"archive/screenshots/pr-4924":1,"archive/screenshots/pr-4925":1,"archive/screenshots/pr-4926":1,"archive/screenshots/pr-4928":1,"archive/screenshots/pr-4932":1,"configuration":1,"engineering":1,"engineering/cli":1,"guides":1,"ja":1,"plugins":1,"plugins/agents":1,"plugins/notifiers":1,"plugins/runtimes":1,"plugins/scm":1,"plugins/terminals":1,"plugins/trackers":1,"plugins/workspaces":1,"zh-CN":1};
   function pageMdxSourcePath() {
@@ -582,7 +587,28 @@ function aoCurLangName() {
     /* View on GitHub: same target as original */
     var gh = document.createElement("a");
     gh.className = "ao-action";
-    gh.href = GH_BASE.replace(/\/+$/, "") + pageMdxSourcePath();
+    var ghPath = pageMdxSourcePath();
+    var ghUpstreamUrl = GH_UPSTREAM + ghPath;
+    var ghFallbackUrl = GH_FALLBACK + ghPath;
+    var ghTarget = ghUpstreamUrl, ghResolved = false;
+    gh.href = ghUpstreamUrl;
+    fetch(GH_UPSTREAM_RAW + ghPath).then(function (r) {
+      ghTarget = r.ok ? ghUpstreamUrl : ghFallbackUrl;
+      gh.href = ghTarget;
+      ghResolved = true;
+    }, function () { ghResolved = true; });
+    gh.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (ghResolved) { window.open(ghTarget, "_blank", "noreferrer"); return; }
+      /* Probe still in flight: wait briefly, then navigate same-tab (async
+         window.open would be popup-blocked). */
+      var t0 = Date.now();
+      (function poll() {
+        if (ghResolved) { location.assign(ghTarget); }
+        else if (Date.now() - t0 > 4000) { location.assign(ghUpstreamUrl); }
+        else setTimeout(poll, 100);
+      })();
+    });
     gh.target = "_blank";
     gh.rel = "noreferrer";
     gh.innerHTML =
