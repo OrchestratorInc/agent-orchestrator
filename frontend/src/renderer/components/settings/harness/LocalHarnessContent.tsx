@@ -37,6 +37,7 @@ import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hook
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../../lib/agent-options";
 import { apiErrorMessage } from "../../../lib/api-client";
+import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
@@ -443,6 +444,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
+		if (operation === "install") void captureRendererEvent("ao.agents.install_clicked", { agent: agentId });
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const fail = (message: string) => {

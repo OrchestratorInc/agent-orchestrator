@@ -15,6 +15,7 @@ const TELEMETRY_SCHEMA_VERSION = 2;
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
+const ONBOARDING_MILESTONES_KEY = "ao.telemetry.onboardingMilestones";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
@@ -31,6 +32,7 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
+let installTimestampMs: number | undefined;
 let installId = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
@@ -208,6 +210,7 @@ export type DailyActiveHeartbeatOptions = {
 	storage?: DailyActiveStorage;
 	now?: () => Date;
 	capture: () => boolean | void | Promise<boolean | void>;
+	onNewDay?: (now: Date) => void;
 	window: DailyActiveEventTarget;
 	document: DailyActiveEventTarget & Pick<Document, "visibilityState">;
 };
@@ -270,7 +273,7 @@ export function buildTelemetryContext(
 					install_source: install.installSource,
 					...(install.installedAt ? { installed_at: install.installedAt } : {}),
 					is_ci: install.isCi,
-					...(install.ciSignal ? { ci_signal: install.ciSignal } : {}),
+					is_container: install.isContainer,
 				}
 			: {}),
 		// Classifies this install as the desktop app across every event, so a
@@ -312,12 +315,14 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
 	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
 	// the flag is left to the SDK, which processes the identified person.
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+	const currentAge = installTimestampMs === undefined ? undefined : Math.floor((Date.now() - installTimestampMs) / 86_400_000);
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), ...(signInKnown ? { is_signed_in: cloudUser !== null } : {}), ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
 // Who this install is. The GitHub login and AO Cloud user ID ride every event as
 // super properties; email is only ever a person property set at identify time.
 let cloudUser: { id: string; email: string } | null = null;
+let signInKnown = false;
 let githubLogin: string | null = null;
 let identifiedId: string | null = null;
 let posthogReady = false;
@@ -340,6 +345,7 @@ function registerBaseProperties(): void {
  */
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
+	signInKnown = true;
 	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
 	// A sign-out, a different account or an opt-out may have landed while init
 	// was pending; this continuation must not identify who is no longer current.
@@ -362,6 +368,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
  */
 export function clearCloudUser(): void {
 	cloudUser = null;
+	signInKnown = true;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -573,16 +580,41 @@ export function telemetryStorage(): DailyActiveStorage | undefined {
 	}
 }
 
+function claimOnboardingMilestone(storage: DailyActiveStorage | undefined, milestone: string): boolean {
+	if (!storage) return false;
+	try {
+		const value = JSON.parse(storage.getItem(ONBOARDING_MILESTONES_KEY) ?? "[]") as unknown;
+		const claimed = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+		if (claimed.includes(milestone)) return false;
+		storage.setItem(ONBOARDING_MILESTONES_KEY, JSON.stringify([...claimed, milestone]));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function hadEarlierActiveDay(storage: DailyActiveStorage | undefined, now = new Date()): boolean {
+	try {
+		const value = JSON.parse(storage?.getItem(ACTIVE_STORAGE_KEY) ?? "{}") as { date?: unknown };
+		return typeof value.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.date) && value.date < now.toISOString().slice(0, 10);
+	} catch {
+		return false;
+	}
+}
+
 export function startDailyActiveHeartbeat({
 	storage,
 	now = () => new Date(),
 	capture,
+	onNewDay,
 	window,
 	document,
 }: DailyActiveHeartbeatOptions): () => void {
 	const maybeCapture = () => {
 		const captureTime = now();
+		const returning = hadEarlierActiveDay(storage, captureTime);
 		if (!reserveDailyActiveCapture(storage, captureTime)) return;
+		if (returning) onNewDay?.(captureTime);
 
 		let result: boolean | void | Promise<boolean | void>;
 		try {
@@ -875,9 +907,14 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.loaded":
 			break;
+		case "ao.agents.missing":
+			if (properties?.reason === "none_installed") safe.reason = properties.reason;
+			break;
+		case "ao.agents.install_clicked":
+			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
+			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
-		case "ao.renderer.orchestrator_open_requested":
 		case "ao.renderer.task_create_succeeded":
 		case "ao.renderer.task_create_failed":
 		case "ao.renderer.session_kill_succeeded":
@@ -913,8 +950,10 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.orchestrator_spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) {
-				safe.source = properties.source;
+			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) safe.source = properties.source;
+			if (event === "ao.renderer.orchestrator_spawn_failed") {
+				if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
+				if (typeof properties?.http_status === "number" && Number.isInteger(properties.http_status) && properties.http_status >= 400 && properties.http_status <= 599) safe.http_status = properties.http_status;
 			}
 			break;
 		}
@@ -963,14 +1002,11 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.renderer.agents_available": {
-			// Counts and a fixed-vocabulary id list only. Agent ids come from AO's own
-			// registry, never from user input, so they carry no user data.
+			// Agent ids come from AO's registry, never from user input.
 			for (const key of ["installed_count", "authorized_count", "supported_count"] as const) {
 				if (typeof properties?.[key] === "number") safe[key] = properties[key];
 			}
-			if (typeof properties?.authorized_agents === "string") {
-				safe.authorized_agents = properties.authorized_agents;
-			}
+			if (typeof properties?.authorized_agents === "string") safe.authorized_agents = properties.authorized_agents;
 			break;
 		}
 		case "ao.renderer.open_in_editor_succeeded": {
@@ -1209,6 +1245,9 @@ export async function initTelemetry(): Promise<boolean> {
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install, bootstrap.experimentCohort);
+		installTimestampMs = bootstrap.installTimestampMs;
+		if (bootstrap.daysSinceInstall !== undefined) telemetryContext.days_since_install = bootstrap.daysSinceInstall;
+		if (bootstrap.lifetimeSessions !== undefined) telemetryContext.lifetime_sessions = bootstrap.lifetimeSessions;
 		posthog = await loadPostHog();
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
@@ -1229,10 +1268,19 @@ export async function initTelemetry(): Promise<boolean> {
 			distinctId: bootstrap.distinctId,
 		});
 		bindRendererErrorHandlers();
+		const storage = telemetryStorage();
+		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.app.first_opened") && claimOnboardingMilestone(storage, "app_opened")) {
+			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
+		}
 		startDailyActiveHeartbeat({
-			storage: telemetryStorage(),
+			storage,
 			window,
 			document,
+			onNewDay: () => {
+				if (!isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
+					posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
+				}
+			},
 			// Ride the batched request queue like every other renderer event
 			// (loaded, route_viewed). An earlier `send_instantly: true` here
 			// fired an immediate, un-retried send during init that never

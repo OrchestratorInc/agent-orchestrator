@@ -187,7 +187,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.app.installed": {
 		"launcher": {},
 	},
-	"ao.app.first_open": {
+	"ao.install.created": {
 		"launcher": {},
 	},
 	"ao.daemon.started": {
@@ -195,21 +195,9 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":          {},
-		"duration":           {},
-		"error_code":         {},
-		"error_kind":         {},
-		"fingerprint":        {},
-		"method":             {},
-		"operation":          {},
-		"path":               {},
-		"status":             {},
-		"status_family":      {},
-		"browser_command":    {},
-		"runtime_link_state": {},
-		"count":              {},
-		"window_start":       {},
-		"window_end":         {},
+		"count":        {},
+		"window_start": {},
+		"window_end":   {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
@@ -222,6 +210,9 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
+	"ao.app.first_opened":      {},
+	"ao.cli.first_used":        {},
+	"ao.app.next_day_returned": {},
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
@@ -314,10 +305,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"mode":       {},
 		"result":     {},
 	},
-	"ao.harness.stale_sessions": {
-		"harness":  {},
-		"sessions": {},
-	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
 		"exited_to": {},
@@ -331,10 +318,11 @@ type postHogClient interface {
 
 // PostHogSink exports allowlisted telemetry events to PostHog.
 type PostHogSink struct {
-	apiKey       string
-	host         string
-	defaultAgent string
-	tenure       *tenureTracker
+	apiKey           string
+	host             string
+	defaultAgent     string
+	tenure           *tenureTracker
+	lifetimeSessions func(context.Context) (int64, error)
 	// env and install carry the segmentation context (OS, arch, CI, install
 	// source, release channel) stamped on every event. See environment.go.
 	env     staticEnvironment
@@ -357,7 +345,7 @@ type PostHogSink struct {
 	appVersion string
 	client     postHogClient
 	log        *slog.Logger
-	ch         chan ports.TelemetryEvent
+	ch         chan queuedPostHogEvent
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
 	queueMu    sync.RWMutex
@@ -368,6 +356,16 @@ type PostHogSink struct {
 	// long HTTP timeout.
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+type queuedPostHogEvent struct {
+	event            ports.TelemetryEvent
+	lifetimeSessions *int64
+}
+
+// SetLifetimeSessions reads the durable counter when an event enters the sink.
+func (s *PostHogSink) SetLifetimeSessions(read func(context.Context) (int64, error)) {
+	s.lifetimeSessions = read
 }
 
 // NewPostHogSink starts a buffered PostHog exporter with a stable install ID.
@@ -397,7 +395,7 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		client:       client,
 		log:          telemetryLogger(log),
 		appVersion:   strings.TrimSpace(appVersion),
-		ch:           make(chan ports.TelemetryEvent, postHogBufferSize),
+		ch:           make(chan queuedPostHogEvent, postHogBufferSize),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -437,18 +435,19 @@ func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 		s.queueMu.RUnlock()
 		return
 	}
+	entry := queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)}
 	queued := false
 	if strings.HasPrefix(ev.Name, "ao.usage.") || ev.Name == "ao.prs.closed" {
 		// Usage summaries have already been reserved in SQLite. Wait for queue
 		// capacity so a burst cannot discard them behind the caller's back.
 		select {
-		case s.ch <- ev:
+		case s.ch <- entry:
 			queued = true
 		case <-ctx.Done():
 		}
 	} else {
 		select {
-		case s.ch <- ev:
+		case s.ch <- entry:
 			queued = true
 		default:
 		}
@@ -491,9 +490,20 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 
 func (s *PostHogSink) loop() {
 	defer s.wg.Done()
-	for ev := range s.ch {
-		s.send(s.ctx, ev)
+	for entry := range s.ch {
+		s.sendQueued(s.ctx, entry)
 	}
+}
+
+func (s *PostHogSink) snapshotLifetimeSessions(ctx context.Context) *int64 {
+	if s.lifetimeSessions == nil {
+		return nil
+	}
+	count, err := s.lifetimeSessions(ctx)
+	if err != nil {
+		return nil
+	}
+	return &count
 }
 
 // Bounded retry for a single event. A dropped send is a permanent gap,
@@ -509,6 +519,11 @@ const (
 )
 
 func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
+	s.sendQueued(ctx, queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)})
+}
+
+func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) {
+	ev := entry.event
 	eventName := remoteEventName(ev.Name)
 	// A stable per-event UUID, reused across every attempt, is PostHog's
 	// idempotency key. A transport error only means AO received no response;
@@ -517,7 +532,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
-	props := s.properties(ev)
+	props := s.propertiesWithCount(ev, entry.lifetimeSessions)
 	// A signed-in install reports as the AO Cloud user, so its events never
 	// depend on which account the anonymous install ID was once merged into.
 	// Signed out, the current anonymous install ID is used.
@@ -601,6 +616,10 @@ func (s *PostHogSink) sendOnce(ctx context.Context, payload []byte) (retryable b
 }
 
 func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
+	return s.propertiesWithCount(ev, s.snapshotLifetimeSessions(context.Background()))
+}
+
+func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessions *int64) map[string]any {
 	props := map[string]any{
 		"source":                   ev.Source,
 		"level":                    string(ev.Level),
@@ -651,11 +670,14 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	if s.hasExperimentCohort {
 		props["experiment_cohort"] = s.experimentCohort
 	}
+	if lifetimeSessions != nil {
+		props["lifetime_sessions"] = *lifetimeSessions
+	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}
-	if ev.ProjectID != nil {
-		props["project_id_hash"] = sha256String(string(*ev.ProjectID))
+	if ev.ProjectID != nil && s.ident != nil {
+		props["project_id_hash"] = sha256String(s.ident.InstallID() + ":" + string(*ev.ProjectID))
 	}
 	if ev.SessionID != nil {
 		props["session_id_hash"] = sha256String(string(*ev.SessionID))
@@ -666,6 +688,10 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	s.stampIdentity(props)
 	if s.ident != nil {
 		props["install_id"] = s.ident.InstallID()
+		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
+			props["days_since_install"] = age
+		}
+		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
 	}
 	return props
 }

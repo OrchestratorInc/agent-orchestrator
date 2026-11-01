@@ -24,7 +24,7 @@ const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
-	// firstOpenEventFile holds the install ID that ao.app.first_open was sent
+	// firstOpenEventFile holds the install ID that ao.install.created was sent
 	// for, so each install ID sends it exactly once, on any build.
 	firstOpenEventFile = "telemetry_first_open_emitted"
 	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
@@ -125,7 +125,7 @@ func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// MarkFirstOpenEvent reserves ao.app.first_open for the current install ID.
+// MarkFirstOpenEvent reserves ao.install.created for the current install ID.
 // Unlike ao.app.installed it does not depend on the install being fresh, so an
 // install that predates ao.app.installed (or whose CLI wrote tenure before the
 // daemon first started) is still counted once. An opted-out install reserves
@@ -181,6 +181,15 @@ func (i *Identity) InstallID() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.installID
+}
+
+// DaysSinceInstall uses the durable install ID file modification timestamp.
+func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
+	info, err := os.Stat(filepath.Join(i.dataDir, installIDFile))
+	if err != nil || info.ModTime().After(now) {
+		return 0, false
+	}
+	return int(now.UTC().Sub(info.ModTime().UTC()).Hours() / 24), true
 }
 
 // AnonymousID is the distinct ID used when no Cloud user is bound.

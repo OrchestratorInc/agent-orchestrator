@@ -84,24 +84,17 @@ const CI_ENV_VARS = [
 	"BUILDKITE_AGENT_ID", "WOODPECKER", "HARNESS_BUILD_ID",
 ];
 
-export type CiSignal = "ci_env" | "container";
-
 /**
- * Flags a CI runner or a container, mirroring the daemon's detectCI, so
- * dashboards can exclude one-shot fleets. ci_signal says which: a dev
- * container can be a real person.
+ * Classifies CI runners and containers independently, mirroring the daemon.
+ * A development container can be a real person.
  */
 export function detectCiEnvironment(
 	env: Record<string, string | undefined>,
 	exists: (file: string) => boolean,
-): { isCi: boolean; ciSignal?: CiSignal } {
+): { isCi: boolean; isContainer: boolean } {
+	const isContainer = Boolean(env.KUBERNETES_SERVICE_HOST || env.container || exists("/.dockerenv") || exists("/run/.containerenv"));
 	const ci = env.CI?.trim().toLowerCase();
-	if (ci && ci !== "false" && ci !== "0") return { isCi: true, ciSignal: "ci_env" };
-	if (CI_ENV_VARS.some((name) => env[name]?.trim())) return { isCi: true, ciSignal: "ci_env" };
-	if (env.KUBERNETES_SERVICE_HOST || env.container || exists("/.dockerenv") || exists("/run/.containerenv")) {
-		return { isCi: true, ciSignal: "container" };
-	}
-	return { isCi: false };
+	return { isCi: Boolean((ci && ci !== "false" && ci !== "0") || CI_ENV_VARS.some((name) => env[name]?.trim())), isContainer };
 }
 
 /** The recorded install time coarsened to its UTC day, or undefined. */

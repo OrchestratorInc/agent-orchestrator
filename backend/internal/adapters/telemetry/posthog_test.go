@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPostHogSink: %v", err)
 	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return 2, nil })
 
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
@@ -69,6 +71,12 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
 		}
+		if props["project_id_hash"] == sha256String(string(projectID)) {
+			t.Fatal("project hash is guessable without the installation salt")
+		}
+		if props["lifetime_sessions"] != float64(2) || props["is_signed_in"] != false || props["days_since_install"] != float64(0) {
+			t.Fatalf("shared metadata missing or incorrect: %#v", props)
+		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
 		}
@@ -83,11 +91,73 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	}
 }
 
+func TestLifetimeSessionCountUsesEnqueueTime(t *testing.T) {
+	var count atomic.Int64
+	count.Store(1)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	requests := make(chan map[string]any, 2)
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["event"] == "ao.daemon.started" {
+			close(firstStarted)
+			<-releaseFirst
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return count.Load(), nil })
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", OccurredAt: time.Now()})
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first export did not start")
+	}
+	count.Store(2)
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.session.spawned", OccurredAt: time.Now()})
+	count.Store(3)
+	close(releaseFirst)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-requests
+	spawn := <-requests
+	props, ok := spawn["properties"].(map[string]any)
+	if !ok || props["lifetime_sessions"] != float64(2) {
+		t.Fatalf("queued spawn count = %#v, want 2", spawn["properties"])
+	}
+}
+
+func TestProjectHashIsInstallationScoped(t *testing.T) {
+	first, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := domain.ProjectID("ao")
+	event := ports.TelemetryEvent{Name: "ao.session.spawned", ProjectID: &projectID}
+	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
+	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
+	if a == b || a == sha256String(string(projectID)) {
+		t.Fatalf("project hash is not installation scoped: %v %v", a, b)
+	}
+}
+
 func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
 	for _, name := range []string{"ao.usage.messages_sent", "ao.prs.closed"} {
 		t.Run(name, func(t *testing.T) {
-			sink := &PostHogSink{ch: make(chan ports.TelemetryEvent, 1), log: slog.Default()}
-			sink.ch <- ports.TelemetryEvent{Name: "queued"}
+			sink := &PostHogSink{ch: make(chan queuedPostHogEvent, 1), log: slog.Default()}
+			sink.ch <- queuedPostHogEvent{event: ports.TelemetryEvent{Name: "queued"}}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			done := make(chan struct{})
@@ -106,8 +176,8 @@ func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("durable event did not enter the queue after capacity opened")
 			}
-			if event := <-sink.ch; event.Name != name {
-				t.Fatalf("queued event = %q", event.Name)
+			if entry := <-sink.ch; entry.event.Name != name {
+				t.Fatalf("queued event = %q", entry.event.Name)
 			}
 		})
 	}
@@ -461,7 +531,6 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
 		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
 		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
-		"ao.harness.stale_sessions":   {"harness", "sessions"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
