@@ -57,10 +57,12 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
-							{artifact.cloud ? null : (
+							{artifact.cloud?.shared ? null : (
 								<ShareArtifactButton
 									className="transition-none"
-									file={{ sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
+									file={artifact.cloud
+										? { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" }
+										: { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
 									name={artifact.name}
 								/>
 							)}

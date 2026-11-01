@@ -518,11 +518,12 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it.each([
-		{ location: "local", hostId: undefined, cloud: false, shown: true },
-		{ location: "remote", hostId: "remote-1", cloud: false, shown: false },
-		{ location: "cloud", hostId: undefined, cloud: true, shown: false },
-	])("puts Share beside Edit only for a $location artifact", async ({ hostId, cloud, shown }) => {
-		const currentSession = { ...session(), ...(cloud ? { cloud: { orgId: "org-1" } } : {}) } as WorkspaceSession;
+		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
+		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: false },
+		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: true },
+		{ location: "shared project's", hostId: undefined, cloud: { orgId: "org-1", shared: true }, shown: false },
+	])("puts Share beside Edit for a $location artifact: $shown", async ({ hostId, cloud, shown }) => {
+		const currentSession = { ...session(), ...(cloud ? { cloud } : {}) } as WorkspaceSession;
 		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path: "notes.md" }} session={currentSession} />);
 
 		await screen.findByRole("button", { name: "notes.md" });
