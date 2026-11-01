@@ -149,8 +149,8 @@ import {
 	spawnedSessionIds,
 	TaskNamedLine,
 	useWorkerUpdateIndex,
+	WorkerMessages,
 	WorkerUpdateIndexContext,
-	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
@@ -4900,18 +4900,18 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
-	// report batch, or reports folded into the user's message) draws as rows, and
-	// AO's task-naming prompt as the name it produced.
+	// report batch, or reports folded into the user's message) draws in full under
+	// the worker's name, and AO's task-naming prompt as the name it produced.
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
-		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		if (updates.length > 0) return <WorkerMessages key={run.key} updates={updates} />;
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
 		const piggybacked = piggybackedUpdates(item);
 		if (piggybacked.length === 0) return renderRun(run);
-		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+		return [<WorkerMessages key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	// The live row sits at the end of the turn, under what the agent has written so

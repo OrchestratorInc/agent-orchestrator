@@ -8,7 +8,6 @@ import {
 	quietWorkerReply,
 	renamedTitle,
 	spawnedSessionIds,
-	splitHeadline,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 
@@ -90,11 +89,6 @@ describe("worker updates", () => {
 		expect(workerUpdatesOf(human)).toEqual([]);
 		expect(piggybackedUpdates(human).map((update) => update.sessionId)).toEqual(["proj-286", "proj-288"]);
 		expect(piggybackedUpdates(message({ origin: "human", text: "How is it going?" }))).toEqual([]);
-	});
-
-	it("takes a short first line as the headline, else the first sentence", () => {
-		expect(splitHeadline("Fixed the menu\nIt now renders in a portal.")).toEqual({ headline: "Fixed the menu", detail: "It now renders in a portal." });
-		expect(splitHeadline("Rebased **#5051**; disk full during validation. Retrying.").headline).toBe("Rebased #5051");
 	});
 
 	it("tells a question from a ? in code, links and chained calls", () => {
