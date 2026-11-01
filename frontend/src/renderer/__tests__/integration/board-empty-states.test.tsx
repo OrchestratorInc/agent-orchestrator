@@ -243,7 +243,7 @@ describe("global board first launch", () => {
 			expect(getMock.mock.calls.some(([url]) => url === "/api/v1/projects")).toBe(true);
 			expect(getMock.mock.calls.some(([url]) => url === "/api/v1/sessions")).toBe(true);
 		});
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
 		expect(getMock.mock.calls.some(([url]) => url === "/api/v1/system/requirements")).toBe(true);
 	});
 
@@ -274,8 +274,8 @@ describe("global board first launch", () => {
 		respondWith([], []);
 		renderBoard(<SessionsBoard />);
 
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
-		expect(screen.getByText("Choose how you want to add code to Agent Orchestrator")).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
+		expect(screen.getByText("Where's the code?")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
@@ -332,7 +332,7 @@ describe("global board first launch", () => {
 		respondWith([], []);
 		renderBoard(<SessionsBoard />);
 
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
+		expect(await screen.findByText("New project")).toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalledWith("/api/v1/system/github-auth/terminal");
 	});
 
@@ -444,7 +444,7 @@ describe("global board first launch", () => {
 		renderBoard(<SessionsBoard />);
 
 		expect(await screen.findByText("fix the bug")).toBeInTheDocument();
-		expect(screen.queryByText("Add a project")).not.toBeInTheDocument();
+		expect(screen.queryByText("New project")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(4);
 	});
 
@@ -482,7 +482,7 @@ describe("project board with no sessions", () => {
 		// Both launchers remain reachable from the empty-state invitation.
 		expect(screen.getAllByRole("button", { name: "Spawn Orchestrator" }).length).toBeGreaterThan(0);
 		expect(screen.getAllByRole("button", { name: "New task" }).length).toBeGreaterThan(0);
-		expect(screen.queryByText("Add a project")).not.toBeInTheDocument();
+		expect(screen.queryByText("New project")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(0);
 	});
 

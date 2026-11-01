@@ -477,12 +477,19 @@ async function openCreateProjectDialog(
 	const user = userEvent.setup();
 	window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue(path);
 	window.ao!.app.scanImportFolder = vi.fn().mockResolvedValue(scan);
-	await user.click(screen.getByLabelText("New project"));
+	await openLocalProjectSources(user);
 	await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 	await screen.findByRole("dialog", { name: "Set up project" });
 	await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
 	await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 	return user;
+}
+
+// Cloud is on by default here, so the add-project flow first asks Local or
+// Cloud; these tests exercise the local sources behind "Local".
+async function openLocalProjectSources(user: ReturnType<typeof userEvent.setup>) {
+	await user.click(screen.getByLabelText("New project"));
+	await user.click(await screen.findByRole("button", { name: "On this computer" }));
 }
 
 function fireDrag(
@@ -596,13 +603,14 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
 		const chooser = await screen.findByRole("dialog");
-		expect(screen.queryByRole("button", { name: "Add project on Host B" })).not.toBeInTheDocument();
+		await user.click(within(chooser).getByRole("button", { name: "On this computer" }));
+		expect(screen.queryByRole("button", { name: "New project on Host B" })).not.toBeInTheDocument();
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
 		await user.click(screen.getByRole("option", { name: "Host B" }));
 		expect(screen.getByRole("dialog")).toBe(chooser);
 		expect(within(chooser).getByRole("combobox", { name: "Machine" })).toHaveTextContent("Host B");
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
-		await user.click(screen.getByRole("option", { name: "This computer" }));
+		await user.click(screen.getByRole("option", { name: "On this computer" }));
 		expect(screen.getByRole("dialog")).toBe(chooser);
 	});
 
@@ -1224,7 +1232,7 @@ describe("Sidebar", () => {
 		renderSidebar();
 		const before = useUiStore.getState().newTaskRequest?.nonce ?? 0;
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(await screen.findByRole("button", { name: "Start a standalone agent" }));
 
 		const request = useUiStore.getState().newTaskRequest;
@@ -1239,7 +1247,7 @@ describe("Sidebar", () => {
 			useUiStore.getState().requestCreateProject();
 		});
 
-		expect(await screen.findByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
 	});
 
 	it("keeps the create-project shortcut available when there are no projects", async () => {
@@ -1249,7 +1257,7 @@ describe("Sidebar", () => {
 			useUiStore.getState().requestCreateProject();
 		});
 
-		expect(await screen.findByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
 	});
 
 	it("reveals orchestrator and kebab buttons on the project row (no dashboard button)", () => {
@@ -1571,8 +1579,8 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		await openLocalProjectSources(user);
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		expect(window.ao!.app.chooseDirectory).not.toHaveBeenCalled();
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
@@ -1599,7 +1607,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/project-one/");
 		renderSidebar();
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
@@ -1622,7 +1630,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo");
 		renderSidebar({ onCloneProject, onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: "Clone a repo" }));
 		expect(await screen.findByRole("dialog", { name: "Clone a Git repository" })).toBeInTheDocument();
 
@@ -1670,7 +1678,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCloneProject, onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: "Clone a repo" }));
 		await user.type(
 			await screen.findByRole("textbox", { name: "Repository URL" }),
@@ -1717,7 +1725,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveTextContent(/cursor/i);
@@ -1770,7 +1778,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
@@ -1835,7 +1843,7 @@ describe("Sidebar", () => {
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/workspace");
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 
 		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a workspace folder");
@@ -1867,7 +1875,7 @@ describe("Sidebar", () => {
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -1927,7 +1935,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -1961,7 +1969,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.getByText("Importing a workspace requires at least one direct child Git repository that already has a commit and an origin remote. You can import this folder as a project instead.")).toBeInTheDocument();
 		expect(screen.queryByText("No repositories detected in this folder.")).not.toBeInTheDocument();
@@ -1970,7 +1978,7 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Import as project" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Go Back" }));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		expect(onCreateProject).not.toHaveBeenCalled();
 	});
 
@@ -2004,7 +2012,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 
@@ -2041,7 +2049,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.getByRole("dialog", { name: "Import workspace" })).toBeInTheDocument();
 		expect(screen.getByText("temp")).toBeInTheDocument();
@@ -2074,7 +2082,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject: vi.fn().mockResolvedValue(undefined) as CreateProjectHandler });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Import as project" })).toBeInTheDocument();
@@ -2088,7 +2096,7 @@ describe("Sidebar", () => {
 		window.ao!.app.checkAncestorRepo = vi.fn().mockResolvedValue(undefined);
 		renderSidebar({ onCreateProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -2099,7 +2107,7 @@ describe("Sidebar", () => {
 			title: "Project setup failed",
 			body: "AO daemon is not ready.",
 		}));
-		expect(screen.getByRole("dialog", { name: "Add a project" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
 		// The initial folder validation is required by the import step. The
 		// non-validation create failure must not trigger a second scan.
 		expect(window.ao!.app.checkAncestorRepo).toHaveBeenCalledWith("/repo/workspace");
@@ -2121,7 +2129,7 @@ describe("Sidebar", () => {
 			);
 		renderSidebar({ onCreateProject, onInitializeProject });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -2171,7 +2179,7 @@ describe("Sidebar", () => {
 		});
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 
@@ -2206,7 +2214,7 @@ describe("Sidebar", () => {
 		);
 		renderSidebar({ onCreateProject, seedAgents: false });
 
-		await user.click(screen.getByLabelText("New project"));
+		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
