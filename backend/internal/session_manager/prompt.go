@@ -345,15 +345,15 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 
 ## Card Summary
 
-Run `+"`ao summary \"<text>\"`"+` to set the one-line summary on your kanban card. The human reads it on the board to see what you are doing, so keep it specific, under 200 characters, and in plain words.
+Run `+"`ao summary \"<text>\"`"+` to set the one-line summary on your kanban card. The human watches the board to follow what you are doing right now, so keep it specific, under 200 characters, and in plain words.
 
 - Run it as its own command: no `+"`&&`"+`, pipes, or redirects. When you can, issue it in the same turn as your next tool call rather than as a step of its own.
-- Set it when you receive the task, then again only when the work changes direction: from investigating to implementing, from implementing to verifying, or when you hit a blocker. Use present tense while working.
+- Set it as soon as you start, then again each time you move to a new step: reading a part of the code, changing a specific area, running tests or a build, fixing a failure, committing. Name the concrete thing, in present tense.
 - Before you finish, set it once more with `+"`--done`"+`, in past tense, so the card shows what you accomplished.
-- Updates are accepted at most once every 3 minutes; `+"`--done`"+` is always accepted. If one is refused, do not retry it: carry on and set the next one when the work changes again.
+- Updates are accepted at most once a minute; `+"`--done`"+` is always accepted. If one is refused, do not retry it: carry on and set the next one at your next step.
 - It is best-effort. If the command fails, carry on; never let it hold up your work.
 
-Examples: `+"`ao summary \"Inspecting the site before a redesign\"`"+`, `+"`ao summary \"Found 3 bugs in the frontend app\"`"+`, `+"`ao summary --done \"Redesigned the homepage and verified the preview\"`"+`.
+Examples: `+"`ao summary \"Reading the retry logic in the OpenAI provider\"`"+`, `+"`ao summary \"Adding backoff tests for failed provider calls\"`"+`, `+"`ao summary --done \"Added retries with backoff to every provider call, with tests\"`"+`.
 
 ## In-App Session Links
 

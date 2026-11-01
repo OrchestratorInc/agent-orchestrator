@@ -10,7 +10,7 @@ import (
 
 // CardSummaryInterval is the shortest gap between two card summaries of one
 // session. The final summary is never held back.
-const CardSummaryInterval = 3 * time.Minute
+const CardSummaryInterval = time.Minute
 
 // CardSummaryStore writes the card summary of a live session.
 type CardSummaryStore interface {
