@@ -1979,10 +1979,17 @@ func (w *Workspace) revParse(ctx context.Context, repo, ref string) (string, err
 }
 
 func (w *Workspace) validateBranch(ctx context.Context, repo, branch string) error {
-	if _, err := w.run(ctx, w.binary, checkRefFormatBranchArgs(repo, branch)...); err != nil {
-		return fmt.Errorf("%w: %q (%w)", ErrBranchInvalid, branch, err)
+	_, err := w.run(ctx, w.binary, checkRefFormatBranchArgs(repo, branch)...)
+	if err == nil {
+		return nil
 	}
-	return nil
+	// A probe git never finished (killed by a signal, or cut off by the
+	// caller's context) says nothing about the name (#5043).
+	var exitErr *exec.ExitError
+	if ctx.Err() != nil || (errors.As(err, &exitErr) && exitErr.ExitCode() == -1) {
+		return fmt.Errorf("gitworktree: branch name check for %q did not finish: %w", branch, errors.Join(err, ctx.Err()))
+	}
+	return fmt.Errorf("%w: %q (%w)", ErrBranchInvalid, branch, err)
 }
 
 // errNoBaseRef is an internal sentinel: every candidate base ref is missing.
