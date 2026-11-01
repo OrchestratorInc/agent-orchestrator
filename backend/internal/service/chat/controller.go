@@ -159,6 +159,7 @@ type Store interface {
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error
 	MarkCompacted(ctx context.Context, conversationID string, at time.Time) error
 	ResolveApproval(ctx context.Context, conversationID, requestID, detailJSON string, now time.Time) error
 	HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error)
@@ -307,6 +308,9 @@ type Controller struct {
 	// replacement erases the other half and turns a percentage meter into a bare
 	// token count.
 	usage domain.ConversationUsage
+	// turnlessPlanItemID keys the plan row of the agent's current run of work
+	// outside any turn; see planItemID. Cleared when an event names a turn.
+	turnlessPlanItemID string
 	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
 	// list a client renders does not reshuffle on every turn.
 	mcpServers            map[string]domain.ConversationMCPServer
@@ -3155,6 +3159,9 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 
 func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
+	if event.ProviderTurnID != "" {
+		c.turnlessPlanItemID = ""
+	}
 
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:
@@ -3348,18 +3355,25 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// which the column cannot. The compaction projection already sets this
 		// precedent, and the two cannot disagree because both are written from one
 		// event.
-		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
+		itemID := c.planItemID(event.ProviderTurnID)
+		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
-				ID:      c.newID(),
-				Kind:    domain.ActivityKindPlan,
-				Status:  planActivityStatus(*event.Plan),
-				Summary: event.Summary,
-				Detail:  planDetail(*event.Plan),
-				// Synthetic, because turn/plan/updated carries no item id: the plan is
-				// not an item. Keyed on the turn so a turn's plan is one row that
-				// updates, and prefixed so it can never collide with a provider id.
-				ProviderItemID: planItemID(event.ProviderTurnID),
-			}, now)
+				ID:             c.newID(),
+				Kind:           domain.ActivityKindPlan,
+				Status:         planActivityStatus(*event.Plan),
+				Summary:        event.Summary,
+				Detail:         planDetail(*event.Plan, now),
+				ProviderItemID: itemID,
+			}, now); err != nil {
+			return err
+		}
+		if !event.Plan.SpansTurns {
+			return nil
+		}
+		// Every earlier turn and run holds a copy of this same list. The daemon sees
+		// the writes in order, so it marks which copy is current on the active path
+		// rather than leaving each client to date the copies.
+		return c.store.ReconcileSpanningPlans(ctx, c.conversation.ID, now)
 
 	case ports.ChatEventModelRerouted:
 		// A correction to a claim AO has already made. The composer names the model it
@@ -3983,15 +3997,23 @@ func (c *Controller) handoffActive() bool {
 	return c.handoff != controllerHandoffNone
 }
 
-// planItemID keys a turn's plan activity. The provider sends no item id with a plan
+// planItemID keys a plan's timeline row. The provider sends no item id with a plan
 // update — a plan is not an item — so the key is synthesized from the turn, which
 // is what makes repeated updates rewrite one row. The prefix keeps it from ever
 // colliding with a provider item id.
-func planItemID(providerTurnID string) string {
-	if providerTurnID == "" {
-		return ""
+//
+// A plan with no turn comes from work the agent does on its own, outside any AO
+// turn. Each run of that work gets one row, so its revisions rewrite it. A run
+// ends when the agent next works on a turn; the provider reports nothing when
+// such work stops, so two runs with no turn between them share a row.
+func (c *Controller) planItemID(providerTurnID string) string {
+	if providerTurnID != "" {
+		return "ao-plan-" + providerTurnID
 	}
-	return "ao-plan-" + providerTurnID
+	if c.turnlessPlanItemID == "" {
+		c.turnlessPlanItemID = "ao-plan-run-" + c.newID()
+	}
+	return c.turnlessPlanItemID
 }
 
 // rerouteItemID keys a reroute notice the same way, for the same reason.
@@ -4020,7 +4042,11 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 // planDetail is the plan's typed payload. The steps go in as structure rather than
 // as rendered text: a client that wants checkboxes needs the per-step status, and a
 // client that wants prose can join them, but the reverse is not recoverable.
-func planDetail(plan domain.ConversationPlan) []byte {
+//
+// A cross-turn list's row also records when it was written. One run's revisions
+// rewrite one row in place, so neither its position nor its updated_at says
+// which copy of the list is newest; this does.
+func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	steps := make([]map[string]any, 0, len(plan.Steps))
 	for _, step := range plan.Steps {
 		steps = append(steps, map[string]any{"text": step.Text, "status": string(step.Status)})
@@ -4028,6 +4054,12 @@ func planDetail(plan domain.ConversationPlan) []byte {
 	detail := map[string]any{"event": "plan", "steps": steps}
 	if plan.Explanation != "" {
 		detail["explanation"] = plan.Explanation
+	}
+	// For a row no turn holds, the row is the only copy a client gets, so every
+	// row of a cross-turn list carries the flag.
+	if plan.SpansTurns {
+		detail["spansTurns"] = true
+		detail["writtenAt"] = writtenAt.UTC()
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {

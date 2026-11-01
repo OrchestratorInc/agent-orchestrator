@@ -2213,6 +2213,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
  *     the end of the turn and a second rendering of the same plan in the middle of
  *     it would just be the same list twice.
+ *   - a plan row the daemon marked superseded: an older copy of a list the agent
+ *     keeps across turns, which a later turn or run carries.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2230,6 +2232,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
+		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
@@ -5040,8 +5043,9 @@ function TimelineItem({
 			</FromAgent>
 		);
 	}
-	// A plan whose turn AO never correlated — one from before this controller
-	// started. The turn-level checklist cannot show it, so the row carries it.
+	// A plan no turn holds: work the agent did on its own after a turn ended, or a
+	// provider turn AO never correlated. The turn-level checklist cannot show it, so
+	// the row carries it. AO cannot tell when such work stops, so its step never spins.
 	if (item.activityKind === "plan") {
 		const plan = activityPlan(item);
 		return plan ? <TurnPlan plan={plan} /> : <ActivityRow activity={item} />;
@@ -5421,12 +5425,6 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
-	// A list the agent keeps across turns reaches every later turn as a copy of the
-	// same list. Only the latest copy is current, so only that turn shows it.
-	const currentSpanningPlanTurn = groups.findLast(
-		(group) => group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns,
-	)?.turnId;
-
 	for (const group of groups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
@@ -5435,8 +5433,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlanTurn;
-		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
+		// A later turn or run carries a newer copy of a list that spans turns.
+		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
 		group.blocked = group.items.some(

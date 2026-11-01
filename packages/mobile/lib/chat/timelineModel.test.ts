@@ -94,6 +94,33 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
 	});
 
+	// Claude keeps one task list across turns and can revise it after a turn ends,
+	// when the revision belongs to no turn. The daemon marks every older copy
+	// superseded, so only the newest shows.
+	it("hides plan rows the daemon marked superseded", () => {
+		const value = snapshot();
+		const row = (sequence: number, superseded: boolean): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", spansTurns: true, superseded, steps: [{ text: "Render", status: "completed" }] },
+		});
+		value.items.push(row(5, true), row(6, false));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-6"]);
+	});
+
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const value = snapshot();
+		const row = (sequence: number, text: string): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", steps: [{ text, status: "completed" }] },
+		});
+		value.items.push(row(5, "Read"), row(6, "Write"));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
+	});
+
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {
 		const value = snapshot();
 		value.turns[1].state = "queued";
@@ -325,7 +352,9 @@ describe("turn plans", () => {
 
 	it("shows a list the agent keeps across turns only on the latest turn that carries it", () => {
 		const value = snapshot();
-		value.turns[0].plan = { spansTurns: true, steps: list("in_progress") };
+		// The daemon marks every older copy superseded, a failed turn's included.
+		value.turns[0].state = "failed";
+		value.turns[0].plan = { spansTurns: true, superseded: true, steps: list("in_progress") };
 		value.turns[1].plan = { spansTurns: true, steps: list("completed") };
 		const groups = groupConversationByTurn(value);
 		expect(groups.find((group) => group.turnId === "t1")?.plan).toBeUndefined();

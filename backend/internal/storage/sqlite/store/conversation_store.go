@@ -1106,7 +1106,8 @@ func (s *Store) ActivateConversationBranch(
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
-		return nil
+		// The new path holds its own copies of a list that spans turns.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 }
 
@@ -2350,6 +2351,70 @@ func (s *Store) SetTurnPlan(
 		return false, fmt.Errorf("set turn plan for %s: %w", providerTurnID, err)
 	}
 	return rows > 0, nil
+}
+
+// ReconcileSpanningPlans marks which copy of a list that spans turns is current
+// on the conversation's active path: the copy written last. Every other copy on
+// the path is superseded. Copies on other branches keep their marks until their
+// branch is active again, when this runs for that path.
+func (s *Store) ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return reconcileSpanningPlans(ctx, q, conversationID, now)
+}
+
+func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID string, now time.Time) error {
+	copies, err := q.SelectSpanningPlanCopiesOnActivePath(ctx, conversationID)
+	if err != nil {
+		return fmt.Errorf("select spanning plan copies in %s: %w", conversationID, err)
+	}
+	current := -1
+	var currentAt time.Time
+	for index, planCopy := range copies {
+		at := spanningPlanWrittenAt(planCopy)
+		// Rows come in sequence order, so a tie goes to the later row.
+		if current < 0 || !at.Before(currentAt) {
+			current, currentAt = index, at
+		}
+	}
+	for index, planCopy := range copies {
+		superseded := index != current
+		if err := q.SetConversationPlanActivitySuperseded(ctx, gen.SetConversationPlanActivitySupersededParams{
+			Superseded: superseded,
+			UpdatedAt:  now,
+			ID:         planCopy.ID,
+		}); err != nil {
+			return fmt.Errorf("mark plan row %s: %w", planCopy.ID, err)
+		}
+		// A turn's plan and its plan row are one planCopy, written from one event.
+		if planCopy.TurnID.Valid {
+			if err := q.SetConversationTurnPlanSuperseded(ctx, gen.SetConversationTurnPlanSupersededParams{
+				Superseded: superseded,
+				ID:         planCopy.TurnID.String,
+			}); err != nil {
+				return fmt.Errorf("mark turn plan %s: %w", planCopy.TurnID.String, err)
+			}
+		}
+	}
+	return nil
+}
+
+// spanningPlanWrittenAt is when a planCopy's content was last written. The daemon
+// records it on each write. A planCopy from before that is dated as the upgrade
+// migration dates it: a turnless row was one revision, written when created,
+// and a turn's planCopy could change only until its turn ended. The row's updated_at
+// is no guide, since settling and recovery touch rows they do not rewrite.
+func spanningPlanWrittenAt(planCopy gen.SelectSpanningPlanCopiesOnActivePathRow) time.Time {
+	var detail struct {
+		WrittenAt time.Time `json:"writtenAt"`
+	}
+	if json.Unmarshal([]byte(planCopy.DetailJson), &detail) == nil && !detail.WrittenAt.IsZero() {
+		return detail.WrittenAt
+	}
+	if planCopy.TurnID.Valid && planCopy.TurnCompletedAt.Valid {
+		return planCopy.TurnCompletedAt.Time
+	}
+	return planCopy.CreatedAt
 }
 
 // MaxStreamedTextChars caps the provider prose stored for one activity.
@@ -3610,7 +3675,8 @@ func (s *Store) RollbackTurns(
 			}); err != nil {
 			return fmt.Errorf("fail rolled back approvals: %w", err)
 		}
-		return nil
+		// A rolled-back turn's copy of a list that spans turns is no longer current.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 	if err != nil {
 		return 0, err
