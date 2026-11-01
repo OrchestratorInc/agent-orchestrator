@@ -3314,6 +3314,7 @@
 	"remote.shareThisComputer": "自分のデバイスからのアクセスを許可",
 	"remote.shareThisComputerDescription": "AO アカウントにサインインしているデバイスから、このコンピューターのプロジェクトとセッションを開けます。トンネル経由の通信は Cloudflare が読み取れます。",
 	"remote.shareThisComputerOn": "デバイスにはこのコンピューターが {{name}} として表示されます。",
+	"remote.shareThisComputerUnlinked": "接続パスワードが変更されたため、デバイスから {{name}} を開けなくなりました。オンにすると再びアクセスできるようになります。",
 	"remote.shareThisComputerStarting": "リモートアクセスを開始しています…",
 	"remote.shareThisComputerNeedsCloudflared": "デバイスからこのコンピューターに接続するには cloudflared をインストールしてください。",
 	"remote.shareThisComputerTimeout": "リモートアクセスを開始できませんでした。もう一度お試しください。",

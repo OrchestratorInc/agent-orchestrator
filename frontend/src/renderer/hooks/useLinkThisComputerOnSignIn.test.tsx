@@ -29,7 +29,7 @@ beforeEach(() => {
 	vi.mocked(linkThisComputer).mockClear();
 	vi.mocked(apiClient.POST).mockClear();
 	fake.signedIn = false;
-	Object.assign(fake.status, { enabled: true, noPublicTunnel: false, accountLinked: false });
+	Object.assign(fake.status, { enabled: true, noPublicTunnel: false, accountLinked: false, url: "https://quick.trycloudflare.com:443" });
 });
 
 test("signing in links a computer Connect Mobile already serves", async () => {
@@ -37,7 +37,7 @@ test("signing in links a computer Connect Mobile already serves", async () => {
 	expect(linkThisComputer).not.toHaveBeenCalled();
 	fake.signedIn = true;
 	rerender();
-	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: undefined }));
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { url: undefined }));
 	// The connector is asked again once the listing landed, so it moves at once.
 	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/remote-access"));
 	rerender();
@@ -49,14 +49,36 @@ test("an AO Cloud without fixed addresses lists it at the tunnel's address", asy
 	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "", added: false });
 	fake.signedIn = true;
 	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
-	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: "https://quick.trycloudflare.com:443" }));
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { url: "https://quick.trycloudflare.com:443" }));
 });
 
 test("an account with no fixed address left lists it at the tunnel's address", async () => {
 	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (409).", 409));
 	fake.signedIn = true;
 	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
-	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: "https://quick.trycloudflare.com:443" }));
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { url: "https://quick.trycloudflare.com:443" }));
+});
+
+test("a computer the account lists without the token links again, and the connector is asked at once", async () => {
+	// A new connection password set while signed out, or from `ao remote-host`,
+	// took the token back, so the account's listing carries one the machine
+	// refuses: it stopped publishing its address and the account's devices
+	// lost it. Signing in links it again under the same listing.
+	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "h_this", added: false });
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { url: undefined }));
+	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/remote-access"));
+});
+
+test("nothing linked, the connector is not asked again", async () => {
+	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "", added: false });
+	Object.assign(fake.status, { url: "" });
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(1));
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(apiClient.POST).not.toHaveBeenCalled();
 });
 
 test("a computer an account already holds is left alone", async () => {

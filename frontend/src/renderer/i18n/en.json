@@ -3296,6 +3296,7 @@
 	"remote.shareThisComputer": "Allow access from your devices",
 	"remote.shareThisComputerDescription": "Devices signed in to your AO account can open this computer's projects and sessions. Cloudflare can read tunneled traffic.",
 	"remote.shareThisComputerOn": "Your devices see this computer as {{name}}.",
+	"remote.shareThisComputerUnlinked": "Your devices can no longer open {{name}}: its connection password changed. Turn this on to let them in again.",
 	"remote.shareThisComputerStarting": "Starting remote access…",
 	"remote.shareThisComputerNeedsCloudflared": "Install cloudflared so your devices can reach this computer.",
 	"remote.shareThisComputerTimeout": "Remote access did not start. Try again.",

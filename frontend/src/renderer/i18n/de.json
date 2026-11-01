@@ -3314,6 +3314,7 @@
 	"remote.shareThisComputer": "Zugriff von Ihren Geräten erlauben",
 	"remote.shareThisComputerDescription": "Geräte, die bei Ihrem AO-Konto angemeldet sind, können die Projekte und Sitzungen dieses Computers öffnen. Cloudflare kann getunnelten Datenverkehr lesen.",
 	"remote.shareThisComputerOn": "Ihre Geräte sehen diesen Computer als {{name}}.",
+	"remote.shareThisComputerUnlinked": "Ihre Geräte können {{name}} nicht mehr öffnen: Das Verbindungspasswort wurde geändert. Schalten Sie dies ein, um ihnen wieder Zugriff zu geben.",
 	"remote.shareThisComputerStarting": "Fernzugriff wird gestartet…",
 	"remote.shareThisComputerNeedsCloudflared": "Installieren Sie cloudflared, damit Ihre Geräte diesen Computer erreichen können.",
 	"remote.shareThisComputerTimeout": "Der Fernzugriff wurde nicht gestartet. Versuchen Sie es erneut.",

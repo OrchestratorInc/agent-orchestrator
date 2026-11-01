@@ -3296,6 +3296,7 @@
 	"remote.shareThisComputer": "允许从你的设备访问",
 	"remote.shareThisComputerDescription": "已登录你的 AO 账户的设备可以打开这台电脑上的项目和会话。Cloudflare 可以读取经隧道传输的流量。",
 	"remote.shareThisComputerOn": "你的设备将这台电脑显示为 {{name}}。",
+	"remote.shareThisComputerUnlinked": "连接密码已更改，你的设备无法再打开 {{name}}。打开此开关即可重新允许访问。",
 	"remote.shareThisComputerStarting": "正在启动远程访问…",
 	"remote.shareThisComputerNeedsCloudflared": "请安装 cloudflared，让你的设备可以访问这台电脑。",
 	"remote.shareThisComputerTimeout": "远程访问未能启动。请重试。",
