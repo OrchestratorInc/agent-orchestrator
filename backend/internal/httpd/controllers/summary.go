@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -12,13 +14,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// SummaryStore writes the card summary for a session.
-type SummaryStore interface {
-	UpdateSessionCardSummary(ctx context.Context, id domain.SessionID, summary string) (bool, error)
+// CardSummaries writes the card summary for a session, holding back updates
+// that come too soon after the previous one.
+type CardSummaries interface {
+	Update(ctx context.Context, id domain.SessionID, summary string, done bool) (found bool, retryAfter time.Duration, err error)
 }
 
 // SummaryController owns the /summary route.
-type SummaryController struct{ Store SummaryStore }
+type SummaryController struct{ Summaries CardSummaries }
 
 // Register mounts summary routes on r.
 func (c *SummaryController) Register(r chi.Router) {
@@ -29,15 +32,22 @@ func (c *SummaryController) Register(r chi.Router) {
 type UpdateSummaryRequest struct {
 	SessionID string `json:"sessionId"`
 	Summary   string `json:"summary" minLength:"1" maxLength:"200"`
+	// Done marks the agent's final summary, which is never held back.
+	Done bool `json:"done,omitempty"`
 }
 
 // UpdateSummaryResponse is the JSON response for POST /api/v1/summary.
 type UpdateSummaryResponse struct {
 	OK bool `json:"ok"`
+	// Updated is false when the summary was held back because the previous
+	// one is too recent.
+	Updated bool `json:"updated"`
+	// RetryAfterSeconds is how long until a held-back update would be accepted.
+	RetryAfterSeconds int `json:"retryAfterSeconds,omitempty"`
 }
 
 func (c *SummaryController) update(w http.ResponseWriter, r *http.Request) {
-	if c.Store == nil {
+	if c.Summaries == nil {
 		envelope.WriteJSON(w, http.StatusNotImplemented, map[string]any{"ok": false})
 		return
 	}
@@ -57,14 +67,18 @@ func (c *SummaryController) update(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "SUMMARY_INVALID", fmt.Sprintf("summary must be 1 to %d characters of plain text", domain.MaxCardSummaryRunes), nil)
 		return
 	}
-	updated, err := c.Store.UpdateSessionCardSummary(r.Context(), domain.SessionID(req.SessionID), summary)
+	found, retryAfter, err := c.Summaries.Update(r.Context(), domain.SessionID(req.SessionID), summary, req.Done)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	if !updated {
+	if !found {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Session not found", nil)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+	envelope.WriteJSON(w, http.StatusOK, UpdateSummaryResponse{
+		OK:                true,
+		Updated:           retryAfter == 0,
+		RetryAfterSeconds: int(math.Ceil(retryAfter.Seconds())),
+	})
 }

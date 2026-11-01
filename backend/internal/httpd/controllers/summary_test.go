@@ -8,29 +8,32 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 )
 
-type fakeSummaryStore struct {
-	id      domain.SessionID
-	summary string
-	calls   int
-	found   bool
+type fakeCardSummaries struct {
+	id         domain.SessionID
+	summary    string
+	done       bool
+	calls      int
+	found      bool
+	retryAfter time.Duration
 }
 
-func (f *fakeSummaryStore) UpdateSessionCardSummary(_ context.Context, id domain.SessionID, summary string) (bool, error) {
+func (f *fakeCardSummaries) Update(_ context.Context, id domain.SessionID, summary string, done bool) (bool, time.Duration, error) {
 	f.calls++
-	f.id, f.summary = id, summary
-	return f.found, nil
+	f.id, f.summary, f.done = id, summary, done
+	return f.found, f.retryAfter, nil
 }
 
 func TestSummaryAPI_StoresNormalizedTextAndEnforcesTheLimit(t *testing.T) {
-	store := &fakeSummaryStore{found: true}
+	store := &fakeCardSummaries{found: true}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{SummaryStore: store}, httpd.ControlDeps{}))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{CardSummaries: store}, httpd.ControlDeps{}))
 	defer srv.Close()
 
 	_, status, _ := doRequest(t, srv, "POST", "/api/v1/summary", `{"sessionId":"ao-7","summary":"  Fixing   the\nlogin redirect "}`)
@@ -48,6 +51,18 @@ func TestSummaryAPI_StoresNormalizedTextAndEnforcesTheLimit(t *testing.T) {
 	atLimit := strings.Repeat("修", domain.MaxCardSummaryRunes)
 	if _, status, _ := doRequest(t, srv, "POST", "/api/v1/summary", `{"sessionId":"ao-7","summary":"`+atLimit+`"}`); status != http.StatusOK || store.summary != atLimit {
 		t.Fatalf("summary at the limit rejected: status=%d", status)
+	}
+
+	store.retryAfter = 90*time.Second + time.Millisecond
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/summary", `{"sessionId":"ao-7","summary":"Adding tests"}`)
+	if status != http.StatusOK || !strings.Contains(string(body), `"updated":false`) || !strings.Contains(string(body), `"retryAfterSeconds":91`) {
+		t.Fatalf("held-back summary: status=%d body=%s", status, body)
+	}
+
+	store.retryAfter = 0
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/summary", `{"sessionId":"ao-7","summary":"Added tests","done":true}`)
+	if status != http.StatusOK || !store.done || !strings.Contains(string(body), `"updated":true`) {
+		t.Fatalf("final summary: status=%d done=%v body=%s", status, store.done, body)
 	}
 
 	store.found = false

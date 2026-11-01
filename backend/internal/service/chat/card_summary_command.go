@@ -7,23 +7,32 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// extractAOSummary returns the summary an `ao summary ...` shell command sets,
-// or "" when the command is something else or its text is not usable. It reads
-// the arguments the way a shell would, so quotes are removed and anything after
-// the first control operator (`&&`, `;`, `|`, a redirect) is not part of the
-// summary. The text then goes through the same normalizer as the CLI and the
-// HTTP endpoint.
-func extractAOSummary(commandInput string) string {
+// extractAOSummary returns the summary an `ao summary ...` shell command sets
+// and whether it carries --done, or "" when the command is something else or
+// its text is not usable. It reads the arguments the way a shell would, so
+// quotes are removed and anything after the first control operator (`&&`, `;`,
+// `|`, a redirect) is not part of the summary. The text then goes through the
+// same normalizer as the CLI and the HTTP endpoint.
+func extractAOSummary(commandInput string) (string, bool) {
 	cmd := strings.TrimSpace(commandInput)
 	rest, ok := strings.CutPrefix(cmd, "ao summary")
 	if !ok || rest == "" || !unicode.IsSpace(rune(rest[0])) {
-		return ""
+		return "", false
 	}
 	words, ok := shellWords(rest)
 	if !ok {
-		return ""
+		return "", false
 	}
-	return domain.NormalizeCardSummary(strings.Join(words, " "))
+	text := make([]string, 0, len(words))
+	done := false
+	for _, word := range words {
+		if word == "--done" {
+			done = true
+			continue
+		}
+		text = append(text, word)
+	}
+	return domain.NormalizeCardSummary(strings.Join(text, " ")), done
 }
 
 // shellWords splits the arguments of one simple command. It stops at the first
