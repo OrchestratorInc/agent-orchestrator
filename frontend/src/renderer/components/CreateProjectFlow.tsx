@@ -2141,7 +2141,7 @@ function ImportSourcePicker({
 		<button
 			key={key}
 			type="button"
-			className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
+			className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-card p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
 			aria-label={label}
 			disabled={disabled}
 			onClick={onClick}
