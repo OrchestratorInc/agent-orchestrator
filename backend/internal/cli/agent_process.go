@@ -7,10 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 const supervisedExitReportTimeout = 5 * time.Second
@@ -79,7 +82,12 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 }
 
 func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, reviewID, launchID string, argv []string) {
-	child := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec,forbidigo // interactive CLI child must inherit the caller's console.
+	child, err := supervisedProcessCommand(ctx, argv)
+	if err != nil {
+		_, _ = fmt.Fprintf(c.deps.Err, "ao: start managed agent: %v\n", err)
+		c.reportSupervisedExit(sessionID, reviewID, launchID)
+		return
+	}
 	child.Stdin = c.deps.In
 	child.Stdout = c.deps.Out
 	child.Stderr = c.deps.Err
@@ -99,6 +107,25 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 	signal.Stop(interrupts)
 
 	c.reportSupervisedExit(sessionID, reviewID, launchID)
+}
+
+func supervisedProcessCommand(ctx context.Context, argv []string) (*exec.Cmd, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("agent command is required")
+	}
+	var assignments []string
+	if runtime.GOOS == "windows" {
+		var ok bool
+		assignments, argv, ok = agentlaunch.SplitEnvAssignments(argv)
+		if !ok {
+			return nil, fmt.Errorf("agent command is required after env assignments")
+		}
+	}
+	child := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec,forbidigo // interactive CLI child must inherit the caller's console.
+	if len(assignments) > 0 {
+		child.Env = append(os.Environ(), assignments...)
+	}
+	return child, nil
 }
 
 func (c *commandContext) reportSupervisedExit(sessionID, reviewID, launchID string) {
