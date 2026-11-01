@@ -487,11 +487,12 @@ var (
 	// this state after path-safety checks, while real preserve failures remain
 	// fatal.
 	ErrWorkspaceStale = errors.New("workspace: stale managed worktree")
-	// ErrWorkspaceLocked reports a registered git worktree whose directory is
-	// missing but whose registration is locked (`git worktree lock`). `git
-	// worktree prune` deliberately leaves a locked registration in place even
-	// when its directory is gone, and `git worktree add`/`remove` at the same
-	// path then fail with an opaque git error. Callers must not treat this as
+	// ErrWorkspaceLocked reports a registered git worktree whose registration
+	// is locked (`git worktree lock`): one whose directory is missing on
+	// restore, or one that Destroy cannot remove. `git worktree prune`
+	// deliberately leaves a locked registration in place even when its
+	// directory is gone, and `git worktree add`/`remove` at the same path then
+	// fail with an opaque git error. Callers must not treat this as
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
@@ -501,6 +502,10 @@ var (
 	// leftover of one. The adapter never moves or deletes such a path; the
 	// user has to clear it before the workspace can be created.
 	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
+	// ErrWorkspaceUnsafePath reports a workspace path that is not a clean
+	// absolute path inside the adapter's managed root. Adapters never create,
+	// move or remove such a path, so teardown leaves it for the user.
+	ErrWorkspaceUnsafePath = errors.New("workspace: unsafe workspace path")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session

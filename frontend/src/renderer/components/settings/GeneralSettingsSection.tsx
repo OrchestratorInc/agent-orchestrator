@@ -21,7 +21,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -135,6 +135,41 @@ function VersionRefreshRow() {
 				</p>
 			) : null}
 		</div>
+	);
+}
+
+const SESSION_RETENTION_DAYS = [7, 30, 90];
+
+/**
+ * How long an archived session is kept before the daemon deletes it for good.
+ * Only sessions whose worktree is already cleaned up are deleted. Hidden on a
+ * daemon that predates the setting, where the choice would do nothing.
+ */
+function SessionRetentionRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateSessionRetention();
+	const days = settings?.sessionRetentionDays;
+	if (days === undefined) return null;
+	// A value set through the API outside the menu still shows as itself.
+	const choices = SESSION_RETENTION_DAYS.includes(days) || days === 0 ? SESSION_RETENTION_DAYS : [...SESSION_RETENTION_DAYS, days].sort((a, b) => a - b);
+	const options: SettingsOption<string>[] = [
+		{ value: "0", label: t("settings.sessionRetention.never") },
+		...choices.map((choice) => ({ value: String(choice), label: t("settings.sessionRetention.afterDays", { days: choice }) })),
+	];
+	return (
+		<SettingsRow
+			label={t("settings.sessionRetention.label")}
+			description={error ? <span role="alert" className="text-error">{error}</span> : t("settings.sessionRetention.description")}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.sessionRetention.label")}
+				value={String(days)}
+				options={options}
+				onChange={(next) => update(Number(next))}
+				disabled={isLoading || saving}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -311,6 +346,7 @@ export function GeneralSettingsSection({
 				<SessionInterfaceRow />
 				<DefaultEditorRow />
 				<VersionRefreshRow />
+				<SessionRetentionRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch

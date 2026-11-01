@@ -39,6 +39,8 @@ export interface Settings {
 	versionRefresh?: boolean;
 	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
 	computerUse?: boolean;
+	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
+	sessionRetentionDays?: number;
 }
 
 export function useSettings(hostId?: string, enabled = true) {
@@ -71,6 +73,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				versionRefresh: data?.versionRefresh ?? false,
 				// A daemon that predates the setting never adds the instruction.
 				computerUse: data?.computerUse ?? false,
+				// Absent on a daemon that predates retention, which keeps every session.
+				sessionRetentionDays: data?.sessionRetentionDays,
 			};
 		},
 	});
@@ -163,6 +167,26 @@ export function useUpdateVersionRefresh() {
 
 	return {
 		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateSessionRetention() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (days: number) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/session-retention", {
+				body: { days },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (days: number) => mutation.mutate(days),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

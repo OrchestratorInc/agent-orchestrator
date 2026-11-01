@@ -208,6 +208,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
+	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -457,6 +458,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersOpenSessionEditorResponse":                "OpenSessionEditorResponse",
 	"ControllersKillSessionResponse":                      "KillSessionResponse",
 	"ControllersRollbackSessionResponse":                  "RollbackSessionResponse",
+	"ControllersDeleteSessionResponse":                    "DeleteSessionResponse",
 	"ControllersSendSessionMessageRequest":                "SendSessionMessageRequest",
 	"ControllersSendSessionMessageResponse":               "SendSessionMessageResponse",
 	"ControllersDelegateTaskRequest":                      "DelegateTaskRequest",
@@ -1195,6 +1197,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/version-refresh", id: "updateVersionRefresh", tag: "settings",
 			summary: "Choose whether idle open sessions move to newly installed harness releases",
 			reqBody: controllers.UpdateVersionRefreshRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/session-retention", id: "updateSessionRetention", tag: "settings",
+			summary: "Choose how long archived sessions are kept before they are deleted",
+			reqBody: controllers.UpdateSessionRetentionRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
@@ -3652,6 +3665,21 @@ func sessionOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}", id: "deleteSession", tag: "sessions",
+			summary:    "Permanently delete a terminated session whose workspace is released",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.DeleteSessionQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.DeleteSessionResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				// Conflict: the session is live, its worktree is not cleaned up
+				// yet (or cleanup-first kept it), or its turns belong to a
+				// conversation that outlives it.
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 		{

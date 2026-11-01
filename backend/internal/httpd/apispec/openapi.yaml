@@ -5756,6 +5756,60 @@ paths:
       tags:
       - sessions
   /api/v1/sessions/{sessionId}:
+    delete:
+      operationId: deleteSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: When true, a worktree that is still on disk is cleaned up first,
+          the way session cleanup does it; a dirty or locked worktree is never forced
+          and refuses the delete.
+        in: query
+        name: cleanup
+        schema:
+          description: When true, a worktree that is still on disk is cleaned up first,
+            the way session cleanup does it; a dirty or locked worktree is never forced
+            and refuses the delete.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Permanently delete a terminated session whose workspace is released
+      tags:
+      - sessions
     get:
       operationId: getSession
       parameters:
@@ -12479,6 +12533,43 @@ paths:
       summary: Choose the default interface for new sessions
       tags:
       - settings
+  /api/v1/settings/session-retention:
+    patch:
+      operationId: updateSessionRetention
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRetentionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose how long archived sessions are kept before they are deleted
+      tags:
+      - settings
   /api/v1/settings/version-refresh:
     patch:
       operationId: updateVersionRefresh
@@ -14763,12 +14854,29 @@ components:
       type: object
     CleanupSkippedSession:
       properties:
+        code:
+          enum:
+          - dirty
+          - locked_worktree
+          - missing_repo
+          - archived_project_unresolvable
+          - permission_error
+          - cleanup_script_failed
+          - worktree_busy
+          - in_use_by_live_session
+          - shell_terminal_open
+          - cleanup_running
+          - attachment_preservation_failed
+          - outside_managed_root
+          - teardown_failed
+          type: string
         reason:
           type: string
         sessionId:
           type: string
       required:
       - sessionId
+      - code
       - reason
       type: object
     ClearNotificationsResponse:
@@ -15973,6 +16081,8 @@ components:
           - failed
           - not_applicable
           type: string
+        workspaceCleanupReportOnly:
+          type: boolean
       required:
       - id
       - kind
@@ -17152,6 +17262,16 @@ components:
       required:
       - ok
       - workerId
+      type: object
+    DeleteSessionResponse:
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     DesktopArtifactLocationResponse:
       properties:
@@ -20667,6 +20787,10 @@ components:
           type: object
         localEnabled:
           type: boolean
+        sessionRetentionDays:
+          description: Days an archived session whose worktree is released is kept
+            before the daemon deletes it permanently; 0 keeps it.
+          type: integer
         trackerIntakeEnabled:
           type: boolean
         versionRefresh:
@@ -20682,6 +20806,7 @@ components:
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
+      - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -21937,6 +22062,19 @@ components:
           type: string
       required:
       - defaultSessionMode
+      type: object
+    UpdateSessionRetentionRequest:
+      properties:
+        days:
+          description: Days to keep an archived session whose worktree is released;
+            0 keeps it.
+          maximum: 3650
+          minimum: 0
+          type:
+          - "null"
+          - integer
+      required:
+      - days
       type: object
     UpdateShellTerminalRequest:
       properties:
