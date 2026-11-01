@@ -22,4 +22,11 @@ var (
 	ErrThreadNotFound = errors.New("pr: review thread not found")
 	// ErrUnsupported is a mutation the PR's SCM provider cannot express.
 	ErrUnsupported = errors.New("pr: unsupported by provider")
+	// ErrInvalidAttachment is an attachment with no name or no content.
+	ErrInvalidAttachment = errors.New("pr: invalid attachment")
+	// ErrAttachmentTooLarge is an attachment over MaxAttachmentBytes.
+	ErrAttachmentTooLarge = errors.New("pr: attachment too large")
+	// ErrAttachmentTypeNotAllowed is an attachment whose declared type, file
+	// extension, or content is outside the allowlist or disagrees with the others.
+	ErrAttachmentTypeNotAllowed = errors.New("pr: attachment type not allowed")
 )

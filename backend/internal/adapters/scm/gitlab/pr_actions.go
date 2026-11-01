@@ -126,3 +126,60 @@ func mapMutationStatus(status int, err error) error {
 		return err
 	}
 }
+
+var _ ports.SCMAttachmentUploader = (*Provider)(nil)
+
+// UploadAttachment stores the file with GitLab's project uploads API. GitLab
+// serves it from the project and returns the markdown that embeds it in a
+// note, so no branch is involved. The returned URL is absolute on the PR's
+// web host.
+func (p *Provider) UploadAttachment(ctx context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
+	if p == nil || p.client == nil {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("gitlab scm: attachment provider is not configured")
+	}
+	if request.PR.Number <= 0 || strings.TrimSpace(request.PR.Repo.Owner) == "" || strings.TrimSpace(request.PR.Repo.Name) == "" {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("gitlab scm: invalid merge request reference")
+	}
+	if strings.TrimSpace(request.Name) == "" || len(request.Data) == 0 {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("gitlab scm: attachment name and content are required")
+	}
+	client, err := p.clientForRepoErr(request.PR.Repo)
+	if err != nil {
+		return ports.SCMAttachmentResult{}, err
+	}
+	path := fmt.Sprintf("/projects/%s/uploads", projectPath(request.PR.Repo.Owner, request.PR.Repo.Name))
+	resp, err := client.doPOSTFile(ctx, path, request.Name, request.ContentType, request.Data)
+	if err != nil {
+		return ports.SCMAttachmentResult{}, mapMutationStatus(resp.StatusCode, err)
+	}
+	var upload struct {
+		URL      string `json:"url"`
+		FullPath string `json:"full_path"`
+		Markdown string `json:"markdown"`
+	}
+	if err := json.Unmarshal(resp.Body, &upload); err != nil {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("gitlab scm: decode upload response: %w", err)
+	}
+	if strings.TrimSpace(upload.URL) == "" && strings.TrimSpace(upload.FullPath) == "" {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("gitlab scm: upload response missing url")
+	}
+	return ports.SCMAttachmentResult{URL: uploadURL(request.PR, upload.URL, upload.FullPath), Markdown: upload.Markdown}, nil
+}
+
+// uploadURL makes an upload's URL absolute. full_path is already rooted at
+// the instance; url is relative to the project, so it gets the project path.
+func uploadURL(ref ports.SCMPRRef, relative, fullPath string) string {
+	if u, err := url.Parse(fullPath); err == nil && u.IsAbs() {
+		return fullPath
+	}
+	base := "https://" + NormalizeHost(ref.Repo.Host)
+	if u, err := url.Parse(ref.URL); err == nil && u.Scheme != "" && u.Host != "" {
+		base = u.Scheme + "://" + u.Host
+	} else if IsGitLabDotCom(ref.Repo.Host) {
+		base = "https://gitlab.com"
+	}
+	if fullPath = strings.TrimSpace(fullPath); fullPath != "" {
+		return base + "/" + strings.TrimPrefix(fullPath, "/")
+	}
+	return base + "/" + ref.Repo.Owner + "/" + ref.Repo.Name + "/" + strings.TrimPrefix(relative, "/")
+}

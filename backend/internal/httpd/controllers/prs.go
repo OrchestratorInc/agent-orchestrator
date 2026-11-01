@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ func (c *PRsController) Register(r chi.Router) {
 	r.Post("/prs/{id}/resolve-comments", c.resolveComments)
 	r.Post("/prs/{id}/state", c.changeState)
 	r.Post("/prs/{id}/comments", c.postComment)
+	r.Post("/prs/{id}/attachments", c.uploadAttachment)
 }
 
 func (c *PRsController) merge(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +165,67 @@ func (c *PRsController) postComment(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, PostPRCommentResponse{OK: true, ID: res.ID, URL: res.URL, CreatedAt: res.CreatedAt})
 }
 
+// maxPRAttachmentDataChars is the base64 length of the largest allowed
+// attachment, so an oversized file is refused before it is decoded.
+var maxPRAttachmentDataChars = base64.StdEncoding.EncodedLen(prsvc.MaxAttachmentBytes)
+
+// maxPRAttachmentBodyBytes bounds the attachment upload body: the base64 file
+// plus headroom for the name, URL, and JSON envelope. Only this route reads a
+// body this large.
+var maxPRAttachmentBodyBytes = int64(maxPRAttachmentDataChars) + (1 << 20)
+
+func (c *PRsController) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/attachments")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPRAttachmentBodyBytes)
+	var in UploadPRAttachmentRequest
+	if err := decodeJSON(r, &in); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeAttachmentTooLarge(w, r)
+			return
+		}
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PRURL) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" || in.Data == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment name and data are required", nil)
+		return
+	}
+	if len(in.Data) > maxPRAttachmentDataChars {
+		writeAttachmentTooLarge(w, r)
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(in.Data)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment data must be standard base64", nil)
+		return
+	}
+	res, err := c.Svc.UploadAttachment(r.Context(), prsvc.AttachmentRequest{
+		PRID: prID, PRURL: in.PRURL, Name: in.Name, ContentType: in.ContentType, Data: data,
+	})
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UploadPRAttachmentResponse{OK: true, URL: res.URL, Name: res.Name, Markdown: res.Markdown})
+}
+
+func writeAttachmentTooLarge(w http.ResponseWriter, r *http.Request) {
+	envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TOO_LARGE", "Attachment exceeds 10 MiB", nil)
+}
+
 // writePRError maps PR sentinel errors to their locked HTTP envelopes,
 // falling back to 500 for unexpected failures.
 func writePRError(w http.ResponseWriter, r *http.Request, err error) {
@@ -173,6 +236,12 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ACTION", "Invalid PR action", nil)
 	case errors.Is(err, prsvc.ErrInvalidComment):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_COMMENT", "Invalid comment", nil)
+	case errors.Is(err, prsvc.ErrInvalidAttachment):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Invalid attachment", nil)
+	case errors.Is(err, prsvc.ErrAttachmentTooLarge):
+		writeAttachmentTooLarge(w, r)
+	case errors.Is(err, prsvc.ErrAttachmentTypeNotAllowed):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TYPE_NOT_ALLOWED", "Attachment type is not allowed", nil)
 	case errors.Is(err, prsvc.ErrUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "SCM_UNSUPPORTED", "The PR's SCM provider does not support this action", nil)
 	case errors.Is(err, prsvc.ErrInvalidTransition):

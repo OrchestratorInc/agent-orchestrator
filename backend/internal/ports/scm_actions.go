@@ -148,3 +148,27 @@ type SCMCommentResult struct {
 type SCMCommenter interface {
 	PostComment(ctx context.Context, request SCMCommentRequest) (SCMCommentResult, error)
 }
+
+// SCMAttachmentRequest uploads one comment attachment for PR. Name is already
+// sanitized to a safe file name and ContentType is the validated media type;
+// Data holds the decoded file bytes.
+type SCMAttachmentRequest struct {
+	PR          SCMPRRef
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
+// SCMAttachmentResult locates an uploaded attachment. URL is absolute.
+// Markdown is the provider's own embed snippet when it returns one; callers
+// build one from URL when it is empty.
+type SCMAttachmentResult struct {
+	URL      string
+	Markdown string
+}
+
+// SCMAttachmentUploader stores a file a pull-request comment can link to or
+// embed, through an SCM provider.
+type SCMAttachmentUploader interface {
+	UploadAttachment(ctx context.Context, request SCMAttachmentRequest) (SCMAttachmentResult, error)
+}

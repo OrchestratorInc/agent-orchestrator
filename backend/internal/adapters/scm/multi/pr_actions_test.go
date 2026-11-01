@@ -13,6 +13,12 @@ type actingProvider struct {
 	fakeProvider
 	stateRequests   []ports.SCMPRStateRequest
 	commentRequests []ports.SCMCommentRequest
+	attachRequests  []ports.SCMAttachmentRequest
+}
+
+func (a *actingProvider) UploadAttachment(_ context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
+	a.attachRequests = append(a.attachRequests, request)
+	return ports.SCMAttachmentResult{URL: "https://x/f.png"}, nil
 }
 
 func (a *actingProvider) ChangePullRequestState(_ context.Context, request ports.SCMPRStateRequest) error {
@@ -51,5 +57,14 @@ func TestPRActionsRouteByProviderAndReportUnsupported(t *testing.T) {
 	var nilProvider *Provider
 	if err := nilProvider.ChangePullRequestState(context.Background(), ports.SCMPRStateRequest{PR: ghRef}); !errors.Is(err, ports.ErrSCMUnsupported) {
 		t.Fatalf("nil provider error = %v, want unsupported", err)
+	}
+	if got, err := m.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: ghRef, Name: "f.png"}); err != nil || got.URL != "https://x/f.png" || len(gh.attachRequests) != 1 {
+		t.Fatalf("attachment = %#v, err = %v, calls = %d", got, err, len(gh.attachRequests))
+	}
+	if _, err := m.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: glRef, Name: "f.png"}); !errors.Is(err, ports.ErrSCMUnsupported) {
+		t.Fatalf("attachment error = %v, want unsupported", err)
+	}
+	if _, err := nilProvider.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: ghRef}); !errors.Is(err, ports.ErrSCMUnsupported) {
+		t.Fatalf("nil provider attachment error = %v, want unsupported", err)
 	}
 }

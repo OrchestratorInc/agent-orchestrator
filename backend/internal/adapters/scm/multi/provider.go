@@ -261,6 +261,23 @@ func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequ
 	return commenter.PostComment(ctx, request)
 }
 
+// UploadAttachment delegates to the sub-provider matching
+// request.PR.Repo.Provider when that provider supports comment attachments.
+func (m *Provider) UploadAttachment(ctx context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
+	if m == nil {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("%w: attachment provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMAttachmentResult{}, err
+	}
+	uploader, ok := p.(ports.SCMAttachmentUploader)
+	if !ok {
+		return ports.SCMAttachmentResult{}, fmt.Errorf("%w: attachments for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return uploader.UploadAttachment(ctx, request)
+}
+
 type credentialChecker interface {
 	SCMCredentialsAvailable(ctx context.Context) (bool, error)
 }

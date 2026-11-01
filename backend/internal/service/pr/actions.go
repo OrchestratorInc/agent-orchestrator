@@ -13,6 +13,7 @@ type ActionManager interface {
 	ResolveComments(ctx context.Context, prID string, commentIDs []string) (ResolveResult, error)
 	ChangeState(ctx context.Context, request StateRequest) (StateResult, error)
 	PostComment(ctx context.Context, request CommentRequest) (CommentResult, error)
+	UploadAttachment(ctx context.Context, request AttachmentRequest) (AttachmentResult, error)
 }
 
 // MergeRequest identifies the tracked PR and pins the mutation to the exact
@@ -69,4 +70,22 @@ type CommentResult struct {
 	ID        string
 	URL       string
 	CreatedAt time.Time
+}
+
+// AttachmentRequest uploads a file for a comment on the tracked PR. Data is
+// the decoded file; ContentType is what the client declared for it.
+type AttachmentRequest struct {
+	PRID        string
+	PRURL       string
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
+// AttachmentResult locates an uploaded attachment. Name is the sanitized file
+// name and Markdown embeds (images) or links (other files) URL.
+type AttachmentResult struct {
+	URL      string
+	Name     string
+	Markdown string
 }

@@ -4656,6 +4656,57 @@ paths:
       summary: Initialize a selected folder as a Git repository with an initial commit
       tags:
       - projects
+  /api/v1/prs/{id}/attachments:
+    post:
+      operationId: uploadPRAttachment
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPRAttachmentRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPRAttachmentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Upload a file a pull request comment can embed or link
+      tags:
+      - prs
   /api/v1/prs/{id}/comments:
     post:
       operationId: postPRComment
@@ -21802,6 +21853,41 @@ components:
       - path
       - content
       - expectedFileFingerprint
+      type: object
+    UploadPRAttachmentRequest:
+      properties:
+        contentType:
+          type: string
+        data:
+          minLength: 1
+          type: string
+        name:
+          minLength: 1
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - name
+      - contentType
+      - data
+      type: object
+    UploadPRAttachmentResponse:
+      properties:
+        markdown:
+          type: string
+        name:
+          type: string
+        ok:
+          type: boolean
+        url:
+          type: string
+      required:
+      - ok
+      - url
+      - name
+      - markdown
       type: object
     UsageHarnessResponse:
       properties:

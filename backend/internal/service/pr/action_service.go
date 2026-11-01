@@ -90,6 +90,7 @@ type ActionDeps struct {
 	Commenter     ports.SCMCommenter
 	CommentWriter CommentWriter
 	Refresher     ReviewRefresher
+	Uploader      ports.SCMAttachmentUploader
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -111,6 +112,7 @@ type ActionService struct {
 	commenter     ports.SCMCommenter
 	commentWriter CommentWriter
 	refresher     ReviewRefresher
+	uploader      ports.SCMAttachmentUploader
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -151,6 +153,7 @@ func NewActionService(deps ActionDeps) *ActionService {
 		commenter:     deps.Commenter,
 		commentWriter: deps.CommentWriter,
 		refresher:     deps.Refresher,
+		uploader:      deps.Uploader,
 	}
 }
 

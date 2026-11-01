@@ -29,6 +29,16 @@ type fakePRService struct {
 	commentErr    error
 	commentReq    prsvc.CommentRequest
 	commentCalls  int
+	attachResult  prsvc.AttachmentResult
+	attachErr     error
+	attachReq     prsvc.AttachmentRequest
+	attachCalls   int
+}
+
+func (f *fakePRService) UploadAttachment(_ context.Context, request prsvc.AttachmentRequest) (prsvc.AttachmentResult, error) {
+	f.attachCalls++
+	f.attachReq = request
+	return f.attachResult, f.attachErr
 }
 
 func (f *fakePRService) ChangeState(_ context.Context, request prsvc.StateRequest) (prsvc.StateResult, error) {

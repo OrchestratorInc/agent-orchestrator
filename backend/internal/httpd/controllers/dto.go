@@ -2698,6 +2698,29 @@ type PostPRCommentResponse struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// UploadPRAttachmentRequest is the body of POST /api/v1/prs/{id}/attachments.
+// Data is the file's bytes, standard base64-encoded without a "data:" prefix,
+// at most 10 MiB decoded. Allowed types are PNG, JPEG, GIF, WebP, MP4,
+// QuickTime, WebM, PDF, plain text/log, JSON, CSV, and ZIP; the declared type,
+// the name's extension, and the file's content must agree. An empty or
+// application/octet-stream contentType is taken from the extension.
+type UploadPRAttachmentRequest struct {
+	PRURL       string `json:"prUrl" minLength:"1"`
+	Name        string `json:"name" minLength:"1"`
+	ContentType string `json:"contentType"`
+	Data        string `json:"data" minLength:"1"`
+}
+
+// UploadPRAttachmentResponse is the body of POST /api/v1/prs/{id}/attachments
+// (200). Name is the sanitized file name; Markdown embeds the file (images) or
+// links it (everything else) in a comment.
+type UploadPRAttachmentResponse struct {
+	OK       bool   `json:"ok"`
+	URL      string `json:"url"`
+	Name     string `json:"name"`
+	Markdown string `json:"markdown"`
+}
+
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
 type ResolveCommentsRequest struct {
 	// CommentIDs accepts provider comment ids and review thread ids. Comment
