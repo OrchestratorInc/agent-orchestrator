@@ -2781,7 +2781,7 @@
 	"shell.usageProcessed": "処理済みトークン {{count}} 個",
 	"shell.usageProcessedCompact": "{{count}} 処理済み",
 	"shell.usageTokens": "{{count}} トークン",
-	"shell.memoryPanelTitle": "メモリ",
+	"shell.memoryPanelTitle": "診断",
 	"shell.memoryPanelDescription": "各セッションがこのマシンに与える負荷と、取るべきひとつの対処。",
 	"shell.memorySectionMachine": "マシン",
 	"shell.memoryState.fine": "余裕あり",

@@ -532,10 +532,12 @@ export function SessionMemoryPanel({
 	);
 }
 
+/** A group label starts on the column headers' edge. The first one sits right
+ * under the header rule, so it needs less space above. */
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
-			<td className="pb-2 pt-6 text-xs font-medium leading-4 text-settings-muted first:pt-0" colSpan={columnCount}>{label}</td>
+			<td className={cn("pb-1 pt-4 text-xs font-medium leading-4 text-settings-muted in-[tr:first-child]:pt-3", cell.name)} colSpan={columnCount}>{label}</td>
 		</tr>
 	);
 }
@@ -555,15 +557,19 @@ function ProcessCountCell({ count, isExpanded }: { count: number; isExpanded: bo
 function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
 	return (
 		<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums", cell.memory)}>
-			<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
-				{formatMemory(bytes)}
+			{/* The bar hangs under the number out of the flow, so the number sits
+			    on the row's centre line with the other cells instead of above it. */}
+			<span className="relative inline-block">
+				<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
+					{formatMemory(bytes)}
+				</span>
+				<span className="absolute right-0 top-full mt-1 block h-0.5 w-16 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
+					<span
+						className={cn("block h-full rounded-sm transition-[width] duration-500", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
+						style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
+					/>
+				</span>
 			</span>
-			<div className="ml-auto mt-1 h-0.5 w-16 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
-				<div
-					className={cn("h-full rounded-sm transition-[width] duration-500", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
-					style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
-				/>
-			</div>
 		</td>
 	);
 }
@@ -622,7 +628,7 @@ function SessionRow({
 					</div>
 				</td>
 				{/* A session's type is its role; its process lines carry their own. */}
-				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
+				<td className={cn("whitespace-nowrap py-2 align-middle text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{isOrchestratorSession(session) ? t("settings.models.orchestratorRole") : t("settings.models.workerRole")}
 				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
@@ -852,7 +858,7 @@ function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading,
 						</div>
 					</div>
 				</td>
-				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs text-passive", cell.type)} data-testid="session-memory-type">
+				<td className={cn("whitespace-nowrap py-2 align-middle text-xs text-passive", cell.type)} data-testid="session-memory-type">
 					{type}
 				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
@@ -950,7 +956,7 @@ function ProcessRow({ row }: { row: ProcessListRow }) {
 			<td className={cn("py-1 font-mono text-settings-muted", cell.process)}>
 				<span className="block truncate" title={row.commands.join("\n")}>{row.kind}</span>
 			</td>
-			<td className={cn("whitespace-nowrap py-1 font-mono text-passive", cell.type)} data-testid="session-memory-process-type">
+			<td className={cn("whitespace-nowrap py-1 text-passive", cell.type)} data-testid="session-memory-process-type">
 				<span title={t(`shell.memoryCategoryHint.${row.category}`)}>{t(`shell.memoryCategory.${row.category}`)}</span>
 			</td>
 			<td className={cn("whitespace-nowrap py-1 align-middle font-mono tabular-nums", cell.pid)}>
@@ -991,6 +997,10 @@ function CopyControl({
 }) {
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Beside a label the icon hangs off its left edge, out of the flow: a
+	// hidden icon that still took space pushed PIDs and "Copy report" off the
+	// edge their column header or section line up on.
+	const iconPlacement = children ? "absolute right-full mr-1" : undefined;
 	useEffect(() => () => {
 		if (timer.current !== null) clearTimeout(timer.current);
 	}, []);
@@ -1008,7 +1018,7 @@ function CopyControl({
 		<button
 			aria-label={copied ? copiedLabel : label}
 			className={cn(
-				"group inline-flex shrink-0 items-center gap-1 rounded-sm text-settings-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+				"group relative inline-flex shrink-0 items-center gap-1 rounded-sm text-settings-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 				className,
 			)}
 			data-testid={testId}
@@ -1020,12 +1030,13 @@ function CopyControl({
 		>
 			{children}
 			{copied ? (
-				<Check aria-hidden="true" className="size-icon-2xs text-success" />
+				<Check aria-hidden="true" className={cn("size-icon-2xs text-success", iconPlacement)} />
 			) : (
 				<Copy
 					aria-hidden="true"
 					className={cn(
 						"size-icon-2xs transition-opacity",
+						iconPlacement,
 						// Beside a PID the icon is a hint that fades in; on its own it
 						// is the whole control and must stay visible.
 						children ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" : undefined,

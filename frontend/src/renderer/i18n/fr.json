@@ -2827,7 +2827,7 @@
 	"shell.usageProcessed": "{{count}} jetons traités",
 	"shell.usageProcessedCompact": "{{count}} traités",
 	"shell.usageTokens": "{{count}} jetons",
-	"shell.memoryPanelTitle": "Mémoire",
+	"shell.memoryPanelTitle": "Diagnostic",
 	"shell.memoryPanelDescription": "Ce que chaque session coûte à cette machine, et la seule chose à faire.",
 	"shell.memorySectionMachine": "Machine",
 	"shell.memoryState.fine": "Ça va",

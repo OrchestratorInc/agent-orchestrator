@@ -2827,7 +2827,7 @@
 	"shell.usageProcessed": "{{count}} tokens processados",
 	"shell.usageProcessedCompact": "{{count}} processados",
 	"shell.usageTokens": "{{count}} tokens",
-	"shell.memoryPanelTitle": "Memória",
+	"shell.memoryPanelTitle": "Diagnóstico",
 	"shell.memoryPanelDescription": "O que cada sessão custa a esta máquina, e a única coisa a fazer.",
 	"shell.memorySectionMachine": "Máquina",
 	"shell.memoryState.fine": "Tranquilo",

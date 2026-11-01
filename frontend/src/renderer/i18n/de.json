@@ -2781,7 +2781,7 @@
 	"shell.usageProcessed": "{{count}} verarbeitete Token",
 	"shell.usageProcessedCompact": "{{count}} verarbeitet",
 	"shell.usageTokens": "{{count}} Tokens",
-	"shell.memoryPanelTitle": "Speicher",
+	"shell.memoryPanelTitle": "Diagnose",
 	"shell.memoryPanelDescription": "Was jede Sitzung diesen Rechner kostet, und was dagegen zu tun ist.",
 	"shell.memorySectionMachine": "Rechner",
 	"shell.memoryState.fine": "In Ordnung",

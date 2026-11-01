@@ -2220,7 +2220,7 @@
 	"shell.usageProcessed": "{{count}} tokens processed",
 	"shell.usageProcessedCompact": "{{count}} processed",
 	"shell.usageTokens": "{{count}} tokens",
-	"shell.memoryPanelTitle": "Memory",
+	"shell.memoryPanelTitle": "Diagnostics",
 	"shell.memoryPanelDescription": "What each session costs this machine, and the one thing to do about it.",
 	"shell.memorySectionMachine": "Machine",
 	"shell.memoryState.fine": "Fine",

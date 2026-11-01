@@ -2292,7 +2292,7 @@
 	"shell.usageProcessed": "Обработано токенов: {{count}}",
 	"shell.usageProcessedCompact": "Обработано: {{count}}",
 	"shell.usageTokens": "Токенов: {{count}}",
-	"shell.memoryPanelTitle": "Память",
+	"shell.memoryPanelTitle": "Диагностика",
 	"shell.memoryPanelDescription": "Сколько ресурсов компьютера использует каждая сессия и что с этим сделать.",
 	"shell.memorySectionMachine": "Компьютер",
 	"shell.memoryState.fine": "Достаточно",
