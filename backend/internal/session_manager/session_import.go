@@ -86,8 +86,15 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR"}[rec.Harness]
 	if key == "" {
+		return
+	}
+	if rec.Harness == domain.HarnessKimchi {
+		// Kimchi ignores this override. Keep the import's actual source root as
+		// a launch assertion: its ACP binding rejects an incompatible child HOME
+		// rather than accepting an account home that only links the transcript.
+		setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
 		return
 	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
@@ -216,6 +223,14 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Kimi publishes a per-session lock file holding the live writer's pid;
 		// its transcript is append-open-close so it is never held open for lsof.
 		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
+	case domain.HarnessKimchi:
+		// Kimchi is a Pi fork with the same lock-less posture: no writer lock or
+		// live-session registry, its transcript is append-open-close so lsof
+		// never sees a live writer, and kimchi-acp's session/load does not refuse
+		// a second writer. An imported Kimchi chat still open in the Kimchi
+		// CLI/TUI is therefore not detected; see the Pi note above. AO resumes
+		// from its own relocated copy of the transcript, not the original.
+		return false
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
 		// per-session lock or live-session registry, and its transcript path is a

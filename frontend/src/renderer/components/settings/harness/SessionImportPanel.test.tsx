@@ -16,6 +16,7 @@ it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
 });
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
