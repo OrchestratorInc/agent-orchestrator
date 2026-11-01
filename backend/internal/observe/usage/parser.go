@@ -116,6 +116,11 @@ type stableTailStateV1 struct {
 type claudeParserStateV1 struct {
 	ModelID  string `json:"model_id,omitempty"`
 	Provider string `json:"billing_provider,omitempty"`
+	// Unfinished is the latest record of a message that no record has ended
+	// yet. Claude writes stop_reason on the record that ends a message, and a
+	// turn the user interrupts never gets one. The message is counted from this
+	// record once the next user record, or another message, shows it is over.
+	Unfinished *claudeTranscriptRecord `json:"unfinished,omitempty"`
 	// LegacyProvider is the retired "provider" key. A build before #2928 filled
 	// it with the harness name — "claude-code", "openai" — not a billing route,
 	// so decoding must accept it (DisallowUnknownFields) and must never read
@@ -294,6 +299,12 @@ type claudeNativeUsage struct {
 
 func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state *claudeParserStateV1, result *parseResult) {
 	eventsByKey := make(map[string]domain.ModelUsageEvent)
+	countUnfinished := func() {
+		if held := state.Unfinished; held != nil {
+			state.Unfinished = nil
+			emitClaudeEvent(source, *held, 0, state, result, eventsByKey)
+		}
+	}
 	for _, record := range records {
 		var native claudeTranscriptRecord
 		if err := json.Unmarshal(record.Data, &native); err != nil {
@@ -308,73 +319,105 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 		if nativeProvider != "" {
 			state.Provider = nativeProvider
 		}
-		if native.Type != "assistant" || !jsonValueReported(native.Message.Usage) ||
-			native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
-			continue
-		}
 		if source.Source.Kind == domain.UsageSourceClaudeMain && native.IsSidechain {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(native.Message.Model), "<synthetic>") {
+		if native.Type == "user" {
+			countUnfinished()
 			continue
 		}
-		var usage claudeNativeUsage
-		if err := json.Unmarshal(native.Message.Usage, &usage); err != nil {
-			recordMalformed(result)
+		if native.Type != "assistant" {
 			continue
 		}
-		var creation5m, creation1h *int64
-		if usage.CacheCreation != nil {
-			creation5m = int64Ptr(usage.CacheCreation.Ephemeral5mInputTokens)
-			creation1h = int64Ptr(usage.CacheCreation.Ephemeral1hInputTokens)
+		if held := state.Unfinished; held != nil && held.Message.ID != native.Message.ID {
+			countUnfinished()
 		}
-		tokens, ok := normalizeAnthropicUsage(
-			usage.InputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-			usage.OutputTokens,
-			creation5m,
-			creation1h,
-		)
-		if !ok {
-			recordMalformed(result)
+		if !jsonValueReported(native.Message.Usage) ||
+			strings.EqualFold(strings.TrimSpace(native.Message.Model), "<synthetic>") {
 			continue
 		}
-		model := firstNonEmpty(native.Message.Model, state.ModelID, source.InitialModelID, "unknown")
-		state.ModelID = model
-		billingProvider := pricing.TrustedClaudeBillingProvider(firstNonEmpty(
-			nativeProvider, state.Provider, source.ProviderHint,
-		))
-		keyID := firstNonEmpty(native.Message.ID, native.UUID, strconv.FormatInt(record.Offset, 10))
-		event := domain.ModelUsageEvent{
-			ProviderID:            domain.UsageProviderAnthropic,
-			BillingProviderID:     billingProvider,
-			BillingProviderSource: domain.ObservedBillingProviderSource(billingProvider),
-			ModelID:               model,
-			MeasurementKind:       domain.UsageMeasurementNativeReported,
-			Tokens:                tokens,
-			ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
-			ServiceTier:           reportedServiceTier(jsonString(usage.Speed)),
-			CreatedAt:             parseUsageTimestamp(native.Timestamp),
-			SourceEventKey: stableSourceEventKey(
-				"claude",
-				source.NativeRootID,
-				string(source.Source.Kind),
-				source.Source.SubagentID,
-				source.Source.NativeSessionID,
-				keyID,
-			),
-		}
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+		if native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
+			// A record without an id cannot be matched to the record that ends
+			// its message, so it is left to that record, as before.
+			if strings.TrimSpace(native.Message.ID) != "" {
+				held := native
+				state.Unfinished = &held
 			}
 			continue
 		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		state.Unfinished = nil
+		emitClaudeEvent(source, native, record.Offset, state, result, eventsByKey)
 	}
+}
+
+// emitClaudeEvent counts one Claude message from the record that settles it.
+func emitClaudeEvent(
+	source domain.UsageSourceContext,
+	native claudeTranscriptRecord,
+	offset int64,
+	state *claudeParserStateV1,
+	result *parseResult,
+	eventsByKey map[string]domain.ModelUsageEvent,
+) {
+	var usage claudeNativeUsage
+	if err := json.Unmarshal(native.Message.Usage, &usage); err != nil {
+		recordMalformed(result)
+		return
+	}
+	var creation5m, creation1h *int64
+	if usage.CacheCreation != nil {
+		creation5m = int64Ptr(usage.CacheCreation.Ephemeral5mInputTokens)
+		creation1h = int64Ptr(usage.CacheCreation.Ephemeral1hInputTokens)
+	}
+	tokens, ok := normalizeAnthropicUsage(
+		usage.InputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheReadInputTokens,
+		usage.OutputTokens,
+		creation5m,
+		creation1h,
+	)
+	if !ok {
+		recordMalformed(result)
+		return
+	}
+	model := firstNonEmpty(native.Message.Model, state.ModelID, source.InitialModelID, "unknown")
+	state.ModelID = model
+	nativeProvider := pricing.TrustedClaudeBillingProvider(
+		firstNonEmpty(native.Message.Provider, native.Provider))
+	billingProvider := pricing.TrustedClaudeBillingProvider(firstNonEmpty(
+		nativeProvider, state.Provider, source.ProviderHint,
+	))
+	keyID := firstNonEmpty(native.Message.ID, native.UUID, strconv.FormatInt(offset, 10))
+	event := domain.ModelUsageEvent{
+		ProviderID:            domain.UsageProviderAnthropic,
+		BillingProviderID:     billingProvider,
+		BillingProviderSource: domain.ObservedBillingProviderSource(billingProvider),
+		ModelID:               model,
+		MeasurementKind:       domain.UsageMeasurementNativeReported,
+		Tokens:                tokens,
+		ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
+		ServiceTier:           reportedServiceTier(jsonString(usage.Speed)),
+		ProviderMessageID:     strings.TrimSpace(native.Message.ID),
+		CreatedAt:             parseUsageTimestamp(native.Timestamp),
+		SourceEventKey: stableSourceEventKey(
+			"claude",
+			source.NativeRootID,
+			string(source.Source.Kind),
+			source.Source.SubagentID,
+			source.Source.NativeSessionID,
+			keyID,
+		),
+	}
+	if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
+		if !usageEventsEqual(existing, event) {
+			result.Cursor.AnomalyCount++
+			result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+		}
+		return
+	}
+	eventsByKey[event.SourceEventKey] = event
+	result.Events = append(result.Events, event)
 }
 
 // canonicalBillingProvider normalizes one observed routing fact into a catalog

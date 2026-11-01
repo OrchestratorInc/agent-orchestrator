@@ -207,6 +207,11 @@ type UsageEventCosts struct {
 // standard rates. It is a column rather than a member of ProviderUsageJSON
 // because Codex reports it on a different line, and a stored usage object is
 // immutable: adding it would make every replay of an older event a conflict.
+//
+// ProviderMessageID is the provider's id for the billed response, such as
+// Anthropic's msg_... id. A response is stored once across every source, so a
+// forked transcript's copy of its parent's history is not billed again. It is
+// empty when the transcript names no id.
 type ModelUsageEvent struct {
 	ProviderID            UsageProviderID
 	BillingProviderID     string
@@ -216,6 +221,7 @@ type ModelUsageEvent struct {
 	Tokens                UsageTokenMetrics
 	ProviderUsageJSON     string
 	ServiceTier           string
+	ProviderMessageID     string
 	Costs                 UsageEventCosts
 	CreatedAt             time.Time
 	SourceEventKey        string

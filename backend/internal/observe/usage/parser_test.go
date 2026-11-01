@@ -47,6 +47,46 @@ func TestParseClaudeFinalUsageAndSkipMainSidechain(t *testing.T) {
 	}
 }
 
+// Break caught: a message the user interrupted, which no record ends with
+// stop_reason, dropped from usage; or counted from an early record, or twice.
+func TestParseClaudeCountsAMessageNoRecordEnded(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	assistant := func(id, stop string, output int) string {
+		reason := "null"
+		if stop != "" {
+			reason = `"` + stop + `"`
+		}
+		return fmt.Sprintf(`{"type":"assistant","timestamp":"2026-07-01T10:00:00Z","message":{"id":%q,"model":"claude-x","stop_reason":%s,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%d}}}`, id, reason, output)
+	}
+	source := usageSource(domain.UsageSourceClaudeMain)
+	first := parseRecords(source, []jsonlRecord{
+		{Offset: 0, Data: []byte(assistant("msg-a", "", 1))},
+		{Offset: 100, Data: []byte(assistant("msg-a", "", 7))},
+	}, 200, now)
+	if first.err != nil || len(first.Events) != 0 {
+		t.Fatalf("first chunk = %d events, err %v; want none while msg-a may still end", len(first.Events), first.err)
+	}
+
+	source.Source.ParserStateJSON = first.Cursor.ParserStateJSON
+	source.Source.ByteOffset = first.Cursor.ByteOffset
+	second := parseRecords(source, []jsonlRecord{
+		{Offset: 200, Data: []byte(`{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"}}`)},
+		{Offset: 300, Data: []byte(assistant("msg-b", "", 3))},
+		{Offset: 400, Data: []byte(assistant("msg-c", "end_turn", 5))},
+		{Offset: 500, Data: []byte(assistant("msg-c", "end_turn", 5))},
+	}, 600, now)
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	var got []string
+	for _, event := range second.Events {
+		got = append(got, fmt.Sprintf("%s:%d", event.ProviderMessageID, tokenValue(event.Tokens.OutputTokens)))
+	}
+	if strings.Join(got, ",") != "msg-a:7,msg-b:3,msg-c:5" {
+		t.Fatalf("events = %v, want msg-a from its latest record, then msg-b and msg-c once each", got)
+	}
+}
+
 // The stored object is the CLI's usage record verbatim, so a field Anthropic
 // adds after this code was written still reaches pricing and auditing.
 func TestParseClaudeRetainsUnknownProviderUsageFieldsWithinTheBound(t *testing.T) {

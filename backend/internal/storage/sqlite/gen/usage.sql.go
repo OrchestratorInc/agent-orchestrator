@@ -550,11 +550,12 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json, service_tier,
+    provider_usage_json, service_tier, provider_message_id,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 RETURNING id
 `
 
@@ -572,6 +573,7 @@ type InsertModelUsageEventParams struct {
 	OutputTokens          sql.NullInt64
 	ProviderUsageJson     sql.NullString
 	ServiceTier           sql.NullString
+	ProviderMessageID     sql.NullString
 	InputCostNanos        sql.NullInt64
 	CachedInputCostNanos  sql.NullInt64
 	OutputCostNanos       sql.NullInt64
@@ -581,6 +583,9 @@ type InsertModelUsageEventParams struct {
 	CreatedAt             sql.NullTime
 }
 
+// The caller has already found no row under this binding and key, so the only
+// conflict left is a provider message another source already stored: a copy,
+// which inserts nothing and returns no row.
 func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsageEventParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, insertModelUsageEvent,
 		arg.BindingID,
@@ -596,6 +601,7 @@ func (q *Queries) InsertModelUsageEvent(ctx context.Context, arg InsertModelUsag
 		arg.OutputTokens,
 		arg.ProviderUsageJson,
 		arg.ServiceTier,
+		arg.ProviderMessageID,
 		arg.InputCostNanos,
 		arg.CachedInputCostNanos,
 		arg.OutputCostNanos,
@@ -940,6 +946,38 @@ ORDER BY mue.usage_source_id
 // full usage_source index once sqlite_stat1 existed.
 func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	rows, err := q.db.QueryContext(ctx, listLegacyUsageSourceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var usage_source_id int64
+		if err := rows.Scan(&usage_source_id); err != nil {
+			return nil, err
+		}
+		items = append(items, usage_source_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUntimedUsageSourceIDs = `-- name: ListUntimedUsageSourceIDs :many
+SELECT DISTINCT usage_source_id
+FROM model_usage_events
+WHERE created_at IS NULL
+ORDER BY usage_source_id
+`
+
+// Events stored before the parser read record times. The usage report windows
+// by created_at, so these are invisible to it until a reread fills the time.
+func (q *Queries) ListUntimedUsageSourceIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listUntimedUsageSourceIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1532,6 +1570,28 @@ type RehomeOpenUsageEventToReplacementSourceParams struct {
 // that is a fact about how it was observed rather than a stale pointer.
 func (q *Queries) RehomeOpenUsageEventToReplacementSource(ctx context.Context, arg RehomeOpenUsageEventToReplacementSourceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, rehomeOpenUsageEventToReplacementSource, arg.UsageSourceID, arg.ID, arg.ExpectedUsageSourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setUntimedUsageEventTime = `-- name: SetUntimedUsageEventTime :execrows
+UPDATE model_usage_events
+SET created_at = ?1
+WHERE binding_id = ?2
+  AND source_event_key = ?3
+  AND created_at IS NULL
+`
+
+type SetUntimedUsageEventTimeParams struct {
+	CreatedAt      sql.NullTime
+	BindingID      int64
+	SourceEventKey string
+}
+
+func (q *Queries) SetUntimedUsageEventTime(ctx context.Context, arg SetUntimedUsageEventTimeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setUntimedUsageEventTime, arg.CreatedAt, arg.BindingID, arg.SourceEventKey)
 	if err != nil {
 		return 0, err
 	}

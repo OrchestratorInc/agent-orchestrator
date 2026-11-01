@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,7 +98,22 @@ type upstreamRecord struct {
 	// FastMultiple is provider_specific_entry.fast: a fast mode billed as a
 	// multiple of every standard rate.
 	FastMultiple *json.Number
+	// LongContext holds the rates published for prompts over a size, keyed by
+	// that size in thousands of tokens: input_cost_per_token_above_272k_tokens
+	// is LongContext[272].
+	LongContext map[int64]longContextRates
 }
+
+// longContextRates are a model's rates for a prompt over one size, and each
+// service tier's rates over that size.
+type longContextRates struct {
+	upstreamRates
+	Tiers map[string]upstreamRates
+}
+
+// longContextInputField matches the input rate that announces a size, such as
+// input_cost_per_token_above_272k_tokens.
+var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)k_tokens$`)
 
 // suffixTiers are the service tiers LiteLLM prices with their own rate fields.
 var suffixTiers = []string{pricing.ServiceTierPriority, pricing.ServiceTierFlex, pricing.ServiceTierUltrafast}
@@ -130,6 +146,37 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 			}
 			u.Tiers[tier] = rates
 		}
+	}
+	for name := range fields {
+		match := longContextInputField.FindStringSubmatch(name)
+		if match == nil {
+			continue
+		}
+		aboveK, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil || aboveK <= 0 {
+			return fmt.Errorf("%s: size out of range", name)
+		}
+		suffix := "_above_" + match[1] + "k_tokens"
+		long := longContextRates{}
+		if long.upstreamRates, err = decodeRates(fields, suffix); err != nil {
+			return err
+		}
+		for _, tier := range suffixTiers {
+			rates, err := decodeRates(fields, suffix+"_"+tier)
+			if err != nil {
+				return err
+			}
+			if rates != (upstreamRates{}) {
+				if long.Tiers == nil {
+					long.Tiers = make(map[string]upstreamRates, len(suffixTiers))
+				}
+				long.Tiers[tier] = rates
+			}
+		}
+		if u.LongContext == nil {
+			u.LongContext = make(map[int64]longContextRates)
+		}
+		u.LongContext[aboveK] = long
 	}
 	// The entry also carries values that are not rates, such as a Bedrock
 	// invocation schema, so only its fast member is read.
@@ -304,6 +351,9 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
 		}
 		rows[modelID] = r
+		if err := addLongContextRows(rows, modelID, record); err != nil {
+			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+		}
 		for rowID, rowRates := range rows {
 			if previous, exists := modelsByProvider[providerID][rowID]; exists && !equalRates(previous, rowRates) {
 				return generatedCatalog{}, fmt.Errorf("%s/%s: conflicting duplicate rates", providerID, rowID)
@@ -387,6 +437,42 @@ func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map
 		}
 	}
 	return rows, nil
+}
+
+// addLongContextRows prices the sizes over which one record bills a prompt at
+// other rates, keyed by pricing.LongContextModelID. Each extends a row already
+// in rows: the standard row, or a service tier's. Like a tier, a size ships
+// only when it carries every rate the row it extends carries; leaving it out
+// prices that request at the base row instead of mixing two sets of rates.
+func addLongContextRows(rows map[string]rates, modelID string, record upstreamRecord) error {
+	for aboveK, long := range record.LongContext {
+		extend := func(rowID string, upstream upstreamRates) error {
+			base, ok := rows[rowID]
+			if !ok || upstream.Input == nil || upstream.Output == nil {
+				return nil
+			}
+			r, err := normalizeRates(upstream)
+			if err != nil {
+				return fmt.Errorf("above %dk: %w", aboveK, err)
+			}
+			if (base.CacheReadUSDPerToken != nil && r.CacheReadUSDPerToken == nil) ||
+				(base.CacheWriteUSDPerToken != nil && r.CacheWriteUSDPerToken == nil) ||
+				(base.CacheWrite1HUSDPerToken != nil && r.CacheWrite1HUSDPerToken == nil) {
+				return nil
+			}
+			rows[pricing.LongContextModelID(rowID, aboveK)] = r
+			return nil
+		}
+		if err := extend(modelID, long.upstreamRates); err != nil {
+			return err
+		}
+		for tier, upstream := range long.Tiers {
+			if err := extend(pricing.TierModelID(modelID, tier), upstream); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func scaleRates(r rates, multiple string) (rates, error) {

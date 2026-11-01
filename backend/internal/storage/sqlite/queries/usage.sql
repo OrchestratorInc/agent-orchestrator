@@ -357,15 +357,19 @@ FROM model_usage_events event
 WHERE event.binding_id = ? AND event.source_event_key = ?;
 
 -- name: InsertModelUsageEvent :one
+-- The caller has already found no row under this binding and key, so the only
+-- conflict left is a provider message another source already stored: a copy,
+-- which inserts nothing and returns no row.
 INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json, service_tier,
+    provider_usage_json, service_tier, provider_message_id,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 RETURNING id;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
@@ -500,6 +504,21 @@ FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
 ORDER BY mue.usage_source_id;
+
+-- name: ListUntimedUsageSourceIDs :many
+-- Events stored before the parser read record times. The usage report windows
+-- by created_at, so these are invisible to it until a reread fills the time.
+SELECT DISTINCT usage_source_id
+FROM model_usage_events
+WHERE created_at IS NULL
+ORDER BY usage_source_id;
+
+-- name: SetUntimedUsageEventTime :execrows
+UPDATE model_usage_events
+SET created_at = sqlc.arg(created_at)
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND created_at IS NULL;
 
 -- name: ListLegacyUsageEvents :many
 SELECT

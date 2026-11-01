@@ -463,6 +463,67 @@ func optionalRateString(value *string) string {
 // Break caught: a priority or fast request priced at the standard rate, a tier
 // row whose missing cache rate was filled from the standard row, or tier rates
 // shipped as new rate fields, which installed daemons decode strictly and reject.
+// Break caught: long-context rates dropped from the catalog, a tier's
+// long-context rates not tied to the tier, or an incomplete size shipped with a
+// gap the base rate would silently fill.
+func TestSyncEmitsCompleteLongContextRows(t *testing.T) {
+	root := t.TempDir()
+	upstream := []byte(`{
+  "gpt-test": {
+    "litellm_provider": "openai",
+    "mode": "responses",
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 1e-5,
+    "cache_read_input_token_cost": 2e-7,
+    "input_cost_per_token_priority": 4e-6,
+    "output_cost_per_token_priority": 2e-5,
+    "cache_read_input_token_cost_priority": 4e-7,
+    "input_cost_per_token_above_272k_tokens": 4e-6,
+    "output_cost_per_token_above_272k_tokens": 1.5e-5,
+    "cache_read_input_token_cost_above_272k_tokens": 4e-7,
+    "input_cost_per_token_above_272k_tokens_priority": 8e-6,
+    "output_cost_per_token_above_272k_tokens_priority": 3e-5,
+    "cache_read_input_token_cost_above_272k_tokens_priority": 8e-7
+  },
+  "gpt-gap": {
+    "litellm_provider": "openai",
+    "mode": "responses",
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 1e-5,
+    "cache_read_input_token_cost": 2e-7,
+    "input_cost_per_token_above_272k_tokens": 4e-6,
+    "output_cost_per_token_above_272k_tokens": 1.5e-5
+  },
+  "glm-test": {"litellm_provider": "zai", "mode": "chat", "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+  "claude-test": {"litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
+}`)
+	if _, err := Sync(root, upstream, testSource("long-context")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(root); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	openai := readProviderBlob(t, root, "openai")
+	var ids []string
+	for _, model := range openai.Models {
+		ids = append(ids, model.ModelID)
+	}
+	want := "gpt-gap,gpt-test,gpt-test#above272k,gpt-test#priority,gpt-test#priority#above272k"
+	if got := strings.Join(ids, ","); got != want {
+		t.Fatalf("openai models = %s, want %s", got, want)
+	}
+	long := blobRates(t, openai, "gpt-test#above272k")
+	if long.UncachedInputUSDPerToken != "0.000004" || long.OutputUSDPerToken != "0.000015" ||
+		optionalRateString(long.CacheReadUSDPerToken) != "0.0000004" {
+		t.Fatalf("long-context rates = %+v", long)
+	}
+	priority := blobRates(t, openai, "gpt-test#priority#above272k")
+	if priority.UncachedInputUSDPerToken != "0.000008" || priority.OutputUSDPerToken != "0.00003" ||
+		optionalRateString(priority.CacheReadUSDPerToken) != "0.0000008" {
+		t.Fatalf("priority long-context rates = %+v", priority)
+	}
+}
+
 func TestSyncEmitsCompleteServiceTierRows(t *testing.T) {
 	root := t.TempDir()
 	upstream := []byte(`{

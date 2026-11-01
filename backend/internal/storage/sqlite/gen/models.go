@@ -474,6 +474,7 @@ type ModelUsageEvent struct {
 	PricingVersion        string
 	BillingProviderSource sql.NullString
 	ServiceTier           sql.NullString
+	ProviderMessageID     sql.NullString
 }
 
 type Notification struct {

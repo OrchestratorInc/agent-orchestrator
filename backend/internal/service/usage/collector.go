@@ -346,6 +346,9 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	switch {
 	case finalizing:
 		state = domain.UsageBindingFinalizing
+	case signal.Event == BackgroundTaskEvent:
+		// The call has returned, so its transcript is whole: drain it once.
+		state = domain.UsageBindingFinalizing
 	case reactivating:
 		state = domain.UsageBindingActive
 	case exists && (state == domain.UsageBindingComplete || state == domain.UsageBindingPartial) &&
@@ -473,6 +476,71 @@ func trustedClaudeProviderHint(harness domain.AgentHarness, raw string) string {
 		return ""
 	}
 	return pricing.TrustedClaudeRoute(boundedUsageMetadata(raw))
+}
+
+// BackgroundTaskEvent records a provider call AO made for a session, such as
+// a title or a prompt suggestion. Unlike session-end it finalizes only the
+// call's own binding, never the worker's.
+const BackgroundTaskEvent = "background-task"
+
+// RecordBackgroundTask counts a finished background call against the session
+// it served. Claude keeps the call's transcript under the project directory of
+// the temporary workspace it ran in, and no session claims that directory, so
+// without this the call's tokens are never collected. Call it before the
+// workspace is removed: Claude names the directory from the resolved path.
+func (c *Collector) RecordBackgroundTask(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	harness domain.AgentHarness,
+	workspace string,
+) error {
+	// ponytail: Claude only. Codex runs these calls ephemeral, so it writes no
+	// rollout to collect.
+	if harness != domain.HarnessClaudeCode {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return err
+	}
+	paths, err := filepath.Glob(filepath.Join(c.roots.ClaudeProjects, claudeProjectDirName(resolved), "*.jsonl"))
+	if err != nil || len(paths) == 0 {
+		return err
+	}
+	// The call ran with the worker's environment, so it billed the same route.
+	bindings, err := c.store.ListUsageBindingsForSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	var route domain.UsageBindingRecord
+	for _, binding := range bindings {
+		if binding.Harness == harness && binding.ProviderHint != "" && !binding.UpdatedAt.Before(route.UpdatedAt) {
+			route = binding
+		}
+	}
+	var errs []error
+	for _, path := range paths {
+		errs = append(errs, c.RecordHook(ctx, sessionID, HookSignal{
+			Event:           BackgroundTaskEvent,
+			Harness:         harness,
+			NativeSessionID: strings.TrimSuffix(filepath.Base(path), ".jsonl"),
+			TranscriptPath:  path,
+			ProviderHint:    route.ProviderHint,
+		}))
+	}
+	return errors.Join(errs...)
+}
+
+// claudeProjectDirName is Claude Code's name for a working directory's
+// project folder: every character that is not an ASCII letter or digit
+// becomes '-'.
+func claudeProjectDirName(path string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, path)
 }
 
 func finalizingEvent(event string) bool {

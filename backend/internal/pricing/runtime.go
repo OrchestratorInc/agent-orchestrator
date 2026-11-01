@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,6 +79,9 @@ type exactRates struct {
 type providerSnapshot struct {
 	version string
 	models  map[string]exactRates
+	// longContext lists, largest first, the sizes in thousands of input tokens
+	// over which a row bills at other rates, keyed by the row they extend.
+	longContext map[string][]int64
 }
 
 // Snapshot is an immutable, validated view of all provider catalogs. Its maps
@@ -235,6 +239,15 @@ func buildProviderSnapshot(blob catalogProviderBlob, ref catalogProviderRef) (pr
 			return providerSnapshot{}, fmt.Errorf("provider %q model %q: %w", ref.ProviderID, model.ModelID, err)
 		}
 		provider.models[canonicalID] = rates
+		if base, aboveK, ok := longContextThreshold(canonicalID); ok {
+			if provider.longContext == nil {
+				provider.longContext = make(map[string][]int64)
+			}
+			provider.longContext[base] = append(provider.longContext[base], aboveK)
+		}
+	}
+	for _, sizes := range provider.longContext {
+		sort.Slice(sizes, func(i, j int) bool { return sizes[i] > sizes[j] })
 	}
 	return provider, nil
 }
@@ -365,6 +378,7 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	if s != nil {
 		if provider, ok := s.providers[providerID]; ok {
 			version = provider.version
+			modelID = provider.longContextRow(modelID, event.Tokens.InputTokens)
 			if knownTier {
 				rates = provider.models[modelID]
 			}
@@ -398,6 +412,21 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 		estimate.TotalNanos = &total
 	}
 	return estimate, nil
+}
+
+// longContextRow is the row that prices a request of input tokens on rowID: the
+// largest size the request passes, or rowID itself. A request with an unknown
+// input count stays on rowID.
+func (p providerSnapshot) longContextRow(rowID string, input *int64) string {
+	if input == nil {
+		return rowID
+	}
+	for _, aboveK := range p.longContext[rowID] {
+		if *input > aboveK*1000 {
+			return LongContextModelID(rowID, aboveK)
+		}
+	}
+	return rowID
 }
 
 // Speed tiers a report groups usage by. Unknown is a tier word AO has no

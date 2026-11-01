@@ -278,6 +278,46 @@ func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
 	}
 }
 
+// Break caught: a request past the model's long-context size priced at the base
+// rates, or a request at exactly the size priced at the long-context ones.
+func TestEstimatePricesLongContextPastItsSize(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {{ID: "claude-test", Input: "0.000001", Output: "0.000002"}},
+		"openai": {
+			{ID: "gpt-flat", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test#above272k", Input: "0.000002", Output: "0.000003"},
+			{ID: "gpt-test#priority", Input: "0.000002", Output: "0.000004"},
+			{ID: "gpt-test#priority#above272k", Input: "0.000004", Output: "0.000006"},
+		},
+		"zai": {{ID: "glm-test", Input: "0.000001", Output: "0.000002"}},
+	})
+	for _, tc := range []struct {
+		name  string
+		model string
+		tier  string
+		input int64
+		want  int64
+	}{
+		{"at the size", "gpt-test", "", 272_000, 274_000_000},
+		{"past the size", "gpt-test", "", 272_001, 547_002_000},
+		{"priority at the size", "gpt-test", "priority", 272_000, 548_000_000},
+		{"priority past the size", "gpt-test", "priority", 300_000, 1_206_000_000},
+		{"model with no long-context row", "gpt-flat", "", 300_000, 302_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+				ProviderID: domain.UsageProviderOpenAI, BillingProviderID: "openai", ModelID: tc.model,
+				ServiceTier: tc.tier, Tokens: pricingTokens(tc.input, 0, tc.input, 1000),
+			})
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			assertCost(t, "total", estimate.TotalNanos, tc.want)
+		})
+	}
+}
+
 func TestEstimateRejectsInvalidTokensAndOverflow(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "9223372036.854775807", Output: "0"}},

@@ -1,7 +1,10 @@
 // Package pricing owns shared lookup identity rules for usage pricing.
 package pricing
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // CanonicalProviderID normalizes a reported provider for exact catalog lookup.
 func CanonicalProviderID(raw string) string {
@@ -85,4 +88,28 @@ const (
 // appears in no provider's model IDs; Vertex IDs already use "@".
 func TierModelID(modelID, tier string) string {
 	return modelID + "#" + tier
+}
+
+// LongContextModelID names the catalog row that prices modelID for a request
+// with more than aboveK thousand input tokens: "gpt-6.1-sol#above272k", and
+// "gpt-6.1-sol#priority#above272k" for a tier's row. It is a row for the same
+// reason a tier is.
+func LongContextModelID(modelID string, aboveK int64) string {
+	return modelID + longContextMarker + strconv.FormatInt(aboveK, 10) + "k"
+}
+
+const longContextMarker = "#above"
+
+// longContextThreshold splits a LongContextModelID into the row it extends and
+// its size in thousands of tokens.
+func longContextThreshold(rowID string) (base string, aboveK int64, ok bool) {
+	index := strings.LastIndex(rowID, longContextMarker)
+	if index < 0 || !strings.HasSuffix(rowID, "k") {
+		return "", 0, false
+	}
+	aboveK, err := strconv.ParseInt(rowID[index+len(longContextMarker):len(rowID)-1], 10, 64)
+	if err != nil || aboveK <= 0 {
+		return "", 0, false
+	}
+	return rowID[:index], aboveK, true
 }

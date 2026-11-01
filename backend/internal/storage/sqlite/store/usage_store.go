@@ -467,7 +467,13 @@ func (s *Store) ApplyUsageChunk(
 				}
 				continue
 			}
-			if _, err := q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev)); err != nil {
+			_, err = q.InsertModelUsageEvent(ctx, usageEventInsertParams(source, ev))
+			if errors.Is(err, sql.ErrNoRows) {
+				// Another source already stored this provider message: a fork or
+				// resume copied it. It was billed once, so it is counted once.
+				continue
+			}
+			if err != nil {
 				return err
 			}
 			insertedEvent = true
@@ -639,6 +645,59 @@ func (s *Store) ListLegacyUsageSources(ctx context.Context) ([]domain.UsageSourc
 		out = append(out, usageSourceContextFromGen(row))
 	}
 	return out, nil
+}
+
+// ListUsageSourcesWithUntimedEvents returns the sources that still hold events
+// with no created_at, which the usage report cannot place in any period.
+func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain.UsageSourceContext, error) {
+	ids, err := s.qr.ListUntimedUsageSourceIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list untimed usage sources: %w", err)
+	}
+	out := make([]domain.UsageSourceContext, 0, len(ids))
+	for _, id := range ids {
+		row, err := s.qr.GetUsageSourceWithBindingAndSession(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get untimed usage source %d: %w", id, err)
+		}
+		out = append(out, usageSourceContextFromGen(row))
+	}
+	return out, nil
+}
+
+// SetUsageEventTimes fills created_at on a binding's events, by source event
+// key. A time already stored is never replaced. It returns the rows filled.
+func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times map[string]time.Time) (int, error) {
+	if len(times) == 0 {
+		return 0, nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	filled := 0
+	err := s.inTx(ctx, "set usage event times", func(q *gen.Queries) error {
+		for key, at := range times {
+			if at.IsZero() {
+				continue
+			}
+			n, err := q.SetUntimedUsageEventTime(ctx, gen.SetUntimedUsageEventTimeParams{
+				CreatedAt:      sql.NullTime{Time: at.UTC(), Valid: true},
+				BindingID:      bindingID,
+				SourceEventKey: key,
+			})
+			if err != nil {
+				return err
+			}
+			filled += int(n)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return filled, nil
 }
 
 // ListLegacyUsageEvents returns the immutable generic facts that transcript
@@ -909,6 +968,7 @@ func usageEventInsertParams(source gen.GetUsageSourceWithBindingAndSessionRow, e
 		OutputTokens:          ptrInt64ToNull(ev.Tokens.OutputTokens),
 		ProviderUsageJson:     stringOrNull(ev.ProviderUsageJSON),
 		ServiceTier:           stringOrNull(ev.ServiceTier),
+		ProviderMessageID:     stringOrNull(ev.ProviderMessageID),
 		InputCostNanos:        ptrInt64ToNull(ev.Costs.InputCostNanos),
 		CachedInputCostNanos:  ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
 		OutputCostNanos:       ptrInt64ToNull(ev.Costs.OutputCostNanos),
