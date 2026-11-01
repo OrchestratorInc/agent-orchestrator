@@ -194,7 +194,8 @@ random `project_telemetry_id`.
 
 Desktop and daemon events carry `days_since_install` when the persisted install
 ID file has a valid timestamp. The daemon reads it at export time; the desktop
-reads it during telemetry bootstrap. The daemon also reads `lifetime_sessions` from
+receives that timestamp during telemetry bootstrap and recalculates the age
+for each event. The daemon also reads `lifetime_sessions` from
 a SQLite counter that increases when a session is committed and survives its
 later deletion. The daemon snapshots the count when an event enters its remote
 sink, before asynchronous export. The desktop reads that counter from the
@@ -215,7 +216,8 @@ no error message, project name, or request ID.
 
 The onboarding milestones use durable local reservations. A first app open is
 recorded only on the install day.
-The next-day return requires a prior desktop active day and a later UTC day.
+The next-day return requires a prior desktop active day and activity on a later
+UTC day, including when the desktop remains open across midnight.
 The first eligible user CLI invocation reserves a local marker before export. None of
 these milestones treats an idle session as a successful session.
 The first project and first session are identified by `first_for_install` on
@@ -230,7 +232,7 @@ events remain deprecated until the separate event rename.
 | `ao.projects.created` with `first_for_install` | First committed project registration | Durable project registry |
 | `ao.session.spawned` with `first_for_install` | First committed session | Durable install milestone |
 | `ao.session.spawned` with `lifetime_sessions: 2` | Second committed session | Durable lifetime counter |
-| `ao.app.next_day_returned` | Desktop active on a previous UTC day and opened again later | Desktop local reservation |
+| `ao.app.next_day_returned` | Desktop active on a previous UTC day and active again later | Desktop local reservation |
 | `ao.agents.missing` | Agent readiness reports zero installed agents | Once per desktop launch |
 | `ao.agents.install_clicked` | User starts an agent install from Settings | One event per accepted click |
 

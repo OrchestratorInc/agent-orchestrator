@@ -24,6 +24,8 @@ export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
 	daysSinceInstall?: number;
+	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
+	installTimestampMs?: number;
 	lifetimeSessions?: number;
 	appVersion: string;
 	platform: NodeJS.Platform;
@@ -279,9 +281,13 @@ export async function buildTelemetryBootstrap(
 	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
 	let daysSinceInstall: number | undefined;
+	let installTimestampMs: number | undefined;
 	try {
 		const installedAt = (await stat(path.join(dataDir, "telemetry_install_id"))).mtimeMs;
-		if (installedAt > 0 && installedAt <= Date.now()) daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+		if (installedAt > 0 && installedAt <= Date.now()) {
+			installTimestampMs = installedAt;
+			daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+		}
 	} catch {
 		// An unreadable creation time is unknown.
 	}
@@ -289,6 +295,7 @@ export async function buildTelemetryBootstrap(
 		distinctId: await bootstrapDistinctId(dataDir),
 		installId,
 		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
+		...(installTimestampMs === undefined ? {} : { installTimestampMs }),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

@@ -32,6 +32,7 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
+let installTimestampMs: number | undefined;
 let installId = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
@@ -209,6 +210,7 @@ export type DailyActiveHeartbeatOptions = {
 	storage?: DailyActiveStorage;
 	now?: () => Date;
 	capture: () => boolean | void | Promise<boolean | void>;
+	onNewDay?: (now: Date) => void;
 	window: DailyActiveEventTarget;
 	document: DailyActiveEventTarget & Pick<Document, "visibilityState">;
 };
@@ -313,7 +315,8 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
 	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
 	// the flag is left to the SDK, which processes the identified person.
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(signInKnown ? { is_signed_in: cloudUser !== null } : {}), ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+	const currentAge = installTimestampMs === undefined ? undefined : Math.floor((Date.now() - installTimestampMs) / 86_400_000);
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), ...(signInKnown ? { is_signed_in: cloudUser !== null } : {}), ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
 // Who this install is. The GitHub login and AO Cloud user ID ride every event as
@@ -603,12 +606,15 @@ export function startDailyActiveHeartbeat({
 	storage,
 	now = () => new Date(),
 	capture,
+	onNewDay,
 	window,
 	document,
 }: DailyActiveHeartbeatOptions): () => void {
 	const maybeCapture = () => {
 		const captureTime = now();
+		const returning = hadEarlierActiveDay(storage, captureTime);
 		if (!reserveDailyActiveCapture(storage, captureTime)) return;
+		if (returning) onNewDay?.(captureTime);
 
 		let result: boolean | void | Promise<boolean | void>;
 		try {
@@ -1239,6 +1245,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install, bootstrap.experimentCohort);
+		installTimestampMs = bootstrap.installTimestampMs;
 		if (bootstrap.daysSinceInstall !== undefined) telemetryContext.days_since_install = bootstrap.daysSinceInstall;
 		if (bootstrap.lifetimeSessions !== undefined) telemetryContext.lifetime_sessions = bootstrap.lifetimeSessions;
 		posthog = await loadPostHog();
@@ -1265,13 +1272,15 @@ export async function initTelemetry(): Promise<boolean> {
 		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.app.first_opened") && claimOnboardingMilestone(storage, "app_opened")) {
 			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
 		}
-		if (hadEarlierActiveDay(storage) && !isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
-			posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
-		}
 		startDailyActiveHeartbeat({
 			storage,
 			window,
 			document,
+			onNewDay: () => {
+				if (!isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
+					posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
+				}
+			},
 			// Ride the batched request queue like every other renderer event
 			// (loaded, route_viewed). An earlier `send_instantly: true` here
 			// fired an immediate, un-retried send during init that never
