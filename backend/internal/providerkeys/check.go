@@ -85,41 +85,41 @@ func Check(ctx context.Context, name, value string) (CheckResult, error) {
 		return CheckResult{Status: CheckUnverified}, nil
 	}
 	if endpoint.validateURL != "" {
-		status, _, err := fetch(ctx, endpoint.validateURL, endpoint, value)
-		if err != nil || status != CheckValid {
+		status, _ := fetch(ctx, endpoint.validateURL, endpoint, value)
+		if status != CheckValid {
 			return CheckResult{Status: status}, nil
 		}
 	}
-	status, body, err := fetch(ctx, endpoint.url, endpoint, value)
-	if err != nil || status != CheckValid {
+	status, body := fetch(ctx, endpoint.url, endpoint, value)
+	if status != CheckValid {
 		return CheckResult{Status: status}, nil
 	}
 	return CheckResult{Status: CheckValid, Models: modelIDs(body, endpoint.prefix)}, nil
 }
 
-func fetch(ctx context.Context, url string, endpoint checkEndpoint, key string) (string, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func fetch(ctx context.Context, url string, endpoint checkEndpoint, key string) (string, []byte) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return CheckUnreachable, nil, err
+		return CheckUnreachable, nil
 	}
 	endpoint.authorize(req, key)
 	req.Header.Set("Accept", "application/json")
 	resp, err := checkClient.Do(req)
 	if err != nil {
-		return CheckUnreachable, nil, err
+		return CheckUnreachable, nil
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return CheckInvalid, nil, nil
+		return CheckInvalid, nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		return CheckUnreachable, nil, nil
+		return CheckUnreachable, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCheckBody))
 	if err != nil {
-		return CheckUnreachable, nil, err
+		return CheckUnreachable, nil
 	}
-	return CheckValid, body, nil
+	return CheckValid, body
 }
 
 // modelIDs reads the OpenAI-style {"data":[{"id"}]} and Gemini-style

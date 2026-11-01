@@ -29,13 +29,13 @@ const (
 	deepseekKeyRef    = "DEEPSEEK_API_KEY"
 )
 
-var dshLockRecord = regexp.MustCompile(`^[0-9]+\n$`)
+var dshLockRecord = regexp.MustCompile(`^\d+\n$`)
 
 // saveDeepSeekHarnessKey stores key as refs.DEEPSEEK_API_KEY in DeepSeek
 // Harness's own credential store, the record its Models page writes. The
 // running Harness reloads the file, and the key applies inside and outside AO.
 // Comments and every other entry are kept.
-func saveDeepSeekHarnessKey(ctx context.Context, _ string, key string) error {
+func saveDeepSeekHarnessKey(ctx context.Context, _, key string) error {
 	path, err := deepseekharness.CredentialsPath()
 	if err != nil || !filepath.IsAbs(path) {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential store is unavailable.")
