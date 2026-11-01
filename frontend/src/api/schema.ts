@@ -1841,6 +1841,23 @@ export interface paths {
         patch: operations["setProjectPermissions"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/task-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Suggest follow-up tasks from open issues and TODO comments */
+        get: operations["listTaskSuggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/tasks/prepare": {
         parameters: {
             query?: never;
@@ -5944,10 +5961,13 @@ export interface components {
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
+            issueId?: string;
             /** @enum {string} */
             mode?: "tui" | "chat";
             model?: string;
             projectId: string;
+            /** @enum {string} */
+            spawnSource?: "parallel_prompt" | "composer_next";
             taskPreparation?: string;
         };
         DelegateTaskResponse: {
@@ -7561,6 +7581,8 @@ export interface components {
             /** @enum {string} */
             requestedOutput?: "artifact";
             /** @enum {string} */
+            spawnSource?: "parallel_prompt" | "composer_next";
+            /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
         SpawnSessionResponse: {
@@ -7729,6 +7751,20 @@ export interface components {
             ready: boolean;
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
+        };
+        TaskSuggestionView: {
+            issueId?: string;
+            issueNumber?: number;
+            line?: number;
+            path?: string;
+            /** @enum {string} */
+            source: "issue" | "todo";
+            text?: string;
+            title?: string;
+            url?: string;
+        };
+        TaskSuggestionsResponse: {
+            suggestions: components["schemas"]["TaskSuggestionView"][];
         };
         TelemetryIdentityResponse: {
             cloudUserId?: string;
@@ -14220,6 +14256,56 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listTaskSuggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskSuggestionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

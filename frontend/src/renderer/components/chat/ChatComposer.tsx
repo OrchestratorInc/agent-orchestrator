@@ -200,6 +200,7 @@ export const ChatComposer = memo(function ChatComposer({
 	starting,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	onModifierSend,
 	settings,
 	addMenuItems,
 	approval,
@@ -291,6 +292,12 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
+	/**
+	 * Cmd/Ctrl+Enter when it does not steer a running turn: called just before
+	 * the send, so the caller can treat that send differently (the new-task page
+	 * starts the task and stays on a fresh draft).
+	 */
+	onModifierSend?: () => void;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -1250,7 +1257,10 @@ export const ChatComposer = memo(function ChatComposer({
 		[onCompact, skills, suggestionsFor],
 	);
 
-	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
+	// `sendsNext` is a Cmd/Ctrl+Enter that does not steer. It reaches the parent
+	// through onModifierSend only when this submission actually calls onSend, so
+	// an empty draft or a press that joins an earlier send leaves no stale intent.
+	function submit(event?: FormEvent, forceSteer?: boolean, sendsNext?: boolean): Promise<void> {
 		event?.preventDefault();
 		// React cannot publish the next busy prop until after this event returns. A
 		// second Enter in that gap joins the accepted submission instead of opening a
@@ -1263,7 +1273,7 @@ export const ChatComposer = memo(function ChatComposer({
 			typeof document !== "undefined" &&
 			document.activeElement?.getAttribute("aria-label") === "Message the agent";
 		setSubmitting(true);
-		const pending = performSubmit(forceSteer);
+		const pending = performSubmit(forceSteer, sendsNext);
 		submitInFlight.current = pending;
 		const release = () => {
 			if (submitInFlight.current !== pending) return;
@@ -1274,7 +1284,7 @@ export const ChatComposer = memo(function ChatComposer({
 		return pending;
 	}
 
-	async function performSubmit(forceSteer?: boolean) {
+	async function performSubmit(forceSteer?: boolean, sendsNext?: boolean) {
 		// Own the scoped draft before file reading or staging can yield. A replacement
 		// surface observes this reservation and cannot edit underneath this send.
 		const mutationToken = draftScope && !savingQueuedEdit
@@ -1282,13 +1292,13 @@ export const ChatComposer = memo(function ChatComposer({
 			: undefined;
 		if (draftScope && !savingQueuedEdit && !mutationToken) return;
 		try {
-			await performClaimedSubmit(forceSteer, mutationToken);
+			await performClaimedSubmit(forceSteer, mutationToken, sendsNext);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
 		}
 	}
 
-	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
+	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken, sendsNext?: boolean) {
 		let currentText = textRef.current;
 		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
@@ -1452,10 +1462,13 @@ export const ChatComposer = memo(function ChatComposer({
 						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
-				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
-					await onSend(message, sendPayloads(nativePayloads));
 				} else {
-					await onSend(message);
+					if (sendsNext) onModifierSend?.();
+					if (nativePayloads.length > 0 || heldPayloads.length > 0) {
+						await onSend(message, sendPayloads(nativePayloads));
+					} else {
+						await onSend(message);
+					}
 				}
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
@@ -1563,6 +1576,7 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
+				if (sendsNext) onModifierSend?.();
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
       await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
@@ -1649,8 +1663,9 @@ export const ChatComposer = memo(function ChatComposer({
 				setSteerNextRequest((request) => request + 1);
 				return true;
 			}
-			const wantsSteer = (event.metaKey || event.ctrlKey) && canSteerDraft;
-			void submit(undefined, wantsSteer);
+			const modifier = event.metaKey || event.ctrlKey;
+			const wantsSteer = modifier && canSteerDraft;
+			void submit(undefined, wantsSteer, modifier && !wantsSteer);
 			return true;
 		},
 		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],

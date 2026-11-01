@@ -353,6 +353,28 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## Running more tasks at once
+
+After your first worker starts, a project's board can suggest two or three more
+tasks to run beside it: open issues, TODO or FIXME notes in the repository, or
+built-in starter tasks. When desktop product telemetry is enabled,
+Orchestrator.inc records:
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.onboarding.parallel_prompt_shown` | The suggestions appear on a board, at most once per project per launch | `suggestion_count`, `source` |
+| `ao.onboarding.parallel_prompt_action` | You start one, start all, open a prompt to edit it, or dismiss the suggestions | `action`, `count` |
+
+`source` is `issue`, `todo`, `starter`, or `mixed`. `action` is `spawn_one`,
+`spawn_all`, `edit`, or `dismiss`, and `count` is how many tasks it covered.
+Session-start events (`ao.session.spawned`) for tasks started from these
+suggestions carry `spawn_source: parallel_prompt`; tasks started with
+Cmd/Ctrl+Enter on the new-task page carry `spawn_source: composer_next`.
+
+No issue title, note text, file path, prompt, or edited text is sent. Finding
+suggestions reads your repository and issue tracker on your machine; nothing
+from them leaves it except these counts.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:

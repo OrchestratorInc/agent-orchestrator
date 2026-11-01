@@ -38,6 +38,9 @@ type DelegateTaskInput struct {
 	TaskPreparation   domain.TaskPreparationToken
 	ClientRequestID   string
 	ClientRequestHash string
+	// IssueID is the tracker issue the task works on, recorded on the worker.
+	IssueID     domain.IssueID
+	SpawnSource domain.SpawnSource
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -92,6 +95,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		ClientRequestID:   in.ClientRequestID,
 		ClientRequestHash: in.ClientRequestHash,
 		ProjectID:         in.ProjectID,
+		IssueID:           in.IssueID,
 		Kind:              domain.KindWorker,
 		Harness:           in.RequestedAgent,
 		Prompt:            prompt,
@@ -110,6 +114,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		// finishes starting in the background.
 		Async:           true,
 		TaskPreparation: in.TaskPreparation,
+		SpawnSource:     in.SpawnSource,
 	}, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)

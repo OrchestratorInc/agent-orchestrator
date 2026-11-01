@@ -40,7 +40,7 @@ func TestStandaloneSessionKindsOnSpawnAndFailure(t *testing.T) {
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore(), Telemetry: sink})
 	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
-	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
+	svc.emitSpawned(context.Background(), ports.SpawnConfig{}, rec, 1, false, false, domain.SessionCreatedByUser)
 	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("failed"), 1)
 	for _, name := range []string{"ao.session.spawned", "ao.session.spawn_failed"} {
 		if got := lastEvent(t, sink, name).Payload["kind"]; got != "standalone" {

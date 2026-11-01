@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
+	prepareNext: vi.fn(),
 	fallbackAction: undefined as string | undefined,
 	workspace: undefined as ChatWorkspaceProps | undefined,
 }));
@@ -29,6 +30,7 @@ vi.mock("./TaskComposer", () => ({
 	useTaskLaunch: () => ({
 		launch: h.launch,
 		launchFallback: h.launchFallback,
+		prepareNext: h.prepareNext,
 		fallbackAction: h.fallbackAction,
 		fallbackLabel: "Create as Terminal UI",
 		submitMode: undefined,
@@ -69,12 +71,36 @@ beforeEach(() => {
 	h.navigate.mockReset();
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
+	h.prepareNext.mockReset();
 	h.fallbackAction = undefined;
 	h.workspace = undefined;
 	window.localStorage.clear();
 });
 
 describe("NewChatPage", () => {
+	it("starts the task with Cmd/Ctrl+Enter and stays on a fresh draft for the next one", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		expect(screen.getByText(/starts this task and opens a new draft/)).toBeInTheDocument();
+
+		await act(async () => {
+			h.workspace?.onModifierSend?.();
+			await h.workspace?.onSend?.("Fix the build", undefined, "cid-1");
+		});
+		expect(h.launch).toHaveBeenCalledWith("Fix the build", expect.objectContaining({ clientRequestId: "cid-1", spawnSource: "composer_next" }));
+		expect(h.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ sessionId: "sess-1" }) }));
+		expect(h.prepareNext).toHaveBeenCalledTimes(1);
+		expect(h.workspace?.localEchos).toBeUndefined();
+
+		// The modifier applies to one send only: a plain send opens its session.
+		h.launch.mockResolvedValue("sess-2");
+		await act(async () => {
+			await h.workspace?.onSend?.("Write the docs", undefined, "cid-2");
+		});
+		expect(h.launch).toHaveBeenLastCalledWith("Write the docs", expect.not.objectContaining({ spawnSource: expect.anything() }));
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "sess-2" } })));
+	});
+
 	it("creates the session on first send and hands its brief to the session chat", async () => {
 		let resolve!: (sessionId: string) => void;
 		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));

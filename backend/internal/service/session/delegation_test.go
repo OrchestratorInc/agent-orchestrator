@@ -150,6 +150,17 @@ func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	if ev.Name != "ao.session.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
 		t.Fatalf("spawned event = %#v", ev)
 	}
+	if _, ok := ev.Payload["spawn_source"]; ok {
+		t.Fatalf("ordinary start carries spawn_source: %#v", ev.Payload)
+	}
+
+	sink.events = nil
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", SpawnSource: domain.SpawnSourceParallelPrompt}); err != nil {
+		t.Fatalf("DelegateTask from the parallel prompt: %v", err)
+	}
+	if len(sink.events) != 1 || sink.events[0].Payload["spawn_source"] != "parallel_prompt" {
+		t.Fatalf("parallel prompt events = %#v, want spawn_source=parallel_prompt", sink.events)
+	}
 
 	sink.events = nil
 	cmd.spawnErr = errors.New("boom")

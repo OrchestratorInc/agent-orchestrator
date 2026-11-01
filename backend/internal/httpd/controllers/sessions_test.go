@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -500,6 +501,16 @@ func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.Deleg
 func (f *fakeSessionService) PrepareTask(_ context.Context, projectID domain.ProjectID) (string, error) {
 	f.preparedProject = projectID
 	return "prep-token", nil
+}
+
+func (f *fakeSessionService) TaskSuggestions(_ context.Context, projectID domain.ProjectID) ([]sessionsvc.TaskSuggestion, error) {
+	if projectID != "ao" {
+		return nil, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	return []sessionsvc.TaskSuggestion{
+		{Source: sessionsvc.TaskSuggestionSourceIssue, IssueID: "github:acme/repo#12", IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
+		{Source: sessionsvc.TaskSuggestionSourceTodo, Path: "src/a.go", Line: 3, Text: "handle retries"},
+	}, nil
 }
 
 func (f *fakeSessionService) CancelTaskPreparation(_ context.Context, token string) error {
@@ -4792,6 +4803,29 @@ func TestSessionsAPI_DelegateTaskValidationAndServiceError(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_DelegateTaskForwardsSpawnSource(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","spawnSource":"composer_next","issueId":" github:acme/repo#12 "}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("delegate = %d, want 202; body=%s", status, body)
+	}
+	if svc.delegationInput.SpawnSource != domain.SpawnSourceComposerNext {
+		t.Fatalf("spawn source = %q, want composer_next", svc.delegationInput.SpawnSource)
+	}
+	if svc.delegationInput.IssueID != "github:acme/repo#12" {
+		t.Fatalf("issue id = %q, want the trimmed tracker id", svc.delegationInput.IssueID)
+	}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","issueId":"`+strings.Repeat("9", 513)+`"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ISSUE_ID_TOO_LONG")
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","spawnSource":"banner"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_SPAWN_SOURCE")
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions", `{"kind":"worker","prompt":"Fix it","spawnSource":"banner"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_SPAWN_SOURCE")
+}
+
 func TestSessionsAPI_DelegateTaskRejectsInvalidAttachments(t *testing.T) {
 	tests := []struct {
 		name string
@@ -5355,4 +5389,26 @@ func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
 			t.Fatalf("isolated %s: status=%d headers=%v", name, status, headers)
 		}
 	}
+}
+
+func TestSessionsAPI_TaskSuggestions(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/projects/ao/task-suggestions", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got controllers.TaskSuggestionsResponse
+	mustJSON(t, body, &got)
+	want := controllers.TaskSuggestionsResponse{Suggestions: []controllers.TaskSuggestionView{
+		{Source: "issue", IssueID: "github:acme/repo#12", IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
+		{Source: "todo", Path: "src/a.go", Line: 3, Text: "handle retries"},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("response = %#v, want %#v", got, want)
+	}
+
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/projects/missing/task-suggestions", "")
+	assertErrorCode(t, body, status, http.StatusNotFound, "PROJECT_NOT_FOUND")
 }

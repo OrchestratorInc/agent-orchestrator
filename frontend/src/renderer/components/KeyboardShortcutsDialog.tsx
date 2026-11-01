@@ -47,6 +47,7 @@ function contextualShortcuts(isMac: boolean): readonly { id: string; label: Mess
 	return [
 		{ id: "send", label: "shortcut.context.send", keys: ["Enter"] },
 		{ id: "steer", label: "shortcut.context.steer", keys: [primary, "Enter"] },
+		{ id: "start-next", label: "shortcut.context.startNext", keys: [primary, "Enter"] },
 		{ id: "stop", label: "shortcut.context.stop", keys: ["Esc"] },
 		{ id: "find", label: "shortcut.context.find", keys: [primary, "F"] },
 		{ id: "text-size", label: "shortcut.context.textSize", keys: [primary, "+ / −"] },

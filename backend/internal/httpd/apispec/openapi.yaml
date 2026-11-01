@@ -4566,6 +4566,45 @@ paths:
       summary: Remember project permissions for future sessions
       tags:
       - projects
+  /api/v1/projects/{id}/task-suggestions:
+    get:
+      operationId: listTaskSuggestions
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskSuggestionsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Suggest follow-up tasks from open issues and TODO comments
+      tags:
+      - projects
   /api/v1/projects/{id}/tasks/prepare:
     post:
       operationId: prepareTask
@@ -17114,6 +17153,9 @@ components:
           type:
           - "null"
           - string
+        issueId:
+          maxLength: 512
+          type: string
         mode:
           enum:
           - tui
@@ -17123,6 +17165,11 @@ components:
           maxLength: 256
           type: string
         projectId:
+          type: string
+        spawnSource:
+          enum:
+          - parallel_prompt
+          - composer_next
           type: string
         taskPreparation:
           type: string
@@ -21246,6 +21293,11 @@ components:
           enum:
           - artifact
           type: string
+        spawnSource:
+          enum:
+          - parallel_prompt
+          - composer_next
+          type: string
         trackerProvider:
           enum:
           - github
@@ -21658,6 +21710,39 @@ components:
       required:
       - ready
       - requirements
+      type: object
+    TaskSuggestionView:
+      properties:
+        issueId:
+          type: string
+        issueNumber:
+          type: integer
+        line:
+          type: integer
+        path:
+          type: string
+        source:
+          enum:
+          - issue
+          - todo
+          type: string
+        text:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - source
+      type: object
+    TaskSuggestionsResponse:
+      properties:
+        suggestions:
+          items:
+            $ref: '#/components/schemas/TaskSuggestionView'
+          type: array
+      required:
+      - suggestions
       type: object
     TelemetryIdentityResponse:
       properties:

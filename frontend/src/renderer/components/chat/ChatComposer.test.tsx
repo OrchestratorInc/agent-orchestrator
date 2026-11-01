@@ -652,6 +652,48 @@ describe("send keys", () => {
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
 	});
 
+	it("reports a Cmd/Ctrl+Enter send that does not steer", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onModifierSend = vi.fn();
+		render(<ChatComposer onSend={onSend} onModifierSend={onModifierSend} draftSessionId="composer-modifier-send" />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "start this one");
+		fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onModifierSend).toHaveBeenCalledOnce();
+		await typeInComposer(field, "and a plain one");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onModifierSend).toHaveBeenCalledOnce();
+	});
+
+	it("does not carry a Cmd/Ctrl+Enter that sent nothing into a later plain send", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onModifierSend = vi.fn();
+		render(<ChatComposer onSend={onSend} onModifierSend={onModifierSend} draftSessionId="composer-modifier-empty" />);
+		const field = screen.getByLabelText("Message the agent");
+		fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(onSend).not.toHaveBeenCalled();
+		expect(onModifierSend).not.toHaveBeenCalled();
+
+		await typeInComposer(field, "a plain send");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onModifierSend).not.toHaveBeenCalled();
+	});
+
+	it("does not report a Cmd/Ctrl+Enter that steers a running turn", async () => {
+		const onSteer = vi.fn().mockResolvedValue(undefined);
+		const onModifierSend = vi.fn();
+		render(<ChatComposer onSend={vi.fn()} onSteer={onSteer} onModifierSend={onModifierSend} canSteer willQueue draftSessionId="composer-modifier-steer" />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "steer this");
+		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		await waitFor(() => expect(onSteer).toHaveBeenCalledOnce());
+		expect(onModifierSend).not.toHaveBeenCalled();
+	});
+
 	it("queues instead of steering when excerpts are attached", async () => {
 		const sessionId = "composer-excerpt-no-steer";
 		const excerpts = [{ id: "keep", conversationId: "conversation-1", messageId: "source-1", revision: 1, text: "keep me", role: "assistant" as const }];
