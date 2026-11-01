@@ -3768,7 +3768,8 @@ func (r *conversationPageRows[T]) at(index int, before, visibleAfter int64) (*T,
 		if err != nil {
 			return nil, err
 		}
-		r.done = int64(len(chunk)) < r.chunk
+		// A byte-bounded fetch can be shorter than the row limit without reaching EOF.
+		r.done = len(chunk) == 0
 		for _, row := range chunk {
 			if r.sequence(row) <= visibleAfter {
 				r.done = true
@@ -3875,7 +3876,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationMessage) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationMessage, error) {
 				rows, err := s.qr.SelectConversationMessagesPage(ctx, gen.SelectConversationMessagesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select message page: %w", err)
@@ -3888,7 +3889,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationActivity) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationActivity, error) {
 				rows, err := s.qr.SelectConversationActivitiesPage(ctx, gen.SelectConversationActivitiesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select activity page: %w", err)

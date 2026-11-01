@@ -260,6 +260,52 @@ describe("TurnChangedFiles", () => {
 });
 
 describe("ActivityRow command output", () => {
+	it("bounds a multi-megabyte log preview while preserving its latest output", () => {
+		const output = "BEGIN_OVERSIZE\n" + "Oversized output integrity check.\n".repeat(160_000) + "END_OVERSIZE";
+		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		const shown = container.querySelector("pre")!.textContent!;
+		expect(shown.split("\n").length).toBeLessThanOrEqual(400);
+		expect(shown.length).toBeLessThanOrEqual(64 * 1024);
+		expect(shown).toContain("END_OVERSIZE");
+		expect(shown).not.toContain("BEGIN_OVERSIZE");
+		expect(screen.getByRole("button", { name: "Download full output" })).toBeInTheDocument();
+		expect(screen.queryByText(/printed more than AO stores/i)).not.toBeInTheDocument();
+	});
+
+	it("bounds single-line output without splitting a surrogate pair", () => {
+		const output = "head" + "😀" + "x".repeat(64 * 1024 - 1);
+		const { container } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		expect(container.querySelector("pre")?.textContent).toBe("x".repeat(64 * 1024 - 1));
+	});
+
+	it("updates the bounded preview as a running command prints more", () => {
+		const output = "start\n".repeat(1_000);
+		const { container, rerender } = render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+		rerender(<TooltipProvider><ActivityRow activity={commandActivity({ output: output + "latest failure" }, "running")} /></TooltipProvider>);
+		expect(container.querySelector("pre")?.textContent).toMatch(/latest failure$/);
+		expect(container.querySelector("pre")!.textContent!.split("\n").length).toBeLessThanOrEqual(400);
+	});
+
+	it("downloads the complete displayed terminal text, not just its preview", async () => {
+		const output = "\x1b[31mBEGIN\x1b[0m\n" + "log line\n".repeat(1_000) + "END";
+		const created = vi.fn((_blob: Blob) => "blob:output");
+		vi.stubGlobal("URL", class extends URL {
+			static createObjectURL = created;
+			static revokeObjectURL = vi.fn();
+		});
+		const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+		try {
+			render(<ActivityRow activity={commandActivity({ output }, "running")} />);
+			await userEvent.click(screen.getByRole("button", { name: "Download full output" }));
+			const blob = created.mock.calls[0]![0] as Blob;
+			expect(await blob.text()).toBe("BEGIN\n" + "log line\n".repeat(1_000) + "END");
+			expect(click).toHaveBeenCalledOnce();
+		} finally {
+			click.mockRestore();
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("opens itself while a command is still printing", () => {
 		const { container } = render(
 			<ActivityRow
