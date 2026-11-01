@@ -29,7 +29,7 @@ func qwenSessionLiveWithProbe(ctx context.Context, configDir, nativeID, ownWorks
 	if err != nil {
 		return false
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	entries, _ := fs.ReadDir(root.FS(), "sessions")
 	for _, entry := range entries {
 		if ctx.Err() != nil {
