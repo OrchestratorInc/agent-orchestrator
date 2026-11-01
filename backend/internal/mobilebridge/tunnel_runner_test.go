@@ -336,9 +336,15 @@ func TestTunnelRunnerKeepsTheQuickTunnelUntilAReplacementIsMade(t *testing.T) {
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- r.runOnce(ctx) }()
-	for deadline := time.Now().Add(10 * time.Second); cloud.requests() < 4; time.Sleep(20 * time.Millisecond) {
+	// The upgrade checks can run before the connector subprocess is scheduled.
+	// Wait for both the repair attempts and the connector's startup record
+	// before cancelling, so the assertion below observes a running quick tunnel.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if b, err := os.ReadFile(argsFile); err == nil && len(b) > 0 && cloud.requests() >= 4 {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("asked AO Cloud %d times", cloud.requests())
+			t.Fatalf("quick tunnel did not start after %d AO Cloud requests", cloud.requests())
 		}
 	}
 	cancel()
