@@ -56,7 +56,7 @@ import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { forgetPreparedCloudSession, preparedCloudSessions, rememberPreparedCloudSession } from "../lib/cloud-session-prestart";
+import { discardedPreparedCloudSession, forgetPreparedCloudSession, preparedCloudSessions, rememberPreparedCloudSession } from "../lib/cloud-session-prestart";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
 import { useModelTuning } from "./settings/ModelTuningControls";
@@ -1422,9 +1422,9 @@ interface PreparedCloudTask {
 /** Deletes a pre-started Cloud session no send claimed. It ran no task, so nothing is lost. */
 function discardPreparedCloudSession(client: ReturnType<typeof useCloudCp>["client"], orgId: string, sessionId: string): void {
 	void client.deleteSession(orgId, sessionId).then(
-		() => forgetPreparedCloudSession(sessionId),
+		() => discardedPreparedCloudSession(sessionId),
 		(error: unknown) => {
-			if (error instanceof CloudCpError && (error.status === 404 || error.code === "SESSION_TERMINATED")) forgetPreparedCloudSession(sessionId);
+			if (error instanceof CloudCpError && (error.status === 404 || error.code === "SESSION_TERMINATED")) discardedPreparedCloudSession(sessionId);
 		},
 	);
 }

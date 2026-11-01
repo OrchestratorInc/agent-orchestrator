@@ -1400,7 +1400,7 @@ describe("CloudSessionChatSurface", () => {
 			model: "gpt-6.1-sol",
 		});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-		const codexSession = { ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" as const } };
+		const codexSession = { ...session, provider: "codex" as const, cloud: { orgId: "org-1", permissionMode: "trusted" as const } };
 		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={codexSession} /></QueryClientProvider>);
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.model).toBe("gpt-6.1-sol"));
 		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ model: "gpt-6-luna", reasoningEffort: "high" }, "model"));
