@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -e
+[ -n "$PYENV_DEBUG" ] && set -x
+
+program="${0##*/}"
+
+export PYENV_ROOT="@ROOT@"
+SHIM_PATH=${0%/*}
+if [[ $SHIM_PATH != "@ROOT@/shims" ]]; then
+  export _PYENV_SHIM_PATH="$SHIM_PATH"
+fi
+exec "@ROOT@/libexec/pyenv" exec "$program" "$@"

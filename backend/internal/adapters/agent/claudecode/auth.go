@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -468,6 +469,10 @@ type claudeCommandOutput struct {
 }
 
 var claudeAuthCommand = func(ctx context.Context, binary, workingDir string, env map[string]string) (claudeCommandOutput, error) {
+	binary, err := binaryutil.VerifyExecutable(ctx, "claude-code", binary)
+	if err != nil {
+		return claudeCommandOutput{}, err
+	}
 	cmd := aoprocess.CommandContext(ctx, binary, "auth", "status")
 	if strings.TrimSpace(workingDir) != "" {
 		cmd.Dir = workingDir
@@ -476,7 +481,7 @@ var claudeAuthCommand = func(ctx context.Context, binary, workingDir string, env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	return claudeCommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
 
