@@ -887,3 +887,26 @@ func TestDoctorCodexLaunchFlagsWarnsOnResolverError(t *testing.T) {
 		t.Fatalf("canary = %+v, want WARN on resolver error", check)
 	}
 }
+
+func TestDoctorCodexLaunchFlagsWarnsOnShimOnlyInstall(t *testing.T) {
+	for _, ext := range []string{".cmd", ".bat", ".CMD", ".BAT"} {
+		t.Run(ext, func(t *testing.T) {
+			shim := filepath.Join(t.TempDir(), "codex"+ext)
+			c := &commandContext{deps: Deps{
+				DoctorResolveCodexBinary: func(context.Context) (string, error) {
+					return shim, nil
+				},
+				CommandOutput: func(context.Context, string, ...string) ([]byte, error) {
+					t.Fatal("launch-flag probe must not execute a Windows shim")
+					return nil, nil
+				},
+			}}
+
+			check := c.checkCodexLaunchFlags(context.Background())
+			want := fmt.Sprintf("codex resolves to the shim %s; Windows runs it through cmd.exe, which corrupts AO's -c hook flags, so codex sessions will fail to start. Reinstall codex with npm so the native codex.exe is present.", shim)
+			if check.Level != doctorWarn || check.Section != doctorSectionAgents || check.Name != "codex-launch-flags" || check.Message != want {
+				t.Fatalf("canary = %+v, want WARN codex-launch-flags in Agents with message %q", check, want)
+			}
+		})
+	}
+}
