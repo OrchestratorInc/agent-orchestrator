@@ -3,9 +3,9 @@ import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
@@ -182,6 +182,22 @@ describe("send keys", () => {
 	it("focuses the message field when the chat composer opens", () => {
 		const { field } = renderComposer({ autoFocusKey: "session-1" });
 		expect(document.activeElement).toBe(field);
+	});
+
+	it("keeps the caret at the end when a focused draft is replaced and focused again", async () => {
+		const focusRef = createRef<ChatComposerHandle>();
+		const replacement = "replacement draft";
+		render(<>
+			<button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => focusRef.current?.setDraft(replacement)}>Replace draft</button>
+			<ChatComposer onSend={vi.fn()} focusRef={focusRef} />
+		</>);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "abcdef");
+		await placeLexicalCaret(field, 2);
+		await userEvent.click(screen.getByRole("button", { name: "Replace draft" }));
+		expect(composerWireText(field)).toBe(replacement);
+		expect(field).toHaveFocus();
+		expect(window.getSelection()?.anchorOffset).toBe(replacement.length);
 	});
 
 	it("refocuses the message field when the active chat session changes", () => {
