@@ -3,6 +3,7 @@ import { memo, useMemo } from "react";
 import type { StyleProp, TextStyle } from "react-native";
 import { useTheme } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
+import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { highlightCode, type SyntaxTokenKind } from "./syntaxHighlight";
 
 /**
@@ -15,19 +16,23 @@ export const HighlightedCodeText = memo(function HighlightedCodeText({
 	language,
 	streaming = false,
 	style,
+	onAddSelection,
 }: {
 	code: string;
 	language?: string;
 	streaming?: boolean;
 	style?: StyleProp<TextStyle>;
+	/** Offers the text-selection menu's "Add to chat", handing it the selected text. */
+	onAddSelection?: (text: string) => void;
 }) {
 	const t = useTheme();
+	const onLayout = useAndroidResponseSelection(onAddSelection ?? null);
 	const tokens = useMemo(
 		() => streaming ? undefined : highlightCode(code, language),
 		[code, language, streaming],
 	);
 	return (
-		<Text selectable uiTextView selectionColor={textSelectionColors(t).selectionColor} style={style}>
+		<Text selectable uiTextView selectionColor={textSelectionColors(t).selectionColor} style={style} onLayout={onAddSelection ? onLayout : undefined} addToChatEnabled={Boolean(onAddSelection)} onAddToChat={(event) => onAddSelection?.(event.nativeEvent.text)}>
 			{tokens?.map((token, index) => (
 				<Text key={`${index}:${token.text.length}`} style={{ color: tokenColor(token.kind, t) }}>
 					{token.text}
