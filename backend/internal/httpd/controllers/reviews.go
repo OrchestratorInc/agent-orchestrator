@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
+	"github.com/aoagents/agent-orchestrator/backend/internal/reviewerror"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
 
@@ -226,8 +227,8 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 	}
 	envelope.WriteJSON(w, status, TriggerReviewResponse{
 		ReviewerHandleID:  res.ReviewerHandleID,
-		Reviews:           reviews,
-		Runs:              runs,
+		Reviews:           reviewStatesPayload(reviews),
+		Runs:              reviewRunsPayload(runs),
 		Created:           res.Created,
 		AutoInjectEnabled: res.AutoInjectEnabled,
 		ReviewerSurface:   reviewerSurfacePayload(res.ReviewerSurface),
@@ -284,7 +285,7 @@ func (c *ReviewsController) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	envelope.WriteJSON(w, http.StatusOK, CancelReviewResponse{
 		ReviewerHandleID: res.ReviewerHandleID,
-		Reviews:          reviews,
+		Reviews:          reviewStatesPayload(reviews),
 	})
 }
 
@@ -330,7 +331,7 @@ func (c *ReviewsController) restore(w http.ResponseWriter, r *http.Request) {
 	if runs == nil {
 		runs = []domain.ReviewRun{}
 	}
-	envelope.WriteJSON(w, http.StatusOK, RestoreReviewResponse{ReviewerHandleID: res.ReviewerHandleID, ReviewerHarness: res.ReviewerHarness, Reviews: reviews, Runs: runs})
+	envelope.WriteJSON(w, http.StatusOK, RestoreReviewResponse{ReviewerHandleID: res.ReviewerHandleID, ReviewerHarness: res.ReviewerHarness, Reviews: reviewStatesPayload(reviews), Runs: reviewRunsPayload(runs)})
 }
 
 func (c *ReviewsController) switchReviewer(w http.ResponseWriter, r *http.Request) {
@@ -368,11 +369,44 @@ func reviewsResponse(res reviewcore.SessionReviews, reviews []reviewcore.PRRevie
 		ReviewerHandleID:      res.ReviewerHandleID,
 		ReviewerHarness:       res.ReviewerHarness,
 		ReviewerActivityState: string(res.ReviewerActivityState),
-		Reviews:               reviews,
-		Runs:                  runs,
+		Reviews:               reviewStatesPayload(reviews),
+		Runs:                  reviewRunsPayload(runs),
 		ReviewerSurface:       reviewerSurfacePayload(res.ReviewerSurface),
 		ActiveReviewers:       activeReviewersPayload(res.ActiveReviewers),
 	}
+}
+
+// Review bodies from older daemons/databases can still contain raw provider
+// errors. Sanitize only unsubmitted failures on copies at the response boundary.
+func reviewRunPayload(run domain.ReviewRun) domain.ReviewRun {
+	if reviewerror.Eligible(string(run.Status), string(run.Verdict), run.GithubReviewID) {
+		run.Body = reviewerror.Summary(run.Body)
+	}
+	return run
+}
+
+func reviewRunsPayload(runs []domain.ReviewRun) []domain.ReviewRun {
+	out := make([]domain.ReviewRun, len(runs))
+	for i, run := range runs {
+		out[i] = reviewRunPayload(run)
+	}
+	return out
+}
+
+func reviewStatesPayload(reviews []reviewcore.PRReviewState) []reviewcore.PRReviewState {
+	out := make([]reviewcore.PRReviewState, len(reviews))
+	for i, review := range reviews {
+		if review.LatestRun != nil {
+			run := reviewRunPayload(*review.LatestRun)
+			review.LatestRun = &run
+		}
+		if review.PreviousRun != nil {
+			run := reviewRunPayload(*review.PreviousRun)
+			review.PreviousRun = &run
+		}
+		out[i] = review
+	}
+	return out
 }
 
 func activeReviewersPayload(surfaces []domain.ReviewerSurface) []domain.ReviewerSurface {
