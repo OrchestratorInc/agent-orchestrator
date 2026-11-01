@@ -2081,6 +2081,7 @@ describe("HarnessSettingsSection", () => {
 			renderSection();
 			const row = await findAgentRow("gemini");
 			await userEvent.click(await within(row).findByRole("button", { name: "Set up" }));
+			await userEvent.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 			await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
 
 			await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
