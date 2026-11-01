@@ -70,7 +70,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { PRLineage } from "./SessionLineage";
+import { SessionLineageFooter } from "./SessionLineage";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
@@ -472,7 +472,6 @@ const SummaryView = memo(function SummaryView({
 				<SessionBranchSummary
 					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
 					hostId={hostId}
-					mergedAt={shippedMerge?.stateChangedAt ?? undefined}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
@@ -508,6 +507,7 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			footer={<SessionLineageFooter branchPRNumber={openPRNumber} hostId={hostId} mergedAt={shippedMerge?.stateChangedAt ?? undefined} prs={prSummaries} session={session} />}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
@@ -1146,10 +1146,7 @@ export function PRSummaryCard({
 						{cardView}
 						{work ? (
 							<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div>
-						) : (
-							// Not the branch checked out: its lineage comes from the provider's commits.
-							<PRLineage className="border-t border-(--color-border-settings-input) pt-1 pb-1" hostId={hostId} pr={pr} sessionId={sessionId} />
-						)}
+						) : null}
 					</motion.div>
 				) : null}
 			</AnimatePresence>

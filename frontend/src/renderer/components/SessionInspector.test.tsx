@@ -5033,11 +5033,32 @@ describe("SessionInspector branch summary", () => {
 
   const lineageBranch = { ...pushed(2), base: "main", baseRef: "origin/main", behind: 3 };
 
+  // Lineage lives behind the button pinned to the bottom of the summary.
+  const openLineage = async () => {
+    const button = await screen.findByRole("button", { name: /^Lineage/ });
+    if (button.getAttribute("aria-expanded") !== "true") await userEvent.click(button);
+    return screen.getByTestId("lineage-footer");
+  };
+
+  it("keeps lineage out of the branch rows and the PR card, behind a button at the bottom", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
+
+    const button = await screen.findByRole("button", { name: /^Lineage/ });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("session-lineage")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Branch" })).not.toContainElement(button);
+
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(within(screen.getByTestId("lineage-footer")).getByTestId("session-lineage")).toBeInTheDocument();
+  });
+
   it("draws the lineage of an open branch: the base, its commits, and the split", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
     renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
 
-    const lineage = within(await screen.findByTestId("session-lineage"));
+    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
     const items = lineage.getAllByRole("listitem").map((item) => item.textContent);
     expect(items).toEqual(["main+3 new since the split", "second change", "first change", "split from main"]);
     expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
@@ -5047,7 +5068,7 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["c5", "c4", "c3", "c2", "c1", "c0"] });
     renderWithQuery(<SessionInspector session={session([], { branchState: { ...lineageBranch, commits: 6 } })} />);
 
-    const lineage = within(await screen.findByTestId("session-lineage"));
+    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
     expect(lineage.getByText("c2")).toBeInTheDocument();
     expect(lineage.queryByText("c1")).not.toBeInTheDocument();
     expect(lineage.getByText("+2 more")).toBeInTheDocument();
@@ -5062,17 +5083,17 @@ describe("SessionInspector branch summary", () => {
       (client) => seedPRSummaries(client, [merged]),
     );
 
-    const lineageEl = await screen.findByTestId("session-lineage");
+    const footer = await openLineage();
+    const lineageEl = await within(footer).findByTestId("session-lineage");
     expect(await within(lineageEl).findByText("merged into main 7d ago")).toBeInTheDocument();
-    // With the branch rows, which leave the folded PR section out of sight.
-    expect(screen.getByRole("region", { name: "Branch" })).toContainElement(lineageEl);
   });
 
-  it("folds the lineage to its header, keeps the base's news, and remembers the choice", async () => {
+  it("remembers the open panel and each folded lineage, which keeps the base's news", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
     const view = renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
 
-    const toggle = await screen.findByRole("button", { name: /^Lineage/ });
+    const lineageEl = await within(await openLineage()).findByTestId("session-lineage");
+    const toggle = within(lineageEl).getAllByRole("button")[0];
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -5081,7 +5102,9 @@ describe("SessionInspector branch summary", () => {
 
     view.unmount();
     renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
-    expect(await screen.findByRole("button", { name: /^Lineage/ })).toHaveAttribute("aria-expanded", "false");
+    expect(await screen.findByRole("button", { name: /^Lineage/ })).toHaveAttribute("aria-expanded", "true");
+    const again = await within(screen.getByTestId("lineage-footer")).findByTestId("session-lineage");
+    expect(within(again).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "false");
   });
 
   it("does not call a branch merged once a new commit moves its tip", async () => {
@@ -5093,7 +5116,7 @@ describe("SessionInspector branch summary", () => {
       (client) => seedPRSummaries(client, [merged]),
     );
 
-    const lineage = within(await screen.findByTestId("session-lineage"));
+    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
     expect(await lineage.findByText("after the merge")).toBeInTheDocument();
     expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
   });
@@ -5155,20 +5178,22 @@ describe("SessionInspector branch summary", () => {
       (client) => seedPRSummaries(client, [checkedOut, other]),
     );
 
-    const sections = await screen.findByTestId("pr-sections");
-    const sectionOf = (label: string) => within(sections).getByText(label).closest("section") as HTMLElement;
-    const ownLineage = await within(sectionOf("PR #7")).findByTestId("session-lineage");
-    expect(within(ownLineage).getByText("second change")).toBeInTheDocument();
-
-    await userEvent.click(within(sections).getByText("PR #8").closest("button") as HTMLElement);
-    const otherLineage = await within(sectionOf("PR #8")).findByTestId("session-lineage");
-    expect(within(otherLineage).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+    await within(await screen.findByTestId("pr-sections")).findByText("PR #8");
+    expect(await screen.findByRole("button", { name: /^Lineage.*2 branches/ })).toBeInTheDocument();
+    const footer = await openLineage();
+    const lineages = await within(footer).findAllByTestId("session-lineage");
+    expect(lineages).toHaveLength(2);
+    const [own, theirs] = lineages;
+    expect(within(own).getAllByRole("button")[0]).toHaveTextContent(`#7 ${checkedOut.title}`);
+    expect(await within(own).findByText("second change")).toBeInTheDocument();
+    expect(within(theirs).getAllByRole("button")[0]).toHaveTextContent(`#8 ${other.title}`);
+    expect(within(theirs).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "main",
       "fix the search shortcut",
       "add search",
       "split from main",
     ]);
-    expect(within(sectionOf("PR #8")).queryByRole("button", { name: /^Commit & push/ })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("pr-sections")).queryByTestId("session-lineage")).not.toBeInTheDocument();
   });
 
   it("opens the checked-out PR once its details load, not the first one listed", async () => {

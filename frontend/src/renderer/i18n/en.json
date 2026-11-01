@@ -824,6 +824,8 @@
 	"inspector.git.behind_one": "{{count}} commit behind {{base}}",
 	"inspector.git.behind_other": "{{count}} commits behind {{base}}",
 	"inspector.git.lineage": "Lineage",
+	"inspector.git.lineageBranches_one": "{{count}} branches",
+	"inspector.git.lineageBranches_other": "{{count}} branches",
 	"inspector.git.splitFrom": "split from {{base}}",
 	"inspector.git.mergedInto": "merged into {{base}} {{time}}",
 	"inspector.git.baseMoved": "+{{count}} new since the split",

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, GitBranch } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -38,12 +38,24 @@ export function resetLineageExpansion() {
  * (once its PR merged) where it came back. It draws from the commits the
  * Activity timeline already loaded, so it adds no request of its own.
  */
+/** Whether the checked-out branch has a split to draw. */
+export function sessionLineageDrawable(session: WorkspaceSession): boolean {
+	return !session.cloud && session.kind !== "orchestrator" && (session.branchState?.commits ?? 0) > 0 && (session.branchState?.base ?? "") !== "" && !sessionBranchPresentation(session).naming;
+}
+
+/** Whether a PR's provider commits give it a lineage of its own. */
+export function prLineageDrawable(pr: SessionPRSummary): boolean {
+	return Boolean(pr.targetBranch) && (pr.commits?.length ?? 0) > 0;
+}
+
 export function SessionLineage({
 	hostId,
+	label,
 	mergedAt,
 	session,
 }: {
 	hostId?: string;
+	label?: string;
 	/** When the PR whose head is the branch tip merged; absent while the branch carries unshipped work. */
 	mergedAt?: string;
 	session: WorkspaceSession;
@@ -53,7 +65,7 @@ export function SessionLineage({
 	// The base the daemon counted against; without one there is no split to draw.
 	const base = session.branchState?.base ?? "";
 	const behind = session.branchState?.behind ?? 0;
-	const drawable = !session.cloud && session.kind !== "orchestrator" && commitCount > 0 && base !== "" && !sessionBranchPresentation(session).naming;
+	const drawable = sessionLineageDrawable(session);
 	// Same key as the Activity timeline's read, so the two share one request.
 	const history = useQuery({
 		queryKey: ["session-activity-commits", hostId ?? "", session.id, commitCount],
@@ -69,7 +81,7 @@ export function SessionLineage({
 		: behind > 0
 			? t("inspector.git.baseMoved", { count: behind })
 			: undefined;
-	return <LineageGraph base={base} commits={commits} mergedAt={mergedAt} stateKey={`${hostId ?? ""}:${session.id}`} topLabel={topLabel} total={commitCount} />;
+	return <LineageGraph base={base} className="" commits={commits} label={label} mergedAt={mergedAt} stateKey={`${hostId ?? ""}:${session.id}`} topLabel={topLabel} total={commitCount} />;
 }
 
 /**
@@ -77,7 +89,7 @@ export function SessionLineage({
  * provider reported for it, splitting from its target branch. How far the
  * target moved since is only known for the checked-out branch.
  */
-export function PRLineage({ className, hostId, pr, sessionId }: { className?: string; hostId?: string; pr: SessionPRSummary; sessionId: string }) {
+export function PRLineage({ className, hostId, label, pr, sessionId }: { className?: string; hostId?: string; label?: string; pr: SessionPRSummary; sessionId: string }) {
 	const { t } = useTranslation();
 	const base = pr.targetBranch;
 	// The provider lists them oldest first; the lane reads newest first. Daemons
@@ -90,6 +102,7 @@ export function PRLineage({ className, hostId, pr, sessionId }: { className?: st
 			base={base}
 			className={className}
 			commits={commits}
+			label={label}
 			mergedAt={mergedAt}
 			stateKey={`${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`}
 			topLabel={mergedAt ? t("inspector.git.mergedInto", { base, time: formatTimeCompact(mergedAt) }) : undefined}
@@ -102,6 +115,7 @@ function LineageGraph({
 	base,
 	className = "mt-3",
 	commits: all,
+	label,
 	mergedAt,
 	stateKey,
 	topLabel,
@@ -111,6 +125,8 @@ function LineageGraph({
 	className?: string;
 	/** Newest first. */
 	commits: LineageCommit[];
+	/** Names the lineage when several share a list; defaults to "Lineage". */
+	label?: string;
 	mergedAt?: string;
 	/** Remembers whether this lineage is folded. */
 	stateKey: string;
@@ -146,7 +162,7 @@ function LineageGraph({
 				onClick={toggle}
 				type="button"
 			>
-				<span className="shrink-0">{t("inspector.git.lineage")}</span>
+				<span className={label ? "min-w-0 truncate text-foreground" : "shrink-0"}>{label ?? t("inspector.git.lineage")}</span>
 				{/* Folded, the one fact that matters still shows. */}
 				{!expanded && topLabel ? <span className="min-w-0 truncate">{topLabel}</span> : null}
 				<ChevronRight aria-hidden="true" className={cn("ml-auto size-icon-sm shrink-0 transition-transform motion-reduce:transition-none", expanded ? "-rotate-90" : "rotate-90")} />
@@ -185,7 +201,7 @@ function LineageGraph({
 									<circle cx={BRANCH_X} cy={y(index + 1)} fill={BRANCH_COLOR} key={commit.sha} r="3.5" />
 								))}
 							</svg>
-							<ol className="m-0 list-none p-0 text-xs" aria-label={t("inspector.git.lineage")}>
+							<ol className="m-0 list-none p-0 text-xs" aria-label={label ?? t("inspector.git.lineage")}>
 								<li className="flex items-center gap-2" style={{ height: ROW, paddingLeft: TEXT_X }}>
 									<span className="font-mono" style={{ color: MAIN_COLOR }}>{base}</span>
 									{topLabel ? <span className="min-w-0 truncate text-passive">{topLabel}</span> : null}
@@ -204,6 +220,79 @@ function LineageGraph({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+		</div>
+	);
+}
+
+/**
+ * The lineage button pinned to the bottom of the summary. It opens a panel
+ * above it with one lineage per branch: the checked-out branch drawn from
+ * the worktree, every other PR from the commits its provider reported.
+ */
+export function SessionLineageFooter({
+	branchPRNumber,
+	hostId,
+	mergedAt,
+	prs,
+	session,
+}: {
+	/** The PR whose branch is checked out; its lineage comes from the worktree. */
+	branchPRNumber?: number;
+	hostId?: string;
+	mergedAt?: string;
+	prs: SessionPRSummary[];
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion();
+	const panelId = useId();
+	const stateKey = `footer:${hostId ?? ""}:${session.id}`;
+	const [open, setOpen] = useState(() => lineageExpansion.get(stateKey) ?? false);
+	const toggle = () => {
+		lineageExpansion.set(stateKey, !open);
+		setOpen(!open);
+	};
+	const branchName = sessionBranchPresentation(session).branch;
+	const prName = (pr: SessionPRSummary) => `#${pr.number} ${pr.title}`;
+	const branchPR = prs.find((pr) => pr.number === branchPRNumber);
+	const worktree = sessionLineageDrawable(session)
+		? { key: "worktree", node: <SessionLineage hostId={hostId} label={branchPR ? prName(branchPR) : branchName || undefined} mergedAt={mergedAt} session={session} /> }
+		: undefined;
+	const others = prs
+		.filter((pr) => pr.number !== branchPRNumber && prLineageDrawable(pr))
+		.map((pr) => ({ key: pr.url || String(pr.number), node: <PRLineage className="" hostId={hostId} label={prName(pr)} pr={pr} sessionId={session.id} /> }));
+	const lineages = [...(worktree ? [worktree] : []), ...others];
+	if (lineages.length === 0) return null;
+	return (
+		<div className="border-t border-border bg-background" data-testid="lineage-footer">
+			<AnimatePresence initial={false}>
+				{open ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1 }}
+						className="overflow-hidden"
+						exit={{ height: 0, opacity: 0 }}
+						id={panelId}
+						initial={{ height: 0, opacity: 0 }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="board-scrollbar flex max-h-[45vh] flex-col gap-2 divide-y divide-(--color-border-settings-input) overflow-y-auto px-3 pt-2 pb-1" role="region" aria-label={t("inspector.git.lineage")}>
+							{lineages.map((lineage) => <div className="min-w-0 pt-1 first:pt-0" key={lineage.key}>{lineage.node}</div>)}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			<button
+				aria-controls={open ? panelId : undefined}
+				aria-expanded={open}
+				className="flex h-9 w-full min-w-0 items-center gap-2 px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+				onClick={toggle}
+				type="button"
+			>
+				<GitBranch aria-hidden="true" className="size-icon-sm shrink-0" />
+				<span className="shrink-0 font-medium">{t("inspector.git.lineage")}</span>
+				{lineages.length > 1 ? <span className="shrink-0 text-passive">{t("inspector.git.lineageBranches", { count: lineages.length })}</span> : null}
+				<ChevronRight aria-hidden="true" className={cn("ml-auto size-icon-sm shrink-0 transition-transform motion-reduce:transition-none", open ? "rotate-90" : "-rotate-90")} />
+			</button>
 		</div>
 	);
 }

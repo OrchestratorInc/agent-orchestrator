@@ -828,6 +828,8 @@
 	"inspector.git.behind_one": "{{count}} Commit hinter {{base}}",
 	"inspector.git.behind_other": "{{count}} Commits hinter {{base}}",
 	"inspector.git.lineage": "Verlauf",
+	"inspector.git.lineageBranches_one": "{{count}} Branches",
+	"inspector.git.lineageBranches_other": "{{count}} Branches",
 	"inspector.git.splitFrom": "abgezweigt von {{base}}",
 	"inspector.git.mergedInto": "in {{base}} gemergt {{time}}",
 	"inspector.git.baseMoved": "+{{count}} neu seit der Abzweigung",

@@ -828,6 +828,8 @@
 	"inspector.git.behind_one": "{{base}} より {{count}} 件遅れ",
 	"inspector.git.behind_other": "{{base}} より {{count}} 件遅れ",
 	"inspector.git.lineage": "系譜",
+	"inspector.git.lineageBranches_one": "{{count}} 個のブランチ",
+	"inspector.git.lineageBranches_other": "{{count}} 個のブランチ",
 	"inspector.git.splitFrom": "{{base}} から分岐",
 	"inspector.git.mergedInto": "{{base}} にマージ済み {{time}}",
 	"inspector.git.baseMoved": "分岐後に +{{count}}",
