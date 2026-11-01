@@ -170,6 +170,43 @@ describe("ParallelPromptCard", () => {
 		expect(postMock.mock.calls[1][1].body.clientRequestId).toBe(postMock.mock.calls[0][1].body.clientRequestId);
 	});
 
+	it("keeps the original request through an incomplete replay until the start is confirmed", async () => {
+		// The worker exists but its commit failed; the same-id retry finds it unfinished.
+		postMock
+			.mockResolvedValueOnce({ error: { code: "SPAWN_COMMIT_FAILED", message: "commit failed" } })
+			.mockResolvedValueOnce({ error: { code: "CLIENT_REQUEST_INCOMPLETE", message: "still starting" } })
+			.mockResolvedValueOnce({ data: { ok: true, workerId: "ao-2" } });
+		renderCard();
+		const row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		for (let attempt = 1; attempt <= 2; attempt += 1) {
+			await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(attempt));
+			expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't confirm that start");
+			expect(within(row).getByRole("button", { name: "Edit prompt" })).toBeDisabled();
+		}
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(screen.queryByText("Fix login")).not.toBeInTheDocument());
+		const ids = postMock.mock.calls.map((call) => call[1].body.clientRequestId);
+		expect(new Set(ids).size).toBe(1);
+	});
+
+	it("keeps an unconfirmed start's request when its retry is refused", async () => {
+		postMock
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ error: { code: "AGENT_AUTH_REQUIRED", message: "Sign in to Codex first" } })
+			.mockResolvedValueOnce({ data: { ok: true, workerId: "ao-2" } });
+		renderCard();
+		const row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't confirm that start");
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to Codex first");
+		expect(within(row).getByRole("button", { name: "Edit prompt" })).toBeDisabled();
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(3));
+		expect(new Set(postMock.mock.calls.map((call) => call[1].body.clientRequestId)).size).toBe(1);
+	});
+
 	it("sends a new request after the daemon refuses a start", async () => {
 		postMock
 			.mockResolvedValueOnce({ error: { code: "AGENT_AUTH_REQUIRED", message: "Sign in to Codex first" } })

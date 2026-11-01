@@ -119,12 +119,18 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 				const workerId = response?.data?.workerId;
 				if (!workerId) {
 					void captureRendererEvent("ao.renderer.task_create_failed", { project_id: projectId });
-					const uncertain = !response || !apiError || POST_START_ERRORS.has(apiErrorCode(apiError) ?? "");
-					if (uncertain) {
+					const code = apiErrorCode(apiError) ?? "";
+					// No answer, a failure after the worker may exist, or a replay that
+					// finds the first attempt still unfinished.
+					const mayHaveStarted = !response || !apiError || POST_START_ERRORS.has(code) || code === "CLIENT_REQUEST_INCOMPLETE";
+					if (mayHaveStarted || saved) {
+						// Keep the request. A refusal of a retry says nothing about whether
+						// the first attempt started, and resending the same id is always
+						// safe: with nothing to replay, the daemon starts it under that id.
 						if (editingId === suggestion.id) setEditingId(undefined);
-						setError(t("parallelPrompt.startUncertain"));
+						setError(mayHaveStarted ? t("parallelPrompt.startUncertain") : apiErrorMessage(apiError, t("newTask.unableToStart")));
 					} else {
-						// The daemon refused it: nothing started, so a retry is a new request.
+						// The daemon refused a first attempt: nothing started, so a retry is a new request.
 						clearPendingParallelStart(projectId, suggestion.id);
 						setError(apiErrorMessage(apiError, t("newTask.unableToStart")));
 					}
