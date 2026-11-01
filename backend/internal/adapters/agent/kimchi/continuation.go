@@ -330,7 +330,7 @@ func validateKimchiResumeCopy(ctx context.Context, path, sessionID, cwd string) 
 // wrap in '--'. It operates on the raw launch cwd with no symlink resolution,
 // matching the loader, so the folder AO writes to is the folder Kimchi reads.
 func encodeKimchiCwdDir(cwd string) string {
-	if len(cwd) > 0 && (cwd[0] == '/' || cwd[0] == '\\') {
+	if cwd != "" && (cwd[0] == '/' || cwd[0] == '\\') {
 		cwd = cwd[1:]
 	}
 	return "--" + strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(cwd) + "--"
