@@ -145,6 +145,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/u
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
+	getCloudAccessToken,
 	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
@@ -152,6 +153,9 @@ import {
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import { clearShareSnapshots } from "./main/cloud-share";
+import { registerCloudShareIpc } from "./main/cloud-share-ipc";
+import { ShareLinkRecords } from "./main/cloud-share-links";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
@@ -3163,6 +3167,19 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 });
 registerCloudArtifactIpc({ ipcMain });
+
+// Share links: publishing reads the file and holds the token here, in the main
+// process; the renderer asks for it when the person presses Publish.
+const shareSnapshotDir = path.join(desktopDataDir, "tmp", "share-uploads");
+void clearShareSnapshots(shareSnapshotDir).catch(() => undefined);
+registerCloudShareIpc({
+	ipcMain,
+	daemonDataDir: resolvedDaemonDataDir,
+	snapshotDir: () => shareSnapshotDir,
+	getToken: () => getCloudAccessToken(cloudDataDir()),
+	fetch: (url, init) => net.fetch(url, init),
+	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

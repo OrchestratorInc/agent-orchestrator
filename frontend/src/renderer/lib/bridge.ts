@@ -89,6 +89,24 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		// Publishing reads local files in the main process: desktop only.
+		cloudShare: {
+			available: async () => false,
+			inspect: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			list: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			publish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			cancel: async () => undefined,
+			unpublish: async () => {
+				throw new Error("Sharing needs the AO desktop app.");
+			},
+			onProgress: () => () => undefined,
+		},
 		cloudArtifact: {
 			fetch: async (url: string) => {
 				const response = await fetch(url);

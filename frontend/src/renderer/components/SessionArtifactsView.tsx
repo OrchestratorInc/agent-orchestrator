@@ -17,6 +17,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -176,6 +177,7 @@ function ArtifactViewerBody({
 	sendMessage,
 	sessionId,
 	toolbarHost,
+	onEditingChange,
 }: {
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
@@ -196,6 +198,7 @@ function ArtifactViewerBody({
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
+	onEditingChange?: (editing: boolean) => void;
 }) {
 	const restore = useRestoreArtifactVersion({ hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
@@ -230,6 +233,7 @@ function ArtifactViewerBody({
 						sendMessage={sendMessage}
 						sessionId={sessionId}
 						toolbarHost={previewing || showingPage ? null : toolbarHost}
+						onEditingChange={onEditingChange}
 					/>
 				</div>
 				{showingPage ? <iframe className="absolute inset-0 h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} /> : null}
@@ -354,6 +358,8 @@ export function SessionArtifactsView({
 	), [artifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
+	// Share hides while the open file is being edited.
+	const [editingFile, setEditingFile] = useState(false);
 	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
@@ -445,6 +451,13 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
+						{/* Beside the viewer's Edit button: a local artifact's public link. */}
+						{!hostId && !session.cloud && !editingFile ? (
+							<ShareArtifactButton
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								name={selected.name}
+							/>
+						) : null}
 						{hasHtmlPreview && previewVersion === null ? (
 							<div className="flex shrink-0 items-center gap-0.5">
 								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
@@ -505,6 +518,7 @@ export function SessionArtifactsView({
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
+							onEditingChange={setEditingFile}
 						/>
 					)}
 				</div>
