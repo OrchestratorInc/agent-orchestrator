@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
+import { isAgentLoginPending } from "../../../lib/agent-login-lifecycle";
 import { aoBridge } from "../../../lib/bridge";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 
@@ -196,6 +197,29 @@ describe("HarnessLoginPanel", () => {
 		await screen.findByText("ABCD-EFGHI");
 		unmount();
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", undefined);
+	});
+
+	it("keeps the harness pending when unmount cancellation cannot reach the host", async () => {
+		vi.mocked(cancelAgentUILogin).mockRejectedValue(new Error("Host is disconnected"));
+		const { user, unmount } = setup("remote-1");
+		await user.click(screen.getByRole("button", { name: "Device code" }));
+		await screen.findByText("ABCD-EFGHI");
+		unmount();
+		await waitFor(() => expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", "remote-1"));
+		await act(async () => { await Promise.resolve(); });
+		expect(isAgentLoginPending("codex", "remote-1")).toBe(true);
+	});
+
+	it("does not open a recovered remote Codex browser login on this computer", async () => {
+		const browser: AgentLoginSnapshot = { ...snapshot, method: "browser", deviceCode: undefined, loginUrl: "https://auth.openai.com/oauth/authorize" };
+		vi.mocked(startAgentUILogin).mockResolvedValue(browser);
+		vi.mocked(getAgentUILogin).mockResolvedValue(browser);
+		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		const { user } = setup("remote-1");
+		await user.click(screen.getByRole("button", { name: "Device code" }));
+		expect(await screen.findByText("Complete sign-in in your browser. Waiting for approval…")).toBeVisible();
+		expect(open).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "Open sign-in page" })).toBeNull();
 	});
 
 	it("polls the selected host and verifies when the process finishes", async () => {

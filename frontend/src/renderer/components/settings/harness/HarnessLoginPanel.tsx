@@ -5,7 +5,7 @@ import type { components } from "../../../../api/schema";
 import { cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiErrorCode } from "../../../lib/api-client";
-import { runAgentLoginTask } from "../../../lib/agent-login-lifecycle";
+import { disposeAgentLogin, retainAgentLoginDisposal, runAgentLoginTask } from "../../../lib/agent-login-lifecycle";
 import { aoBridge } from "../../../lib/bridge";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
@@ -55,7 +55,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		return () => {
 			mounted.current = false;
 			const current = operationRef.current;
-			if (current) void runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
+			// A failed cancellation (for example on a disconnected host) is retried
+			// and keeps the harness pending, so updates stay blocked meanwhile.
+			if (current) void disposeAgentLogin(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
 		};
 	}, [agentId, hostId]);
 
@@ -117,6 +119,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		if (!url || operation.status !== "running" || openedOperation.current === operation.id) return;
 		if (!remote && operation.method !== "device_code") return;
 		if (agentId === "claude-code" && !operation.acceptsCode) return;
+		// A recovered remote Codex browser login redirects to a localhost callback
+		// on the remote host, which this computer's browser cannot reach.
+		if (remote && agentId === "codex" && operation.method === "browser") return;
 		openedOperation.current = operation.id;
 		void aoBridge.app.openExternal(url).catch(() => undefined);
 	}, [agentId, remote, operation?.id, operation?.status, operation?.loginUrl, operation?.method, operation?.acceptsCode]);
@@ -135,7 +140,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 				if (!mounted.current) return;
 				const next = await startAgentUILogin(agentId, target.id, credential, hostId);
 				if (!mounted.current) {
-					await cancelAgentUILogin(agentId, next.id, hostId);
+					const dispose = () => cancelAgentUILogin(agentId, next.id, hostId);
+					try {
+						await dispose();
+					} catch (err) {
+						retainAgentLoginDisposal(agentId, hostId, dispose);
+						throw err;
+					}
 					return;
 				}
 				setMethodId(next.method);
