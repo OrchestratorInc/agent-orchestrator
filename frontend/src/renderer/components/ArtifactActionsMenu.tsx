@@ -4,11 +4,12 @@ import { useTranslation } from "react-i18next";
 import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
-import { CLOUD_TEXT_ARTIFACT, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
 import { aoBridge } from "../lib/bridge";
+import type { CloudCpClient } from "../lib/cloud-cp";
 import { artifactKey } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -28,6 +29,25 @@ function fileManagerName(): string {
 
 function terminalName(): string {
 	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
+}
+
+/**
+ * Copies a cloud session's artifact files to its folder under ~/.ao and opens
+ * it in the file manager, or shows `reveal` in it: a cloud session's
+ * artifacts live in the control plane, so this is the folder a local
+ * session's "Show in" opens.
+ */
+export async function openCloudArtifactsFolder(client: CloudCpClient, baseUrl: string, orgId: string, sessionId: string, reveal?: string): Promise<void> {
+	const [{ artifacts }, access] = await Promise.all([
+		client.listSessionArtifacts(orgId, sessionId),
+		client.createSessionArtifactAccess(orgId, sessionId),
+	]);
+	const root = `${baseUrl.replace(/\/+$/, "")}${access.filesPrefix}`;
+	await aoBridge.cloudArtifact.openFolder({
+		sessionId,
+		files: artifacts.map((file) => ({ path: file.path, url: cloudArtifactFileUrl(root, file.path, file.updatedAt) })),
+		reveal,
+	});
 }
 
 /**
@@ -77,7 +97,7 @@ export function ArtifactActionsMenu({
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
 	const sidebar = variant === "sidebar";
-	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
 	const access = useCloudArtifactAccess(session, Boolean(session.cloud) && !downloadUrl);
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
@@ -103,11 +123,23 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
 	};
+	const revealCloud = async () => {
+		open.reset();
+		setCopyError("");
+		try {
+			if (!session.cloud) return;
+			await openCloudArtifactsFolder(cloudClient, cloudBaseUrl, session.cloud.orgId, session.id, artifact.path);
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
 	const copy = async () => {
 		open.reset();
 		setCopyError("");
 		try {
 			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl ?? cloudFileUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
+			// A cloud file is known to be text only once it is read.
+			if (session.cloud && detail.binary) throw new Error(t("artifacts.notText"));
 			await aoBridge.clipboard.writeText(detail.content);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
@@ -124,7 +156,7 @@ export function ArtifactActionsMenu({
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
-	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
+	const copyable = !fileMediaKind(artifact.path);
 
 	const error = open.error?.message || copyError;
 	const resetOpen = open.reset;
@@ -164,7 +196,7 @@ export function ArtifactActionsMenu({
 		<>
 			{sidebar ? (
 				<>
-					{onEdit && !session.cloud && !fileMediaKind(artifact.path) ? (
+					{onEdit && !fileMediaKind(artifact.path) ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-foreground", actionClassName)} onClick={onEdit} size="icon-sm" type="button" variant="ghost">
@@ -219,7 +251,7 @@ export function ArtifactActionsMenu({
 					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
 				</Tooltip>
 			) : null}
-			{!sidebar || local ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 				{iconOnly ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -263,6 +295,15 @@ export function ArtifactActionsMenu({
 									{copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 								</>
 							) : null}
+						</>
+					) : null}
+					{session.cloud ? (
+						<>
+							<DropdownMenuItem onSelect={() => void revealCloud()}>
+								<FolderOpen aria-hidden="true" />
+								{t("artifacts.showIn", { name: fileManagerName() })}
+							</DropdownMenuItem>
+							{!sidebar ? <DropdownMenuSeparator /> : null}
 						</>
 					) : null}
 					{!sidebar && copyable ? (

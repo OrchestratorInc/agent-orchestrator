@@ -2,10 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
-import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
+import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 
-const { getMock, putMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn() }));
+const { getMock, putMock, cloudGet, cloudPut } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn(), cloudGet: vi.fn(), cloudPut: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock, PUT: putMock }, apiErrorMessage: () => "request failed" }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { getProjectEnvironment: cloudGet, putProjectEnvironment: cloudPut }, ready: true, baseUrl: "https://cloud.test" }) }));
 
 beforeEach(() => {
 	getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "p", name: "Example", config: { env: { EXISTING: "old" }, autoReview: true } } } });
@@ -70,4 +71,34 @@ it("autosaves a valid draft without a save button", async () => {
 	await userEvent.type(value, "auto");
 	await waitFor(() => expect(putMock).toHaveBeenCalledOnce(), { timeout: 3000 });
 	expect(putMock.mock.calls[0][1].body.config.env).toEqual({ EXISTING: "auto" });
+});
+
+it("saves a Cloud project's variables to the control plane, never the local daemon", async () => {
+	cloudGet.mockReset().mockResolvedValue({ editable: true, variables: [{ name: "API_KEY", value: "old" }] });
+	cloudPut.mockReset().mockImplementation(async (_org: string, _project: string, variables: Record<string, string>) => ({
+		editable: true, variables: Object.entries(variables).map(([name, value]) => ({ name, value })),
+	}));
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	render(<QueryClientProvider client={client}><CloudProjectEnvironmentSettings projectId="p" cloudOrgId="org" /></QueryClientProvider>);
+	const value = await screen.findByLabelText("Value 1");
+	expect(screen.getByText(/Stored encrypted/)).toBeInTheDocument();
+	await userEvent.clear(value);
+	await userEvent.type(value, "new");
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(cloudPut).toHaveBeenCalledWith("org", "p", { API_KEY: "new" }));
+	expect(getMock).not.toHaveBeenCalled();
+	expect(putMock).not.toHaveBeenCalled();
+});
+
+it("shows a Cloud member who cannot change them only the variables' names", async () => {
+	cloudGet.mockReset().mockResolvedValue({ editable: false, variables: [{ name: "API_KEY" }] });
+	cloudPut.mockReset();
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	render(<QueryClientProvider client={client}><CloudProjectEnvironmentSettings projectId="p" cloudOrgId="org" /></QueryClientProvider>);
+	expect(await screen.findByText("API_KEY")).toBeInTheDocument();
+	expect(screen.getByText(/Only organization owners and admins/)).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Add variable" })).not.toBeInTheDocument();
+	expect(screen.queryByLabelText("Value 1")).not.toBeInTheDocument();
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	expect(cloudPut).not.toHaveBeenCalled();
 });

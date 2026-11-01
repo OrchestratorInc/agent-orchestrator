@@ -15,6 +15,8 @@ import type {
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
+	CloudCpPromptSuggestionRequest,
+	CloudCpPromptSuggestionResponse,
 	CloudCpChatModelsResponse,
 	CloudCpCoderTemplateParametersResponse,
 	CloudCpCoderTemplatesResponse,
@@ -43,6 +45,11 @@ import type {
 	CloudCpSessionPullRequestsResponse,
 	CloudCpSessionReviewState,
 	CloudCpProjectSettingsRequest,
+	CloudCpProjectEnvironment,
+	CloudCpProjectIntakeStatus,
+	CloudCpCue,
+	CloudCpCueDefinition,
+	CloudCpInvokeCueResult,
 	CloudCpProviderConnectionResponse,
 	CloudCpProviderConnectionsResponse,
 	CloudCpGitHubReposResponse,
@@ -73,7 +80,12 @@ import type {
 	CloudCpRestoreSessionResponse,
 	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
+	CloudCpSessionPinResponse,
 	CloudCpArtifactAccessResponse,
+	CloudCpArtifactVersion,
+	CloudCpArtifactVersionSummary,
+	CloudCpChatSearchResponse,
+	CloudCpSaveArtifactRequest,
 	CloudCpSessionArtifact,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
@@ -184,6 +196,17 @@ export interface CloudCpClient {
 	): Promise<CloudCpProjectResponse>;
 	getProject(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
 	updateProjectSettings(orgId: string, projectId: string, body: CloudCpProjectSettingsRequest, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
+	/** GET /orgs/{orgId}/projects/{projectId}/environment: values only for an owner or admin. */
+	getProjectEnvironment(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectEnvironment>;
+	/** PUT /orgs/{orgId}/projects/{projectId}/environment: replaces them as a whole; owners and admins only. */
+	putProjectEnvironment(orgId: string, projectId: string, variables: Record<string, string>, options?: CloudCpRequestOptions): Promise<CloudCpProjectEnvironment>;
+	getProjectIntakeStatus(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectIntakeStatus>;
+	listProjectCues(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ cues: CloudCpCue[] }>;
+	createProjectCue(orgId: string, projectId: string, body: CloudCpCueDefinition, options?: CloudCpRequestOptions): Promise<{ cue: CloudCpCue }>;
+	updateProjectCue(orgId: string, cueId: string, body: CloudCpCueDefinition, options?: CloudCpRequestOptions): Promise<{ cue: CloudCpCue }>;
+	deleteProjectCue(orgId: string, cueId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Runs a cue into a session: an agent cue is sent there; a command cue comes back to run in a new shell. */
+	invokeProjectCue(orgId: string, cueId: string, sessionId: string, options?: CloudCpMutationOptions): Promise<CloudCpInvokeCueResult>;
 	updateProject(
 		orgId: string,
 		projectId: string,
@@ -207,6 +230,10 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	/** Rename a session for everyone who sees it. */
+	renameSession(orgId: string, sessionId: string, displayName: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	/** Pin or unpin a session in the caller's own sidebar. */
+	setSessionPinned(orgId: string, sessionId: string, pinned: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionPinResponse>;
 	createSessionArtifactAccess(
 		orgId: string,
 		sessionId: string,
@@ -217,6 +244,17 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<{ artifacts: CloudCpSessionArtifact[] }>;
+	/** Saves an edit of one artifact file made in the app; 409 artifact_changed when the file changed since it was read. */
+	saveSessionArtifact(orgId: string, sessionId: string, body: CloudCpSaveArtifactRequest, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
+	/** The kept versions of one artifact file, newest (the committed file) first. */
+	listSessionArtifactVersions(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<{ versions: CloudCpArtifactVersionSummary[] }>;
+	getSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<CloudCpArtifactVersion>;
+	/** Makes a kept version the committed file again, as a new version. */
+	restoreSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
+	/** Starts the agent again in a live session whose terminal agent exited. */
+	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
+	/** Chat messages across the organization's sessions the caller can see that contain query. */
+	searchChats(orgId: string, query: { query: string; limit?: number }, options?: CloudCpRequestOptions): Promise<CloudCpChatSearchResponse>;
 	/** Deletes one artifact file from cloud storage and the session's worker. */
 	deleteSessionArtifact(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<void>;
 	updateSessionPreferences(
@@ -400,6 +438,13 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSendMessageResponse>;
 	listChatModels(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
+	/** The next message the person could send after a settled turn; a worker that cannot suggest fails. */
+	suggestChatPrompt(orgId: string, sessionId: string, body: CloudCpPromptSuggestionRequest, options?: CloudCpRequestOptions): Promise<CloudCpPromptSuggestionResponse>;
+	/** One review conversation's events (a review whose run has interfaceMode chat). */
+	listReviewChatEvents(orgId: string, sessionId: string, reviewRunId: string, query?: CloudCpChatEventsQuery, options?: CloudCpRequestOptions): Promise<CloudCpChatEventsResponse>;
+	/** Queues a message to the reviewer; a conversation that stopped after its verdict starts again. */
+	sendReviewChatMessage(orgId: string, sessionId: string, reviewRunId: string, text: string, options?: CloudCpMutationOptions): Promise<CloudCpSendMessageResponse>;
+	interruptReviewChat(orgId: string, sessionId: string, reviewRunId: string, options?: CloudCpRequestOptions): Promise<void>;
 	cancelTurn(
 		orgId: string,
 		sessionId: string,
@@ -752,6 +797,26 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { signal: o?.signal }),
 		updateProjectSettings: (orgId, projectId, body, o) =>
 			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/settings`, { body, signal: o?.signal }),
+		getProjectEnvironment: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/environment`, { signal: o?.signal }),
+		putProjectEnvironment: (orgId, projectId, variables, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/environment`, { body: { variables }, signal: o?.signal }),
+		getProjectIntakeStatus: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/intake`, { signal: o?.signal }),
+		listProjectCues: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/cues`, { signal: o?.signal }),
+		createProjectCue: (orgId, projectId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/cues`, { body, signal: o?.signal }),
+		updateProjectCue: (orgId, cueId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/cues/${seg(cueId)}`, { body, signal: o?.signal }),
+		deleteProjectCue: (orgId, cueId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/cues/${seg(cueId)}`, { signal: o?.signal }),
+		invokeProjectCue: (orgId, cueId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/cues/${seg(cueId)}/invoke`, {
+				body: { sessionId },
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
 		deleteProject: (orgId, projectId, o) =>
 			requestJson("DELETE", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, {
 				signal: o?.signal,
@@ -774,10 +839,26 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		renameSession: (orgId, sessionId, displayName, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { body: { displayName }, signal: o?.signal }),
+		setSessionPinned: (orgId, sessionId, pinned, o) =>
+			requestJson(pinned ? "POST" : "DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pin`, { signal: o?.signal }),
 		createSessionArtifactAccess: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
 		listSessionArtifacts: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
+		saveSessionArtifact: (orgId, sessionId, body, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/content`, { body, signal: o?.signal }),
+		listSessionArtifactVersions: (orgId, sessionId, path, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions`, { query: { path }, signal: o?.signal }),
+		getSessionArtifactVersion: (orgId, sessionId, path, version, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions/${seg(String(version))}`, { query: { path }, signal: o?.signal }),
+		restoreSessionArtifactVersion: (orgId, sessionId, path, version, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/versions/restore`, { body: { path, version }, signal: o?.signal }),
+		restartSessionAgent: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/agent/restart`, { signal: o?.signal }),
+		searchChats: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/chat-search`, { query: { q: query.query, limit: query.limit }, signal: o?.signal }),
 		deleteSessionArtifact: (orgId, sessionId, path, o) =>
 			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts?path=${encodeURIComponent(path)}`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>
@@ -898,7 +979,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		searchWorkspaceReview: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
-				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, mode: query.mode, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
@@ -941,6 +1022,21 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listChatModels: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-models`, { signal: o?.signal }),
+		suggestChatPrompt: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat/prompt-suggestion`, { body, signal: o?.signal }),
+		listReviewChatEvents: (orgId, sessionId, reviewRunId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/${seg(reviewRunId)}/chat-events`, {
+				query: { after: query?.after, limit: query?.limit },
+				signal: o?.signal,
+			}),
+		sendReviewChatMessage: (orgId, sessionId, reviewRunId, text, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/${seg(reviewRunId)}/chat/messages`, {
+				body: { text },
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		interruptReviewChat: (orgId, sessionId, reviewRunId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/${seg(reviewRunId)}/chat/interrupt`, { signal: o?.signal }),
 		cancelTurn: (orgId, sessionId, turnId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/cancel`, {
 				signal: o?.signal,

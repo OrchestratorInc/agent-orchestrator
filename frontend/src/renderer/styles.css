@@ -6372,6 +6372,13 @@ html[data-window-translucent="true"] :is(
 	--sidebar-accent: var(--solid-sidebar-accent);
 }
 
+/* A Cloud session's startup and interface-switch screens cover the session
+ * beneath them; on a clear canvas that session would show through the steps,
+ * so they keep the solid one. */
+html[data-window-translucent="true"] [data-startup-cover] {
+	background-color: var(--solid-bg-primary);
+}
+
 /* Text drawn in the canvas colour sits on a solid foreground fill (the send
  * button's arrow), so it must keep the solid colour or it vanishes. */
 html[data-window-translucent="true"] :is(.text-background, .hover\:text-background:hover) {

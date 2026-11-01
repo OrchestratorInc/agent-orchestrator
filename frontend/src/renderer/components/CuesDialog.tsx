@@ -26,6 +26,8 @@ import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
 type CuesSettingsProps = {
 	projectId: string;
+	/** A Cloud project's organization: its cues live on the control plane. */
+	cloudOrgId?: string;
 	onBusyChange?: (busy: boolean) => void;
 	createOnly?: boolean;
 	onCreated?: () => void;
@@ -70,18 +72,18 @@ export function CuesSettings(props: CuesSettingsProps) {
 	return <ProjectCuesSettings key={props.projectId} {...props} />;
 }
 
-function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
+function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const cuesQuery = useProjectCuesQuery(projectId, !createOnly);
+	const cuesQuery = useProjectCuesQuery(projectId, !createOnly, cloudOrgId);
 	useEffect(() => {
 		if (!createOnly && cuesQuery.isError && !cuesQuery.isFetching) {
 			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(cuesQuery.error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
 		}
 	}, [projectId, createOnly, cuesQuery.isError, cuesQuery.isFetching, cuesQuery.error, showGlobalToast, t]);
-	const createMutation = useCreateCueMutation(projectId);
-	const updateMutation = useUpdateCueMutation(projectId);
-	const deleteMutation = useDeleteCueMutation(projectId);
+	const createMutation = useCreateCueMutation(projectId, cloudOrgId);
+	const updateMutation = useUpdateCueMutation(projectId, cloudOrgId);
+	const deleteMutation = useDeleteCueMutation(projectId, cloudOrgId);
 
 	const [formOpen, setFormOpen] = useState<"new" | CueDTO | null>(createOnly ? "new" : null);
 	const [deletingCue, setDeletingCue] = useState<CueDTO | null>(null);
@@ -376,8 +378,9 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 }
 
 /** Session-local creation surface; shares the settings editor and validation. */
-export function CreateCueDialog({ projectId, open, onOpenChange, onClosed }: {
+export function CreateCueDialog({ projectId, cloudOrgId, open, onOpenChange, onClosed }: {
 	projectId: string;
+	cloudOrgId?: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onClosed?: () => void;
@@ -397,7 +400,7 @@ export function CreateCueDialog({ projectId, open, onOpenChange, onClosed }: {
 					<button type="button" aria-label={t("settings.close")} className="settings-close-button" disabled={busy} onClick={() => onOpenChange(false)}><X aria-hidden="true" className="size-4" /></button>
 				</DialogHeader>
 				{open ? <div className={settingsDialogBodyClass}>
-					<CuesSettings projectId={projectId} createOnly hideCueActions onBusyChange={setBusy}
+					<CuesSettings projectId={projectId} cloudOrgId={cloudOrgId} createOnly hideCueActions onBusyChange={setBusy}
 						onCreated={() => onOpenChange(false)} onCancel={() => onOpenChange(false)} />
 				</div> : null}
 			</DialogContent>

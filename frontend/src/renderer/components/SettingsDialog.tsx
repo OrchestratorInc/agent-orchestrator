@@ -17,7 +17,7 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
-import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
+import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
 import { topbarDragStyle } from "./ShellTopbar";
@@ -104,9 +104,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Scripts are project settings on local and Cloud projects alike (a Cloud
-	// session's worker runs them). Environment and cues are local-daemon
-	// features; remote hosts expose none of these.
+	// Scripts, environment and cues are project settings on local and Cloud
+	// projects alike (a Cloud session's worker runs and gets them); remote hosts
+	// expose none of these.
 	// A Cloud project's repositories, where its agent starts, and the
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
@@ -114,7 +114,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
-	if (!remoteHostId && !isCloudProjectSettings) {
+	if (!remoteHostId) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -202,7 +202,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
 		if (settingsModal?.scope === "project") {
-			projectHistory.reset(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
+			projectHistory.reset(settingsModal.section ?? "general");
 			setPendingProjectSection(null);
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
@@ -302,8 +302,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 					</div>
 				);
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
-				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "cues") {
+				return <CuesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onBusyChange={setCueBusy} />;
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
 				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
@@ -316,8 +316,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
 					: <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
-				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "environment") {
+				return isCloudProjectSettings && cloudOrgId !== undefined
+					? <CloudProjectEnvironmentSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
+					: <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;

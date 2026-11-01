@@ -12,6 +12,7 @@ import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
+import { defaultReviewerHarness } from "../lib/reviewer-harnesses";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
@@ -64,6 +65,10 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	const usesCoder = offering.hasCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER;
 	const standalone = isStandaloneCloudProject(project);
 	const additionalRepos = projectAdditionalRepos(project.config);
+	// The control plane runs issue intake for every Cloud project with a
+	// repository (the local daemon's AO_TRACKER_INTAKE gate is about its own
+	// poller); a project without a repository has no issues.
+	const intakeVisible = !standalone;
 	const save = async (values: ProjectSettingsDraft) => {
 		const response = await client.updateProjectSettings(project.orgId, project.id, cloudProjectSettingsPatch(saved.current, toCloudDraft(values)));
 		saved.current = cloudProjectSettingsDraft(response.project);
@@ -73,7 +78,8 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		// A standalone project has no repository, so no branches or pull requests to configure.
-		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, lockedAgents: true }}
+		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, requiredAgents: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
+		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
 			{ label: t("settings.project.kind"), value: standalone ? t("settings.project.kind.cloudStandalone", { defaultValue: "Cloud, without a repository" }) : t("settings.project.kind.cloud") },
@@ -83,10 +89,13 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 				: { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl },
 			...additionalRepos.map((repo, index) => ({ label: t("settings.cloudProject.additionalRepositoryN", { defaultValue: "Additional repository {{number}}", number: index + 1 }), value: repo.url, href: repo.url })),
 		]}
-		generalExtra={usesCoder ? <CloudProjectCoderSettings project={project} /> : undefined}
+		generalExtra={usesCoder || intakeVisible ? <>
+			{intakeVisible ? <CloudIntakeStatus project={project} /> : null}
+			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
+		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
-		// Without a project reviewer, Cloud reviews with the session's agent: the worker's.
-		defaultReviewer={(draft) => draft.workerAgent}
+		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
+		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
 }
@@ -256,11 +265,14 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 
 function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
-	// The agent is fixed in Cloud; show the one a reviewer actually runs with.
-	const shown = value || (role === "reviewer" ? draft.workerAgent : "");
+	// Show the agent a reviewer actually runs with when none is chosen.
+	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent, true) : "");
+	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
 	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
-		options={[{ value: "", label: t(role === "reviewer" ? "settings.cloudProject.sessionAgent" : "settings.cloudProject.sessionSelection") }, ...CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }))]}
+		// The worker and orchestrator need an agent, as on local projects; a
+		// reviewer can follow the worker agent's default.
+		options={role === "reviewer" ? [{ value: "", label: t("settings.cloudProject.sessionAgent") }, ...agents] : agents}
 		triggerClassName="w-fit" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
 		onChange={onChange} />;
@@ -269,7 +281,8 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft {
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
-		sessionPrefix: values.sessionPrefix, intakeEnabled: false, intakeRepo: "", intakeAssignee: "",
+		sessionPrefix: values.sessionPrefix, workersRequestReview: values.workersRequestReview,
+		intakeEnabled: values.intake.enabled, intakeRepo: values.intake.repo, intakeAssignee: values.intake.assignee,
 		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,
 		workerModel: values.worker.agentConfig.model, orchestratorModel: values.orchestrator.agentConfig.model, reviewerModel: values.reviewer.agentConfig.model,
 		workerMode: values.worker.agentConfig.mode, orchestratorMode: values.orchestrator.agentConfig.mode, reviewerMode: values.reviewer.agentConfig.mode,
@@ -292,5 +305,25 @@ function toCloudDraft(values: ProjectSettingsDraft): CloudProjectSettingsDraft {
 		if (permissions !== "" && permissions !== "default" && permissions !== "auto" && permissions !== "accept-edits" && permissions !== "bypass-permissions") throw new Error("Unsupported Cloud permissions");
 		return { agent: provider, agentConfig: { model, mode, effort, permissions } };
 	};
-	return { displayName: values.displayName, defaultBranch: values.defaultBranch, sessionPrefix: values.sessionPrefix, autoReview: values.autoReview, worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer") };
+	return {
+		displayName: values.displayName, defaultBranch: values.defaultBranch, sessionPrefix: values.sessionPrefix, autoReview: values.autoReview,
+		workersRequestReview: values.workersRequestReview ?? false,
+		intake: { enabled: values.intakeEnabled, repo: values.intakeRepo, assignee: values.intakeAssignee },
+		worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer"),
+	};
+}
+
+/** When issue intake last looked for issues, or why it could not. */
+function CloudIntakeStatus({ project }: { project: CloudCpProject }) {
+	const { t } = useTranslation();
+	const { client, ready, baseUrl } = useCloudCp();
+	const status = useQuery({
+		queryKey: ["cloud-project-intake", baseUrl, project.orgId, project.id],
+		enabled: ready && project.config.trackerIntake?.enabled === true,
+		refetchInterval: 60_000,
+		retry: false,
+		queryFn: ({ signal }) => client.getProjectIntakeStatus(project.orgId, project.id, { signal }),
+	});
+	if (!status.data?.enabled || !status.data.lastError) return null;
+	return <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.cloudProject.intakeLastError", { error: status.data.lastError })}</p>;
 }

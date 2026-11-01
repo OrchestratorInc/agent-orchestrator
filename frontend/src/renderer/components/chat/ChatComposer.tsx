@@ -209,6 +209,7 @@ export const ChatComposer = memo(function ChatComposer({
 	skills = [],
 	filePaths = [],
 	filePathsTruncated,
+	onFileQuery,
 	onStageAttachments,
 	nativeImages,
 	onSteer,
@@ -268,6 +269,8 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
+		/** With text delivery, the message as typed, before its captures were inlined into `text`. */
+		displayText?: string,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -301,6 +304,11 @@ export const ChatComposer = memo(function ChatComposer({
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
+	/**
+	 * Told what follows "@" as it is typed, for a workspace whose files are searched
+	 * rather than listed up front (a Cloud session's): it answers through filePaths.
+	 */
+	onFileQuery?: (query: string) => void;
 	/** The path list was capped, so the menu says so rather than implying it is all. */
 	filePathsTruncated?: boolean;
 	/**
@@ -629,6 +637,10 @@ export const ChatComposer = memo(function ChatComposer({
 		() => suggestionsFor(trigger),
 		[trigger, dismissedKey, suggestionsFor],
 	);
+	const fileQuery = trigger?.kind === "file" ? trigger.query : undefined;
+	useEffect(() => {
+		if (fileQuery !== undefined) onFileQuery?.(fileQuery);
+	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
@@ -1574,7 +1586,9 @@ export const ChatComposer = memo(function ChatComposer({
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
-      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+      // The text carries the captures for the agent; they are passed too, so the
+      // surface can show the message as typed with its captures beside it.
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText);
      } else {
       await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
      }

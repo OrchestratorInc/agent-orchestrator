@@ -305,11 +305,12 @@ export function ShellTopbar({
 							/>
 						) : null}
 						{/* Cues run from the topbar into the selected session. */}
-						{session && supportsLocalCues ? (
+						{session && (supportsLocalCues || (!hostId && session.cloud)) ? (
 							<span className="inline-flex" style={noDragStyle}>
 								<CueRunMenu
 									projectId={session.workspaceId}
 									sessionId={session.id}
+									cloudOrgId={session.cloud?.orgId}
 									disabled={!sessionCueTargetAvailable(session)}
 								/>
 							</span>

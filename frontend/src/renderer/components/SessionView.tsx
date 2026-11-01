@@ -25,6 +25,7 @@ import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
+import { CloudReviewerChatSurface } from "./chat/CloudReviewerChatSurface";
 import { NotificationCenter } from "./NotificationCenter";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
@@ -199,6 +200,11 @@ function cloudReviewRunForTerminal(
 	return data?.runs.find((run) => run.reviewerTerminalId === terminalID);
 }
 
+function cloudReviewerChatFromReviews(data: CloudCpSessionReviewState | undefined): ReviewerChatTarget | undefined {
+	const surface = data?.reviewerSurface;
+	return surface?.mode === "chat" && surface.reviewId ? { reviewId: surface.reviewId, harness: surface.harness || "claude-code" } : undefined;
+}
+
 function reviewerChatFromReviews(data?: ReviewsResponse): ReviewerChatTarget | undefined {
 	const surface = workingReviewerSurface(data) ?? data?.reviewerSurface;
 	if (surface?.mode !== "chat" || !surface.reviewId) return undefined;
@@ -357,7 +363,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
 	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
 	return (
-		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen">
+		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen" data-startup-cover="">
 			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
 				<Loader2 aria-hidden="true" className="size-6 animate-spin" />
 				<span className="text-sm">{label}</span>
@@ -834,8 +840,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerTerminal = session && sessionIsActive(session)
 		? availableReviewerTerminal ?? retainedCloudReviewerTerminal
 		: undefined;
-	const availableReviewerChat = reviewerChatFromReviews(reviewerQuery.data);
+	// A Cloud review that runs in Chat shows as a reviewer chat tab, as a local one does.
+	const availableReviewerChat = session?.cloud
+		? cloudReviewerChatFromReviews(cloudReviewerQuery.data)
+		: reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;
+	// The selected reviewer chat: a Cloud review's conversation lives on the
+	// control plane, a local one on this session's daemon.
+	const reviewerChatContent = !reviewerChatId ? undefined : session?.cloud ? (
+		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewerChatId} harness={reviewerChat?.harness ?? "claude-code"} />
+	) : (
+		<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
+	);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
 	// scoped to the session on screen so each session has its own shell set.
@@ -2004,7 +2020,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
 							    asks this machine's daemon, which has never heard of a Cloud
 							    session and answers "session not found". */}
-							{showChatSurface && session?.cloud && !reviewerChatId ? (
+							{showChatSurface && session?.cloud ? (
+								<>
 								<CloudSessionChatSurface
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
@@ -2025,9 +2042,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
+									tabStripAction={newShellTerminalAction}
+									workspaceTabs={centerFileTabs}
+									workspaceActiveTabKey={activeWorkspaceTabKey}
+									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
+									reviewerChat={reviewerChat}
+									reviewerChatSelected={Boolean(reviewerChatId)}
+									onOpenReviewerChat={(target) => selectReviewerChat(target.reviewId)}
 								/>
+								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
+								</>
 							) : showChatSurface ? (
 								<>
 								<SessionChatSurface
@@ -2092,11 +2118,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								{reviewerChatId ? (
-									<div className="absolute inset-0">
-										<ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} />
-									</div>
-								) : null}
+								{reviewerChatContent ? <div className="absolute inset-0">{reviewerChatContent}</div> : null}
 								</>
 							) : (
 								<CenterPane
@@ -2115,7 +2137,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}
 									reviewerChatSelected={Boolean(reviewerChatId)}
-									reviewerChatContent={reviewerChatId ? <ReviewerChatSurface hideHeader hostId={hostId} workerSessionId={sessionId} reviewId={reviewerChatId} /> : undefined}
+									reviewerChatContent={reviewerChatContent}
 									session={session}
 									shellTerminals={shellTerminals}
 									terminalTarget={routedTerminalTarget}

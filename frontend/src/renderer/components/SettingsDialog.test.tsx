@@ -311,10 +311,9 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		// Scripts are project settings on Cloud projects too; environment and cues stay local.
-		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
-		for (const section of ["Environment", "Cues"]) {
-			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
+		// Scripts, environment and cues are project settings on Cloud projects too.
+		for (const section of ["Scripts", "Environment", "Cues"]) {
+			expect(screen.getByRole("button", { name: section })).toBeInTheDocument();
 		}
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
 	});

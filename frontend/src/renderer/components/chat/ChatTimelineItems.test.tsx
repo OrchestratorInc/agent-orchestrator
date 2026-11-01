@@ -1,9 +1,10 @@
 import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { StrictMode, type ReactElement } from "react";
+import { StrictMode, type ReactElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
 	ActivityRow,
+	AdaptiveStreamPacingContext,
 	AssistantMessage,
 	ChatHostId,
 	HumanMessage,
@@ -41,6 +42,10 @@ function message(overrides: Partial<ConversationMessage> = {}): ConversationMess
 		createdAt: "2026-08-24T00:00:00Z",
 		...overrides,
 	};
+}
+
+function Cloud({ children }: { children: ReactNode }) {
+	return <AdaptiveStreamPacingContext.Provider value>{children}</AdaptiveStreamPacingContext.Provider>;
 }
 
 function runFrame(now: number) {
@@ -453,6 +458,45 @@ describe("AssistantMessage streaming", () => {
 		// The fade spans linger briefly after the stream settles, so match the paragraph.
 		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+	});
+
+	it("in Cloud chat, plays out a finished reply's buffered text quickly", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} showCopy /></Cloud>);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: true })} showCopy /></Cloud>);
+		runFrame(0);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy /></Cloud>);
+		// The remainder plays out over a few frames rather than landing at once.
+		expect(document.querySelector("p")?.textContent).not.toBe("aThe complete answer");
+		drain(32);
+		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
+		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+	});
+
+	it("in Cloud chat, shows a finished reply whole when its unrevealed remainder is too long to play out", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} /></Cloud>);
+		const text = "a".padEnd(5_000, "x");
+		view.rerender(<Cloud><AssistantMessage message={message({ text, streaming: true })} /></Cloud>);
+		runFrame(0);
+		view.rerender(<Cloud><AssistantMessage message={message({ text, streaming: false })} /></Cloud>);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
+	it("in Cloud chat, spreads bursts that arrive far apart over most of the gap between them", () => {
+		const view = render(<Cloud><AssistantMessage message={message()} /></Cloud>);
+		view.rerender(<Cloud><AssistantMessage message={message({ text: "a".padEnd(200, "x") })} /></Cloud>);
+		drain(0);
+		frameTime = 3_000;
+		const text = "a".padEnd(400, "x");
+		view.rerender(<Cloud><AssistantMessage message={message({ text })} /></Cloud>);
+		runFrame(3_000);
+		runFrame(3_032);
+		// A 140ms settle would reveal about a fifth of the burst in one frame; a
+		// second-apart stream reveals only a few percent.
+		const shown = document.querySelector("p")?.textContent?.length ?? 0;
+		expect(shown - 200).toBeLessThan(20);
+		drain(3_032);
+		expect(document.querySelector("p")?.textContent).toBe(text);
 	});
 
 	it("hides message actions while text is still buffered", () => {

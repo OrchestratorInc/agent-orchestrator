@@ -2501,9 +2501,11 @@ const SessionRow = memo(function SessionRow({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
+	// A session shared from another organization is the sharer's to name.
+	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		rename.begin();
-	}, [rename.begin]);
+		if (renamable) rename.begin();
+	}, [rename.begin, renamable]);
 	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
 
@@ -2736,7 +2738,7 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				<Tooltip>
+				{session.cloud?.shared ? null : <Tooltip>
 					<TooltipTrigger asChild>
 						<button
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
@@ -2757,7 +2759,7 @@ const SessionActions = memo(function SessionActions({
 					<TooltipContent side="top">
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 					</TooltipContent>
-				</Tooltip>
+				</Tooltip>}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">

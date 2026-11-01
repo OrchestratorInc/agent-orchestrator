@@ -241,12 +241,13 @@ describe("SessionArtifactsView for a cloud session", () => {
 		save.mockRestore();
 	});
 
-	it("offers no local folder actions", async () => {
+	it("opens a cloud session's artifacts in a folder, with no terminal action", async () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
-		expect(screen.queryAllByRole("button", { name: /^Open in / })).toHaveLength(0);
+		expect(screen.getAllByRole("button", { name: /^Open in / })).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: /^Show in / })).toBeNull();
+		expect(screen.getAllByRole("menuitem", { name: /^Show in / })).toHaveLength(1);
+		expect(screen.queryByRole("menuitem", { name: "Show in Terminal" })).toBeNull();
 	});
 
 	it("deletes a cloud file from cloud storage and the sandbox after confirming", async () => {
@@ -429,11 +430,11 @@ describe("SessionArtifactsView", () => {
 		await vi.waitFor(() => expect(deleteArtifactMock).toHaveBeenCalledWith({ path: "notes.md", sessionId: "sess-1", hostId: undefined }));
 	});
 
-	it("lets a cloud card be deleted but not edited, without local file manager actions", async () => {
+	it("gives cloud cards the edit, delete and folder actions a local card has", async () => {
 		deleteCloudArtifactMock.mockReset().mockResolvedValue(undefined);
 		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
-		expect(screen.queryByRole("button", { name: /^Edit file:/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^More actions:/ })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("button", { name: /^Edit file:/ }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /^More actions:/ }).length).toBeGreaterThan(0);
 		await userEvent.click(screen.getByRole("button", { name: "Delete artifact: notes.md" }));
 		const dialog = screen.getByRole("dialog");
 		expect(dialog).toHaveTextContent("from the session's cloud storage and from its sandbox");
@@ -536,10 +537,10 @@ describe("SessionArtifactsView", () => {
 	it.each([
 		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "chart.png", separators: 0, actions: ["Delete artifact"] },
-		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 1, actions: ["Download", "Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 2, actions: [expect.stringMatching(/^Show in /), "Download", "Delete artifact"] },
 		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Delete artifact"] },
-		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Download", "Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"] },
 	])("separates only populated action groups for $location $path", async ({ hostId, cloud, path, separators, actions }) => {
 		const artifact: SessionArtifact = { kind: "file", name: path, path, size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		const currentSession = { ...session([artifact]), ...(cloud ? { cloud: { orgId: "org-1" } } : {}) } as WorkspaceSession;
@@ -547,7 +548,7 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: path }));
 		const menu = screen.getByRole("menu");
-		const hasHistory = !cloud && path.endsWith(".md");
+		const hasHistory = path.endsWith(".md");
 		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(hasHistory ? ["Version history", ...actions] : actions);
 		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + (hasHistory ? 1 : 0));
 		const children = Array.from(menu.children);
@@ -601,7 +602,7 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 	});
 
 	it("opens a requested artifact and passes its feedback request through", () => {

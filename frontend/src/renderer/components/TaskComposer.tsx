@@ -16,7 +16,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
-import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession, type CloudCpSessionResponse } from "../lib/cloud-cp";
 import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
@@ -54,7 +54,9 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
-import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
+import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { discardedPreparedCloudSession, forgetPreparedCloudSession, preparedCloudSessions, rememberPreparedCloudSession } from "../lib/cloud-session-prestart";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
 import { useModelTuning } from "./settings/ModelTuningControls";
@@ -156,7 +158,12 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
-export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostId?: string }) {
+export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
+	projectId?: string;
+	hostId?: string;
+	/** Start a non-Coder Cloud project's session as the page opens, ahead of its brief (the new chat page). */
+	prestartCloud?: boolean;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const remoteConnections = useConnectedHosts();
@@ -180,6 +187,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// The prepared worktree's session id. It becomes the task's session id on send,
 	// so files uploaded into it before then are already where the agent reads them.
 	const [preparedSessionId, setPreparedSessionId] = useState("");
+	// A Cloud session started ahead of the brief (prestartCloud), and the sends
+	// that claimed one, by request id, so a retry reaches the same session.
+	const [preparedCloud, setPreparedCloud] = useState<PreparedCloudTask>();
+	const preparedCloudRef = useRef<PreparedCloudTask | undefined>(undefined);
+	preparedCloudRef.current = preparedCloud;
+	const claimedCloudRef = useRef(new Map<string, string>());
 	const requestRef = useRef<{ payload: string; id: string } | undefined>(undefined);
 	const {
 		attachments,
@@ -198,6 +211,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = !hostId && Boolean(cloudProject);
+	// Coder projects keep their own New Task dialog and start-up untouched.
+	const isCoderCloudProject = isCloudProject && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
 	const preferenceContext = hostId ? `${hostId}:${projectId ?? ""}` : projectId ?? "";
 	const persistedPreferences = useMemo(
@@ -212,6 +227,37 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			try {
 				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
+				// The session started as the page opened takes the brief as its first
+				// message, so its sandbox is already up; a retry reaches the same one.
+				const prepared = preparedCloudRef.current;
+				const claimed = input.clientRequestId ? claimedCloudRef.current.get(input.clientRequestId) : undefined;
+				const preparedId = claimed ?? (prepared && prepared.orgId === cloudOrg.id && prepared.projectId === input.projectId &&
+					prepared.harness === (input.agent ?? "claude-code") && prepared.mode === input.mode ? prepared.sessionId : undefined);
+				if (preparedId) {
+					if (input.clientRequestId) claimedCloudRef.current.set(input.clientRequestId, preparedId);
+					if (prepared?.sessionId === preparedId) setPreparedCloud(undefined);
+					const started = await startPreparedCloudSession(cloudClient, cloudOrg.id, preparedId, input).catch((err: unknown) => {
+						// A session that is gone (deleted, or failed to start), or a control
+						// plane that cannot name it after the brief, gives way to a fresh one;
+						// any other failure keeps the claim for a retry.
+						if (err instanceof CloudCpError && (err.status === 404 || err.code === "SESSION_TERMINATED")) return undefined;
+						if (err instanceof PreparedSessionUnnamed) {
+							discardPreparedCloudSession(cloudClient, cloudOrg.id, preparedId);
+							return undefined;
+						}
+						throw err;
+					});
+					if (started) {
+						forgetPreparedCloudSession(preparedId);
+						rememberCloudChatSettings(cloudOrg.id, started.id, started.harness, input);
+						seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, started);
+						void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+						void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+						return started.id;
+					}
+					forgetPreparedCloudSession(preparedId);
+					if (input.clientRequestId) claimedCloudRef.current.delete(input.clientRequestId);
+				}
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
 				// The task starts in the interface the composer resolved (its choice,
@@ -226,7 +272,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(input.mode ? { interfaceMode: input.mode } : {}),
+					// Only a permission the user picked, as for a local task; without
+					// one the worker derives it from the session's mode.
+					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+				// The session's Chat composer shows, and its turns keep, what the task
+				// was started with, as a local task's chat does.
+				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
@@ -565,11 +617,22 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// so its composer never asks for it.
 	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
-	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
+	// Settings → Harness → Models picks the models a picker offers, for Cloud
+	// tasks too: a switched-off model is left out of the Cloud catalog as well.
 	const { models: localOfferedModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
-		skip: isCloudProject,
+	});
+	const listedCloudModels = useMemo((): AgentModelOption[] | undefined => cloudCatalog?.models.map((item) => ({
+		id: item.id,
+		label: item.displayName,
+		isDefault: false,
+		efforts: item.efforts,
+		defaultEffort: item.defaultEffort,
+	})), [cloudCatalog]);
+	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
+		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
+		skip: !isCloudProject,
 	});
 	// The daemon marks models this computer's agent CLI is too old for. A cloud task
 	// runs on the worker's own CLI, so those marks say nothing about it.
@@ -594,19 +657,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel].filter(isConcreteModelID).join("\n");
 	const cloudModels = useMemo((): AgentModelOption[] => {
 		if (cloudCatalog) {
-			const listed: AgentModelOption[] = cloudCatalog.models.map((item) => ({
-				id: item.id,
-				label: item.displayName,
-				isDefault: false,
-				efforts: item.efforts,
-				defaultEffort: item.defaultEffort,
-			}));
+			const listed = offeredCloudModels;
 			const kept = keptCloudModels === "" ? [] : keptCloudModels.split("\n");
 			const unlisted = kept.filter((id, index) => kept.indexOf(id) === index && !listed.some((item) => item.id === id));
 			return [...listed, ...unlisted.map((id) => ({ id, label: id, isDefault: false }))];
 		}
 		return localCatalogForCloud ? offeredModels.map((item) => ({ ...item, isDefault: false })) : NO_MODELS;
-	}, [cloudCatalog, keptCloudModels, localCatalogForCloud, offeredModels]);
+	}, [cloudCatalog, keptCloudModels, localCatalogForCloud, offeredCloudModels, offeredModels]);
 	const modelCatalog: TaskComposerModelCatalog | undefined = isCloudProject
 		? {
 				...(localCatalogForCloud ? localModelCatalog : undefined),
@@ -623,15 +680,20 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const catalogDefaultOption =
 		isCloudProject ? "" : selectableModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalog?.selectionMode === "mode";
-	// The model this user ran most recently.
+	// The model this user ran most recently. Cloud reports no last use per
+	// model; the newest Cloud session of this agent that named one stands in.
+	const cloudSessions = queryClient.getQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, cloudBaseUrl, cloudOrg?.id ?? ""]);
+	// Only a model the control plane's catalog lists is picked for a Cloud task:
+	// this computer's models, listed for an older control plane, are suggestions.
+	const cloudPicksAllowed = !isCloudProject || cloudCatalog !== undefined;
 	const lastUsedOption = isCloudProject
-		? ""
+		? cloudPicksAllowed ? lastCloudSessionModel(cloudSessions, selectedAgent, selectableModels) : ""
 		: selectableModels
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
 	const claudeFallbackOption =
-		!isCloudProject && selectedAgent === "claude-code" && !catalogUsesModes
+		cloudPicksAllowed && selectedAgent === "claude-code" && !catalogUsesModes
 			? (splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
 			: "";
 	const rememberedModelIsValid =
@@ -965,6 +1027,65 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
 	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	// A non-Coder Cloud project's session starts as the new chat page opens, with
+	// no brief, so its sandbox is coming up while the user types; the send makes
+	// it the task (createCloudTask). A different agent, interface or project, or
+	// leaving the page, deletes one no send claimed.
+	const prestartMode = submitMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined);
+	const prestartOrgId = cloudOrg?.id;
+	// Only once the offering is known: a project on the org's default provider may be Coder.
+	// Once settings have loaded, so the interface it starts in does not change after it started.
+	const prestartEnabled = prestartCloud && isCloudProject && cloudOffering.loaded && !isCoderCloudProject &&
+		canSubmit && settings !== undefined && Boolean(prestartOrgId) && Boolean(selectedAgent);
+	const prestartClientRef = useRef(cloudClient);
+	prestartClientRef.current = cloudClient;
+	useEffect(() => {
+		if (!prestartEnabled || !prestartOrgId || !projectId) return;
+		const cloudClient = prestartClientRef.current;
+		// Sessions an earlier page or run started and never used.
+		for (const leftover of preparedCloudSessions(prestartOrgId)) discardPreparedCloudSession(cloudClient, prestartOrgId, leftover);
+		let disposed = false;
+		let started: PreparedCloudTask | undefined;
+		// A moment's wait, so flicking through agents does not start a sandbox for each.
+		const timer = window.setTimeout(() => {
+			void createCloudSession(cloudClient, prestartOrgId, {
+				projectId,
+				kind: "worker",
+				harness: selectedAgent as CreateTaskInput["agent"] & string,
+				displayName: t("command.newTask"),
+				// No brief yet: the agent waits idle, and the send is its first turn.
+				prompt: "",
+				...(prestartMode ? { interfaceMode: prestartMode } : {}),
+			}).then(({ session }) => {
+				started = { orgId: prestartOrgId, projectId, sessionId: session.id, harness: selectedAgent, mode: prestartMode };
+				rememberPreparedCloudSession({ orgId: prestartOrgId, sessionId: session.id });
+				if (disposed) {
+					discardPreparedCloudSession(cloudClient, prestartOrgId, session.id);
+					return;
+				}
+				setPreparedCloud(started);
+			}, () => undefined);
+		}, PRESTART_DELAY_MS);
+		return () => {
+			disposed = true;
+			window.clearTimeout(timer);
+			setPreparedCloud(undefined);
+			// A session a send claimed is the task now.
+			if (started && ![...claimedCloudRef.current.values()].includes(started.sessionId)) {
+				discardPreparedCloudSession(cloudClient, prestartOrgId, started.sessionId);
+			}
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [prestartEnabled, prestartMode, prestartOrgId, projectId, selectedAgent]);
+	// The pre-started sandbox is coming up until its worker connects: the page shows it starting.
+	const preparedCloudState = useQuery<CloudCpSessionResponse>({
+		queryKey: ["cloud-prepared-session", prestartOrgId ?? "", preparedCloud?.sessionId ?? ""],
+		enabled: Boolean(preparedCloud && prestartOrgId),
+		refetchInterval: (query) => query.state.data?.session.runtimeConnected ? false : 2_000,
+		retry: false,
+		queryFn: ({ signal }) => cloudClient.getSession(prestartOrgId!, preparedCloud!.sessionId, { signal }),
+	});
+	const cloudSessionStarting = Boolean(preparedCloud) && preparedCloudState.data?.session.runtimeConnected !== true;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
 			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
@@ -1038,7 +1159,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
 		// A session started without a permission choice runs in auto (applySpawnAgentConfig).
-		approvalMode: approvalMode ?? (APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
+		// A Cloud task's runs in trusted mode, whose turns skip prompts unless one is picked.
+		approvalMode: approvalMode ?? (isCloudProject
+			? "bypass-permissions"
+			: APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
 	};
 	const chooseTurnSettings = (next: TurnSettings) => {
 		if ((next.model ?? "") !== (turnSettings.model ?? "")) {
@@ -1076,6 +1200,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		preparedSessionId,
 		submitMode,
 		isCloudProject,
+		isCoderCloudProject,
+		// A Cloud session started ahead of the brief is still coming up.
+		cloudSessionStarting,
 		canSubmit,
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
@@ -1276,6 +1403,93 @@ export function TaskComposer({
 }
 
 const APPROVAL_MODES: ApprovalMode[] = ["default", "accept-edits", "auto", "bypass-permissions"];
+
+/**
+ * The model of the newest Cloud session of this agent that named one, when the
+ * catalog still lists it: Cloud keeps no last use per model, and a session
+ * records the model it was started with.
+ */
+export function lastCloudSessionModel(sessions: CloudCpSession[] | undefined, agent: string, catalog: { id: string }[]): string {
+	const newest = (sessions ?? [])
+		.filter((session) => session.harness === agent && isConcreteModelID(session.model ?? "") && catalog.some((item) => item.id === session.model))
+		.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+	return newest?.model ?? "";
+}
+
+// How long the page waits after its agent settles before starting a Cloud session.
+const PRESTART_DELAY_MS = 600;
+
+/** A Cloud session the new chat page started ahead of its brief. */
+interface PreparedCloudTask {
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	harness: string;
+	mode?: "chat" | "tui";
+}
+
+/** Deletes a pre-started Cloud session no send claimed. It ran no task, so nothing is lost. */
+function discardPreparedCloudSession(client: ReturnType<typeof useCloudCp>["client"], orgId: string, sessionId: string): void {
+	void client.deleteSession(orgId, sessionId).then(
+		() => discardedPreparedCloudSession(sessionId),
+		(error: unknown) => {
+			if (error instanceof CloudCpError && (error.status === 404 || error.code === "SESSION_TERMINATED")) discardedPreparedCloudSession(sessionId);
+		},
+	);
+}
+
+/** A control plane that cannot rename a session: its pre-started one cannot take the brief's name. */
+class PreparedSessionUnnamed extends Error {}
+
+/**
+ * Makes a pre-started Cloud session the task: named after the brief, with the
+ * brief as its first message and the task's settings on that turn. A control
+ * plane that predates renaming refuses (PreparedSessionUnnamed) before the
+ * brief is sent, so the task starts as a fresh session named after it.
+ */
+async function startPreparedCloudSession(
+	client: ReturnType<typeof useCloudCp>["client"],
+	orgId: string,
+	sessionId: string,
+	input: CreateTaskInput,
+): Promise<CloudCpSession> {
+	const displayName = input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code");
+	const renamed = await client.renameSession(orgId, sessionId, displayName).then((answer) => answer.session, (error: unknown) => {
+		if (error instanceof CloudCpError && (error.status === 404 || error.status === 405)) throw new PreparedSessionUnnamed();
+		return undefined;
+	});
+	await client.sendSessionMessage(orgId, sessionId, {
+		text: input.brief,
+		...(input.model ? { model: input.model } : {}),
+		...(input.effort ? { reasoningEffort: input.effort } : {}),
+		...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+	}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+	return renamed ?? (await client.getSession(orgId, sessionId)).session;
+}
+
+/**
+ * Seeds a new Cloud session's Chat settings (CloudSessionChatSurface reads this
+ * key) with what its task was started with, so its composer shows them. Only a
+ * picked approval mode is saved as the user's pick.
+ */
+function rememberCloudChatSettings(
+	orgId: string,
+	sessionId: string,
+	harness: string,
+	input: Pick<CreateTaskInput, "model" | "effort" | "approvalMode">,
+): void {
+	const saved = {
+		...(input.model ? { model: input.model } : {}),
+		...(input.effort ? { reasoningEffort: input.effort } : {}),
+		...(input.approvalMode ? { approvalMode: input.approvalMode, approvalModeChosen: true } : {}),
+	};
+	if (Object.keys(saved).length === 0) return;
+	try {
+		window.localStorage.setItem(`cloud-chat-settings:${orgId}:${sessionId}:${toAgentProvider(harness)}`, JSON.stringify(saved));
+	} catch {
+		// The composer then shows the session's own defaults.
+	}
+}
 
 // Both local and cloud list only harnesses that can run, plus a way to manage
 // them: local logins, or cloud connections for cloud projects.

@@ -41,6 +41,7 @@ export function CloudSessionStartupLoader({
 			// A long Setup log scrolls the screen rather than clipping the steps.
 			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background", panel && "overflow-y-auto", completed && "cloud-session-loader--complete pointer-events-none")}
 			data-testid="cloud-session-loader-screen"
+			data-startup-cover=""
 		>
 			{startupNote || panel ? (
 				<div className={cn("flex max-w-[calc(100%-2rem)] flex-col gap-4", panel ? "w-[36rem] py-6" : "w-80")}>
