@@ -24,9 +24,9 @@ const kimchiTestSession = "019fe4d5-24c5-77ac-a0e3-d3c18b37dcef"
 func TestEncodeKimchiCwdDir(t *testing.T) {
 	cases := map[string]string{
 		"/Users/me/.ao/data/worktrees/proj/x": "--Users-me-.ao-data-worktrees-proj-x--",
-		"/private/tmp/a/b":                  "--private-tmp-a-b--",
-		"/work/repo":                        "--work-repo--",
-		`C:\Users\me\proj`:                  "--C--Users-me-proj--",
+		"/private/tmp/a/b":                    "--private-tmp-a-b--",
+		"/work/repo":                          "--work-repo--",
+		`C:\Users\me\proj`:                    "--C--Users-me-proj--",
 	}
 	for in, want := range cases {
 		if got := encodeKimchiCwdDir(in); got != want {

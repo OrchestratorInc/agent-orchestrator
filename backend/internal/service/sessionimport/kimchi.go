@@ -66,9 +66,9 @@ type kimchiRecord struct {
 type kimchiNode struct {
 	id, parent, role, text string
 	model, thinking, name  string
-	editTarget            string
-	at                    time.Time
-	dropped               bool
+	editTarget             string
+	at                     time.Time
+	dropped                bool
 }
 
 // kimchiNativeID is the conversation UUID encoded in a Kimchi session file

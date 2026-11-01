@@ -1013,8 +1013,8 @@ func TestImportedConfigEnvPointsKimchiAtSourceHome(t *testing.T) {
 	rec := domain.SessionRecord{Harness: domain.HarnessKimchi}
 	rec.Metadata = domain.SessionMetadata{
 		ProviderConversationID: "native",
-		NativeTranscriptPath:  filepath.Join(source, "sessions", "--source--", "t_native.jsonl"),
-		ImportSource:          &domain.SessionImportSource{NativeID: "native", ConfigDir: source},
+		NativeTranscriptPath:   filepath.Join(source, "sessions", "--source--", "t_native.jsonl"),
+		ImportSource:           &domain.SessionImportSource{NativeID: "native", ConfigDir: source},
 	}
 	env := map[string]string{"KIMCHI_CODING_AGENT_DIR": t.TempDir()}
 	m.applyImportedConfigEnv(context.Background(), rec, env)

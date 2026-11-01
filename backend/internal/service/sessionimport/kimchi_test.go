@@ -210,7 +210,7 @@ func TestKimchiTranscriptAppliesActiveContextEditsAndRetractions(t *testing.T) {
 
 func TestKimchiTranscriptRejectsDuplicateSessionRecords(t *testing.T) {
 	root := t.TempDir()
-	header := `{"type":"session","version":3,"id":"`+kimchiSession+`","cwd":"/work/repo"}`
+	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"/work/repo"}`
 	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), header+"\n"+kimchiMsg("u1", "", "user", "hello")+"\n"+header+"\n")
 	if _, err := readTranscript(context.Background(), domain.HarnessKimchi, root, path); err == nil {
 		t.Fatal("expected duplicate native session record to fail")
@@ -233,7 +233,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 		t.Fatal("Kimchi discovery followed an override its runtime ignores")
 	}
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimchi: root}
-	header := `{"type":"session","version":3,"id":"`+kimchiSession+`","cwd":"`+cwd+`","timestamp":"`+time.Now().UTC().Format(time.RFC3339Nano)+`"}`
+	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"` + cwd + `","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
 	path := writeFile(t, kimchiPath(root, "--source--", kimchiSession), header+`
 {"type":"model_change","id":"m1","parentId":null,"provider":"kimchi-dev","modelId":"auto"}
 {"type":"thinking_level_change","id":"t1","parentId":"m1","thinkingLevel":"high"}
