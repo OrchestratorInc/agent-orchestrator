@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
@@ -29,6 +30,13 @@ import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
+
+function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference) {
+	const duplicate = draft.references.some(ref => ref.conversationId === excerpt.conversationId &&
+		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text);
+	const referenceLimit = !duplicate && draft.references.length >= 8;
+	return { referenceLimit, draft: duplicate || referenceLimit ? draft : { ...draft, references: [...draft.references, excerpt] } };
+}
 
 export function SideComposer({
 	draft,
@@ -398,6 +406,10 @@ export function useIndependentSideChats(
 	const [inputAnswers, setInputAnswers] = useState<Record<string, Record<string, string>>>({});
 	const activeIdRef = useRef(activeId);
 	activeIdRef.current = activeId;
+	const activationRevision = useRef({ id: activeId, revision: 0 });
+	if (activationRevision.current.id !== activeId) {
+		activationRevision.current = { id: activeId, revision: activationRevision.current.revision + 1 };
+	}
 	const closedSidesRef = useRef(new Set<string>());
 	const [pendingCloses, setPendingCloses] = useState<PendingSideClose[]>([]);
 	const closingSidesRef = useRef(new Set<string>());
@@ -415,6 +427,13 @@ export function useIndependentSideChats(
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const sessionRef = useRef(sessionId);
 	sessionRef.current = enabled ? sessionId : "";
+	const creationScope = useMemo(() => ({ active: true, pending: new Set<symbol>() }), [sessionId, enabled]);
+	const creationScopeRef = useRef(creationScope);
+	creationScopeRef.current = creationScope;
+	useEffect(() => {
+		creationScope.active = true;
+		return () => { creationScope.active = false; };
+	}, [creationScope]);
 	useEffect(() => {
 		sessionRef.current = enabled ? sessionId : "";
 		return () => { sessionRef.current = ""; };
@@ -435,6 +454,7 @@ export function useIndependentSideChats(
 		setConfirmClose(undefined);
 		setCloseError(undefined);
 		setError(undefined);
+		setPending(false);
 	}, [sessionId, enabled]);
 
 	const refreshList = useCallback(async () => {
@@ -598,9 +618,16 @@ export function useIndependentSideChats(
 	}, [sessionId, activeId, drafts, sendingRevision]);
 
 	const create = useCallback(
-		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID()) => {
+		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
+			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
 			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
+			const owned = () => creationScope.active && creationScopeRef.current === creationScope && sessionRef.current === sessionId;
+			const current = () => owned() && (options?.isCurrent?.() ?? true);
+			if (!current()) throw new Error("Side chat is no longer active.");
+			const activation = activationRevision.current.revision;
+			const request = Symbol();
+			creationScope.pending.add(request);
 			setPending(true);
 			setError(undefined);
 			try {
@@ -624,27 +651,60 @@ export function useIndependentSideChats(
 					},
 				);
 				if (requestError) throw requestError;
-				if (sessionRef.current !== sessionId || closedSidesRef.current.has(data.side.id))
+				const available = () => current() && !closedSidesRef.current.has(data.side.id) && !closingSidesRef.current.has(data.side.id);
+				if (!available())
 					throw new Error("Side chat is no longer active.");
 				await aoBridge.sideChats.capture().catch(() => undefined);
+				if (!available()) throw new Error("Side chat is no longer active.");
+				if (excerpt) {
+					// An unconfirmed create can recover an existing, inactive side. Load
+					// its draft before appending, and save without focusing any composer.
+					let draft = draftsRef.current[data.side.id];
+					if (!draft) {
+						const { data: saved, error: draftError } = await readSideChatDraft(sessionId, data.side.id);
+						if (draftError) throw draftError;
+						if (!available()) throw new Error("Side chat is no longer active.");
+						draft = draftsRef.current[data.side.id] ?? parseSideChatDraft(saved?.contentJson ?? "");
+					}
+					// Commit a functional merge before saving: another side (or this
+					// one) may have an edit queued in the same React batch as the read.
+					const loadedDraft = draft;
+					let nextDraft = loadedDraft;
+					let referenceLimit = false;
+					flushSync(() => setDrafts(currentDrafts => {
+						const latest = currentDrafts[data.side.id] ?? loadedDraft;
+						const result = appendReference(latest, excerpt);
+						referenceLimit = result.referenceLimit;
+						if (referenceLimit) return currentDrafts;
+						nextDraft = result.draft;
+						return { ...currentDrafts, [data.side.id]: nextDraft };
+					}));
+					if (!available()) throw new Error("Side chat is no longer active.");
+					if (referenceLimit) throw new Error(t("sideChat.referenceLimit"));
+					const { error: draftError } = await saveSideChatDraft(sessionId, data.side.id, JSON.stringify(nextDraft));
+					if (draftError) throw draftError;
+					if (!available()) throw new Error("Side chat is no longer active.");
+				}
 				setSides((current) =>
 					current.some((side) => side.id === data.side.id)
 						? current.map((side) => (side.id === data.side.id ? data.side : side))
 						: [...current, data.side],
 				);
-				setActiveId(data.side.id);
-				setVisible(true);
-				setFocusKey((key) => key + 1);
-				if (excerpt) addReference(data.side.id, excerpt);
+				if (!options || (activationRevision.current.revision === activation && options.shouldActivate())) {
+					setActiveId(data.side.id);
+					setVisible(true);
+					setFocusKey((key) => key + 1);
+				}
 				return { id: data.side.id };
 			} catch (cause) {
-				setError(apiErrorMessage(cause));
+				if (current()) setError(apiErrorMessage(cause));
 				throw cause;
 			} finally {
-				setPending(false);
+				creationScope.pending.delete(request);
+				if (owned()) setPending(creationScope.pending.size > 0);
 			}
 		},
-		[sessionId, enabled, canCreate],
+		[sessionId, enabled, canCreate, creationScope, t],
 	);
 
 	const updateDraft = useCallback((sideId: string, text: string) => {
@@ -676,22 +736,13 @@ export function useIndependentSideChats(
 	const addReference = useCallback((sideId: string, excerpt: ChatDraftExcerptReference) => {
 		setDrafts((current) => {
 			const draft = current[sideId] ?? emptySideChatDraft();
-			const duplicate = draft.references.some(
-				(ref) =>
-					ref.conversationId === excerpt.conversationId &&
-					ref.messageId === excerpt.messageId &&
-					ref.revision === excerpt.revision &&
-					ref.text === excerpt.text,
-			);
-			if (duplicate) return current;
-			if (draft.references.length >= 8) {
+			const result = appendReference(draft, excerpt);
+			if (result.referenceLimit) {
 				queueMicrotask(() => setError(t("sideChat.referenceLimit")));
 				return current;
 			}
-			return {
-				...current,
-				[sideId]: { ...draft, references: [...draft.references, excerpt] },
-			};
+			if (result.draft === draft) return current;
+			return { ...current, [sideId]: result.draft };
 		});
 		setFocusKey((key) => key + 1);
 	}, [t]);
