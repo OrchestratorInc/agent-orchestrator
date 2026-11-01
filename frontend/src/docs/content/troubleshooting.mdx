@@ -63,6 +63,9 @@ ao doctor --json
 	<Accordion title="A session says its workspace no longer exists">
 		The Files pane stops refreshing that session after the daemon confirms its project folder is missing. Restore the folder, then use Retry in Files. Other sessions and hosts continue refreshing normally.
 	</Accordion>
+	<Accordion title="A suggested next message disappears">
+		Prompt suggestions wait until the Chat controller is ready and the previous turn is complete. A suggestion can disappear while the agent reconnects or resumes, then return when the conversation is ready again.
+	</Accordion>
 	<Accordion title="A new task cannot start">
 		Choose an installed, signed-in agent in Harness Settings. If a saved model or effort is no longer supported, review the selected agent default and press Start again. If a branch is checked out elsewhere, enter a new branch name and press Start to confirm it. If the base branch cannot be resolved, set it in Project Settings.
 	</Accordion>

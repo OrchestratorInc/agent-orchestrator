@@ -523,7 +523,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		}
 	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
-		targetChatControllerReady && !controllerBusy && !localEchos.length &&
+		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
