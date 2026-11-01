@@ -207,7 +207,7 @@ jobs:
         run: go test -race -count=1 -run '^TestBackgroundCommandHasNoConsole$' ./internal/adapters/agent/pi ./internal/adapters/agent/omp ./internal/adapters/agent/primeagent
 
       - name: Test Windows Cline hook ownership
-        run: go test -race -count=1 ./internal/adapters/agent/cline
+        run: go test -race -count=1 ./internal/adapters/agent/cline/...
       - name: Test Windows subprocess commands
         run: go test -race -count=1 -run 'Cloudflared|Tunnel|Command' ./internal/mobilebridge/ ./internal/process/ ./internal/adapters/systemexec/
 

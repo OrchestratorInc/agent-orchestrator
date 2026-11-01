@@ -1,0 +1,81 @@
+{
+  "root": "1793566074130_vaav7",
+  "through": 41,
+  "expectedPID": 33468,
+  "mutatedPID": 34324,
+  "hookAt": 1793566074867,
+  "events": [
+    {
+      "version": "v1",
+      "event": "hub.client.registered",
+      "sequence": 36,
+      "timestamp": 1793566071096,
+      "payload": {
+        "clientId": "ao7478-supervised-inspector",
+        "connectedAt": 1793566071096,
+        "metadata": {
+          "pid": 15616,
+          "version": "0.2.0"
+        }
+      }
+    },
+    {
+      "version": "v1",
+      "event": "hub.client.registered",
+      "sequence": 37,
+      "timestamp": 1793566072686,
+      "payload": {
+        "clientId": "ao7478-review-ao7478-worker",
+        "connectedAt": 1793566072686,
+        "metadata": {
+          "pid": 34324,
+          "version": "0.2.0"
+        }
+      }
+    },
+    {
+      "version": "v1",
+      "event": "hub.client.registered",
+      "sequence": 38,
+      "timestamp": 1793566074124,
+      "payload": {
+        "clientId": "ao7478-ao7478-worker",
+        "connectedAt": 1793566074124,
+        "metadata": {
+          "pid": 33468,
+          "version": "0.2.0"
+        }
+      }
+    },
+    {
+      "version": "v1",
+      "event": "session.updated",
+      "sequence": 39,
+      "sessionId": "1793566074130_vaav7",
+      "timestamp": 1793566074865,
+      "payload": {}
+    },
+    {
+      "version": "v1",
+      "event": "session.updated",
+      "sequence": 40,
+      "sessionId": "1793566074130_vaav7",
+      "timestamp": 1793566074865,
+      "payload": {}
+    },
+    {
+      "version": "v1",
+      "event": "session.created",
+      "sequence": 41,
+      "sessionId": "1793566074130_vaav7",
+      "timestamp": 1793566074866,
+      "payload": {
+        "session": {
+          "sessionId": "1793566074130_vaav7",
+          "createdByClientId": "ao7478-ao7478-worker"
+        }
+      }
+    }
+  ],
+  "since": 35
+}
