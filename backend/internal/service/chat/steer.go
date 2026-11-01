@@ -68,6 +68,9 @@ type SteerResult struct {
 	// ActivityID is the timeline row recording the guidance, so a client can
 	// reconcile an optimistic bubble with the durable one instead of showing both.
 	ActivityID string
+	// Replayed is a retry of an already accepted client message id answered
+	// from its stored receipt, without contacting the provider again.
+	Replayed bool
 }
 
 // SteerOrSendResult identifies whether one atomic request joined an active turn
@@ -693,6 +696,7 @@ func replaySteerDelivery(
 		return SteerResult{
 			ProviderTurnID: delivery.ProviderTurnID,
 			ActivityID:     delivery.ActivityID,
+			Replayed:       true,
 		}, nil
 	case domain.ConversationSteerRejected:
 		return SteerResult{}, replaySteerRejection(delivery)

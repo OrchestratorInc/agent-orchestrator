@@ -1432,9 +1432,7 @@ func (s *Store) appendUserMessage(
 		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
-			if err := q.IncrementUsageMessageSummary(ctx, gen.IncrementUsageMessageSummaryParams{
-				SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},
-			}); err != nil {
+			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
 				return fmt.Errorf("record usage message count: %w", err)
 			}
 		}
