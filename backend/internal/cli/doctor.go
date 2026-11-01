@@ -481,9 +481,6 @@ func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck 
 		}
 		return doctorCheck{Level: doctorWarn, Section: doctorSectionAgents, Name: name, Message: fmt.Sprintf("skipped codex launch-flag probe: could not resolve codex binary: %v", err)}
 	}
-	if path == "" {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex binary not found"}
-	}
 	if ext := strings.ToLower(filepath.Ext(path)); ext == ".cmd" || ext == ".bat" {
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: name,
