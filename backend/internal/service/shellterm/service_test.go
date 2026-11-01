@@ -2469,3 +2469,21 @@ func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.
 	case <-time.After(2 * initialInputPollInterval):
 	}
 }
+
+// A restarted daemon in the same app launch must still see the trusted command
+// terminals its predecessor opened, so agent auth can keep excluding logins.
+func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},
+		{HandleID: "auth-current", AppRunID: testAppRunID, Title: "Log in to Codex", Transient: true},
+		{HandleID: "auth-previous", AppRunID: "previous", Title: "Log in to Codex", Transient: true},
+	}}
+	svc := newTestService(newFakeShellRuntime(), st, nil)
+	got, err := svc.ListCommandTerminalsForCurrentAppRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "auth-current" || got[0].Title != "Log in to Codex" {
+		t.Fatalf("command terminals = %+v, want only this launch's trusted terminal", got)
+	}
+}

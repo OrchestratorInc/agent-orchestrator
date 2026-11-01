@@ -70,6 +70,9 @@ type InitialInputReadyState struct {
 // values from the reviewed auth registry; the input is sent only after the
 // harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
+	// Owner is a trusted workflow identity, independent of the editable title.
+	// It is persisted so the workflow can reconcile commands after a restart.
+	Owner                   string
 	Argv                    []string
 	Env                     map[string]string
 	WorkingDir              string
