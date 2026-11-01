@@ -62,6 +62,7 @@ func TestMiMoCatalogKeyUsesReportedDataDir(t *testing.T) {
 func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 	data := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv("LOCALAPPDATA", data)
 	dir := filepath.Join(data, "crush")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

@@ -71,12 +71,6 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 	</>;
 }
 
-function agentsLabel(agents: string[], t: ReturnType<typeof useTranslation>["t"]) {
-	const names = agents.map(agentLabel);
-	if (names.length <= 3) return t("settings.apiKeys.usedBy", { names: names.join(", ") });
-	return t("settings.apiKeys.usedByMore", { names: names.slice(0, 3).join(", "), extra: names.length - 3 });
-}
-
 function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }: {
 	providerKey: ProviderKey;
 	editing: boolean;
@@ -90,14 +84,22 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 		setChecking(true);
 		try {
 			const result = await checkProviderKey(key.name, "");
-			onNotice(checkNotice(result.status, t));
+		switch (result.status) {
+		case "valid": onNotice({ tone: "status", text: t("settings.apiKeys.accepted") }); break;
+		case "invalid": onNotice({ tone: "error", text: t("settings.apiKeys.rejected") }); break;
+		case "unreachable": onNotice({ tone: "error", text: t("settings.apiKeys.unreachable") }); break;
+		default: onNotice({ tone: "status", text: t("settings.apiKeys.unverified") });
+		}
 		} catch (err) {
 			onNotice({ tone: "error", text: err instanceof Error ? err.message : t("settings.apiKeys.checkFailed") });
 		} finally { setChecking(false); }
 	};
+	const agentNames = key.agents.map(agentLabel);
 	const saved = key.configured
 		? [key.hint ? t("settings.apiKeys.savedHint", { hint: key.hint }) : t("settings.apiKeys.saved"), key.device ? t("settings.apiKeys.outsideAo") : ""].filter(Boolean).join(" · ")
-		: agentsLabel(key.agents, t);
+		: agentNames.length <= 3
+			? t("settings.apiKeys.usedBy", { names: agentNames.join(", ") })
+			: t("settings.apiKeys.usedByMore", { names: agentNames.slice(0, 3).join(", "), extra: agentNames.length - 3 });
 	const description = notice
 		? <span role={notice.tone === "error" ? "alert" : "status"} className={notice.tone === "error" ? "text-error" : undefined}>{notice.text}</span>
 		: saved;
@@ -111,15 +113,6 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 			</Button>
 		</div>
 	</SettingsRow>;
-}
-
-function checkNotice(status: string, t: ReturnType<typeof useTranslation>["t"]): Notice {
-	switch (status) {
-	case "valid": return { tone: "status", text: t("settings.apiKeys.accepted") };
-	case "invalid": return { tone: "error", text: t("settings.apiKeys.rejected") };
-	case "unreachable": return { tone: "error", text: t("settings.apiKeys.unreachable") };
-	default: return { tone: "status", text: t("settings.apiKeys.unverified") };
-	}
 }
 
 function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: ProviderKey; onDone: (notice?: Notice) => void }) {
