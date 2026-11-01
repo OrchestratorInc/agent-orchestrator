@@ -953,41 +953,55 @@ describe("SessionInspector PR section", () => {
         { id: "PRRC_1", author: "linus", isBot: false, body: "Debounce this.", createdAt: "2026-06-15T10:00:00Z", url: "https://github.com/acme/repo/pull/7#discussion_r1" },
         { id: "PRRC_2", author: "ada", isBot: false, body: "Will do.", createdAt: "2026-06-15T10:05:00Z" },
       ],
+    }, {
+      id: "PRRT_2",
+      path: "src/app.ts",
+      line: 3,
+      resolved: true,
+      comments: [{ id: "PRRC_3", author: "linus", isBot: false, body: "Rename this.", createdAt: "2026-06-14T10:00:00Z" }],
     }],
   });
 
-  it("lists the PR's comments and review threads, filtered to humans or bots", async () => {
+  it("folds the PR's comments the way Reviews folds review comments: open threads and conversation open, bots and resolved closed", async () => {
     servePR(conversationPR());
 
     const comments = within(await screen.findByTestId("pr-comments"));
-    expect(comments.getByRole("tab", { name: "All 3" })).toHaveAttribute("aria-selected", "true");
-    expect(comments.getByText("1 unresolved")).toBeInTheDocument();
-    expect(comments.getByText("src/search.ts:12")).toBeInTheDocument();
-    expect(comments.getByText("Will do.")).toBeInTheDocument();
+    const open = within(comments.getByTestId("pr-comments-open"));
+    expect(open.getByRole("button", { name: "Open threads · 1" })).toHaveAttribute("aria-expanded", "true");
+    expect(open.getByText("src/search.ts:12")).toBeInTheDocument();
+    expect(open.getByText("linus · 1 reply")).toBeInTheDocument();
+    expect(open.getByText("Debounce this.")).toBeInTheDocument();
+    expect(open.queryByText("Will do.")).not.toBeInTheDocument();
+    await userEvent.click(open.getByText("src/search.ts:12").closest("button") as HTMLElement);
+    expect(open.getByText("Will do.")).toBeInTheDocument();
 
-    await userEvent.click(comments.getByRole("tab", { name: "Bots 1" }));
-    expect(comments.getByText("Preview deployed.")).toBeInTheDocument();
-    expect(comments.queryByText("Can we keep the old flag?")).not.toBeInTheDocument();
-
-    await userEvent.click(comments.getByRole("tab", { name: "Humans 2" }));
+    expect(within(comments.getByTestId("pr-comments-conversation")).getByText("Can we keep the old flag?")).toBeInTheDocument();
+    const bots = within(comments.getByTestId("pr-comments-bots"));
+    expect(bots.getByRole("button", { name: "From bots · 1" })).toHaveAttribute("aria-expanded", "false");
     expect(comments.queryByText("Preview deployed.")).not.toBeInTheDocument();
-    expect(comments.getByText("Can we keep the old flag?")).toBeInTheDocument();
+    await userEvent.click(bots.getByRole("button", { name: "From bots · 1" }));
+    expect(bots.getByText("Preview deployed.")).toBeInTheDocument();
+    expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
+    // No tab strip: the folds are the filter.
+    expect(comments.queryByRole("tablist")).not.toBeInTheDocument();
   });
 
-  it("replies inside a review thread, resolves it, and posts a new comment", async () => {
+  it("replies in a thread and resolves it from the row's menu, and posts a new comment", async () => {
     servePR(conversationPR());
     const comments = within(await screen.findByTestId("pr-comments"));
-    const thread = comments.getByText("src/search.ts:12").closest("li") as HTMLElement;
+    const thread = () => comments.getByText("src/search.ts:12").closest("[data-kind=thread]") as HTMLElement;
 
-    await userEvent.click(within(thread).getByRole("button", { name: "Reply" }));
-    await userEvent.type(within(thread).getByRole("textbox", { name: "Write a reply…" }), "Done in the next commit");
-    await userEvent.click(within(thread).getAllByRole("button", { name: "Reply" }).at(-1) as HTMLElement);
+    await userEvent.click(within(thread()).getByRole("button", { name: "Actions for src/search.ts:12" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Reply" }));
+    await userEvent.type(within(thread()).getByRole("textbox", { name: "Write a reply…" }), "Done in the next commit");
+    await userEvent.click(within(thread()).getByRole("button", { name: "Reply" }));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/comments", {
       params: { path: { id: "7" } },
       body: { prUrl: "https://example.com/pr/7", body: "Done in the next commit", threadId: "PRRT_1" },
     }));
 
-    await userEvent.click(within(thread).getByRole("button", { name: "Resolve" }));
+    await userEvent.click(within(thread()).getByRole("button", { name: "Actions for src/search.ts:12" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Resolve" }));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
       params: { path: { sessionId: "sess-1" } },
       body: { pullRequestUrl: "https://example.com/pr/7", commentUrl: "https://github.com/acme/repo/pull/7#discussion_r1" },
@@ -1000,18 +1014,36 @@ describe("SessionInspector PR section", () => {
     }));
   });
 
-  it("sends a comment to the session's agent", async () => {
+  it("uploads a comment attachment for the PR and writes its markdown into the box", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/attachments"
+      ? { data: { ok: true, name: "shot.png", url: "https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true", markdown: "![shot.png](https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true)" }, error: undefined }
+      : { data: { ok: true }, error: undefined });
     servePR(conversationPR());
     const comments = within(await screen.findByTestId("pr-comments"));
-    const thread = comments.getByText("src/search.ts:12").closest("li") as HTMLElement;
+    const box = comments.getByRole("textbox", { name: "Add a comment…" }) as HTMLTextAreaElement;
+    await userEvent.click(box);
+    await userEvent.upload(comments.getByTestId("pr-comment-file"), new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" }));
 
-    await userEvent.click(within(thread).getByRole("button", { name: "Send to agent" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/attachments", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", name: "shot.png", contentType: "image/png", data: "iVBORw==" },
+    }));
+    await waitFor(() => expect(box.value).toContain("![shot.png](https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true)"));
+  });
+
+  it("sends a thread to the session's agent from its menu and marks it sent", async () => {
+    servePR(conversationPR());
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = comments.getByText("src/search.ts:12").closest("[data-kind=thread]") as HTMLElement;
+
+    await userEvent.click(within(thread).getByRole("button", { name: "Actions for src/search.ts:12" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Send to agent" }));
     const agentCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
     await waitFor(() => expect(agentCalls()).toHaveLength(1));
     const message = agentCalls()[0][1].body.message as string;
     expect(message).toContain("Location: src/search.ts:12");
     expect(message).toContain("@linus: Debounce this.");
-    expect(await within(thread).findByRole("button", { name: "Sent to agent" })).toBeDisabled();
+    expect(await within(thread).findByRole("status", { name: "Sent to agent" })).toBeInTheDocument();
   });
 
   it("offers Merge when the provider requires no review", () => {
