@@ -347,12 +347,13 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 
 Run `+"`ao summary \"<text>\"`"+` to set the one-line summary on your kanban card. The human reads it on the board to see what you are doing, so keep it specific, under 200 characters, and in plain words.
 
-- Run it as its own command: no `+"`&&`"+`, pipes, or redirects.
-- Set it when you receive the task, then again when your focus shifts: after inspecting the repo, when starting implementation, after a meaningful result. Use present tense while working.
-- Set it once more before you finish, in past tense, so the card shows what you accomplished.
-- It is best-effort. If the command fails, retry at most once and then carry on; never let it hold up your work.
+- Run it as its own command: no `+"`&&`"+`, pipes, or redirects. When you can, issue it in the same turn as your next tool call rather than as a step of its own.
+- Set it when you receive the task, then again only when the work changes direction: from investigating to implementing, from implementing to verifying, or when you hit a blocker. Use present tense while working.
+- Before you finish, set it once more with `+"`--done`"+`, in past tense, so the card shows what you accomplished.
+- Updates are accepted at most once every 3 minutes; `+"`--done`"+` is always accepted. If one is refused, do not retry it: carry on and set the next one when the work changes again.
+- It is best-effort. If the command fails, carry on; never let it hold up your work.
 
-Examples: `+"`ao summary \"Inspecting the site before a redesign\"`"+`, `+"`ao summary \"Found 3 bugs in the frontend app\"`"+`, `+"`ao summary \"Redesigned the homepage and verified the preview\"`"+`.
+Examples: `+"`ao summary \"Inspecting the site before a redesign\"`"+`, `+"`ao summary \"Found 3 bugs in the frontend app\"`"+`, `+"`ao summary --done \"Redesigned the homepage and verified the preview\"`"+`.
 
 ## In-App Session Links
 

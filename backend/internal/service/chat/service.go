@@ -64,7 +64,7 @@ type Service struct {
 	now                    Clock
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
-	onCardSummary          func(context.Context, domain.SessionID, string)
+	onCardSummary          func(context.Context, domain.SessionID, string, bool)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
 	onModelChanged   func(domain.SessionID, string)
@@ -178,8 +178,8 @@ type Options struct {
 	// account state; conversation rows are not the authority for Codex capacity.
 	OnCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// OnCardSummary receives the card summary the agent chose, extracted from an
-	// `ao summary` command in the event stream.
-	OnCardSummary func(context.Context, domain.SessionID, string)
+	// `ao summary` command in the event stream, and whether it is the final one.
+	OnCardSummary func(context.Context, domain.SessionID, string, bool)
 	// OnModelChanged syncs ChatUI's model override to session metadata before
 	// the next prompt routes. Nil leaves session metadata unchanged.
 	OnModelChanged func(domain.SessionID, string)

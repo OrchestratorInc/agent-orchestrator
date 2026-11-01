@@ -74,6 +74,7 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
@@ -365,6 +366,7 @@ func Run(buildVersion string) error {
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
+	cardSummaries := sessionsvc.NewCardSummaryLimiter(store, time.Now)
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -461,8 +463,8 @@ func Run(buildVersion string) error {
 					"sessionID", sessionID, "model", model, "error", err)
 			}
 		},
-		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string) {
-			if _, err := store.UpdateSessionCardSummary(ctx, sessionID, summary); err != nil {
+		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string, done bool) {
+			if _, _, err := cardSummaries.Update(ctx, sessionID, summary, done); err != nil {
 				log.Warn("update card summary from event stream failed", "sessionID", sessionID, "error", err)
 			}
 		},
@@ -1068,7 +1070,7 @@ func Run(buildVersion string) error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
-		SummaryStore:       store,
+		CardSummaries:      cardSummaries,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,

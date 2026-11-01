@@ -45,7 +45,7 @@ type APIDeps struct {
 	Reviews            reviewsvc.Manager
 	Notifications      controllers.NotificationService
 	Reports            controllers.ReportService
-	SummaryStore       controllers.SummaryStore
+	CardSummaries      controllers.CardSummaries
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
 	Import             controllers.ImportService
@@ -209,7 +209,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		reviews:       &controllers.ReviewsController{Svc: deps.Reviews},
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
-		summary:       &controllers.SummaryController{Store: deps.SummaryStore},
+		summary:       &controllers.SummaryController{Summaries: deps.CardSummaries},
 		push:          &controllers.PushController{Registry: deps.Push},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		fs:            &controllers.FSController{Svc: deps.Directories},

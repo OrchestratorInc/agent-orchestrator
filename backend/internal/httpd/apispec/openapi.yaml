@@ -16064,6 +16064,8 @@ components:
       type: object
     ControllersUpdateSummaryRequest:
       properties:
+        done:
+          type: boolean
         sessionId:
           type: string
         summary:
@@ -16078,8 +16080,13 @@ components:
       properties:
         ok:
           type: boolean
+        retryAfterSeconds:
+          type: integer
+        updated:
+          type: boolean
       required:
       - ok
+      - updated
       type: object
     ConversationAccountPayload:
       properties:

@@ -5557,11 +5557,14 @@ export interface components {
             enabled: null | boolean;
         };
         ControllersUpdateSummaryRequest: {
+            done?: boolean;
             sessionId: string;
             summary: string;
         };
         ControllersUpdateSummaryResponse: {
             ok: boolean;
+            retryAfterSeconds?: number;
+            updated: boolean;
         };
         ConversationAccountPayload: {
             authFailureId?: string;
