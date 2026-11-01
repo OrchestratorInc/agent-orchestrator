@@ -23,8 +23,8 @@ var qwenNativeSessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
-	_ ports.AgentImportedSessionRelocator   = (*Plugin)(nil)
+	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
+	_ ports.AgentImportedSessionRelocator    = (*Plugin)(nil)
 )
 
 // sanitizeQwenCwdForPlatform mirrors Qwen Code 0.26.4 sanitizeCwd: lowercase
