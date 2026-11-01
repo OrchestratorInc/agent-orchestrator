@@ -494,7 +494,7 @@ type nativeHistoryHighWater struct {
 // completed while Chat was not attached; the AO high-water mark covers an
 // immediate round trip before a resumed TUI has emitted another hook.
 type nativeHistoryCheckpoint struct {
-	harness                domain.AgentHarness
+	harness                 domain.AgentHarness
 	latestUserPromptAt      time.Time
 	latestAssistantUpdateAt time.Time
 	requireNewerTurn        bool
@@ -1066,7 +1066,7 @@ func nativeHistoryActivityFingerprint(
 // The durable snapshot is invariant during history settling. Keep its index
 // separate from per-replay matching so refreshes do not rebuild it.
 type nativeHistoryTurnIndex struct {
-	harness         domain.AgentHarness
+	harness          domain.AgentHarness
 	byProviderTurnID map[string]*nativeHistoryTurn
 	providerItems    map[string]*nativeHistoryTurn
 	ordered          []*nativeHistoryTurn
