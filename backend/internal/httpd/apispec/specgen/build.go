@@ -846,7 +846,7 @@ func telemetryIdentityOperations() []operation {
 // identityOperations declares the unauthenticated host-identity probe. It is
 // the one route the Connect Mobile LAN listener serves without the connection
 // password, so the phone can confirm which machine answered before presenting
-// a credential. See docs/adr/0003-unauthenticated-identity-probe.md.
+// a credential. See docs/archive/adr/0003-unauthenticated-identity-probe.mdx.
 func identityOperations() []operation {
 	return []operation{
 		{

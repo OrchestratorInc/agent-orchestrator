@@ -13,7 +13,7 @@ import type { ServerConfig } from "./config";
  * conversation was instant over the LAN. Until that path carries a stream —
  * a named tunnel, or a relay — polling faster is what keeps it usable.
  *
- * See docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md — this is a
+ * See docs/archive/adr/0004-cloudflare-tunnel-for-remote-mobile-access.mdx — this is a
  * stopgap, and the exit condition is concrete: conversation events move to the
  * existing /mux WebSocket, which already reaches the same daemon and already
  * round-trips small frames in 11ms over the tunnel. When that lands, both this

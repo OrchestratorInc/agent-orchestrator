@@ -1,6 +1,6 @@
 // Recovering the login-shell environment so a Finder/Dock launch (started by
 // launchd, not a shell) gets the same PATH and exported credentials a terminal
-// launch would. See docs/daemon-environment.md for the root cause.
+// launch would. See docs/engineering/daemon-environment.mdx for the root cause.
 //
 // Kept pure and dependency-injected (no node:* or electron imports — the
 // vite-plugin-electron-renderer polyfill breaks node:* under vitest, see

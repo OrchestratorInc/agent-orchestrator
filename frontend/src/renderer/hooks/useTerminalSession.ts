@@ -10,7 +10,7 @@
 //
 // Status rule: the frontend never writes a session's display status. On mux
 // `exited`/`error` it invalidates the workspaces query and lets the daemon's
-// derived status flow back (docs/architecture.md).
+// derived status flow back (docs/engineering/architecture.mdx).
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";

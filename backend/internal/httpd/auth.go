@@ -258,7 +258,7 @@ func maybeSetPreviewAuthCookie(w http.ResponseWriter, r *http.Request, tok strin
 //
 // Exact path, GET only, and checked ahead of the lockout so a phone racing
 // endpoints cannot lock itself out probing. See
-// docs/adr/0003-unauthenticated-identity-probe.md.
+// docs/archive/adr/0003-unauthenticated-identity-probe.mdx.
 const identityProbePath = "/api/v1/identity"
 
 // isIdentityProbe reports whether r is the exempt probe. Deliberately an exact

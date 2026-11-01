@@ -169,16 +169,16 @@ Open Orchestrator.inc and point it at the repository you want it to manage. The 
 | Document | Start here when you need |
 | :-- | :-- |
 | [Product documentation](https://docs.orchestrator.inc) | Installation, agent setup, and day-to-day product usage. |
-| [docs/documentation-map.md](docs/documentation-map.md) | Which docs are human-facing, which are machine-readable contracts, and which wins on drift. |
-| [docs/architecture.md](docs/architecture.md) | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
-| [docs/backend-code-structure.md](docs/backend-code-structure.md) | Package ownership and where each backend concern belongs. |
-| [docs/cli/README.md](docs/cli/README.md) | CLI behavior and daemon route mapping. |
-| [docs/development.md](docs/development.md) | Prerequisites, build steps, running tests, and troubleshooting for local development. |
-| [docs/STATUS.md](docs/STATUS.md) | What currently ships on `main` and what remains in flight. |
+| [docs/engineering/documentation-map.mdx](docs/engineering/documentation-map.mdx) | Which docs are human-facing, which are machine-readable contracts, and which wins on drift. |
+| [docs/engineering/architecture.mdx](docs/engineering/architecture.mdx) | Backend mental model, lifecycle, persistence, CDC, status derivation, and daemon boundaries. |
+| [docs/engineering/backend-code-structure.mdx](docs/engineering/backend-code-structure.mdx) | Package ownership and where each backend concern belongs. |
+| [docs/engineering/cli/index.mdx](docs/engineering/cli/index.mdx) | CLI behavior and daemon route mapping. |
+| [docs/engineering/development.mdx](docs/engineering/development.mdx) | Prerequisites, build steps, running tests, and troubleshooting for local development. |
+| [docs/engineering/status.mdx](docs/engineering/status.mdx) | What currently ships on `main` and what remains in flight. |
 
 ## Contributing
 
-Start with the [development guide](docs/development.md) for prerequisites, local setup, and test commands. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and use [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) for bugs and feature requests.
+Start with the [development guide](docs/engineering/development.mdx) for prerequisites, local setup, and test commands. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and use [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) for bugs and feature requests.
 
 ### Report a bug
 
@@ -203,7 +203,7 @@ Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor d
 
 ## Product telemetry
 
-Orchestrator.inc collects limited usage and reliability telemetry, never your code, prompts, agent conversations, or credentials. It includes an installation ID and your GitHub username; if you sign in to AO Cloud it also includes your AO Cloud user ID and the email address of that account, set once as a PostHog person property (never read from git config). Turn it all off in Settings > General > Privacy > Share usage analytics, which covers the desktop, the daemon, and a paired phone. [Learn exactly what we collect and how to opt out](docs/telemetry.md).
+Orchestrator.inc collects limited usage and reliability telemetry, never your code, prompts, agent conversations, or credentials. It includes an installation ID and your GitHub username; if you sign in to AO Cloud it also includes your AO Cloud user ID and the email address of that account, set once as a PostHog person property (never read from git config). Turn it all off in Settings > General > Privacy > Share usage analytics, which covers the desktop, the daemon, and a paired phone. [Learn exactly what we collect and how to opt out](docs/engineering/telemetry.mdx).
 
 ## License
 

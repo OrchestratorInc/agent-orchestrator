@@ -250,7 +250,7 @@ func PrepareRuntimeSettingsArgs(
 
 // runtimeSettingsPath is the deterministic path for a session's process-scoped
 // runtime settings file, rooted under the AO data directory rather than the OS
-// temp dir (AGENTS.md / docs/architecture.md require app state under
+// temp dir (AGENTS.md / docs/engineering/architecture.mdx require app state under
 // ~/.ao / AO_DATA_DIR). A stable name keyed by session id means relaunches
 // overwrite rather than accumulate files.
 func runtimeSettingsPath(dataDir, sessionID string) string {

@@ -169,16 +169,16 @@ Abre Orchestrator.inc y selecciona el repositorio que quieres que gestione. La a
 | Documento | Empieza aquí si necesitas |
 | :-- | :-- |
 | [Documentación del producto](https://docs.orchestrator.inc) | Instalación, configuración de agentes y uso cotidiano del producto. |
-| [docs/documentation-map.md](../docs/documentation-map.md) | Qué documentos están pensados para personas, cuáles son contratos legibles por máquina y cuál prevalece si divergen. |
-| [docs/architecture.md](../docs/architecture.md) | Modelo mental del backend, ciclo de vida, persistencia, CDC, derivación del estado y límites del daemon. |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Responsabilidad de los paquetes y ubicación de cada aspecto del backend. |
-| [docs/cli/README.md](../docs/cli/README.md) | Comportamiento de la CLI y correspondencia con las rutas del daemon. |
-| [docs/development.md](../docs/development.md) | Requisitos previos, compilación, pruebas y solución de problemas para el desarrollo local. |
-| [docs/STATUS.md](../docs/STATUS.md) | Qué se distribuye actualmente en `main` y qué sigue en desarrollo. |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | Qué documentos están pensados para personas, cuáles son contratos legibles por máquina y cuál prevalece si divergen. |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | Modelo mental del backend, ciclo de vida, persistencia, CDC, derivación del estado y límites del daemon. |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | Responsabilidad de los paquetes y ubicación de cada aspecto del backend. |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | Comportamiento de la CLI y correspondencia con las rutas del daemon. |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | Requisitos previos, compilación, pruebas y solución de problemas para el desarrollo local. |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | Qué se distribuye actualmente en `main` y qué sigue en desarrollo. |
 
 ## Contribuir
 
-Empieza por la [guía de desarrollo](../docs/development.md), donde encontrarás los requisitos previos, la configuración local y los comandos de prueba. Lee [CONTRIBUTING.md](../CONTRIBUTING.md) antes de abrir un pull request y utiliza [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) para informar de bugs o proponer funciones.
+Empieza por la [guía de desarrollo](../docs/engineering/development.mdx), donde encontrarás los requisitos previos, la configuración local y los comandos de prueba. Lee [CONTRIBUTING.md](../CONTRIBUTING.md) antes de abrir un pull request y utiliza [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) para informar de bugs o proponer funciones.
 
 ### Informar de un bug
 
@@ -203,7 +203,7 @@ Si necesitas ayuda para describir un problema, únete al [canal de triaje de bug
 
 ## Telemetría del producto
 
-Orchestrator.inc recopila telemetría limitada de uso y fiabilidad, nunca tu código, prompts, conversaciones con agentes ni credenciales. Incluye un ID de instalación y tu nombre de usuario de GitHub; si inicias sesión en AO Cloud, también incluye tu ID de usuario de AO Cloud y la dirección de correo de esa cuenta, que se registra una sola vez como propiedad de persona en PostHog (nunca se lee de la configuración de git). Desactívala por completo en Settings > General > Privacy > Share usage analytics; esto abarca el escritorio, el daemon y un teléfono vinculado. [Consulta exactamente qué recopilamos y cómo desactivarlo](../docs/telemetry.md).
+Orchestrator.inc recopila telemetría limitada de uso y fiabilidad, nunca tu código, prompts, conversaciones con agentes ni credenciales. Incluye un ID de instalación y tu nombre de usuario de GitHub; si inicias sesión en AO Cloud, también incluye tu ID de usuario de AO Cloud y la dirección de correo de esa cuenta, que se registra una sola vez como propiedad de persona en PostHog (nunca se lee de la configuración de git). Desactívala por completo en Settings > General > Privacy > Share usage analytics; esto abarca el escritorio, el daemon y un teléfono vinculado. [Consulta exactamente qué recopilamos y cómo desactivarlo](../docs/engineering/telemetry.mdx).
 
 ## Licencia
 

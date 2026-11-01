@@ -169,16 +169,16 @@ Abra o Orchestrator.inc e indique o repositório que você quer que ele gerencie
 | Documento | Comece aqui quando precisar de |
 | :-- | :-- |
 | [Documentação do produto](https://docs.orchestrator.inc) | Instalação, configuração de agentes e uso cotidiano do produto. |
-| [docs/documentation-map.md](../docs/documentation-map.md) | Quais documentos são voltados a pessoas, quais são contratos legíveis por máquina e qual prevalece em caso de divergência. |
-| [docs/architecture.md](../docs/architecture.md) | Modelo mental do backend, ciclo de vida, persistência, CDC, derivação de status e limites do daemon. |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Responsabilidade dos pacotes e onde cada aspecto do backend deve ficar. |
-| [docs/cli/README.md](../docs/cli/README.md) | Comportamento da CLI e mapeamento das rotas do daemon. |
-| [docs/development.md](../docs/development.md) | Pré-requisitos, etapas de build, execução de testes e solução de problemas no desenvolvimento local. |
-| [docs/STATUS.md](../docs/STATUS.md) | O que está disponível atualmente em `main` e o que ainda está em desenvolvimento. |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | Quais documentos são voltados a pessoas, quais são contratos legíveis por máquina e qual prevalece em caso de divergência. |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | Modelo mental do backend, ciclo de vida, persistência, CDC, derivação de status e limites do daemon. |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | Responsabilidade dos pacotes e onde cada aspecto do backend deve ficar. |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | Comportamento da CLI e mapeamento das rotas do daemon. |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | Pré-requisitos, etapas de build, execução de testes e solução de problemas no desenvolvimento local. |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | O que está disponível atualmente em `main` e o que ainda está em desenvolvimento. |
 
 ## Como contribuir
 
-Comece pelo [guia de desenvolvimento](../docs/development.md) para ver pré-requisitos, configuração local e comandos de teste. Leia [CONTRIBUTING.md](../CONTRIBUTING.md) antes de abrir um pull request e use as [Issues do GitHub](https://github.com/OrchestratorInc/agent-orchestrator/issues) para bugs e solicitações de recursos.
+Comece pelo [guia de desenvolvimento](../docs/engineering/development.mdx) para ver pré-requisitos, configuração local e comandos de teste. Leia [CONTRIBUTING.md](../CONTRIBUTING.md) antes de abrir um pull request e use as [Issues do GitHub](https://github.com/OrchestratorInc/agent-orchestrator/issues) para bugs e solicitações de recursos.
 
 ### Relatar um bug
 
@@ -203,7 +203,7 @@ Participe do [Discord](https://discord.com/invite/UZv7JjxbwG) para receber ajuda
 
 ## Telemetria do produto
 
-O Orchestrator.inc coleta telemetria limitada de uso e confiabilidade, nunca seu código, prompts, conversas com agentes ou credenciais. Ela inclui um ID de instalação e seu nome de usuário do GitHub; se você entrar no AO Cloud, também inclui seu ID de usuário do AO Cloud e o endereço de e-mail dessa conta, definido uma única vez como propriedade de pessoa no PostHog (nunca lido da configuração do git). Desative tudo em Settings > General > Privacy > Share usage analytics, o que abrange o desktop, o daemon e um celular pareado. [Saiba exatamente o que coletamos e como desativar](../docs/telemetry.md).
+O Orchestrator.inc coleta telemetria limitada de uso e confiabilidade, nunca seu código, prompts, conversas com agentes ou credenciais. Ela inclui um ID de instalação e seu nome de usuário do GitHub; se você entrar no AO Cloud, também inclui seu ID de usuário do AO Cloud e o endereço de e-mail dessa conta, definido uma única vez como propriedade de pessoa no PostHog (nunca lido da configuração do git). Desative tudo em Settings > General > Privacy > Share usage analytics, o que abrange o desktop, o daemon e um celular pareado. [Saiba exatamente o que coletamos e como desativar](../docs/engineering/telemetry.mdx).
 
 ## Licença
 

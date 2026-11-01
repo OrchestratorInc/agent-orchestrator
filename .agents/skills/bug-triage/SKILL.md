@@ -61,7 +61,7 @@ Use diagnostics that fit the symptom, within the user's requested scope. Prefer
 read-only checks against the affected installation. Don't restart sessions, upgrade
 AO, change live data, or alter the user's checkout just to collect evidence.
 
-AO uses a Go daemon and an Electron/React frontend. Read `docs/architecture.md` for
+AO uses a Go daemon and an Electron/React frontend. Read `docs/engineering/architecture.mdx` for
 current boundaries and locate actual files with `rg` before citing code. Do not rely
 on the old TypeScript implementation or assume which runtime backs a session.
 

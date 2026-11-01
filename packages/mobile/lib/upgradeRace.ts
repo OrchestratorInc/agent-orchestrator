@@ -11,7 +11,7 @@ import { RE_RACE_COOLDOWN_MS } from "./reRace";
  *
  * That is not just a wasted fast path. The tunnel poll is deliberately quick
  * (see pollInterval.ts), so staying there costs battery and cellular data; and
- * per docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md the tunnel is
+ * per docs/archive/adr/0004-cloudflare-tunnel-for-remote-mobile-access.mdx the tunnel is
  * the one path a third party can observe, justified by it being used *only*
  * when nothing else works. Sticking to it after Wi-Fi returns quietly breaks
  * that.

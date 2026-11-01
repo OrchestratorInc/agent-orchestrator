@@ -17,7 +17,7 @@ export const MOBILE_POSTHOG_HOST =
  * (EXPO_PUBLIC_* is inlined), so it controls the next build. A shipped binary
  * cannot be hotfixed from here; the runtime kill switch for an event already in
  * the field is the PostHog-side ingestion drop rule, the same lever used for the
- * legacy desktop events (see docs/posthog-cost-controls.md).
+ * legacy desktop events (see docs/engineering/posthog-cost-controls.mdx).
  */
 export const MOBILE_TELEMETRY_DISABLED =
 	(process.env.EXPO_PUBLIC_AO_TELEMETRY_DISABLED ?? "").trim() === "1";

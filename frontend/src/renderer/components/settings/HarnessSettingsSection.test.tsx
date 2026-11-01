@@ -1581,7 +1581,7 @@ describe("HarnessSettingsSection", () => {
 
 	it("classifies an unauthorized Unreal Agent as not configured and offers documentation", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "unauthorized" })] };
-		const documentationUrl = "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md";
+		const documentationUrl = "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/engineering/harnesses/unreal-agent.mdx";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
 			if (path === "/api/v1/agents/auth-plans") {
