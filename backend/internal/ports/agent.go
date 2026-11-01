@@ -162,6 +162,21 @@ type AgentAuthDiagnosticsChecker interface {
 	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }
 
+// AgentRuntimeAuthChecker checks sign-in with the credentials AO adds when it
+// launches a session from dataDir (such as a login AO saved itself), so a
+// readiness or switch check agrees with what that session would actually use.
+type AgentRuntimeAuthChecker interface {
+	AuthStatusForRuntime(ctx context.Context, dataDir string) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
+
+// AgentRuntimeCredentialEnv reports the credential environment AO adds when it
+// launches a local session from dataDir (such as a login AO saved itself), so
+// work done outside a session, like model discovery or the computer's account
+// check, sees the same credential. It returns nil when AO adds none.
+type AgentRuntimeCredentialEnv interface {
+	RuntimeCredentialEnv(dataDir string) map[string]string
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.
@@ -188,6 +203,15 @@ type Agent interface {
 	// SessionInfo reads agent-owned session metadata such as native session id,
 	// display title, or summary. ok=false means no info is available.
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
+}
+
+// AgentNativeRestoreCommand is an optional refinement for adapters that can
+// recover a different native session ID while building a restore command.
+// When ok is true, sessionID is the exact identity selected by cmd. The manager
+// uses it for native history validation instead of the potentially stale stored ID.
+// Implementations must return the command and identity from the same lookup.
+type AgentNativeRestoreCommand interface {
+	GetRestoreCommandWithSessionID(ctx context.Context, cfg RestoreConfig) (cmd []string, sessionID string, ok bool, err error)
 }
 
 // AgentAuthChecker is the optional capability for adapters whose native CLI has

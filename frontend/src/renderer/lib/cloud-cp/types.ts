@@ -1216,6 +1216,20 @@ export interface CloudCpChatModelsResponse {
 		 */
 		approvalModes?: Array<"default" | "accept-edits" | "auto" | "bypass-permissions">;
 	}>;
+	/**
+	 * Where a new task's catalog came from: a Cloud worker running this CLI
+	 * version with the user's current credential, or the models the control
+	 * plane's pinned CLI version supports. Absent from a session's own list,
+	 * which that session's worker reported.
+	 */
+	source?: "worker" | "release";
+	/** The harness CLI version the list is for. */
+	cliVersion?: string;
+	/**
+	 * On a session's own list, whether its worker listed the models for the
+	 * signed-in account rather than from the CLI's built-in list.
+	 */
+	accountListed?: boolean;
 }
 
 export interface CloudCpClientEvent {

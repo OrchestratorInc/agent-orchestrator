@@ -64,6 +64,30 @@ func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store
 	})
 }
 
+func TestQueueUserMessageExcludesSpawnOpeningPromptFromUsage(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	st.SetUsageTelemetryAllowed(func() bool { return true })
+	svc := provisioningService(t, st)
+	ctx := context.Background()
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "spawn task brief", Origin: domain.MessageOriginHuman, SpawnOpeningPrompt: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one"); err != nil || len(batches) != 0 {
+		t.Fatalf("opening prompt batches = %+v, err=%v", batches, err)
+	}
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "direct follow-up", Origin: domain.MessageOriginHuman, ClientMessageID: "direct-follow-up",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one")
+	if err != nil || len(batches) != 1 || batches[0].Count != 1 {
+		t.Fatalf("direct message batches = %+v, err=%v", batches, err)
+	}
+}
+
 type staleProvisioningReader struct{ record domain.SessionRecord }
 
 func (r staleProvisioningReader) GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error) {
