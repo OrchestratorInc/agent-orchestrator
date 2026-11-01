@@ -1,12 +1,14 @@
 import { Feather } from "./icons";
 import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, BackHandler, Keyboard, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { sessionHostId } from "./hostedRows";
-import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
+import { prLine, workerRowPresentation, workerStatusGlyph, type WorkerStatusGlyph } from "./agentsView";
+import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolName, PlatformSymbol } from "./symbols";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
@@ -15,11 +17,10 @@ import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
-import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
-import { Spinning } from "./ui";
+import { Spinner } from "./Spinner";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
-import { iconSize, press, space, type } from "./tokens";
+import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
 import { MachineIdentity } from "./MachineIdentity";
@@ -78,7 +79,11 @@ export const WorkerListRow = memo(
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
-	const [renameError, setRenameError] = useState<string>();
+	// One way out of each rename: Return and the blur that follows it, or a
+	// cancel and the blur the dismissed keyboard sends, must not both act.
+	const renameSettled = useRef(false);
+	const renaming = useRef(isRenaming);
+	renaming.current = isRenaming;
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
 	const glyph = workerStatusGlyph(session.status);
@@ -92,51 +97,69 @@ export const WorkerListRow = memo(
 	// only restates the title, so whatever reaches here says something new.
 	const details = prs?.text ?? row.branch ?? "";
 	useEffect(() => {
+		if (isRenaming) renameSettled.current = false;
+	}, [isRenaming]);
+	useEffect(() => {
 		if (isRenaming) return;
 		setRenameTitle(row.title);
-		setRenameError(undefined);
 		setRenameSaving(false);
 	}, [isRenaming, row.title]);
-	const cancelRename = () => {
+	const cancelRename = useCallback(() => {
+		if (renameSettled.current) return;
+		renameSettled.current = true;
 		Keyboard.dismiss();
-		setRenameError(undefined);
 		onRenameCancel();
-	};
-	const saveRename = useCallback(async () => {
+	}, [onRenameCancel]);
+	// An inline rename commits the way each platform's own lists do: Return, or
+	// leaving the field. Android's back and VoiceOver's escape scrub cancel.
+	const commitRename = useCallback(async () => {
+		if (renameSettled.current) return;
+		renameSettled.current = true;
+		Keyboard.dismiss();
 		const nextTitle = normalizeConversationTitle(renameTitle);
-		if (!nextTitle || renameSaving) return;
+		// Left empty or unchanged, the worker keeps its name.
+		if (!nextTitle || nextTitle === row.title) {
+			onRenameCancel();
+			return;
+		}
 		setRenameSaving(true);
-		setRenameError(undefined);
 		try {
 			await onRename(nextTitle);
 			haptics.success();
-			Keyboard.dismiss();
-			onRenameCancel();
 		} catch (cause) {
+			// With no Cancel button, a field kept open on a failure would have no
+			// way out, so the rename ends and says why.
 			haptics.error();
-			setRenameError(userFacingError(cause, "Couldn't rename this worker."));
-			setRenameSaving(false);
+			Alert.alert("Couldn't rename this worker", userFacingError(cause, "Please try again."));
 		}
-	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
+		// The board may have moved on to renaming another row meanwhile.
+		if (renaming.current) onRenameCancel();
+	}, [onRename, onRenameCancel, renameTitle, row.title]);
+	useEffect(() => {
+		if (!isRenaming) return;
+		const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+			cancelRename();
+			return true;
+		});
+		return () => subscription.remove();
+	}, [cancelRename, isRenaming]);
+	// No haptics on these presses: the pin's result and Archive's confirmation
+	// each give their own, and opening a row is navigation.
 	const renderRightActions = useCallback(
 		() => (
-			<View style={styles.actionRail}>
-				<WorkerRowActions
-					title={row.title}
-					pinned={Boolean(session.isPinned)}
-					onSetPinned={(pinned) => {
-						closeActionRailRef.current();
-						haptics.tap();
-						void onSetPinned(pinned);
-					}}
-					onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
-				/>
-			</View>
+			<WorkerRowActions
+				title={row.title}
+				pinned={Boolean(session.isPinned)}
+				onSetPinned={(pinned) => {
+					closeActionRailRef.current();
+					void onSetPinned(pinned);
+				}}
+				onDelete={() => { closeActionRailRef.current(); onDelete(); }}
+			/>
 		),
-		[onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
+		[onDelete, onSetPinned, row.title, session.isPinned],
 	);
 	const openSession = useCallback(() => {
-		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
 			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? hostId },
@@ -163,9 +186,7 @@ export const WorkerListRow = memo(
 			case "unpin":
 				return void onSetPinned(false);
 			case "rename":
-				haptics.tap();
 				setRenameTitle(row.title);
-				setRenameError(undefined);
 				return onRenameStart();
 			case "resume":
 				return onResume();
@@ -188,9 +209,9 @@ export const WorkerListRow = memo(
 			shellStyle={styles.shell}
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
-			pressedStyle={styles.rowPressed}
+			// No gesture hint: a screen reader reaches pin, rename and archive as
+			// the row's actions, and announces that it has them.
 			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
-			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -210,10 +231,9 @@ export const WorkerListRow = memo(
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
-					renameError={renameError}
 					onRenameTitleChange={setRenameTitle}
 					onRenameCancel={cancelRename}
-					onRenameSave={() => void saveRename()}
+					onRenameCommit={() => void commitRename()}
 					styles={styles}
 					t={t}
 				/>
@@ -262,10 +282,9 @@ function WorkerRowContents({
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
-	renameError,
 	onRenameTitleChange,
 	onRenameCancel,
-	onRenameSave,
+	onRenameCommit,
 	styles,
 	t,
 }: {
@@ -279,14 +298,12 @@ function WorkerRowContents({
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
-	renameError?: string;
 	onRenameTitleChange?(title: string): void;
 	onRenameCancel?(): void;
-	onRenameSave?(): void;
+	onRenameCommit?(): void;
 	styles: ReturnType<typeof makeStyles>;
 	t: Theme;
 }) {
-	const canSave = Boolean(normalizeConversationTitle(renameTitle)) && !renameSaving;
 	return (
 		<>
 			<View style={styles.eyebrow}>
@@ -297,13 +314,13 @@ function WorkerRowContents({
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
-				    A working row turns: the shape for "working" is a circle, and a
-				    circle only says so while it is moving — a pulse says "waiting",
-				    which is what the row above it says for a different state. */}
+				    A working or starting row shows the system's spinner: a still
+				    circle reads as stuck, and a pulse says "waiting", which is what
+				    the row above it says for a different state. */}
 				{glyph && row.trailingKind === "status" ? (
-					<Spinning enabled={Boolean(visual.breathing)}>
-						<Feather name={glyph} size={12} color={visual.color} />
-					</Spinning>
+					visual.breathing || glyph === "loader"
+						? <Spinner size={iconSize.xs} color={visual.color} />
+						: <StatusGlyph glyph={glyph} color={visual.color} />
 				) : null}
 				<Text
 					style={[styles.trailing, { color: row.trailingKind === "status" ? visual.color : t.textTertiary }]}
@@ -317,34 +334,23 @@ function WorkerRowContents({
 				<View style={styles.titleEditor}>
 					<TextInput
 						autoFocus
+						accessibilityLabel="Worker name"
+						accessibilityHint="Saves when you press Return or leave the field."
+						// VoiceOver's escape scrub backs out of the rename.
+						onAccessibilityEscape={onRenameCancel}
 						value={renameTitle}
 						onChangeText={onRenameTitleChange}
+						editable={!renameSaving}
 						placeholder="Worker name"
 						placeholderTextColor={t.textFaint}
 						{...textSelectionColors(t)}
 						maxLength={120}
 						returnKeyType="done"
-						onSubmitEditing={onRenameSave}
+						onSubmitEditing={onRenameCommit}
+						onBlur={onRenameCommit}
 						style={styles.renameInput}
 					/>
-					<Pressable
-						accessibilityRole="button"
-						hitSlop={{ top: 6, bottom: 6, left: 3, right: 3 }} accessibilityLabel="Cancel rename"
-						disabled={renameSaving}
-						onPress={onRenameCancel}
-						style={({ pressed }) => [styles.renameControl, pressed && styles.renameControlPressed, renameSaving && styles.renameControlDisabled]}
-					>
-						<Feather name="x" size={iconSize.md} color={t.textSecondary} />
-					</Pressable>
-					<Pressable
-						accessibilityRole="button"
-						hitSlop={{ top: 6, bottom: 6, left: 3, right: 3 }} accessibilityLabel="Save worker name"
-						disabled={!canSave}
-						onPress={onRenameSave}
-						style={({ pressed }) => [styles.renameControl, styles.renameSave, pressed && styles.renameControlPressed, !canSave && styles.renameControlDisabled]}
-					>
-						<Feather name={renameSaving ? "loader" : "check"} size={iconSize.md} color={t.onAccent} />
-					</Pressable>
+					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
 				</View>
 			) : (
 				<Text style={styles.title} numberOfLines={1}>
@@ -352,7 +358,6 @@ function WorkerRowContents({
 				</Text>
 			)}
 
-			{renameError ? <Text accessibilityRole="alert" style={styles.renameError}>{renameError}</Text> : null}
 			{details || machine ? (
 				<View style={styles.metadata}>
 					{details ? (
@@ -367,19 +372,28 @@ function WorkerRowContents({
 	);
 }
 
+/**
+ * Status glyphs are chrome, so each draws as its platform's own symbol. The
+ * pull request keeps its Lucide glyph: a domain mark with no system symbol.
+ */
+const STATUS_SYMBOLS: Record<Exclude<WorkerStatusGlyph, "git-pull-request" | "loader">, AppSymbolName | PlatformSymbol> = {
+	"alert-circle": "error",
+	"message-square": "chat",
+	"x-octagon": { ios: "xmark.octagon", android: "dangerous" },
+	"check-circle": "checkCircle",
+	moon: "idle",
+};
+
+function StatusGlyph({ glyph, color }: { glyph: Exclude<WorkerStatusGlyph, "loader">; color: string }) {
+	if (glyph === "git-pull-request") return <Feather name={glyph} size={iconSize.xs} color={color} />;
+	return <AppSymbol name={STATUS_SYMBOLS[glyph]} size={iconSize.xs} color={color} />;
+}
+
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		shell: {
 			minHeight: 76,
 			overflow: "hidden",
-			borderBottomWidth: rowDividerWidth,
-			borderBottomColor: t.borderSubtle,
-		},
-		actionRail: {
-			width: WORKER_ACTION_REVEAL_WIDTH,
-			backgroundColor: t.bgElevated,
-			borderLeftWidth: StyleSheet.hairlineWidth,
-			borderLeftColor: t.borderSubtle,
 		},
 		foreground: { backgroundColor: t.bgBase },
 		row: {
@@ -388,20 +402,17 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			gap: space.hair,
 		},
-		rowPressed: { backgroundColor: t.bgSubtle },
+		// Inset to the text, as T3 Code's list rows are, and drawn inside the row
+		// so it travels with a swipe instead of staying behind on the rail.
+		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },
-		renameInput: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
-		renameError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: -1 },
-		renameControl: { width: 32, height: 32, borderRadius: 16, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevatedHover },
-		renameSave: { borderColor: t.accent, backgroundColor: t.accent },
-		renameControlPressed: { opacity: press.opacity },
-		renameControlDisabled: { opacity: 0.45 },
+		renameInput: { fontFamily: "DMSans_600SemiBold", flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
-		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
+		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
 		metadataSpacer: { flex: 1 },
-		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
+		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
 		machineIdentity: { maxWidth: "52%", marginLeft: "auto" },
 	});

@@ -88,7 +88,6 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 
 	return {
 		bgBase,
-		bgSide: dark ? p.sidebar : mixColor(p.sidebar, p.text, 0.07),
 		bgColumn: dark ? mixColor(p.bg, p.panel, 0.4) : mixColor(bgBase, bgElevated, 0.5),
 		bgSurface: dark ? mixColor(p.bg, p.panel, 0.6) : bgElevated,
 		bgElevated,
@@ -127,6 +126,12 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 
 		// Text clears AA on the canvas by construction, so the canvas clears AA on it.
 		onAccent: p.bg,
+		// White, as on the hand-tuned palettes, unless a theme's red is too pale to
+		// carry it; then it darkens until the glyph clears the non-text floor.
+		onDestructive: ensureContrast("#ffffff", red, FAINT_CONTRAST, "#000000"),
+		// White where it reads as text on both fills, as it does on every light
+		// palette; otherwise the base, which each state hue clears by construction.
+		onStatus: [green, purple].every((fill) => contrastRatio("#ffffff", fill) >= TEXT_CONTRAST) ? "#ffffff" : bgBase,
 		scrim: dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.45)",
 
 		fontMono,

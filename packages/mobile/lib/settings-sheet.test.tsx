@@ -8,9 +8,8 @@ vi.mock("expo-router", async () => {
 	const Stack = Object.assign(({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Stack", props, children), { Screen: "StackScreen" });
 	return { Stack, ThemeProvider: "NavigationThemeProvider", DarkTheme: { colors: {} }, DefaultTheme: { colors: {} } };
 });
-vi.mock("@expo-google-fonts/geist/400Regular", () => ({ Geist_400Regular: 1 }));
-vi.mock("@expo-google-fonts/geist/500Medium", () => ({ Geist_500Medium: 2 }));
-vi.mock("@expo-google-fonts/geist/600SemiBold", () => ({ Geist_600SemiBold: 3 }));
+vi.mock("expo-router/react-navigation", () => ({ getFocusedRouteNameFromRoute: () => undefined }));
+vi.mock("./appFonts", () => ({ appFonts: {} }));
 vi.mock("@expo-google-fonts/geist-mono/400Regular", () => ({ GeistMono_400Regular: 4 }));
 vi.mock("expo-font", () => ({ useFonts: () => [true, null] }));
 vi.mock("expo-splash-screen", () => ({ preventAutoHideAsync: vi.fn(async () => {}), hideAsync: vi.fn(async () => {}) }));
@@ -26,16 +25,13 @@ vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
-vi.mock("./MinimalBackButton", () => ({ MinimalBackButton: () => null }));
-vi.mock("./native-header-items", () => ({ glassHeaderControl: () => ({}) }));
-vi.mock("./layoutGrid", () => ({ LayoutGrid: () => null }));
 
 import RootLayout from "../app/_layout";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("Settings sheet visible viewport", () => {
-	it.each(["android", "ios"])("keeps the fixed editor footer inside every allowed %s sheet height", async (platform) => {
+describe("Settings presentation", () => {
+	it.each(["android", "ios"])("pushes Settings as a page on %s", async (platform) => {
 		fixtures.platform.OS = platform;
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		const error = console.error;
@@ -49,20 +45,27 @@ describe("Settings sheet visible viewport", () => {
 		try {
 			const settings = renderer.root.findByProps({ name: "settings" }).props.options;
 			const naming = renderer.root.findByProps({ name: "sheets/machine-name" }).props.options;
+			// Settings' own stack draws the headers, never the root's. The title
+			// names it in the history of a page opened over it.
+			expect(settings.headerShown).toBe(false);
+			expect(settings.title).toBe("Settings");
+			// A page pushed over the board on both platforms, with the stack's
+			// own push and back, as every page opened from it is: no sheet.
+			expect(settings.presentation).toBeUndefined();
+			expect(settings.sheetAllowedDetents).toBeUndefined();
+			expect(settings.sheetGrabberVisible).toBeUndefined();
+			// Nothing stops a swipe for the whole flow; a machine page holds it
+			// on its own (app/settings/machine/[id]/edit.tsx and index.tsx).
+			expect(settings.gestureEnabled).toBeUndefined();
 			if (platform === "android") {
 				expect(naming.presentation).toBe("transparentModal");
 				expect(naming.sheetAllowedDetents).toBeUndefined();
 				expect(naming.contentStyle.backgroundColor).toBe("transparent");
 			} else {
 				expect(naming.presentation).toBe("formSheet");
-				expect(naming.sheetAllowedDetents).toBe("fitToContents");
+				// A SwiftUI Form fills the sheet instead of measuring to fit.
+				expect(naming.sheetAllowedDetents).toEqual([0.5]);
 			}
-			// A footer placed at the tallest detent must also be visible at opening.
-			// Android translates the full-height content instead of resizing the
-			// nested Settings navigator when moving to a smaller detent.
-			expect(settings.sheetAllowedDetents).toEqual([0.92]);
-			expect(settings.sheetInitialDetentIndex).toBe(0);
-			expect(settings.gestureEnabled).toBe(false);
 		} finally {
 			act(() => renderer.unmount());
 		}

@@ -32,8 +32,11 @@ function initialState(insetsBottom: number): ChatKeyboardState {
  * iOS keeps keyboard-controller's avoiding view, which interpolates its padding
  * with the keyboard. Android pads the root by hand: edge-to-edge defeats
  * `adjustResize`, so the window no longer shrinks for the keyboard.
+ *
+ * `underHeader`: the screen is laid out under a clear header, from the
+ * window's top (iOS 26's glass bar), so the avoiding view owes it nothing.
  */
-export function useChatKeyboard() {
+export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean } = {}) {
 	const headerHeight = useHeaderHeight();
 	const insets = useSafeAreaInsets();
 	const insetsBottom = useRef(insets.bottom);
@@ -73,7 +76,7 @@ export function useChatKeyboard() {
 		keyboardVisible: state.visible,
 		rootStyle: platform === "android" ? { paddingBottom: state.visible ? state.height : 0 } : undefined,
 		behavior: platform === "ios" ? "padding" as const : undefined,
-		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(headerHeight) : 0,
+		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(underHeader ? 0 : headerHeight) : 0,
 		restingInset: dockRestingInset(insets.bottom),
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
 	};

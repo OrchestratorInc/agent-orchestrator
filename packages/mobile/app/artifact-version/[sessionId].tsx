@@ -88,8 +88,8 @@ function ArtifactVersionContent() {
 		}
 	}, [config, path, refresh, router, sessionId, version]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." /></View>;
-	if (!valid) return <View style={styles.center}><EmptyState icon="clock" title="This version can't be opened" message="Open it again from the artifact's history." /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." /></View>;
+	if (!valid) return <View style={styles.center}><EmptyState icon="history" title="This version can't be opened" message="Open it again from the artifact's history." /></View>;
 	if (!loaded && loadError) return <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't load this version" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} /></View>;
 	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 
@@ -121,7 +121,7 @@ function ArtifactVersionContent() {
 				{restoreError ? <Text accessibilityRole="alert" style={styles.error}>{restoreError}</Text> : null}
 				<View style={styles.actions}>
 					<Button title="Back to current" variant="ghost" onPress={() => backOr(router)} style={styles.action} />
-					<Button title={restoring ? "Restoring" : "Restore this version"} icon="rotate-ccw" loading={restoring} disabled={restoring} onPress={() => void restore()} style={styles.action} />
+					<Button title={restoring ? "Restoring" : "Restore this version"} icon={{ ios: "arrow.counterclockwise", android: "restore" }} loading={restoring} disabled={restoring} onPress={() => void restore()} style={styles.action} />
 				</View>
 			</View>
 		</View>

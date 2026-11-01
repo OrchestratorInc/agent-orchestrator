@@ -21,6 +21,23 @@ export type BrowserLiveCommand =
 	| { type: "navigate"; payload: { action: "open" | "back" | "forward" | "reload" | "stop"; url?: string } }
 	| { type: "tab"; payload: { action: "new" | "select" | "close"; tabId?: string; url?: string } };
 
+/**
+ * Host errors that refuse one command and leave the stream healthy: the page
+ * stays up and the error is shown as a notice. Each maps to the copy the phone
+ * shows, or to null to show the desktop's own message.
+ */
+const RECOVERABLE_ERRORS = new Map<string, string | null>([
+	["BROWSER_REMOTE_READ_ONLY", null],
+	["BROWSER_REMOTE_NOT_VIEWED", null],
+	["INVALID_ARGUMENT", null],
+	// The desktop's wording for these is written for the `ao browser` CLI.
+	["URL_REQUIRED", "Enter an address to open."],
+	["INVALID_URL", "Enter a web address, like localhost:3000 or example.com."],
+	["BROWSER_URL_FORBIDDEN", "The desktop browser opens only http and https addresses."],
+	["TAB_NOT_FOUND", "That tab has already closed."],
+	["TAB_ID_REQUIRED", "That tab has already closed."],
+]);
+
 type BrowserLiveHandlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
 	onState(state: BrowserLiveState): void;
@@ -100,8 +117,8 @@ export class BrowserLiveClient {
 			if (message.type === "state" && message.payload) this.handlers.onState(message.payload);
 			if (message.type === "error") {
 				const detail = message.message ?? message.code ?? "Browser host error";
-				if (message.code === "BROWSER_REMOTE_READ_ONLY" || message.code === "BROWSER_REMOTE_NOT_VIEWED" || message.code === "INVALID_ARGUMENT") {
-					this.handlers.onStatus("open", detail);
+				if (message.code && RECOVERABLE_ERRORS.has(message.code)) {
+					this.handlers.onStatus("open", RECOVERABLE_ERRORS.get(message.code) ?? detail);
 				} else {
 					this.handlers.onStatus("error", detail);
 				}

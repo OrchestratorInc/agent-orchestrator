@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { materialDrawableNames } from "./toolbarIcon.types";
 
 import {
 	ARCHIVE_SESSION_HINT,
 	ARCHIVE_SESSION_CONFIRM,
-	hasWorkerActionDrawable,
-	workerActionGlyph,
+	workerAccessibilityActions,
+	workerActionNamed,
 	workerActionSymbol,
+	workerActionSymbols,
 	workerContextActions,
+	type WorkerActionId,
 	type WorkerActionState,
 } from "./worker-action-model";
+
+const ALL_ACTIONS: readonly WorkerActionId[] = ["open", "pin", "unpin", "rename", "resume", "restore", "openPr", "delete"];
 
 const state = (over: Partial<WorkerActionState> = {}): WorkerActionState => ({
 	pinned: false,
@@ -80,7 +85,8 @@ describe("workerContextActions", () => {
 			cancel: "No",
 			confirm: "Confirm",
 		});
-		expect(ARCHIVE_SESSION_HINT).toMatch(/Deletes the worktree folder unless it has uncommitted changes/);
+		// Short enough for the two lines iOS's menu gives a subtitle.
+		expect(ARCHIVE_SESSION_HINT).toBe("Stops the agent. Keeps uncommitted work.");
 	});
 
 	it("opens with Open, so the menu's first item is the row's own tap", () => {
@@ -88,60 +94,49 @@ describe("workerContextActions", () => {
 	});
 });
 
+describe("workerAccessibilityActions", () => {
+	// A screen reader can neither swipe a row open nor long-press it, so the
+	// menu's actions have to be the row's own accessibility actions.
+	it("offers every menu action but Open, which is the row's activation", () => {
+		const actions = workerContextActions(state({ hasPr: true, stopped: true }));
+		expect(workerAccessibilityActions(actions)).toEqual([
+			{ name: "resume", label: "Resume agent" },
+			{ name: "pin", label: "Pin" },
+			{ name: "rename", label: "Rename" },
+			{ name: "openPr", label: "Review pull request" },
+			{ name: "delete", label: "Archive session" },
+		]);
+	});
+
+	it("routes only the actions the row offers", () => {
+		const actions = workerContextActions(state());
+		expect(workerActionNamed(actions, "delete")).toBe("delete");
+		expect(workerActionNamed(actions, "activate")).toBeUndefined();
+		expect(workerActionNamed(actions, "restore")).toBeUndefined();
+	});
+});
+
 describe("workerActionSymbol", () => {
-	it("gives every action an SF Symbol, since iOS resolves them by name", () => {
-		for (const action of workerContextActions(state({ hasPr: true, stopped: true }))) {
-			expect(workerActionSymbol(action.id).length).toBeGreaterThan(0);
+	it("gives every action a symbol on each platform", () => {
+		for (const id of ALL_ACTIONS) {
+			expect(workerActionSymbol(id).ios.length).toBeGreaterThan(0);
+			expect(workerActionSymbol(id).android.length).toBeGreaterThan(0);
 		}
 	});
 
 	it("distinguishes pin from unpin", () => {
-		expect(workerActionSymbol("pin")).not.toBe(workerActionSymbol("unpin"));
+		expect(workerActionSymbol("pin")).not.toEqual(workerActionSymbol("unpin"));
 	});
 
 	it("uses the archive box for the restorable session action", () => {
-		expect(workerActionSymbol("delete")).toBe("archivebox");
-	});
-});
-
-describe("workerActionGlyph", () => {
-	// Android renders its own Modal, not the native menu, so these are what that
-	// list actually shows. Every action needs one or a row renders iconless beside
-	// rows that don't.
-	it("gives every action a glyph", () => {
-		for (const id of ["pin", "unpin", "rename", "delete", "open", "openPr", "resume", "restore"] as const) {
-			expect(workerActionGlyph(id).name).toBeTruthy();
-		}
+		expect(workerActionSymbol("delete")).toEqual({ ios: "archivebox", android: "archive" });
 	});
 
-	// The swipe rail already offers pin and unpin with a pushpin; a menu that drew
-	// the same action differently would read as a different action.
-	// The renderer pins with Lucide's Pin/PinOff, so the rail does too — the same
-	// pushpin the desktop shows, not a filled Material one.
-	it("pins with the same pushpin the desktop uses", () => {
-		expect(workerActionGlyph("pin")).toEqual({ family: "feather", name: "pin" });
-		expect(workerActionGlyph("unpin")).toEqual({ family: "feather", name: "pin-off" });
-	});
-
-	it("uses the archive glyph for the restorable session action", () => {
-		expect(workerActionGlyph("delete")).toEqual({ family: "feather", name: "archive" });
-	});
-
-	// Destructive and recovery actions are the ones you must not confuse.
-	it("keeps delete, resume and restore distinct", () => {
-		const names = [workerActionGlyph("delete"), workerActionGlyph("resume"), workerActionGlyph("restore")].map((glyph) => glyph.name);
-		expect(new Set(names).size).toBe(3);
-	});
-});
-
-describe("hasWorkerActionDrawable", () => {
-	// Android and the fallback menu require() a bundled drawable, and a missing
-	// file is a bundle-time failure rather than a blank icon — so this list has to
-	// track assets/icons exactly. Every action now ships one, so the Android menu
-	// reads like the iOS one rather than a half-iconned list.
-	it("claims an icon for every action", () => {
-		for (const id of ["pin", "unpin", "rename", "delete", "open", "openPr", "resume", "restore"] as const) {
-			expect(hasWorkerActionDrawable(id)).toBe(true);
-		}
+	// Android's menu takes a bundled drawable, and a missing file is a
+	// bundle-time failure rather than a blank icon, so every action's Material
+	// Symbol has to be one the shared registry bundles (lib/toolbarIcon.test.ts
+	// checks its files).
+	it.each(ALL_ACTIONS)("draws %s's Material Symbol from the shared drawable registry", (id) => {
+		expect(materialDrawableNames).toContain(workerActionSymbols[id].android);
 	});
 });

@@ -1,24 +1,13 @@
-import { Feather } from "../icons";
-import { useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Stack, useNavigation, useRouter } from "expo-router";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import {
-	ActivityIndicator,
-	Alert,
-	Keyboard,
-	Pressable,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
+import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
-import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { openGitHub } from "../openGitHub";
-import { glassHeaderControl } from "../native-header-items";
-import { NativeHeaderButton } from "../native-header-button";
+import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
 import { useApp } from "../store";
 import {
 	mobileInterfaceTransitionIsActive,
@@ -28,6 +17,8 @@ import {
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
 import type { Theme } from "../theme";
+import { Frost, FROST_TAIL, frostStops } from "../frost";
+import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
@@ -37,15 +28,15 @@ import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
-import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
+import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
+import { conversationMenuGroups, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
-import { conversationMarkers } from "./timelineModel";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
-import { turnSettingsModelLabel } from "./turnSettingsModel";
-import { brokenMcpServers, can } from "./types";
+import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
@@ -53,11 +44,15 @@ import { sessionStartupView, startupVisible } from "../session/sessionStartup";
 import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
+import { sessionHeaderButtons } from "../session/sessionHeaderButtons";
+import { useSessionPreview } from "../session/useSessionPreview";
+import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
-import { iconSize, type, space } from "../tokens";
+import { space } from "../tokens";
+import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -67,6 +62,9 @@ import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
+
+/** How long the composer's height holds still before the timeline takes it: past its spring. */
+const COMPOSER_SETTLE_MS = 120;
 
 async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
 	Keyboard.dismiss();
@@ -92,15 +90,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const [headerRightReady, setHeaderRightReady] = useState(false);
-	useLayoutEffect(
-		() => resetHeaderRightForSwap(
-			() => navigation.setOptions(glassHeaderControl("right")),
-			() => setHeaderRightReady(true),
-		),
-		[navigation],
-	);
-	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
@@ -122,12 +112,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useEffect(() => {
 		if (connection === "open" && loadFailed) void refreshConversation();
 	}, [connection, loadFailed, refreshConversation]);
-	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
-	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
-	const [menuOpen, setMenuOpen] = useState(false);
-	const [collapsedReviewPRKey, setCollapsedReviewPRKey] = useState<string>();
-	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
 	// An earlier prompt open in its inline editor takes the keyboard, so the
@@ -148,7 +133,24 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard();
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const headerOverlap = useGlassHeaderOverlap();
+	// On iOS 26 the banners float under the header, over the list's top, and the
+	// list starts below them.
+	const [bannersHeight, setBannersHeight] = useState(0);
+	const [composerHeight, setComposerHeight] = useState(0);
+	// The jump back to the newest message steps aside while the composer is open.
+	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer springs open and closed, and its height changes every frame
+	// of that. The timeline takes the height once it settles, rather than
+	// re-rendering the conversation for each frame.
+	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	const measureComposer = useCallback((event: LayoutChangeEvent) => {
+		const height = Math.round(event.nativeEvent.layout.height);
+		clearTimeout(composerSettle.current);
+		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
+	}, []);
 	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
@@ -156,27 +158,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	// The usage sheet follows the conversation while it is up: the numbers move
+	// with every turn.
+	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);
+	const snapshotListeners = useRef(new Set<(snapshot: ConversationSnapshot) => void>());
 	useLayoutEffect(() => {
-		const entry = actionsEntryRef.current;
+		latestSnapshot.current = conversation.snapshot;
 		const snapshot = conversation.snapshot;
-		if (!entry || entry.sessionId !== session.id || !snapshot) return;
-		const liveEntry = {
-			...entry,
-			snapshot,
-			modelLabel: turnSettingsModelLabel(snapshot, conversation.models, conversation.configOptions),
-			openingShell,
-			compacting: conversation.pendingActions.includes("compact"),
-			mcpReloading: conversation.pendingActions.includes("mcp"),
-			refreshing: conversation.refreshing,
-			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
-			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
-		};
-		actionsEntryRef.current = liveEntry;
-		actionsListeners.current.forEach((listener) => listener(liveEntry));
-	}, [conversation.snapshot, conversation.models, conversation.configOptions, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id]);
+		if (snapshot) snapshotListeners.current.forEach((listener) => listener(snapshot));
+	}, [conversation.snapshot]);
+	const subscribeSnapshot = useCallback((listener: (snapshot: ConversationSnapshot) => void) => {
+		snapshotListeners.current.add(listener);
+		if (latestSnapshot.current) listener(latestSnapshot.current);
+		return () => { snapshotListeners.current.delete(listener); };
+	}, []);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -238,42 +233,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = conversation.snapshot?.controller.state;
-	const reviewPromptPRCandidate = "projectName" in session ? undefined : sessionPRReadyForReview(session);
-	const reviewPromptKey = reviewPromptPRCandidate ? `${reviewPromptPRCandidate.url}#${reviewPromptPRCandidate.number}` : undefined;
-	const reviewPromptHostKey = config ? machineIdentity(config) : currentHostId;
-	const reviewPromptStateStorageKey = reviewPromptKey && reviewPromptHostKey
-		? `ao.chat.reviewPromptCollapsed:${encodeURIComponent(reviewPromptHostKey)}:${encodeURIComponent(session.id)}:${encodeURIComponent(reviewPromptKey)}`
-		: undefined;
-	useEffect(() => {
-		let cancelled = false;
-		setLoadedReviewPromptStateKey(undefined);
-		setCollapsedReviewPRKey(undefined);
-		if (!reviewPromptKey || !reviewPromptStateStorageKey) {
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-			return () => { cancelled = true; };
-		}
-		AsyncStorage.getItem(reviewPromptStateStorageKey).then((value) => {
-			if (cancelled) return;
-			setCollapsedReviewPRKey(value === "1" ? reviewPromptKey : undefined);
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-		}).catch(() => {
-			if (cancelled) return;
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-		});
-		return () => { cancelled = true; };
-	}, [reviewPromptKey, reviewPromptStateStorageKey]);
-	const reviewPromptStateReady = !reviewPromptStateStorageKey || loadedReviewPromptStateKey === reviewPromptStateStorageKey;
-	const reviewPromptPR = reviewPromptStateReady ? reviewPromptPRCandidate : undefined;
-	const reviewPromptCollapsed = Boolean(reviewPromptStateReady && reviewPromptKey && reviewPromptKey === collapsedReviewPRKey);
-	const collapseReviewPrompt = useCallback(() => {
-		if (!reviewPromptKey || !reviewPromptStateStorageKey) return;
-		setCollapsedReviewPRKey(reviewPromptKey);
-		void AsyncStorage.setItem(reviewPromptStateStorageKey, "1").catch(() => {});
-	}, [reviewPromptKey, reviewPromptStateStorageKey]);
-	const expandReviewPrompt = useCallback(() => {
-		setCollapsedReviewPRKey(undefined);
-		if (reviewPromptStateStorageKey) void AsyncStorage.removeItem(reviewPromptStateStorageKey).catch(() => {});
-	}, [reviewPromptStateStorageKey]);
+	// The PR ready for review, as a chip over the composer that opens it.
+	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
 	const reviewPromptSummary = config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number) : undefined;
 
@@ -309,33 +270,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
-
-	// The title is set on the first commit, above. Only the trailing control waits:
-	// native-stack measures the replacement for a frame, and deferring the whole
-	// options object meant the title arrived with it — iOS then animated the
-	// header in from the top, after the screen had already landed.
+	// The conversation scrolls up under a clear bar. iOS 26's is the system's
+	// glass, which blurs it beneath the title, as Settings and the board do; the
+	// edge effect is the system's own: setting `scrollEdgeEffects` from here
+	// turned it off. Android's bar frosts it out with the page's colour (see
+	// `frost`), as the board tabs' bars do. The route also holds terminal
+	// sessions, so the stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
-		navigation.setOptions(
-			headerRightReady
-				? glassHeaderControl("right", (
-					<View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-						{reviewPromptCollapsed && reviewPromptPR ? (
-							<Pressable
-								testID="header-pullRequest"
-								accessibilityRole="button"
-								accessibilityLabel="Show PR card"
-								onPress={() => { haptics.tap(); expandReviewPrompt(); }}
-								style={({ pressed }) => [styles.reviewHeaderPRButton, { backgroundColor: pressed ? t.accentTint : t.bgElevatedHover }]}
-							>
-								<Feather name="git-pull-request" size={iconSize.lg} color={t.textSecondary} />
-							</Pressable>
-						) : null}
-						<NativeHeaderButton icon="more" label="Conversation actions" onPress={() => { haptics.tap(); setMenuOpen(true); }} />
-					</View>
-				))
-				: glassHeaderControl("right"),
-		);
-	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
+		if (!CLEAR_HEADER) return;
+		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
+		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
+	}, [navigation, t]);
 
 	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
@@ -362,36 +307,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
 
-	const openTurnSettings = useCallback(async () => {
-		const current = conversation.snapshot;
-		if (!current) return;
-		await dismissKeyboardBeforeSheet(keyboardVisible);
-		let catalog = { models: conversation.models, configOptions: conversation.configOptions };
-		let catalogError = conversation.actionErrors.settings ?? conversation.actionErrors.config;
-		try {
-			catalog = await conversation.loadTurnOptions();
-		} catch (cause) {
-			catalogError = conversationActionError(cause);
-		}
-		router.push(chatSheetRoute({
-			kind: "turn-settings",
-			snapshot: current,
-			models: catalog.models,
-			options: catalog.configOptions,
-			disabled: current.controller.state === "stopped" || conversation.pendingActions.includes("settings") || conversation.pendingActions.includes("config"),
-			error: catalogError,
-			onSettings: conversation.chooseSettings,
-			onOption: conversation.setConfigOption,
-			onRefresh: () => conversation.loadTurnOptions({ refresh: true }),
-		}));
-	}, [conversation, keyboardVisible, router]);
-
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
 		setOpeningShell(true);
 		try {
 			const shell = await openSessionShell(config, session.id, session.projectId);
-			setMenuOpen(false);
 			router.push({ pathname: "/shell/[handleId]", params: { handleId: shell.handleId, projectId: session.projectId, sessionId: session.id, title: shell.title, hostId: config.hostId } });
 		} catch (cause) {
 			Alert.alert("Couldn't open shell", userFacingError(cause));
@@ -489,7 +409,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
-			setMenuOpen(false);
 			try {
 				await interfaceSwitch.start("tui", policy);
 			} catch (cause) {
@@ -521,80 +440,130 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		);
 	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
 
+	// Chat sheets take the keyboard's place rather than opening under it.
+	const presentSheet = useCallback(async (entry: ChatSheetEntry) => {
+		await dismissKeyboardBeforeSheet(keyboardVisible);
+		router.push(chatSheetRoute(entry));
+	}, [keyboardVisible, router]);
+	const openUsage = useCallback(() => {
+		const snapshot = latestSnapshot.current;
+		if (snapshot) void presentSheet({ kind: "conversation-usage", sessionTitle: sessionName, snapshot, subscribeSnapshot });
+	}, [presentSheet, sessionName, subscribeSnapshot]);
+
+	// What the menu shows, as plain values: the conversation streams, and the menu
+	// is rebuilt only when one of these changes, not on every event.
+	const menuSnapshot = conversation.snapshot;
+	const isOrchestrator = "projectName" in session;
+	const menuReady = Boolean(menuSnapshot);
+	// The daemon refuses to rename the project orchestrator.
+	const menuCanCompact = Boolean(menuSnapshot && can(menuSnapshot, "compaction")) && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
+	// The ring on Compact: how much of the context window the conversation fills.
+	const menuContextPercent = contextReadout(menuSnapshot?.usage)?.percent;
+	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
+	const menuCompacting = conversation.pendingActions.includes("compact");
+	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
+	// Android's bar keeps only the "⋯"; iOS's leads with the switch, preview and files.
+	const sessionToolsInMenu = Platform.OS === "android";
+	const previewReady = useSessionPreview(config, session.id);
+	const interfaceSwitchReady = Boolean(interfaceSwitch.status?.supported);
+	const interfaceSwitchBusy = interfaceSwitch.starting;
+	const menuSwitchBusy = interfaceSwitchBusy || interfaceTransitionActive;
+	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
+		previewReady,
+		artifactCount: menuArtifactCount,
+		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
+		canPin: !isOrchestrator,
+		canDelete: !isOrchestrator,
+		canCompact: menuCanCompact,
+		pinned: menuPinned,
+		openingShell,
+		compacting: menuCompacting,
+		turnInFlight: turnActive,
+		contextPercent: menuContextPercent,
+	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCompacting, menuContextPercent, menuPinned, menuReady, openingShell, previewReady, turnActive]);
+	// The actions page follows what it shows while it is up (see `ConversationActionsEntry`).
+	const latestMenuGroups = useRef(menuGroups);
+	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
 	useEffect(() => {
-		const current = conversation.snapshot;
-		if (!menuOpen || !current) return;
-		setMenuOpen(false);
-		const entry: ConversationActionsEntry = {
-			kind: "conversation-actions",
-			sessionId: session.id,
-			snapshot: current,
-			subscribeEntry: (listener) => {
-				actionsListeners.current.add(listener);
-				listener(actionsEntryRef.current ?? entry);
-				return () => { actionsListeners.current.delete(listener); };
-			},
-			sessionTitle: sessionName,
-			modelLabel: turnSettingsModelLabel(current, conversation.models, conversation.configOptions),
-			openingShell,
-			compacting: conversation.pendingActions.includes("compact"),
-			mcpReloading: conversation.pendingActions.includes("mcp"),
-			refreshing: conversation.refreshing,
-			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
-			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
-			// Orchestrators are not deleted from here; the board owns their lifecycle.
-			canDelete: !("projectName" in session),
-			// The daemon refuses to rename the project orchestrator.
-			canRename: !("projectName" in session),
-			canPin: !("projectName" in session),
-			pinned: "projectName" in session ? false : Boolean(session.isPinned),
-			artifactCount: "projectName" in session ? undefined : session.artifacts?.length,
-			onFiles: filesNavigation.openChanges,
-			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
-			onOpenShell: () => void openShell(),
-			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
-			onArtifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
-			onPullRequests: () => {
-				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
-					? reviewRouteForSession(session, currentHostId)
-					: undefined;
-				if (route) openPage(route);
-				else router.push({ pathname: "/(tabs)/prs", params: { hostId: currentHostId, projectId: session.projectId } });
-			},
-			onSettings: () => void openTurnSettings(),
-			onSwitchInterface: requestInterfaceSwitch,
-			onCompact: () => void conversation.compact().catch(() => {}),
-			onReload: () => void conversation.reloadMcp().catch(() => {}),
-			onRename: () => router.push(chatSheetRoute({
-				kind: "conversation-rename",
-				initialTitle: sessionName,
-				onRename: (next) => renameWorker(session.id, next),
-			})),
-			onTogglePin: () => {
-				if ("projectName" in session) return;
-				void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
-			},
-			onRefresh: () => void conversation.refresh(),
-			onDelete: () => {
-				haptics.warning();
-				Alert.alert(
-					ARCHIVE_SESSION_CONFIRM.title,
-					ARCHIVE_SESSION_CONFIRM.message,
-					[
-						{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
-						// Leave first: the session this screen is showing is about to stop
-						// existing, and the board is where its row disappears from.
-						{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
-					],
-				);
-			},
-		};
-		actionsEntryRef.current = entry;
-		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [currentHostId, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
+		latestMenuGroups.current = menuGroups;
+		if (menuGroups) menuGroupListeners.current.forEach((listener) => listener(menuGroups));
+	}, [menuGroups]);
+	const subscribeMenuGroups = useCallback((listener: (groups: readonly ConversationMenuGroup[]) => void) => {
+		if (latestMenuGroups.current) listener(latestMenuGroups.current);
+		menuGroupListeners.current.add(listener);
+		return () => { menuGroupListeners.current.delete(listener); };
+	}, []);
+
+	// Each menu item's work, read when it is chosen, so the menu does not have to
+	// change whenever a callback does.
+	const menuActions: Record<ConversationMenuAction, () => void> = {
+		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		shell: () => void openShell(),
+		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
+		pull_requests: () => {
+			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
+				? reviewRouteForSession(session, currentHostId)
+				: undefined;
+			if (route) openPage(route);
+			// Several PRs open Pull Requests over this page, so closing it
+			// returns here.
+			else openPage("/prs");
+		},
+		pin: () => {
+			if ("projectName" in session) return;
+			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
+		},
+		compact: () => void conversation.compact().catch(() => {}),
+		delete: () => {
+			haptics.warning();
+			Alert.alert(
+				ARCHIVE_SESSION_CONFIRM.title,
+				ARCHIVE_SESSION_CONFIRM.message,
+				[
+					{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+					// Leave first: the session this screen is showing is about to stop
+					// existing, and the board is where its row disappears from.
+					{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+				],
+			);
+		},
+	};
+	const menuActionsRef = useRef(menuActions);
+	menuActionsRef.current = menuActions;
+	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
+
+	// The header leads with the same buttons as the terminal's (see
+	// `sessionHeaderButtons`), and its "⋯" opens the rest of the actions as a
+	// page. A folded PR card comes back from the strip it leaves in the composer,
+	// not from here. Each button's work is read when it is pressed, so the header
+	// is registered again only when what it shows changes.
+	const headerPress = useRef({ requestInterfaceSwitch, openPreview: () => {}, openFiles: filesNavigation.openChanges });
+	headerPress.current = {
+		requestInterfaceSwitch,
+		openPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		openFiles: filesNavigation.openChanges,
+	};
+	const openActions = useCallback(() => {
+		const groups = latestMenuGroups.current;
+		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
+	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
+	const headerItems = useMemo(() => menuReady ? (
+		<Stack.Toolbar placement="right">
+			{sessionToolsInMenu ? null : sessionHeaderButtons({
+				switchTo: "terminal",
+				switchReady: interfaceSwitchReady,
+				switchBusy: interfaceSwitchBusy,
+				switchBusyLabel: "Switching to Terminal UI",
+				switchDisabled: interfaceTransitionActive,
+				previewReady,
+				onSwitch: () => headerPress.current.requestInterfaceSwitch(),
+				onPreview: () => headerPress.current.openPreview(),
+				onFiles: () => headerPress.current.openFiles(),
+				t,
+			})}
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
+		</Stack.Toolbar>
+	) : null, [interfaceSwitchBusy, interfaceSwitchReady, interfaceTransitionActive, menuReady, openActions, previewReady, sessionToolsInMenu, t]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -630,19 +599,38 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
-	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
+	if (failedStart && !conversation.snapshot) {
+		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
+	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
 	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
-		return <View style={styles.startupLoading}><SessionStartupStatus startup={startupView} /></View>;
+		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
-	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
+	if (conversation.loading && !conversation.snapshot) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (conversation.unavailable) {
+		return <Failure>
+			<EmptyState
+				icon="warning"
+				title="Conversation unavailable"
+				message={`${conversation.unavailable.message}\n\nThe worktree is untouched. You can still open a plain shell in it.`}
+				action={<Button title="Open worktree shell" icon="terminal" loading={openingShell} onPress={() => void openShell()} />}
+			/>
+		</Failure>;
+	}
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
-	if (!conversation.snapshot && linkHealth === "phone-offline") return <Centered icon="wifi-off" title="You're offline" message="This conversation loads once this phone is back online." />;
-	if (!conversation.snapshot && connection !== "open" && linkHealth === "reconnecting") return <Centered icon="refresh-cw" title="Reconnecting…" message="This conversation loads once the app reconnects." spinning />;
-	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
-	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot && linkHealth === "phone-offline") {
+		return <Failure><EmptyState icon="offline" title="You're offline" message="This conversation loads once this phone is back online." /></Failure>;
+	}
+	if (!conversation.snapshot && connection !== "open" && linkHealth === "reconnecting") {
+		return <Failure><EmptyState icon="refresh" title="Reconnecting…" message="This conversation loads once the app reconnects." /></Failure>;
+	}
+	if (!conversation.snapshot && unreachable) {
+		return <Failure><EmptyState icon="offline" title="This machine is offline" message="This conversation loads once the app reconnects." action={<Button title="Retry" icon="refresh" onPress={() => void conversation.refresh()} />} /></Failure>;
+	}
+	if (!conversation.snapshot) {
+		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action={<Button title="Retry" icon="refresh" onPress={() => void conversation.refresh()} />} /></Failure>;
+	}
 
 	const snapshot = conversation.snapshot;
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
@@ -653,21 +641,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const mcpReloadSupported = can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
-	return (
-		// keyboard-controller's avoider, not React Native's. Both do the same
-		// arithmetic; this one interpolates the padding with the keyboard's own
-		// animation, so the composer travels with the keys. RN's re-renders once per
-		// keyboard event on the JS thread, which is the single-frame jump up when
-		// the keyboard opens.
-		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
+	const banners = (
+		<>
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"
-					icon="repeat"
+					icon="busy"
 					title={interfaceTransitionBanner.text}
 					action={interfaceTransitionBanner.action}
 					secondary={interfaceTransitionBanner.secondary}
@@ -677,7 +656,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			) : interfaceTransitionNotice ? (
 				<InlineBanner
 					tone={interfaceTransitionRecovered ? "warning" : "danger"}
-					icon={interfaceTransitionRecovered ? "check-circle" : "alert-triangle"}
+					icon={interfaceTransitionRecovered ? "checkCircle" : "warning"}
 					title={`${interfaceTransitionNoticeText}${
 						interfaceSwitch.acknowledgeNoticeError
 							? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
@@ -713,11 +692,28 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				dismissed={dismissedBanners}
 				onDismiss={dismissBanner}
 			/>
-			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
-			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
-			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
-			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
+			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="offline" action="Retry" onPress={() => void conversation.refresh()} /> : null}
+			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={openUsage} /> : null}
+			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
+			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
+			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
+		</>
+	);
+
+	return (
+		// keyboard-controller's avoider, not React Native's. Both do the same
+		// arithmetic; this one interpolates the padding with the keyboard's own
+		// animation, so the composer travels with the keys. RN's re-renders once per
+		// keyboard event on the JS thread, which is the single-frame jump up when
+		// the keyboard opens.
+		<KeyboardAvoidingView
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
+		>
+			{headerItems}
+			{CLEAR_HEADER ? null : banners}
+			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
@@ -735,10 +731,27 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onJumpHandled={clearJumpToSequence}
 					answeredBelow={answeredBelow}
 					startup={timelineStartup}
+					underHeader={headerOverlap}
+					topInset={bannersHeight}
+					bottomInset={composerHeight}
+					jumpHidden={composerOpen}
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
+			{/* Android's frost behind the clear bar: solid under the title, then
+			    dissolving into the page, so the conversation frosts out as it
+			    passes under it rather than meeting a hard edge. */}
+			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
+				<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
+			) : null}
+			{CLEAR_HEADER ? (
+				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
+					{banners}
+				</View>
+			) : null}
+			{/* The composer floats over the conversation, which scrolls on under its
+			    glass; the timeline leaves its measured height clear at the end. */}
+			<View pointerEvents="box-none" style={styles.floatingComposer} onLayout={measureComposer}>
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
@@ -746,9 +759,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onQuoteHandled={quoteHandled}
 					reviewPR={reviewPromptPR}
 					reviewPRSummary={reviewPromptSummary}
-					reviewPRCollapsed={reviewPromptCollapsed}
-					onCollapseReviewPR={collapseReviewPrompt}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					onExpandedChange={setComposerOpen}
 					sessionId={session.id}
 					config={config}
 					snapshot={snapshot}
@@ -779,7 +791,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onPromoteQueuedTurn={conversation.promoteQueuedTurn}
 					onCancelQueuedTurn={conversation.cancelQueuedTurn}
 					onInterrupt={() => void conversation.interrupt().catch(() => {})}
-					onOpenSettings={() => void openTurnSettings()}
 					onSettings={conversation.chooseSettings}
 					onConfigOption={conversation.setConfigOption}
 					restingInset={chatKeyboard.restingInset}
@@ -788,6 +799,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 				/>
 			</View>
+			</View>
+			</View>
+			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
 		</KeyboardAvoidingView>
 	);
 }
@@ -796,16 +810,14 @@ function ConversationBanners({ snapshot, startFailure, starting, brokenServers, 
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
-		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !starting && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon={{ ios: "key", android: "key" }} action="Open shell" onPress={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="warning" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !starting && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon={{ ios: "power", android: "power_settings_new" }} action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
-		{!startFailure && !starting && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
-		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}
-		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon="tool" action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
+		{!startFailure && !starting && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="busy" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
+		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="warning" /> : null}
+		{brokenServers.length ? <DismissibleBanner copy={mcpBanner(brokenServers, mcpError)!} dismissed={dismissed} onDismiss={onDismiss} tone="warning" icon={{ ios: "wrench.and.screwdriver", android: "build" }} action={mcpReloadSupported && !turnInFlight ? (mcpReloading ? "Reloading…" : "Reload") : undefined} onPress={mcpReloading ? undefined : onReload} /> : null}
 	</>;
 }
-
-type InlineBannerProps = { tone: "warning" | "danger" | "muted"; icon: keyof typeof Feather.glyphMap; title: string; body?: string; action?: string; secondary?: string; onPress?(): void; onSecondary?(): void; onDismiss?(): void };
 
 /** A banner the reader can close; it stays closed until what it reports changes. */
 function DismissibleBanner({ copy, dismissed, onDismiss, ...props }: Omit<InlineBannerProps, "title" | "body" | "onDismiss"> & { copy: BannerCopy | undefined; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
@@ -813,28 +825,24 @@ function DismissibleBanner({ copy, dismissed, onDismiss, ...props }: Omit<Inline
 	return <InlineBanner {...props} title={copy.title} body={copy.body} onDismiss={() => onDismiss(copy.key)} />;
 }
 
-// Headline plus at most two lines of detail, like the desktop's status banners.
-function InlineBanner({ tone, icon, title, body, action, secondary, onPress, onSecondary, onDismiss }: InlineBannerProps) {
-	const t = useTheme();
+/** A screen-filling state the conversation cannot get past, announced as it appears. */
+function Failure({ children }: { children: ReactNode }) {
 	const styles = useThemedStyles(makeStyles);
-	const color = tone === "danger" ? t.red : tone === "warning" ? t.amber : t.textTertiary;
-	const fill = tone === "danger" ? t.tintRed : tone === "warning" ? t.tintAmber : t.bgSubtle;
-	return (
-		<View style={[styles.banner, { backgroundColor: fill }]}>
-			<Feather name={icon} size={12} color={color} style={styles.bannerIcon} />
-			<View style={styles.bannerCopy}>
-				<Text style={[styles.bannerTitle, { color: tone === "muted" ? t.textSecondary : color }]} numberOfLines={1}>{title}</Text>
-				{body ? <Text style={styles.bannerText} numberOfLines={2}>{body}</Text> : null}
-			</View>
-			{secondary ? <Pressable hitSlop={7} onPress={() => { haptics.tap(); onSecondary?.(); }}><Text style={styles.bannerSecondary}>{secondary}</Text></Pressable> : null}
-			{action ? <Pressable hitSlop={7} onPress={() => { haptics.tap(); onPress?.(); }}><Text style={[styles.bannerAction, { color }]}>{action}</Text></Pressable> : null}
-			{onDismiss ? <Pressable accessibilityRole="button" accessibilityLabel={`Close: ${title}`} hitSlop={10} onPress={() => { haptics.tap(); onDismiss(); }} style={styles.bannerClose}><Feather name="x" size={15} color={t.textTertiary} /></Pressable> : null}
-		</View>
-	);
+	const headerOverlap = useGlassHeaderOverlap();
+	return <View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>;
 }
 
-function Unavailable({ message, onShell, openingShell }: { message: string; onShell(): void; openingShell: boolean }) { return <Centered icon="alert-triangle" title="Conversation unavailable" message={`${message}\n\nThe worktree is untouched. You can still open a plain shell in it.`} action={openingShell ? "Opening…" : "Open worktree shell"} onAction={onShell} />; }
-function Centered({ icon, title, message, spinning, action, onAction }: { icon: keyof typeof Feather.glyphMap; title: string; message?: string; spinning?: boolean; action?: string; onAction?(): void }) { const t = useTheme(); const styles = useThemedStyles(makeStyles); return <View style={styles.center}>{spinning ? <ActivityIndicator color={t.accent} /> : <Feather name={icon} size={20} color={t.amber} />}<Text style={styles.centerTitle}>{title}</Text>{message ? <Text style={styles.centerCopy}>{message}</Text> : null}{action ? <Pressable onPress={() => { haptics.tap(); onAction?.(); }} style={styles.centerAction}><Text style={styles.centerActionText}>{action}</Text></Pressable> : null}</View>; }
+/**
+ * The conversation runs on under a clear bar: iOS 26's glass, and on Android
+ * the bar the frost lies behind. Older iOS keeps the stack's solid bar.
+ */
+const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";
+
+/** How much of the screen the clear header covers; nothing under a solid one. */
+function useGlassHeaderOverlap(): number {
+	const headerHeight = useHeaderHeight();
+	return CLEAR_HEADER ? headerHeight : 0;
+}
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
 function interfacePhaseLabel(phase?: string): string {
@@ -852,20 +860,13 @@ function signInCommand(harness: string): string | undefined { return harness ===
 const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	banner: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.sm, paddingVertical: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
-	bannerIcon: { alignSelf: "flex-start", marginTop: space.hair },
-	bannerCopy: { flex: 1, minWidth: 0, gap: space.none },
-	bannerTitle: { fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
-	bannerText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	bannerClose: { width: 26, height: 26, alignItems: "center", justifyContent: "center" },
-	bannerAction: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
-	bannerSecondary: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	reviewHeaderPRButton: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.huge, backgroundColor: t.bgBase },
+	center: { flex: 1, backgroundColor: t.bgBase },
+	conversation: { flex: 1 },
+	// The page's colour, so the conversation scrolling up passes under the
+	// banners rather than showing between them.
+	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
+	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
+	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.
 	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },
-	centerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
-	centerCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	centerAction: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: space.lg, marginTop: space.xxs },
-	centerActionText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 });

@@ -13,11 +13,9 @@ describe("chat sheet registry", () => {
 	});
 
 	it.each([
-		["turn-settings", "/sheets/chat-settings"],
 		["conversation-map", "/sheets/conversation-map"],
 		["composer-picker", "/sheets/composer-picker"],
-		["conversation-actions", "/sheets/conversation-actions"],
-		["conversation-rename", "/sheets/conversation-rename"],
+		["conversation-usage", "/sheets/conversation-usage"],
 	] as const)("routes %s through a native sheet route", (kind, pathname) => {
 		const route = chatSheetRoute({ kind } as never);
 		expect(route.pathname).toBe(pathname);

@@ -7,225 +7,133 @@ function source(relativePath: string): string {
 }
 
 describe("Android native compatibility boundaries", () => {
-	it("renders the Android drawer as one React Native tree", () => {
-		const path = fileURLToPath(new URL("./sidebar-navigation-shell.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
-		expect(android).toContain("PanResponder");
-		// The closed drawer's swipe responder starts below the safe-area-adjusted
-		// header. A fixed top offset overlaps the menu button on tall cutouts.
-		expect(android).toContain("edgeGestureTarget");
-		expect(android).toContain("top: insets.top + 64");
-		// Keep the smooth native animation, but commit the closed state only after
-		// it settles so Fabric measures the header button at its final position.
-		// The visible scrim must disappear as soon as closing starts, independently
-		// of that delayed interaction state, or it flashes over the settled screen.
-		expect(android).toContain("useNativeDriver: true");
-		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
-		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
-		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
-		expect(android).toContain("(open ? panResponder.panHandlers : {})");
-		// A gesture can reverse an in-flight spring, but it must continue from the
-		// drawer's live position rather than snapping to an open/closed endpoint.
-		expect(android).toContain("settling: drawerSettling.current");
-		expect(android).toContain("progress.stopAnimation((value) => {");
-		expect(android).toContain("gestureStartProgress.current = value");
-		expect(android).toContain("startProgress: gestureStartProgress.current");
-		expect(android).toContain("retainedDrawerOpen");
-		expect(android).not.toContain("DrawerLayoutAndroid");
-		expect(android).not.toContain("@expo/ui");
-		expect(android).not.toContain("RNHostView");
-		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
-		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
-	});
-
-	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
-		for (const file of [
-			"./native-header-button.android.tsx",
-			"./sidebar-settings-button.android.tsx",
-			"./sidebar-spawn-button.android.tsx",
-		]) {
-			const path = fileURLToPath(new URL(file, import.meta.url));
-			expect(existsSync(path)).toBe(true);
-			const android = existsSync(path) ? source(file) : "";
-			expect(android).toContain("Pressable");
-			expect(android).toContain("Feather");
-			expect(android).not.toContain("@expo/ui");
-		}
+	// Material's own icon button: the 48dp target, the ripple and the click all
+	// come from Compose, so no touch is recognised by hand in JavaScript.
+	it("draws the header button as a Compose icon button with a Material Symbol", () => {
 		const headerButton = source("./native-header-button.android.tsx");
-		expect(headerButton).toContain(
-			"hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}",
-		);
-		// Fabric can omit Pressable.onPress when a native transform settles between
-		// touch-down and touch-up. Recover only a stationary, uncancelled touch, and
-		// wait long enough for the normal onPress path to win first.
-		expect(headerButton).toContain("onTouchStart");
-		expect(headerButton).toContain("onTouchMove");
-		expect(headerButton).toContain("onTouchEnd");
-		expect(headerButton).toContain("onTouchCancel");
-		expect(headerButton).toContain("pressHandledSequence");
-		expect(headerButton).toContain("PRESS_FALLBACK_DELAY_MS");
-		expect(headerButton).toMatch(/setTimeout\(\(\) => \{[\s\S]*pressHandledSequence\.current === sequence[\s\S]*movement > TAP_SLOP[\s\S]*onPress\(\);/);
+		expect(headerButton).toContain('from "@expo/ui/jetpack-compose"');
+		expect(headerButton).toMatch(/<IconButton onClick=\{onPress\}/);
+		expect(headerButton).toContain("materialDrawable(nativeHeaderGlyphs[icon].android)");
+		expect(headerButton).toContain("<BadgedBox>");
+		for (const handRolled of ["Pressable", "onTouchStart", "onTouchEnd", "setTimeout", "Feather"]) {
+			expect(headerButton).not.toContain(handRolled);
+		}
 	});
 
 	it("keeps SwiftUI and percentage native widths out of the cross-platform Spawn route", () => {
 		const spawn = source("../app/spawn.tsx");
 		expect(spawn).not.toContain("@expo/ui/swift-ui");
 		expect(spawn).not.toContain("NativeTextInput");
-		expect(spawn).toContain("SpawnPromptInput");
-
-		const path = fileURLToPath(new URL("./spawn-prompt-input.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./spawn-prompt-input.android.tsx") : "";
-		expect(android).toContain("TextInput");
-		expect(android).not.toContain("autoFocus");
-		expect(android).not.toContain('width: "100%"');
-		expect(spawn).toContain('@expo/ui/community/bottom-sheet');
-		expect(spawn).toContain("BottomSheetView");
-		expect(spawn).toContain("enablePanDownToClose");
-		expect(spawn).not.toContain("KeyboardAvoidingView");
-		// The controls stick to the keyboard instead, which is the only approach
-		// that moves in step with it inside a native form sheet.
-		expect(spawn).toContain("KeyboardStickyView");
-		expect(spawn).not.toContain("androidGrabber");
-		// Only iOS's prompt flexes to fill the sheet; Android's sheet sizes to its
-		// content, so a flexing child there would have nothing to fill.
-		expect(spawn).toContain('Platform.OS === "ios" && styles.promptHostFill');
-		expect(spawn).toContain("const PROMPT_MIN_HEIGHT = 112;");
-		expect(spawn).toContain('promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT }');
-		expect(source("../app/_layout.tsx")).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal"');
+		// The prompt is the chat composer's own field, in the shared shell.
+		expect(spawn).not.toContain("SpawnPromptInput");
+		expect(source("./spawn-composer.tsx")).toContain("<TextInput");
+		// A page on both platforms, so nothing needs a sheet of its own.
+		expect(spawn).not.toContain("@expo/ui/community/bottom-sheet");
+		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="spawn" options={{ title: "New task" }} />');
 	});
 
-	// Spawn is itself a bottom sheet on Android, so its choices open inside it.
-	// They used to be a second sheet over the first: two grabbers, and only the
-	// top one answered a swipe down.
+	// Spawn's choices open on its own page. They used to be a second sheet over
+	// Spawn's: two grabbers, and only the top one answered a swipe down. Each is
+	// now a Material dropdown anchored to its own button, rather than an inline
+	// list that replaced the controls.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
-		const icons = source("./icons.tsx");
-		expect(android).toContain("OptionList");
+		expect(android).toContain('from "@expo/ui/jetpack-compose"');
+		expect(android).toContain("<DropdownMenu expanded={expanded} properties={KEEP_KEYBOARD} onDismissRequest={onDismiss}");
+		expect(android).not.toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
 		expect(android).not.toContain("Picker");
-		expect(android).not.toContain("@expo/ui");
-		expect(android).toContain("AgentLogo");
-		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
-		expect(android).toContain('icon={selectedProject?.icon ?? "folder"}');
-		expect(android).toContain('option.icon ? <Feather name={option.icon}');
-		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
-		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
+		expect(android).not.toContain("Pressable");
+		expect(android).not.toContain("Feather");
+		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
+		expect(android).toContain('project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder")');
+		expect(android).toContain("chipColorFor(harness)");
+		// The approval mode sits in the composer's line, after the agent.
+		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf("settings={"));
+		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf('testID("spawn-harness")'));
 	});
 
-	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
-		const path = fileURLToPath(new URL("./chat/ChatAttachmentMenu.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./chat/ChatAttachmentMenu.android.tsx") : "";
-		expect(android).toContain('@expo/ui/community/bottom-sheet');
-		expect(android).toContain("enablePanDownToClose");
-		expect(android).toContain("borderRadius: radius.pill");
-		expect(android).not.toContain("MenuView");
+	// The attachment chooser is the same pull-down menu on both platforms, so
+	// Android gets Compose's dropdown with Material Symbol icons, not a sheet.
+	it("attaches through the shared native menu instead of an Android sheet", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/ChatAttachmentMenu.android.tsx", import.meta.url)))).toBe(false);
+		const menu = source("./chat/ChatAttachmentMenu.tsx");
+		expect(menu).toContain("<MenuView ref={menu}");
+		expect(menu).toContain('image: chatMenuIcon("photo")');
+		expect(menu).not.toContain("bottom-sheet");
 	});
 
-	it("uses React Native Android inputs for worker search and elicitation", () => {
-		for (const file of ["./worker-dock.android.tsx", "./chat/elicitation-native-controls.android.tsx"]) {
-			const path = fileURLToPath(new URL(file, import.meta.url));
-			expect(existsSync(path)).toBe(true);
-			const android = existsSync(path) ? source(file) : "";
-			expect(android).toContain("TextInput");
-			expect(android).not.toContain("@expo/ui");
-			expect(android).not.toContain('width: "100%"');
+	// Android draws the shared file's Material 3 controls: real radios and
+	// checkboxes with their row semantics, an outlined field and Compose buttons,
+	// instead of glyph-drawn imitations.
+	it("answers elicitation with Compose controls", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/elicitation-native-controls.android.tsx", import.meta.url)))).toBe(false);
+		const controls = source("./chat/elicitation-native-controls.tsx");
+		expect(controls).toContain('from "@expo/ui/jetpack-compose"');
+		expect(controls).toContain('selectable(checked, choose, "radioButton")');
+		expect(controls).toContain('toggleable(checked, choose, { role: "checkbox" })');
+		expect(controls).toContain("<RadioButton selected={checked} />");
+		expect(controls).toContain("<Checkbox value={checked} />");
+		expect(controls).toContain("<OutlinedTextField");
+		for (const imitation of ["Feather", "Pressable", "rgba(", 'width: "100%"']) {
+			expect(controls).not.toContain(imitation);
 		}
-		expect(source("./worker-dock.android.tsx")).toContain('testID="worker-search-close"');
 	});
 
-	it("keeps the Android worker actions at opposite edges and hosts their native sheet", () => {
-		const dock = source("./worker-dock.android.tsx");
-		expect(dock).toContain("styles.flexSpacer");
-		expect(dock).toMatch(/flexSpacer:\s*\{\s*flex:\s*1\s*\}/);
-		expect(dock).toContain('row: { flex: 1, height: 52, flexDirection: "row"');
-
-		const controls = source("./worker-controls-sheet.android.tsx");
-		expect(controls).toContain("BottomSheet");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
+	// The top app bar's own search action and a Compose dropdown take the place
+	// of the hand-built dock and its bottom sheet, and spawning is Material's FAB.
+	it("filters and spawns Android workers with native controls", () => {
+		const board = source("../app/(tabs)/(workers)/index.tsx");
+		expect(board).toContain('<AddFab expanded={fab.expanded} label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />');
+		expect(source("./BoardHeaderItems.tsx")).toContain("{!ios ? filter : null}");
+		expect(source("./AddFab.android.tsx")).toContain('import { ExtendedFloatingActionButton, Host, Icon, Text } from "@expo/ui/jetpack-compose";');
+		for (const gone of ["./worker-dock.android.tsx", "./worker-controls-sheet.android.tsx", "./worker-controls-sheet.tsx"]) {
+			expect(existsSync(fileURLToPath(new URL(gone, import.meta.url)))).toBe(false);
+		}
 	});
 
-	it("uses a draggable native Android worker-controls sheet", () => {
-		const controls = source("./worker-controls-sheet.android.tsx");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
-		expect(controls).toContain("BottomSheetView");
-		expect(controls).toContain("enablePanDownToClose");
-		expect(controls).not.toMatch(/\bModal\b/);
-		expect(controls).not.toContain("styles.grabber");
-		expect(controls).toContain('snapPoints={["55%", "85%"]}');
-		expect(controls).toContain("enableDynamicSizing={false}");
-		expect(controls).toMatch(/projectList:\s*\{[^}]*flex:\s*1/s);
+	// The new task's composer is the chat's on both platforms: its pill, its
+	// field, its attach menu and its round button.
+	it("draws the Spawn composer as the chat composer", () => {
+		const shell = source("./spawn-composer.tsx");
+		expect(shell).not.toContain("@expo/ui");
+		expect(shell).toContain("<ChatAttachmentMenu");
+		expect(shell).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
+		expect(shell).toContain("...composerStyleRules(t),");
+		expect(shell).toContain('style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}');
 	});
 
-	it("keeps the iOS worker-controls host full width", () => {
-		const controls = source("./worker-controls-sheet.tsx");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
-		expect(controls).toContain('snapPoints={["55%", "85%"]}');
-		expect(controls).not.toContain("<Host");
-	});
-
-	it("makes the entire iOS Spawn prompt a native text-input hit target", () => {
-		const ios = source("./spawn-prompt-input.ios.tsx");
-		// A SwiftUI TextField keeps an intrinsic one-line hit target even when its
-		// Host is tall. React Native's native TextInput owns the full frame, so every
-		// visible point in the prompt area focuses the editor.
-		expect(ios).toContain('import { StyleSheet, TextInput } from "react-native"');
-		expect(ios).not.toContain('@expo/ui');
-		expect(ios).toContain("height = 112");
-		expect(ios).toMatch(/paddingHorizontal:\s*space\.lg/);
-		expect(ios).toMatch(/paddingTop:\s*space\.huge/);
-		expect(ios).toMatch(/paddingBottom:\s*space\.md/);
-		expect(ios).toContain('textAlignVertical="top"');
-		expect(ios).toContain("scrollEnabled");
-		expect(ios).toMatch(/style=\{\[styles\.input,\s*\{\s*height,/);
-	});
-
-	it("gives the iOS Spawn prompt modest top breathing room", () => {
-		const spawn = source("../app/spawn.tsx");
-		expect(spawn).toContain('Platform.OS === "ios" && styles.iosContent');
-		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
-	});
-
-	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
-		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./chat/ChatSettingsModal.android.tsx") : "";
-		expect(android).toContain("ChoicePage");
-		expect(android).toContain("SettingRow");
-		expect(android).not.toContain("Picker");
-		// The turn-settings route is already a native form sheet, so a choice list
-		// opens as a page within it rather than a sheet on top.
-		expect(android).not.toContain('@expo/ui/community/bottom-sheet');
-		expect(android).not.toMatch(/\bModal\b/);
-		expect(android).toContain('numberOfLines={1}');
-		expect(android).not.toContain('description ? <Text numberOfLines={1} style={styles.rowDescription}');
-		expect(android).toContain('<View style={styles.choiceCopy}>');
-		expect(android).toMatch(/choiceCopy:\s*\{\s*flex:\s*1,\s*minWidth:\s*0/);
-		expect(android).toMatch(/choiceRow:\s*\{[^}]*alignItems:\s*"flex-start"/s);
-		expect(android).not.toContain('width: "100%"');
+	// The turn's settings have no sheet of their own: they are the controls
+	// row's dropdowns, opened from React Native buttons that are real
+	// accessibility nodes, as the attach button's is.
+	it("picks Android turn settings from the controls row's own menus", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/ChatSettingsModal.tsx", import.meta.url)))).toBe(false);
+		const control = source("./chat/ChatTurnSettingsControl.tsx");
+		expect(control).toContain("<MenuView ref={menu} colorScheme={scheme} actions={actions} onPressAction={onAction}");
+		expect(control).toContain("onPress={() => menu.current?.show()}");
+		expect(control).not.toContain("All turn settings");
 	});
 
 	it("dismisses the Android keyboard before presenting chat sheets", () => {
 		const screen = source("./chat/ChatSessionScreen.tsx");
 		expect(screen).toContain("dismissKeyboardBeforeSheet");
-		expect(screen).toMatch(/openTurnSettings[\s\S]*await dismissKeyboardBeforeSheet/);
-		expect(screen).toMatch(/menuOpen[\s\S]*dismissKeyboardBeforeSheet/);
+		expect(screen).toMatch(/const presentSheet = useCallback\(async \(entry: ChatSheetEntry\) => \{\s*await dismissKeyboardBeforeSheet/);
 	});
 
-	it("pins conversation actions to one Android detent on first open", () => {
+	// The usage details are a few short rows, so the sheet wraps them: one
+	// Android detent, which a swipe down closes.
+	it("sizes the conversation usage sheet to its rows", () => {
 		const layout = source("../app/_layout.tsx");
-		expect(layout).toContain('{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
-		expect(layout).toContain('Platform.OS === "android" && androidDetents ? [...androidDetents]');
+		expect(layout).toContain('{ name: "sheets/conversation-usage", detents: "fitToContents" }');
+		expect(layout).not.toContain("sheets/conversation-actions");
 	});
 
 	// With two detents Material only hid the sheet after a drag past half its
 	// height, so a normal swipe down snapped back and closing felt random.
 	it("pins Android review actions to one 60% detent so a swipe down closes it", () => {
 		const layout = source("../app/_layout.tsx");
-		const actions = source("../app/sheets/review-actions.tsx");
+		const actions = source("./review-actions-sheet.tsx");
 		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
 		expect(layout).toContain("sheetInitialDetentIndex: 0");
 		expect(layout).toContain("sheetGrabberVisible: true");
@@ -236,31 +144,25 @@ describe("Android native compatibility boundaries", () => {
 		expect(source("./push.ts")).not.toContain('sound: "default"');
 	});
 
-	it("presents Settings from the root stack above the preserved drawer", () => {
+	// A full-screen page over the board on Android, with a top app bar and the
+	// system back; a sheet on iOS.
+	it("presents Settings from the root stack over the board", () => {
 		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);
 		const rootLayout = source("../app/_layout.tsx");
-		expect(rootLayout).toMatch(/name="settings"[\s\S]*presentation:\s*"formSheet"/);
+		// A page on both platforms: no presentation of its own.
+		expect(rootLayout).toContain('<Stack.Screen name="settings" options={{ headerShown: false, title: "Settings", contentStyle: { backgroundColor: t.bgBase } }} />');
 	});
 
-	it("renders conversation actions in a single native list with its conversation header", () => {
-		const actions = source("./chat/ConversationActionsSheet.tsx");
-		const registry = source("./chat/chatSheetRegistry.ts");
-		expect(actions).toContain("<FlatList");
-		expect(actions).toMatch(/ListHeaderComponent=\{<SheetHeader[\s\S]*?\/>}/);
-		expect(actions).not.toContain("<ScrollView");
-		expect(registry).toContain("sessionTitle: string");
-		expect(actions).toContain('title={snapshot.title || "Untitled conversation"}');
-		expect(actions).toContain('subtitle={`Session · ${entry.sessionTitle}`}');
-		expect(actions).toContain("backgroundColor: t.bgBase");
-		expect(actions).toContain("backgroundColor: t.bgElevated");
-		expect(actions).not.toMatch(/<ScrollView[\s\S]*<View style=\{styles\.header\}>/);
-	});
-
-	it("keeps Android conversation-menu drags with the list instead of dismissing its sheet", () => {
-		const actions = source("./chat/ConversationActionsSheet.tsx");
-		expect(actions).toMatch(/<FlatList[\s\S]*nestedScrollEnabled/);
+	// The conversation's actions are a page of Material list rows, each led by
+	// a bundled drawable, opened from the top app bar's "⋯".
+	it("opens conversation actions as a Material grouped list page", () => {
+		const page = source("./chat/ConversationActionsPage.android.tsx");
+		expect(page).toContain("<GroupedSection key={group.title} title={group.title}>");
+		expect(page).toContain("source={materialDrawable(item.icon.android)}");
+		expect(source("./chat/ChatSessionScreen.tsx")).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
+		expect(source("./toolbarIcon.android.ts")).toContain('more_vert: require("../assets/icons/more_vert.xml")');
 	});
 });

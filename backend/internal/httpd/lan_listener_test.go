@@ -65,7 +65,18 @@ func TestMobileLANRejectsReassignedAddressWithSamePassword(t *testing.T) {
 	if got := request("", "same-secret"); got.Code != http.StatusAccepted || calls != 2 {
 		t.Fatalf("legacy request: status=%d calls=%d", got.Code, calls)
 	}
-	if got := request("h_A", "wrong"); got.Code != http.StatusUnauthorized || calls != 2 {
+	// The address answers for another host before any password is checked: the
+	// phone's own password for h_A is not a wrong password for h_B.
+	for i := 0; i < 6; i++ {
+		if got := request("h_A", "h_A-secret"); got.Code != http.StatusMisdirectedRequest || calls != 2 {
+			t.Fatalf("stale h_A request with its own password: status=%d calls=%d", got.Code, calls)
+		}
+	}
+	// None of those spent an attempt toward h_B's lockout.
+	if got := request("h_B", "same-secret"); got.Code != http.StatusAccepted || calls != 3 {
+		t.Fatalf("after stale requests: status=%d calls=%d", got.Code, calls)
+	}
+	if got := request("h_B", "wrong"); got.Code != http.StatusUnauthorized || calls != 3 {
 		t.Fatalf("unauthenticated request: status=%d calls=%d", got.Code, calls)
 	}
 }

@@ -107,6 +107,18 @@ describe("requestDockModel", () => {
 			expect(model?.canAnswerInline).toBe(true);
 		});
 
+		// The card toggles these as checkboxes and sends the list, rather than
+		// sending the first one tapped as a single answer.
+		it("marks a question that takes several answers", () => {
+			const model = requestDockModel(snapshot([elicitation({
+				question_1: { type: "array", description: "Which checks?", items: { anyOf: [{ const: "lint", title: "Lint" }, { const: "test", title: "Test" }] } },
+			} as Record<string, InputProperty>)]), idle);
+			expect(model?.canAnswerInline).toBe(true);
+			expect(model?.pages[0].multi).toBe(true);
+			expect(model?.pages[0].options.map((o) => o.label)).toEqual(["Lint", "Test"]);
+			expect(model?.pages[0].freeText).toBeUndefined();
+		});
+
 		it("marks a numeric answer so the right keyboard opens", () => {
 			const model = requestDockModel(snapshot([elicitation({
 				question_1: { type: "integer", description: "How many retries?" },

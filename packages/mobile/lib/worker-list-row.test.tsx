@@ -28,9 +28,16 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 // expo-router's useRouter returns one stable router object; mirror that.
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
+const backHandler = vi.hoisted(() => ({ listeners: [] as (() => boolean)[] }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
+	BackHandler: {
+		addEventListener: (_event: string, listener: () => boolean) => {
+			backHandler.listeners.push(listener);
+			return { remove: () => { backHandler.listeners = backHandler.listeners.filter((entry) => entry !== listener); } };
+		},
+	},
 	Keyboard: { dismiss: vi.fn() },
 	Platform: { OS: "ios" },
 	Pressable: "Pressable",
@@ -44,11 +51,16 @@ vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("./haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn(), warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
+// A row shows a status glyph only beside a status; set one to draw it.
+const status = vi.hoisted(() => ({ glyph: undefined as string | undefined }));
 vi.mock("./agentsView", async (importOriginal) => ({
 	...await importOriginal<typeof import("./agentsView")>(),
 	prLine: () => undefined,
-	workerRowPresentation: () => { counters.renders++; return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: "2m", trailingKind: "time" }; },
-	workerStatusGlyph: () => undefined,
+	workerRowPresentation: () => {
+		counters.renders++;
+		return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: status.glyph ? "Status" : "2m", trailingKind: status.glyph ? "status" : "time" };
+	},
+	workerStatusGlyph: () => status.glyph,
 }));
 vi.mock("./prView", () => ({ toneColor: () => "tone" }));
 vi.mock("./theme", () => ({ statusVisual: () => ({ label: "Working", color: "orange", breathing: false }) }));
@@ -62,10 +74,14 @@ vi.mock("./ThemeProvider", () => {
 	};
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
-vi.mock("./worker-action-model", () => ({ workerContextActions: () => [] }));
+vi.mock("./worker-action-model", async (importOriginal) => ({
+	...await importOriginal<typeof import("./worker-action-model")>(),
+	workerContextActions: () => [],
+}));
 vi.mock("./worker-row-actions", () => ({ WorkerRowActions: "WorkerRowActions" }));
-vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader", Spinning: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+// A host that keeps the row's handlers, so a test can press, act and swipe.
+vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: (props: { children: React.ReactNode }) => createElement("RowInteraction", props, props.children) }));
+vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appContext) }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-reanimated", () => ({
@@ -82,6 +98,7 @@ vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./reviewView", () => ({ reviewRouteForSession: () => undefined }));
 
 import { WorkerListRow } from "./worker-list-row";
+import { ArchivedWorkerRow } from "./archived-worker-row";
 import { WorkerBoardList } from "./worker-board-list";
 
 const session: DashboardSession = {
@@ -140,6 +157,25 @@ describe("WorkerListRow", () => {
 		expect(list.props.itemLayoutAnimation).toBeUndefined();
 		expect(scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
 		act(() => renderer.unmount());
+	});
+
+	// The board tab's large-title bar is translucent and the board is laid out
+	// under it, so the pill starts below the bar instead of under the status bar.
+	it("floats the update pill below a translucent header", () => {
+		const a = { ...session, id: "a", hostId: "mac", lastEventAt: "2026-10-08T02:00:00Z" };
+		const b = { ...session, id: "b", hostId: "mac", lastEventAt: "2026-10-08T01:00:00Z" };
+		const pillTop = (overlayTopInset?: number) => {
+			const render = (sessions: DashboardSession[]) => <WorkerBoardList sessions={sessions} overlayTopInset={overlayTopInset} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />;
+			let renderer!: ReactTestRenderer;
+			act(() => { renderer = create(render([a, b])); });
+			act(() => { renderer.update(render([a, { ...b, lastEventAt: "2026-10-08T03:00:00Z" }])); });
+			const pill = renderer.root.findAllByType("Pressable" as never).find(node => node.props.accessibilityLabel?.includes("updated"))!;
+			const style = Object.assign({}, ...pill.props.style({ pressed: false }).filter(Boolean));
+			act(() => renderer.unmount());
+			return style.top;
+		};
+		expect(pillTop(155)).toBe(155 + 8);
+		expect(pillTop()).toBe(8);
 	});
 
 	it("does not show an update pill when another host hydrates 75 existing workers", () => {
@@ -208,6 +244,196 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+
+	// Metadata is footnote, the 13pt floor: the project, time or status and the
+	// pull request or branch, on live and archived rows alike.
+	it("sets no row text below 13pt", () => {
+		const fontSizes = (element: React.ReactElement) => {
+			let renderer!: ReactTestRenderer;
+			act(() => { renderer = create(element); });
+			const sizes = renderer.root.findAllByType("Text" as never)
+				.map((node) => Object.assign({}, ...[node.props.style].flat().filter(Boolean)).fontSize as number);
+			act(() => renderer.unmount());
+			return sizes;
+		};
+		const live = fontSizes(
+			<WorkerListRow
+				session={session} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1}
+				onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+				onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+			/>,
+		);
+		const archived = fontSizes(
+			<ArchivedWorkerRow session={{ ...session, status: "terminated", isTerminated: true }} projectName="Agent Orchestrator"
+				nowBucket={1} restoring={false} restoreDisabled={false} offline={false} onRestore={vi.fn()} />,
+		);
+		for (const sizes of [live, archived]) {
+			expect(sizes).toHaveLength(4);
+			expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+		}
+	});
+});
+
+// Status reads by shape as well as colour, in each platform's own symbols; a
+// starting row turns the system spinner rather than standing a loader still.
+describe("worker status glyphs", () => {
+	function glyphFor(glyph: string) {
+		status.glyph = glyph;
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+					onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		status.glyph = undefined;
+		const found = {
+			spinner: renderer.root.findAllByType("ActivityIndicator" as never).length,
+			symbol: renderer.root.findAllByType("SymbolView" as never).map((node) => node.props.name),
+			lucide: renderer.root.findAllByType("Feather" as never).map((node) => node.props.name),
+		};
+		act(() => renderer.unmount());
+		return found;
+	}
+
+	it("spins for a starting worker", () => {
+		expect(glyphFor("loader")).toEqual({ spinner: 1, symbol: [], lucide: [] });
+	});
+
+	it("draws status as system symbols", () => {
+		expect(glyphFor("alert-circle").symbol).toEqual([{ ios: "exclamationmark.circle", android: "error" }]);
+		expect(glyphFor("x-octagon").symbol).toEqual([{ ios: "xmark.octagon", android: "dangerous" }]);
+		expect(glyphFor("moon")).toMatchObject({ lucide: [] });
+	});
+
+	it("keeps Lucide only for the pull request, a domain glyph", () => {
+		expect(glyphFor("git-pull-request")).toEqual({ spinner: 0, symbol: [], lucide: ["git-pull-request"] });
+	});
+});
+
+// Haptics mark an outcome or a destructive confirmation; opening a row,
+// pressing a rail control or folding a section stays silent, and one action
+// never buzzes twice.
+describe("worker board haptics", () => {
+	it("fires one warning as Archive asks to confirm, and nothing for the presses before it", async () => {
+		const { haptics } = await import("./haptics");
+		const { Alert } = await import("react-native");
+		const fired = () => Object.values(haptics).flatMap((fn) => vi.mocked(fn).mock.calls.length ? [fn] : []);
+		for (const fn of Object.values(haptics)) vi.mocked(fn).mockClear();
+		vi.mocked(Alert.alert).mockClear();
+		router.push.mockClear();
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerBoardList sessions={[session]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
+		const row = renderer.root.findByType("RowInteraction" as never);
+		act(() => row.props.onPress());
+		expect(router.push).toHaveBeenCalledTimes(1);
+		act(() => row.props.onAction("rename"));
+		act(() => row.props.rightActions.props.onSetPinned(true));
+		expect(fired()).toEqual([]);
+		act(() => row.props.rightActions.props.onDelete());
+		expect(Alert.alert).toHaveBeenCalledTimes(1);
+		expect(fired()).toEqual([haptics.warning]);
+		expect(vi.mocked(haptics.warning)).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
+	});
+});
+
+// An inline rename has no Save or Cancel buttons: Return or leaving the field
+// commits, as a list's own rename does, and Android's back or VoiceOver's
+// escape scrub cancels.
+describe("renaming a worker in place", () => {
+	const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+	function renaming(onRename = vi.fn(async (_title: string) => {})) {
+		const onRenameCancel = vi.fn();
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Agent Orchestrator" isRenaming nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={onRenameCancel}
+					onRename={onRename} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		const field = () => renderer.root.findByType("TextInput" as never);
+		return { renderer, field, onRename, onRenameCancel };
+	}
+
+	it("draws only the field, with no save or cancel pills", () => {
+		const { renderer, field } = renaming();
+		expect(field().props.returnKeyType).toBe("done");
+		expect(renderer.root.findAllByType("Pressable" as never)).toHaveLength(0);
+		act(() => renderer.unmount());
+	});
+
+	it("commits once on Return, though the blur that follows asks again", async () => {
+		const { renderer, field, onRename, onRenameCancel } = renaming();
+		act(() => field().props.onChangeText("  Ship the board  "));
+		act(() => field().props.onSubmitEditing());
+		act(() => field().props.onBlur());
+		await flush();
+		expect(onRename.mock.calls).toEqual([["Ship the board"]]);
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
+	});
+
+	it("commits when the field loses focus", async () => {
+		const { renderer, field, onRename } = renaming();
+		act(() => field().props.onChangeText("Ship the board"));
+		act(() => field().props.onBlur());
+		await flush();
+		expect(onRename).toHaveBeenCalledWith("Ship the board");
+		act(() => renderer.unmount());
+	});
+
+	it("keeps the name when the field is left empty or unchanged", () => {
+		for (const title of ["", "Polish workers"]) {
+			const { renderer, field, onRename, onRenameCancel } = renaming();
+			act(() => field().props.onChangeText(title));
+			act(() => field().props.onBlur());
+			expect(onRename).not.toHaveBeenCalled();
+			expect(onRenameCancel).toHaveBeenCalledTimes(1);
+			act(() => renderer.unmount());
+		}
+	});
+
+	it("cancels on VoiceOver's escape and on Android's back, without saving", () => {
+		const viaEscape = renaming();
+		act(() => viaEscape.field().props.onChangeText("Ship the board"));
+		act(() => viaEscape.field().props.onAccessibilityEscape());
+		// The blur from the keyboard going away must not save after all.
+		act(() => viaEscape.field().props.onBlur());
+		expect(viaEscape.onRename).not.toHaveBeenCalled();
+		expect(viaEscape.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaEscape.renderer.unmount());
+
+		const viaBack = renaming();
+		act(() => viaBack.field().props.onChangeText("Ship the board"));
+		let handled = false;
+		act(() => { handled = backHandler.listeners.at(-1)!(); });
+		expect(handled).toBe(true);
+		expect(viaBack.onRename).not.toHaveBeenCalled();
+		expect(viaBack.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaBack.renderer.unmount());
+		expect(backHandler.listeners).toHaveLength(0);
+	});
+
+	// With no Cancel button a field kept open on a failure would have no way
+	// out, so the rename ends and an alert says why.
+	it("ends a failed rename with an alert", async () => {
+		const { Alert } = await import("react-native");
+		vi.mocked(Alert.alert).mockClear();
+		const { renderer, field, onRenameCancel } = renaming(vi.fn(async () => { throw new Error("Lab: rename failed on purpose."); }));
+		act(() => field().props.onChangeText("Ship the board"));
+		act(() => field().props.onSubmitEditing());
+		await flush();
+		expect(Alert.alert).toHaveBeenCalledWith("Couldn't rename this worker", expect.any(String));
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
 	});
 });
 
@@ -360,6 +586,18 @@ describe("a machine that pages its archive", () => {
 	const answer = async (page: { sessions: unknown[]; nextCursor: string | null }) => {
 		await act(async () => { archivePages.requests.shift()!.resolve(page); });
 	};
+
+	// A full-width disclosure row: the platform's touch target, and the row
+	// highlight rather than a fade.
+	it("draws the Archive header as a full-height disclosure row", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		const header = archiveHeader(renderer);
+		expect(header.props.accessibilityState).toEqual({ expanded: false });
+		expect(Object.assign({}, ...header.props.style({ pressed: true }).filter(Boolean))).toMatchObject({ minHeight: 44, backgroundColor: "hover" });
+		expect(header.findByType("SymbolView" as never).props.name).toEqual({ ios: "chevron.forward", android: "chevron_right" });
+		act(() => renderer.unmount());
+	});
 
 	// The poll no longer carries the archive, only its size; the rows are
 	// fetched a page at a time, and only once someone opens it.

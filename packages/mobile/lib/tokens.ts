@@ -2,20 +2,17 @@
  * The app's measurement system. Every size, gap, radius, icon and duration in
  * the product comes from here, so a screen never invents a number.
  *
- * The sizes are Apple's Dynamic Type ramp (iOS 17 HIG) — a phone needs those
- * steps, and they are what `fontScaleCap` is calibrated against. Everything
- * else about the type follows the desktop app, which is the same product:
+ * The type follows T3 Code's mobile app, whose look this app shares:
  *
- *   - **Geist**, the family the renderer uses (`--font-family-base`), and Geist
- *     Mono for code. iOS would otherwise draw SF Pro, and the two products
- *     would not look like each other.
- *   - **Weights of 400, 500 and 600 only.** The renderer's scale stops at
- *     `--font-weight-semibold`; bold was never part of the design, and a bold
- *     screen title on a phone read heavier than the same title on the desktop.
- *   - **Negative tracking**, from the renderer's scale: `-0.025em` for the
- *     largest steps, `-0.015em` for subheads, `-0.01em` for everything at
- *     reading size. SF Pro's optical tracking ran the other way at large sizes,
- *     which is why these used to be positive.
+ *   - **DM Sans** for text and Geist Mono for code. Native chrome the system
+ *     draws itself (navigation titles, tab labels) stays in SF Pro / Roboto.
+ *   - **A compact ramp**: 16/23 reading text, 14/19 secondary copy and a 13pt
+ *     floor for metadata. Each step keeps the name of the Apple text style it
+ *     scales with, which is what `fontScaleCap` is calibrated against.
+ *   - **Weights of 400, 500 and 600 only.** Row titles and labels are medium;
+ *     semibold is for titles and the rare emphasised word.
+ *   - **No tracking at reading sizes.** DM Sans is spaced for text already; only
+ *     the largest titles tighten a little.
  *
  * Spacing is a 4pt grid with a 2pt half-step for dense rows. Radii, icon sizes
  * and motion follow the same idea: a short ladder of named steps chosen for a
@@ -31,7 +28,7 @@ export type TypeToken = {
 };
 
 /**
- * The desktop's family, one file per weight.
+ * The app's family, one file per weight.
  *
  * A weight is a font file here, not a number: with a bundled family iOS draws
  * whichever face the name points at and ignores `fontWeight`, so a style that
@@ -39,9 +36,9 @@ export type TypeToken = {
  * mapping in one place, and the type ramp below uses it.
  */
 export const font = {
-	regular: "Geist_400Regular",
-	medium: "Geist_500Medium",
-	semibold: "Geist_600SemiBold",
+	regular: "DMSans_400Regular",
+	medium: "DMSans_500Medium",
+	semibold: "DMSans_600SemiBold",
 	mono: "GeistMono_400Regular",
 } as const;
 
@@ -49,11 +46,11 @@ export function fontForWeight(weight: TypeToken["fontWeight"]): string {
 	return weight === "600" ? font.semibold : weight === "500" ? font.medium : font.regular;
 }
 
-/** The renderer's tracking scale, in em. */
-export const tracking = { tightXl: -0.025, tightLg: -0.015, tight: -0.01 } as const;
+/** The tracking scale, in em. */
+export const tracking = { tightXl: -0.02, tightLg: -0.01, tight: 0 } as const;
 
 /**
- * Apple's ramp. Use the semantic name, not the number: a screen title is
+ * The ramp. Use the semantic name, not the number: a screen title is
  * `title2`, a row label is `body`, a metadata line is `footnote`.
  *
  *   largeTitle / title1 / title2  — screen and sheet titles
@@ -64,20 +61,20 @@ export const tracking = { tightXl: -0.025, tightLg: -0.015, tight: -0.01 } as co
  *   subheadline                   — secondary copy under a row title
  *   footnote                      — metadata, timestamps, counts
  *   caption1                      — dense labels, tab bar
- *   caption2                      — the floor: badges and uppercase micro-labels
+ *   caption2                      — the floor: badges and micro-labels
  */
 export const type = {
-	largeTitle: { fontFamily: font.semibold, fontSize: 34, lineHeight: 41, fontWeight: "600", letterSpacing: 34 * tracking.tightXl },
-	title1: { fontFamily: font.semibold, fontSize: 28, lineHeight: 34, fontWeight: "600", letterSpacing: 28 * tracking.tightXl },
-	title2: { fontFamily: font.semibold, fontSize: 22, lineHeight: 28, fontWeight: "600", letterSpacing: 22 * tracking.tightLg },
-	title3: { fontFamily: font.semibold, fontSize: 20, lineHeight: 25, fontWeight: "600", letterSpacing: 20 * tracking.tightLg },
-	headline: { fontFamily: font.semibold, fontSize: 17, lineHeight: 22, fontWeight: "600", letterSpacing: 17 * tracking.tight },
-	body: { fontFamily: font.regular, fontSize: 17, lineHeight: 22, fontWeight: "400", letterSpacing: 17 * tracking.tight },
-	callout: { fontFamily: font.regular, fontSize: 16, lineHeight: 21, fontWeight: "400", letterSpacing: 16 * tracking.tight },
-	subheadline: { fontFamily: font.regular, fontSize: 15, lineHeight: 20, fontWeight: "400", letterSpacing: 15 * tracking.tight },
-	footnote: { fontFamily: font.regular, fontSize: 13, lineHeight: 18, fontWeight: "400", letterSpacing: 13 * tracking.tight },
+	largeTitle: { fontFamily: font.semibold, fontSize: 30, lineHeight: 36, fontWeight: "600", letterSpacing: 30 * tracking.tightXl },
+	title1: { fontFamily: font.semibold, fontSize: 26, lineHeight: 32, fontWeight: "600", letterSpacing: 26 * tracking.tightXl },
+	title2: { fontFamily: font.semibold, fontSize: 21, lineHeight: 28, fontWeight: "600", letterSpacing: 21 * tracking.tightLg },
+	title3: { fontFamily: font.semibold, fontSize: 18, lineHeight: 23, fontWeight: "600", letterSpacing: 18 * tracking.tightLg },
+	headline: { fontFamily: font.medium, fontSize: 16, lineHeight: 23, fontWeight: "500", letterSpacing: 16 * tracking.tight },
+	body: { fontFamily: font.regular, fontSize: 16, lineHeight: 23, fontWeight: "400", letterSpacing: 16 * tracking.tight },
+	callout: { fontFamily: font.regular, fontSize: 15, lineHeight: 21, fontWeight: "400", letterSpacing: 15 * tracking.tight },
+	subheadline: { fontFamily: font.regular, fontSize: 14, lineHeight: 19, fontWeight: "400", letterSpacing: 14 * tracking.tight },
+	footnote: { fontFamily: font.regular, fontSize: 13, lineHeight: 17, fontWeight: "400", letterSpacing: 13 * tracking.tight },
 	caption1: { fontFamily: font.medium, fontSize: 12, lineHeight: 16, fontWeight: "500", letterSpacing: 12 * tracking.tight },
-	caption2: { fontFamily: font.medium, fontSize: 11, lineHeight: 13, fontWeight: "500", letterSpacing: 0 },
+	caption2: { fontFamily: font.medium, fontSize: 11, lineHeight: 14, fontWeight: "500", letterSpacing: 0 },
 } as const satisfies Record<string, TypeToken>;
 
 /**
@@ -94,18 +91,6 @@ export const prose: TypeToken = {
 };
 
 export type TypeName = keyof typeof type;
-
-/**
- * An uppercase micro-label: the one place small caps are worth the tracking.
- * Pair with the color the section actually means — never with the accent.
- */
-export const microLabel: TypeToken = {
-	fontFamily: font.semibold,
-	fontSize: type.caption2.fontSize,
-	lineHeight: type.caption2.lineHeight,
-	fontWeight: "600",
-	letterSpacing: 0.9,
-};
 
 /** 4pt grid, with a 2pt half-step for hairline gaps inside a row. */
 export const space = {
@@ -140,6 +125,16 @@ export const radius = {
 	pill: 999,
 } as const;
 
+/**
+ * Colours drawn over a live camera preview. The preview is dark whatever the
+ * theme, so these stay fixed: the backdrop behind it before the first frame
+ * arrives, and the reticle that shows where to hold a code.
+ */
+export const onCamera = {
+	backdrop: "#0c0d10",
+	reticle: "rgba(255,255,255,0.92)",
+} as const;
+
 /** Icon ladder. Match the stroke to the weight of the text beside it. */
 export const iconSize = {
 	xs: 12,
@@ -148,10 +143,23 @@ export const iconSize = {
 	lg: 20,
 	xl: 24,
 	xxl: 28,
+	/** The large glyph an empty state leads with. */
+	hero: 48,
 } as const;
 
-/** The minimum tappable square, from the HIG. */
-export const touchTarget = 44;
+/**
+ * The minimum tappable square: 44pt on iOS (HIG), 48dp on Android (Material 3).
+ * Size a control's hit area with it, never its picture: a glyph or avatar that
+ * borrows it grows on Android with the target.
+ */
+export { touchTarget } from "./platformTokens";
+
+/**
+ * A form sheet's `sheetCornerRadius`: the system's own shape on iOS (unset) and
+ * Material 3's bottom-sheet corner on Android. Pass this rather than a number,
+ * so a sheet keeps the platform's shape.
+ */
+export { sheetCornerRadius } from "./platformTokens";
 
 /**
  * The inset every sheet body shares. The native sheet draws its own top
@@ -194,10 +202,21 @@ export const spring = {
 	snappy: { damping: 20, stiffness: 320, mass: 0.8 },
 } as const;
 
+/**
+ * Opacity for a control's interactive states, one value each so every control
+ * dims by the same amount. `pressed` is for iOS controls that fade on touch; an
+ * Android control shows a ripple instead (see `pressFeedback.ts`). `disabled`
+ * sits at Material 3's 38% for disabled content, rounded.
+ */
+export const stateOpacity = {
+	pressed: 0.7,
+	disabled: 0.4,
+} as const;
+
 /** Press feedback: scale down, fade a touch, and come back on the same curve. */
 export const press = {
 	scale: 0.96,
-	opacity: 0.7,
+	opacity: stateOpacity.pressed,
 	in: duration.fast,
 	out: duration.base,
 } as const;

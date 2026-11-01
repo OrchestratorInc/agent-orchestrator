@@ -3,18 +3,19 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
 	ids: 0,
-	theme: new Proxy({}, { get: () => "#000000" }),
+	// Each token reads back as its own name, so a test can tell which one a control used.
+	theme: new Proxy({}, { get: (_, key) => typeof key === "string" ? `theme.${key}` : undefined }),
 }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" }, View: "View", Text: "Text", TextInput: "TextInput", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator",
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
 }));
 vi.mock("../haptics", () => ({ haptics: { success: vi.fn(), error: vi.fn(), tap: vi.fn() } }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 vi.mock("../textSelection", () => ({ textSelectionColors: () => ({}) }));
 vi.mock("./useConversation", () => ({ clientMessageId: () => `id-${++fixtures.ids}` }));
 
+import { haptics } from "../haptics";
 import { InlineMessageEditor, messageEditDraft, type MessageEditDraft } from "./InlineMessageEditor";
 import { withAttachmentReferences } from "./messageAttachments";
 
@@ -92,4 +93,31 @@ it("explains a blocked Send on tap instead of sending, and leaves on Cancel", as
 	expect(alert()).toHaveLength(0);
 	act(() => button("Cancel edit").props.onPress());
 	expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+// One haptic per send, for its outcome; leaving the editor is not a haptic moment.
+it("answers a send once, with its outcome, and cancels quietly", async () => {
+	for (const fn of [haptics.tap, haptics.success, haptics.error]) vi.mocked(fn).mockClear();
+	const value = draft();
+	const onCancel = open(value, vi.fn(async () => {}));
+	act(() => input().props.onChangeText("Fix the other bug"));
+	await send();
+	expect(haptics.success).toHaveBeenCalledOnce();
+	act(() => button("Cancel edit").props.onPress());
+	expect(onCancel).toHaveBeenCalledOnce();
+	expect(haptics.tap).not.toHaveBeenCalled();
+});
+
+// Send is filled with the accent, so its glyph and spinner take the accent's own ink.
+it("inks Send in the accent's foreground, idle and sending", async () => {
+	let finish!: () => void;
+	const onEdit = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+	open(draft(), onEdit);
+	const sendButton = () => button("Send edited message");
+	expect(sendButton().props.style({ pressed: false })).toContainEqual(expect.objectContaining({ backgroundColor: "theme.accent" }));
+	expect(sendButton().findByType("SymbolView" as never).props.tintColor).toBe("theme.onAccent");
+	act(() => input().props.onChangeText("Fix the other bug"));
+	await act(async () => { sendButton().props.onPress(); });
+	expect(sendButton().findByType("ActivityIndicator" as never).props.color).toBe("theme.onAccent");
+	await act(async () => finish());
 });

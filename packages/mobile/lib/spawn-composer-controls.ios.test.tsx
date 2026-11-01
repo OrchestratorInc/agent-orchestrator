@@ -1,17 +1,34 @@
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixtures = vi.hoisted(() => ({ theme: new Proxy({}, { get: () => "#000000" }) }));
+const fixtures = vi.hoisted(() => ({
+	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
+	select: vi.fn(),
+	tap: vi.fn(),
+}));
 
-vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: () => undefined }));
-vi.mock("./haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
-vi.mock("./voice/MicKey", async () => { const React = await import("react"); return { MicKey: (props: object) => React.createElement("MicKey", props) }; });
+vi.mock("./haptics", () => ({ haptics: { select: fixtures.select, tap: fixtures.tap } }));
+vi.mock("./effort-gauge", async () => {
+	const React = await import("react");
+	return { EffortGaugeButton: (props: object) => React.createElement("EffortGaugeButton", props) };
+});
+vi.mock("./effort-slider", async () => {
+	const React = await import("react");
+	return { EffortSliderOverlay: (props: object) => React.createElement("EffortSlider", props) };
+});
 vi.mock("expo-asset", () => ({ Asset: { fromModule: vi.fn() } }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Pressable: host("Pressable"), StyleSheet: { create: (styles: object) => styles }, Text: host("RNText"), View: host("View") };
+	return {
+		BackHandler: { addEventListener: () => ({ remove: () => {} }) },
+		Keyboard: { addListener: () => ({ remove: () => {} }) },
+		Platform: { OS: "ios", Version: "26.0" },
+		StyleSheet: { create: (styles: object) => styles },
+		View: host("View"),
+	};
 });
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
@@ -23,13 +40,31 @@ vi.mock("@expo/ui", async () => {
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Button: host("Button"), Divider: host("Divider"), Group: host("Group"), HStack: host("HStack"), Image: host("Image"), Menu: host("Menu"), Spacer: host("Spacer"), Text: host("Text"), VStack: host("VStack") };
+	return {
+		Button: host("Button"), Divider: host("Divider"), Group: host("Group"), HStack: host("HStack"), Image: host("Image"), Label: host("Label"), Menu: host("Menu"), RNHostView: host("RNHostView"),
+		ProgressView: host("ProgressView"), Section: host("Section"), Spacer: host("Spacer"), Text: host("Text"), Toggle: host("Toggle"), VStack: host("VStack"),
+	};
 });
-vi.mock("@expo/ui/swift-ui/modifiers", () => ({
-	accessibilityIdentifier: vi.fn(), aspectRatio: vi.fn(), backgroundOverlay: vi.fn(), buttonStyle: vi.fn(), clipShape: vi.fn(), containerRelativeFrame: vi.fn(), font: vi.fn(), frame: vi.fn(), glassEffect: vi.fn(), labelStyle: vi.fn(), layoutPriority: vi.fn(), lineLimit: vi.fn(), menuOrder: vi.fn(), opacity: vi.fn(), padding: vi.fn(), resizable: vi.fn(), tint: vi.fn(), truncationMode: vi.fn(),
-}));
+vi.mock("@expo/ui/swift-ui/modifiers", () => {
+	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
+	return {
+		...Object.fromEntries([
+			"accessibilityIdentifier", "accessibilityLabel", "aspectRatio", "backgroundOverlay", "buttonStyle", "clipShape", "contentShape", "controlSize", "disabled", "font",
+			"foregroundStyle", "frame", "glassEffect", "labelStyle", "layoutPriority", "lineLimit", "menuOrder", "opacity", "padding", "resizable", "tint", "truncationMode",
+		].map((name) => [name, record(name)])),
+		shapes: { rectangle: () => ({ shape: "rectangle" }) },
+	};
+});
 
+vi.mock("./spawn-composer", async () => {
+	const React = await import("react");
+	// The shared shell is tested on its own; here it only holds the settings.
+	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
+});
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
+import { rootTouchStart } from "./touchOutside";
+import { COMPOSER_DISC } from "./chat/composerStyles";
+import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -40,6 +75,8 @@ beforeEach(() => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
 		error(...args);
 	});
+	fixtures.select.mockClear();
+	fixtures.tap.mockClear();
 });
 
 afterEach(async () => {
@@ -49,51 +86,236 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-describe("iOS spawn machine selector", () => {
-	it("places a checked Run on menu beside the project selector", async () => {
-		const onSelectHost = vi.fn();
-		const onChoosePhoto = vi.fn();
-		const onChooseFile = vi.fn();
-		await act(async () => {
-			renderer = create(<SpawnComposerControls
-				hosts={[{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }]}
-				hostId="host-a"
-				onSelectHost={onSelectHost}
-				projects={[{ id: "project-1", label: "Project" }]}
-				projectId="project-1"
-				onSelectProject={vi.fn()}
-				agents={[]}
-				harness=""
-				onSelectHarness={vi.fn()}
-				models={[]}
-				modelSelection="__auto__"
-				modelLabel="Automatic"
-				onSelectModel={vi.fn()}
-				onChoosePhoto={onChoosePhoto}
-				onChooseFile={onChooseFile}
-				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
-				onSpawn={vi.fn()}
-				busy={false}
-				disabled
-			/>);
-		});
+type Props = Parameters<typeof SpawnComposerControls>[0];
+type Modifier = { modifier: string; args: unknown[] };
 
-		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
-		// Host, project, attach, harness, model.
-		expect(menus).toHaveLength(5);
-		const hostButtons = menus[0].findAll((node) => String(node.type) === "Button");
-		expect(hostButtons.map((node) => [node.props.label, node.props.systemImage])).toEqual([
-			["Alpha", "checkmark"],
-			["Beta", undefined],
+const baseProps = (overrides: Partial<Props> = {}): Props => ({
+	hosts: [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }],
+	hostId: "host-a",
+	onSelectHost: vi.fn(),
+	projects: [{ id: "project-1", label: "Project", icon: "folder" }, { id: "standalone", label: "Standalone agent", icon: "message-square-plus", sectionBreakBefore: true }],
+	projectId: "project-1",
+	onSelectProject: vi.fn(),
+	agents: [{ id: "codex", label: "Codex" }, { id: "aider", label: "Aider" }],
+	harness: "codex",
+	onSelectHarness: vi.fn(),
+	models: [{ id: "gpt-5", label: "GPT-5" }],
+	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
+	onSelectAgentModel: vi.fn(),
+	usesDefaultModel: true,
+	prompt: "",
+	onChangePrompt: vi.fn(),
+	placeholder: "Ask Codex",
+	attachments: null,
+	hasAttachments: false,
+	onBrowseModels: vi.fn(),
+	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
+	approvalMode: "auto",
+	onSelectApprovalMode: vi.fn(),
+	effortChoices: [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }],
+	onSelectEffort: vi.fn(),
+	modelSelection: "__auto__",
+	modelLabel: "Default model",
+	onSelectModel: vi.fn(),
+	onChoosePhoto: vi.fn(),
+	onChooseFile: vi.fn(),
+	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
+	onSpawn: vi.fn(),
+	busy: false,
+	disabled: false,
+	...overrides,
+});
+
+async function render(props: Props) {
+	await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
+	return renderer!.root;
+}
+
+const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
+const modifiers = (node: ReactTestInstance) => (node.props.modifiers ?? []) as Modifier[];
+const modifier = (node: ReactTestInstance, name: string) => modifiers(node).find((entry) => entry.modifier === name);
+const gaugeOf = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "EffortGaugeButton" && node.props.testID === "spawn-effort")[0];
+const identified = (root: ReactTestInstance, id: string) =>
+	root.findAll((node) => hostType(node) !== "" && modifiers(node).some((entry) => entry.modifier === "accessibilityIdentifier" && entry.args[0] === id))[0];
+// A Menu's `label` is a prop, not a child, so its element is read unrendered.
+type LabelElement = { type: unknown; props: { modifiers?: Modifier[]; children?: unknown } };
+const modifierOf = (element: LabelElement, name: string) => (element.props.modifiers ?? []).find((entry) => entry.modifier === name);
+const choices = (menu: ReactTestInstance) => menu.findAll((node) => hostType(node) === "Toggle");
+const choiceLabel = (choice: ReactTestInstance): string => choice.props.label ?? choice.findByType("Label" as never).props.title;
+
+/** The asset a harness mark element draws, rendered on its own. */
+async function markOf(element: React.ReactElement): Promise<string | undefined> {
+	let mark: ReactTestRenderer | undefined;
+	await act(async () => { mark = create(element); });
+	const name = mark!.root.findAll((node) => hostType(node) === "Image")[0]?.props.assetName;
+	await act(async () => mark!.unmount());
+	return name;
+}
+
+describe("iOS spawn selectors", () => {
+	it("checks the current machine with the system's checkable item and selects another", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		const menu = identified(root, "spawn-host");
+		expect(hostType(menu)).toBe("Menu");
+		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Alpha", true], ["Beta", false]]);
+
+		await act(async () => choices(menu)[1].props.onIsOnChange(true));
+		expect(props.onSelectHost).toHaveBeenCalledWith("host-b");
+		expect(fixtures.select).toHaveBeenCalledOnce();
+
+		// Turning the current choice off again is not a choice.
+		await act(async () => choices(menu)[0].props.onIsOnChange(false));
+		expect(props.onSelectHost).toHaveBeenCalledOnce();
+	});
+
+	it("separates Standalone agent from the projects and gives each row its symbol", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		const menu = identified(root, "spawn-project");
+		const rows = menu.findAll((node) => hostType(node) === "Toggle" || hostType(node) === "Divider");
+		expect(rows.map((node) => hostType(node) === "Divider" ? "divider" : [node.props.label, node.props.systemImage, node.props.isOn])).toEqual([
+			["Project", "folder", true],
+			"divider",
+			["Standalone agent", "plus.bubble", false],
 		]);
-		await act(async () => hostButtons[1].props.onPress());
-		expect(onSelectHost).toHaveBeenCalledWith("host-b");
+		await act(async () => choices(menu)[1].props.onIsOnChange(true));
+		expect(props.onSelectProject).toHaveBeenCalledWith("standalone");
+	});
 
-		const attachButtons = menus[2].findAll((node) => String(node.type) === "Button");
-		expect(attachButtons.map((node) => node.props.label)).toEqual(["Choose Photo", "Choose File"]);
-		await act(async () => attachButtons[0].props.onPress());
-		await act(async () => attachButtons[1].props.onPress());
-		expect(onChoosePhoto).toHaveBeenCalledOnce();
-		expect(onChooseFile).toHaveBeenCalledOnce();
+	// Each agent opens onto its own models, so picking a model picks its agent.
+	it("nests each agent's models under it, checking the current agent and model", async () => {
+		const props = baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5" });
+		const root = await render(props);
+		const codex = identified(root, "spawn-model-codex");
+		// Each agent keeps its mark in the menu: an asset-catalog image, which keeps
+		// its size in an open submenu's header where a framed image did not.
+		expect(codex.props.label.props.title).toBe("Codex");
+		expect(await markOf(codex.props.label.props.icon)).toBe("HarnessLogo-codex");
+		expect(choices(codex).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false], ["GPT-5", true]]);
+		// An agent without a list yet still offers its default model.
+		const aider = identified(root, "spawn-model-aider");
+		expect(choices(aider).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false]]);
+		await act(async () => choices(aider)[0].props.onIsOnChange(true));
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("aider", "__auto__");
+	});
+
+	// The trigger is the harness's mark and one name: the model once one is
+	// picked, the agent while it runs its default. VoiceOver hears both.
+	it("shows the harness mark with the picked model, or the agent on its default", async () => {
+		const shown = async (props: Props) => {
+			const root = await render(props);
+			const menu = identified(root, "spawn-harness");
+			let face: ReactTestRenderer | undefined;
+			await act(async () => { face = create(menu.props.label); });
+			const texts = face!.root.findAll((node) => hostType(node) === "Text").map((node) => node.props.children);
+			const mark = face!.root.findAll((node) => hostType(node) === "Image" && node.props.assetName)[0]?.props.assetName;
+			const label = modifier(menu, "accessibilityLabel")?.args[0];
+			await act(async () => face!.unmount());
+			await act(async () => renderer?.unmount());
+			renderer = undefined;
+			return { texts, mark, label };
+		};
+		expect(await shown(baseProps({ modelLabel: "Default model" }))).toEqual({ texts: ["Codex"], mark: "HarnessLogo-codex", label: "Codex, Default model" });
+		expect(await shown(baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false }))).toEqual({ texts: ["GPT-5"], mark: "HarnessLogo-codex", label: "Codex, GPT-5" });
+		// On its default, the trigger names the model the catalog marks as it.
+		const named = { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
+		expect((await shown(baseProps({ modelLabel: "Default model", agentModels: named }))).texts).toEqual(["GPT-6.1-Sol"]);
+		// A model the project pins is named, though nothing was picked here.
+		expect((await shown(baseProps({ modelLabel: "GPT-5", usesDefaultModel: false }))).texts).toEqual(["GPT-5"]);
+	});
+
+	it("names the default row by the catalog's default and opens a long catalog whole", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
+		const root = await render(props);
+		const codex = identified(root, "spawn-model-codex");
+		expect(choiceLabel(choices(codex)[0])).toBe("Default · GPT-6.1-Sol");
+		const all = codex.findAll((node) => hostType(node) === "Button" && String(node.props.label).startsWith("All models"))[0];
+		expect(all.props.label).toBe(`All models (${(8929).toLocaleString()})`);
+		await act(async () => all.props.onPress());
+		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
+		// A catalog the menu lists whole has no "All models".
+		expect(identified(root, "spawn-model-aider").findAll((node) => hostType(node) === "Button")).toHaveLength(0);
+	});
+
+	it("picks the approval mode from its own symbol at the controls row's end", async () => {
+		const props = baseProps({ approvalMode: "bypass-permissions" });
+		const root = await render(props);
+		const menu = identified(root, "spawn-approval");
+		expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Approval, Bypass permissions"]);
+		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Auto", false], ["Bypass permissions", true]]);
+		await act(async () => choices(menu)[0].props.onIsOnChange(true));
+		expect(props.onSelectApprovalMode).toHaveBeenCalledWith("auto");
+	});
+
+	// The speedometer opens the slider above the composer; the slider picks
+	// the level and stays up until a tap lands outside it.
+	it("opens the effort slider from a speedometer beside the model", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		const gauge = gaugeOf(root);
+		expect(root.findAll((node) => hostType(node) === "RNHostView").some((host) => host.findAll((node) => node === gauge).length > 0)).toBe(true);
+		expect(gauge.props.choices).toEqual(props.effortChoices);
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+		await act(async () => gauge.props.onPress());
+		const slider = root.findAll((node) => hostType(node) === "EffortSlider")[0];
+		expect(gaugeOf(root).props.open).toBe(true);
+		await act(async () => slider.props.onChoose("low"));
+		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
+		// A tap anywhere outside it closes it.
+		await act(async () => rootTouchStart());
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+	});
+
+	it("draws no speedometer for a model that takes no effort", async () => {
+		const root = await render(baseProps({ effortChoices: [] }));
+		expect(gaugeOf(root)).toBeUndefined();
+	});
+
+	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {
+		const root = await render(baseProps());
+		// A Menu's face is a prop, so each is rendered on its own to read its text.
+		// The approval mode's face is its symbol alone, as the chat's.
+		for (const id of ["spawn-host", "spawn-project", "spawn-harness"]) {
+			let face: ReactTestRenderer | undefined;
+			await act(async () => { face = create(identified(root, id).props.label); });
+			const texts = face!.root.findAll((node) => hostType(node) === "Text");
+			expect(texts.length).toBeGreaterThan(0);
+			for (const text of texts) {
+				const font = modifier(text, "font");
+				expect(font?.args[0]).toHaveProperty("textStyle");
+				expect(font?.args[0]).not.toHaveProperty("size");
+			}
+			await act(async () => face!.unmount());
+		}
+		for (const id of ["spawn-host", "spawn-project", "spawn-approval", "spawn-harness"]) {
+			const frame = modifier(identified(root, id), "frame");
+			expect(frame).toBeUndefined();
+		}
+		// The rows take their content's height; the settings fill the composer's
+		// controls row, as the chat's turn settings do.
+		const [rows, settings] = root.findAllByType("Host" as never);
+		expect(rows.props.matchContents).toEqual({ vertical: true });
+		expect(settings.props.style).toEqual({ alignSelf: "stretch", height: touchTarget });
+	});
+
+	// A plain-style Menu hears taps only inside its label: a frame on the Menu
+	// grows its layout, and gaps or a Spacer in the label are transparent.
+	it("answers taps across a full touch target on every trigger", async () => {
+		const root = await render(baseProps());
+		// The per-agent model submenus are rows of the agent's menu, which the system draws.
+		for (const id of ["spawn-host", "spawn-project", "spawn-harness", "spawn-approval"]) {
+			const menu = identified(root, id);
+			expect(modifier(menu, "frame")?.args[0] ?? {}).not.toHaveProperty("minHeight");
+			let face: ReactTestRenderer | undefined;
+			await act(async () => { face = create(menu.props.label); });
+			const top = face!.root.findAll((node) => hostType(node) !== "")[0];
+			// At least a touch target: the approval symbol is one square.
+			const frame = modifier(top, "frame")?.args[0] as { minHeight?: number; height?: number };
+			expect(frame.minHeight ?? frame.height).toBeGreaterThanOrEqual(touchTarget);
+			expect(modifier(top, "contentShape")?.args).toEqual([{ shape: "rectangle" }]);
+			await act(async () => face!.unmount());
+		}
 	});
 });
+

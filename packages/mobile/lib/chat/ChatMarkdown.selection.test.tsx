@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
+	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", accentTint: "rgba(244,245,247,0.14)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
 }));
 
 vi.mock("react-native", () => ({
@@ -19,7 +19,6 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("@bsky.app/react-native-uitextview", () => ({ UITextView: "UITextView" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn() } }));
@@ -260,6 +259,91 @@ it("adds the exact native selection without changing the response or link handle
 	act(() => renderer.unmount());
 });
 
+describe("list markers outside the selection surface", () => {
+	// Characters standing in for controls read as text to a screen reader and
+	// draw at the font's whim; the separate-block path draws them instead.
+	it("draws bullets and task boxes rather than typing them", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"- Plain item\n- [x] Finished task\n- [ ] Open task"} />); });
+		const text = renderer.root.findAllByType("UITextView" as never).map(textOf).join("\n");
+		for (const glyph of ["•", "☑", "☐"]) expect(text).not.toContain(glyph);
+		const boxes = renderer.root.findAllByType("SymbolView" as never);
+		expect(boxes.map((box) => box.props.accessibilityLabel)).toEqual(["Done", "Not done"]);
+		expect(boxes.map((box) => box.props.name)).toEqual([{ ios: "checkmark.square", android: "check_box" }, { ios: "square", android: "check_box_outline_blank" }]);
+		act(() => renderer.unmount());
+	});
+
+	// The item's text grows with the system font size, so a box of fixed height
+	// would leave the marker above its first line at larger sizes.
+	it("holds each drawn marker on its item's first line at any text size", () => {
+		const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : (style as Record<string, unknown>) || {};
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"- Plain item\n- [ ] Open task"} />); });
+		const lines = renderer.root.findAllByType("Text" as never).filter((node) => node.props.children === "​");
+		const items = renderer.root.findAllByType("UITextView" as never).filter((node) => node.props.selectable);
+		expect(lines).toHaveLength(2);
+		expect(items).toHaveLength(2);
+		lines.forEach((line, index) => {
+			expect(line.props.importantForAccessibility).toBe("no");
+			const { fontSize, lineHeight } = flatten(items[index].props.style);
+			expect(flatten(line.props.style)).toMatchObject({ fontSize, lineHeight });
+			expect(flatten(line.parent!.props.style).height).toBeUndefined();
+		});
+		act(() => renderer.unmount());
+	});
+
+	it("keeps an ordered list's numbers as text", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"1. First\n2. Second"} />); });
+		const text = renderer.root.findAllByType("UITextView" as never).map(textOf);
+		expect(text).toEqual(expect.arrayContaining(["1.", "2."]));
+		act(() => renderer.unmount());
+	});
+});
+
+describe("code block actions", () => {
+	const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : (style as Record<string, unknown>) || {};
+	const render = () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"```ts\nconst answer = 42;\n```"} />); });
+		return renderer;
+	};
+
+	it("gives Wrap and Copy touch-target-sized buttons", () => {
+		const renderer = render();
+		for (const label of ["Wrap code", "Copy code"]) {
+			const button = renderer.root.findByProps({ accessibilityLabel: label });
+			expect(button.props.accessibilityRole).toBe("button");
+			expect(flatten(button.props.style({ pressed: false }))).toMatchObject({ width: 44, height: 44 });
+		}
+		act(() => renderer.unmount());
+	});
+
+	// Wrap is a toggle, so its state is announced and drawn as a filled backing,
+	// not carried by the glyph's colour alone.
+	it("shows and announces Wrap's state", () => {
+		const renderer = render();
+		const wrap = () => renderer.root.findByProps({ accessibilityLabel: "Wrap code" });
+		const backing = () => flatten(wrap().findByType("View" as never).props.style);
+		expect(wrap().props.accessibilityState).toEqual({ selected: false });
+		expect(backing().backgroundColor).toBeUndefined();
+		act(() => wrap().props.onPress());
+		expect(wrap().props.accessibilityState).toEqual({ selected: true });
+		expect(backing().backgroundColor).toBe(theme.accentTint);
+		act(() => wrap().props.onPress());
+		act(() => renderer.unmount());
+	});
+
+	it("confirms a copy with a checkmark", () => {
+		const renderer = render();
+		const copy = renderer.root.findByProps({ accessibilityLabel: "Copy code" });
+		expect(copy.findByType("SymbolView" as never).props.name).toEqual({ ios: "doc.on.doc", android: "content_copy" });
+		act(() => copy.props.onPress());
+		expect(renderer.root.findByProps({ accessibilityLabel: "Copy code" }).findByType("SymbolView" as never).props.name).toEqual({ ios: "checkmark", android: "check" });
+		act(() => renderer.unmount());
+	});
+});
+
 it.each([false, true])("opens an orchestrator's ao://sessions links as sessions, a bare one named for its session (continuous: %s)", (continuousSelection) => {
 	const onLinkOpen = vi.fn();
 	const sessionName = (id: string) => id === "ao-259" ? "Fix table rendering" : undefined;
@@ -300,4 +384,39 @@ it("asks once for the name of a session the surface does not know, then shows it
 	expect(textOf(link())).toBe("Review PR #7113");
 	expect(wanted).toHaveBeenCalledTimes(1);
 	act(() => renderer.unmount());
+});
+
+describe("inline Markdown nested in emphasis", () => {
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+
+	it.each(["ios", "android"])("draws a link inside bold as a link, not its source, on %s", (os) => {
+		platform.OS = os;
+		const open = vi.fn();
+		let renderer!: ReactTestRenderer;
+		try {
+			act(() => { renderer = create(<ChatLinkProvider onLinkOpen={open}><ChatMarkdown text="Read **the [setup guide](https://example.com/setup) first** please." /></ChatLinkProvider>); });
+			const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+			expect(text).toBe("Read the setup guide first please.");
+			const [link] = links(renderer);
+			expect(textOf(link)).toBe("setup guide");
+			act(() => link.props.onPress());
+			expect(open).toHaveBeenCalledWith("https://example.com/setup");
+			// iOS keeps a paragraph with a link on RN Text so VoiceOver can focus it, nested or not.
+			let surface = link.parent;
+			while (surface && surface.props.selectable !== true) surface = surface.parent;
+			if (os === "ios") expect(surface?.props.uiTextView).toBe(false);
+			act(() => renderer.unmount());
+		} finally {
+			platform.OS = "ios";
+		}
+	});
+
+	it("nests code, italic and strikethrough inside bold and italic", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text="**run `make` *now* please** and *see ~~old~~ [new](https://x.dev)*" />); });
+		const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+		expect(text).toBe("run make now please and see old new");
+		expect(links(renderer).map(textOf)).toEqual(["new"]);
+		act(() => renderer.unmount());
+	});
 });

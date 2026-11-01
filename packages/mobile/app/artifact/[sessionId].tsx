@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -14,17 +14,18 @@ import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkd
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { sendFileFeedback } from "../../lib/files/api";
-import { ReviewTray, SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { ReviewButton } from "../../lib/files/ReviewButton";
 import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { haptics } from "../../lib/haptics";
-import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { toolbarIcon } from "../../lib/toolbarIcon";
 import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
@@ -128,26 +129,20 @@ function ArtifactViewerContent() {
 	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: artifact?.name ?? path.split("/").pop() ?? "Artifact",
-			headerRight: artifact
-				? () => (
-					<View style={styles.headerActions}>
-						{canShowArtifactHistory(artifact) ? (
-							<Pressable accessibilityRole="button" accessibilityLabel="Version history" hitSlop={10} onPress={() => { haptics.tap(); openHistory(artifact); }} style={headerActionStyle}>
-								<Feather name="clock" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
-							</Pressable>
-						) : null}
-						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
-							<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
-						</Pressable>
-					</View>
-				)
-				: undefined,
-		});
-	}, [artifact, askAbout, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
+		navigation.setOptions({ title: artifact?.name ?? path.split("/").pop() ?? "Artifact" });
+	}, [artifact?.name, navigation, path]);
+	// Memoized: each new element re-registers the header's items.
+	const headerItems = useMemo(() => artifact ? (
+		<Stack.Toolbar placement="right">
+			{canShowArtifactHistory(artifact) ? <Stack.Toolbar.Button icon={toolbarIcon("history")} accessibilityLabel="Version history" onPress={() => openHistory(artifact)} /> : null}
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Artifact actions" onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} />
+		</Stack.Toolbar>
+	) : null, [artifact, askAbout, openHistory, openMenu]);
+	const openReview = useCallback(() => {
+		router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId: routeHostId } });
+	}, [routeHostId, router, sessionId]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact) {
@@ -156,6 +151,7 @@ function ArtifactViewerContent() {
 	}
 	return (
 		<View style={styles.screen}>
+			{headerItems}
 			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
 			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
@@ -169,7 +165,7 @@ function ArtifactViewerContent() {
 					onClose={() => { closeAsk(); setActionError(undefined); }}
 				/>
 			) : (
-				<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
+				<ReviewButton count={review.comments.length} onPress={openReview} />
 			)}
 			{menu}
 		</View>
@@ -340,7 +336,6 @@ function Unavailable({ title, message, action }: { title: string; message?: stri
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	headerActions: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },

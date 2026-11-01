@@ -75,6 +75,8 @@
 			"expo-router",
 			"@sentry/react-native/expo",
 			"./plugins/withCircleDashedCheck",
+			"./plugins/withHarnessMenuIcons",
+			"./plugins/withAndroidDialogTheme",
 			[
 				"expo-navigation-bar",
 				{

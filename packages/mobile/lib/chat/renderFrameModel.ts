@@ -13,6 +13,11 @@ export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
 const MAX_MEASURED_WIDTHS = 16;
 
+/** A path to one of a session's rendered pages, the only thing the frame and viewer load. */
+export function isRenderPath(path: string): boolean {
+	return RENDER_PATH.test(path);
+}
+
 export function clampRenderHeight(height: number): number {
 	return Math.min(RENDER_MAX_HEIGHT, Math.max(RENDER_MIN_HEIGHT, Math.round(height)));
 }
@@ -245,7 +250,7 @@ export function renderTheme(t: Theme, appearance: "light" | "dark"): RenderTheme
 		"--link": t.highlight,
 		"--chart-1": t.blue,
 		// The theme replaces the page's defaults wholesale, so these must be
-		// present too. The app's Geist is not loaded inside the page.
+		// present too. The app's own family is not loaded inside the page.
 		"--font-sans": "-apple-system, system-ui, sans-serif",
 		"--font-mono": "ui-monospace, Menlo, monospace",
 		"--radius": "0.5rem",

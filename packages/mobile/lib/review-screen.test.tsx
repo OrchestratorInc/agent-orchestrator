@@ -23,10 +23,23 @@ vi.mock("react-native", async () => {
 	};
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
-vi.mock("@expo/vector-icons", () => ({ Feather: "Feather" }));
+vi.mock("./icons", () => ({ Feather: "Feather" }));
+vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
+vi.mock("lucide-react-native/icons/git-commit-horizontal", () => ({ default: "GitCommitHorizontal" }));
+vi.mock("./Spinner", () => ({ Spinner: "Spinner" }));
+vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ pressed: {}, android_ripple: undefined }) }));
+vi.mock("./refreshControlColors", () => ({ refreshControlColors: () => ({}) }));
+vi.mock("./divider", () => ({ rowDividerWidth: 1 }));
+// The native button, as a host element that keeps its props.
+vi.mock("./review-action-button", async () => {
+	const React = await import("react");
+	return { ReviewActionButton: (props: object) => React.createElement("ReviewActionButton", props) };
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
+	const Toolbar = Object.assign(() => null, { Button: () => null });
 	return {
+		Stack: { Toolbar },
 		useLocalSearchParams: () => ({ sessionId: "worker-1", prNumber: "12", prUrl: "https://github.com/acme/repo/pull/12", hostId: "dev" }),
 		useFocusEffect: (effect: () => void) => React.useEffect(() => { effect(); }, [effect]),
 		useNavigation: () => ({ setOptions: vi.fn(), getState: () => ({ routes: [], index: 0 }) }),
@@ -90,11 +103,11 @@ async function render() {
 	// Let the reviews load and the worker read settle.
 	await act(async () => { await Promise.resolve(); });
 }
-const pill = (label: string) => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityLabel === label);
-// The row's own label goes on to name the worker; the pill's stops at "Open worker".
+const pill = (label: string) => renderer!.root.findAll((node) => (node.type as unknown) === "ReviewActionButton" && node.props.accessibilityLabel === label);
+// The row's own label goes on to name the worker; the button's stops at "Open worker".
 const workerRow = () => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Open worker "));
 const alerts = () => renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "alert").map((node) => node.props.children);
-const outlined = (node: { props: { style?: unknown } }) => [node.props.style].flat(Infinity).some((style) => (style as { borderWidth?: number } | null)?.borderWidth === 1);
+const outlined = (node: { props: { tone?: string } }) => node.props.tone === "outlined";
 
 it("reads an archived worker the board poll leaves out and offers Restore", async () => {
 	fixtures.getSession.mockResolvedValue(worker({ status: "terminated", isTerminated: true }));

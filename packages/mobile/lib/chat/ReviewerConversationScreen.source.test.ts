@@ -26,6 +26,14 @@ describe("reviewer conversation parity", () => {
 		expect(readFileSync(new URL("./useConversation.ts", import.meta.url), "utf8")).toContain("if (options?.reviewId && !sessionId.trim()) throw new Error(");
 	});
 
+	it("uses the shared spinner, glyphs and type ramp", () => {
+		expect(source).toContain('<Spinner size="large" accessibilityLabel="Loading reviewer chat" />');
+		expect(source).toContain('icon="chat"');
+		expect(source).toContain('<Button title="Try again" icon="refresh" onPress=');
+		expect(source).not.toContain("ActivityIndicator");
+		expect(source).not.toMatch(/fontSize: \d/);
+	});
+
 	it("does not offer ordinary-session rollback for a reviewer id", () => {
 		expect(source).not.toContain("onRollback=");
 	});
@@ -38,6 +46,7 @@ describe("reviewer conversation parity", () => {
 		expect(source).toContain("style={[styles.screen, chatKeyboard.rootStyle]}");
 		expect(source).toContain("restingInset={chatKeyboard.restingInset}");
 		expect(source).not.toContain("keyboardVerticalOffset={88}");
-		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard();");
+		// The session's chat lays out under a clear bar; the reviewer's below its bar.
+		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });");
 	});
 });

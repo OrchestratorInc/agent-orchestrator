@@ -119,7 +119,7 @@ export function sessionLookupDue(args: {
  *
  * While the board is not connected, the route does not diagnose the link itself.
  * Telling a rotated tunnel from a rejected password from an unreachable machine
- * is the board's rule: `app/(tabs)/index.tsx` composes `describeConnectionFailure`
+ * is the board's rule: `app/(tabs)/(workers)/index.tsx` composes `describeConnectionFailure`
  * (`connectionError.ts`) with `tunnelMayHaveRotated` (`staleTunnel.ts`) over the
  * store's `errorStatus` and `activeEndpoints`, which this route does not hold, and
  * a second copy would drift. A rejected lookup (401/403/429) goes to that same

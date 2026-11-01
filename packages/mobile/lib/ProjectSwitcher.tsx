@@ -1,88 +1,102 @@
-import { Feather } from "./icons";
-import { useRouter } from "expo-router";
+import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
+import { startTransition, useRef } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppSymbol } from "./AppSymbol";
 import type { Theme } from "./theme";
 import { haptics } from "./haptics";
-import { activeProjectLabel } from "./projectFilter";
-import { projectSheetRoute } from "./sheetResult";
+import { usePressFeedback } from "./pressFeedback";
+import { activeProjectLabel, ALL_PROJECTS, resolveActiveProject } from "./projectFilter";
 import { useApp } from "./store";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { iconSize, space, type } from "./tokens";
+import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
+import { iconSize, space, touchTarget, type } from "./tokens";
 
-// Scopes the board to one project (or All). A header row — label, current
-// scope, overflow button — rather than the horizontal pill row it replaced: the
-// pills grew a scrollable list that pushed the board down and hid every project
-// past the third one off the right edge.
-//
-// It opens the same sheet Settings uses, so there is one project picker in the
-// app instead of two controls that drift apart.
+/**
+ * Scopes the pull-request list to one project (or all of them): a row naming
+ * the current scope, which opens the system's pull-down menu with a check on
+ * the current choice. A SwiftUI menu on iOS, a Material dropdown on Android.
+ *
+ * The choice applies in place, with no navigation: the list is already on
+ * screen, so the filter changing under the menu is the whole feedback.
+ */
 export function ProjectSwitcher() {
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const menu = useRef<MenuComponentRef>(null);
 	const { projects, projectsKnown, activeProjectId, setActiveProject } = useApp();
-	const router = useRouter();
 
 	// Nothing to switch between — a single-project user never sees this.
 	if (projects.length <= 1) return null;
 
-	const active = projects.find((p) => p.id === activeProjectId);
+	const applied = resolveActiveProject(activeProjectId, projects, projectsKnown);
+	const label = activeProjectLabel(activeProjectId, projects, projectsKnown);
+	const scoped = applied !== ALL_PROJECTS;
+	const actions: MenuAction[] = [
+		{ id: ALL_PROJECTS, title: "All projects" },
+		...projects.map((project) => ({ id: project.id, title: project.name })),
+	].map((action) => ({ ...action, state: action.id === applied ? "on" : "off" }));
 
-	return (
+	const choose = ({ nativeEvent: { event } }: NativeActionEvent) => {
+		// Compared with the saved id, not the applied one: choosing All over a
+		// project that no longer exists still has to clear it from storage.
+		if (event === activeProjectId) return;
+		if (event !== applied) haptics.select();
+		// Rebuilding the list must not hold up the menu's dismissal.
+		startTransition(() => setActiveProject(event));
+	};
+
+	const row = (
 		<>
-			<View style={styles.row}>
-				<Text style={styles.label}>PROJECTS</Text>
-				<Pressable
-					onPress={() => {
-						haptics.tap();
-						// No navigation on select — the board is already on screen, so the
-						// filter applying in place is the whole feedback.
-						router.push(projectSheetRoute({ selected: activeProjectId, onSelect: setActiveProject }));
-					}}
-					hitSlop={10}
-					style={({ pressed }) => [styles.trigger, pressed && styles.triggerPressed]}
-					accessibilityRole="button"
-					accessibilityLabel="Change active project"
-				>
-					<Text style={[styles.value, active && { color: t.accent }]} numberOfLines={1}>
-						{activeProjectLabel(activeProjectId, projects, projectsKnown)}
-					</Text>
-					{/* A chevron, not an overflow "…": this changes a value rather than
-					    revealing a menu of actions. */}
-					<Feather name="chevron-down" size={iconSize.sm} color={active ? t.accent : t.textTertiary} />
-				</Pressable>
+			<Text style={styles.label} numberOfLines={1}>
+				Project
+			</Text>
+			{/* A long project name ellipsizes rather than pushing the label out. */}
+			<View style={styles.value}>
+				<Text style={[styles.valueText, scoped && { color: t.accent }]} numberOfLines={1}>
+					{label}
+				</Text>
+				{/* Up and down, not an overflow "…": this picks a value from a list. */}
+				<AppSymbol name="chevronUpDown" size={iconSize.sm} color={scoped ? t.accent : t.textTertiary} />
 			</View>
-
 		</>
+	);
+	const a11y = {
+		accessibilityRole: "button" as const,
+		accessibilityLabel: `Project, ${label}`,
+		accessibilityHint: "Chooses which project's pull requests are listed",
+	};
+
+	// The whole row is the trigger, as a settings row with a pop-up value is.
+	// It also keeps the menu's host as wide as the list: a host sized to a
+	// shorter name holds that width, and would clip a longer one chosen later.
+	return (
+		<MenuView ref={menu} actions={actions} colorScheme={scheme} title="Show pull requests from" onPressAction={choose} testID="project-switcher">
+			{Platform.OS === "android" ? (
+				// The row claims the touch on Android, so it ripples and opens the
+				// dropdown itself. On iOS the SwiftUI menu takes the tap.
+				<Pressable {...a11y} android_ripple={feedback.android_ripple} onPress={() => menu.current?.show()} style={styles.row}>
+					{row}
+				</Pressable>
+			) : (
+				<View accessible {...a11y} style={styles.row}>
+					{row}
+				</View>
+			)}
+		</MenuView>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-	row: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.md,
-		paddingHorizontal: space.lg,
-		paddingBottom: space.xxs,
-	},
-	label: { fontFamily: "Geist_600SemiBold",
-		color: t.textSecondary,
-		fontSize: type.footnote.fontSize,
-		letterSpacing: 0.8,
-		fontWeight: "600",
-		flex: 1,
-	},
-	trigger: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.xs,
-		// Keep the right-hand picker in one place as project names change.
-		...(Platform.OS === "ios" ? { width: "60%" as const, justifyContent: "flex-end" as const } : { maxWidth: "70%" as const }),
-		paddingVertical: space.xxs,
-		paddingHorizontal: space.sm,
-		marginRight: -8,
-		borderRadius: 8, borderCurve: "continuous",
-	},
-	triggerPressed: { backgroundColor: t.bgElevated },
-	value: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", flexShrink: 1, ...(Platform.OS === "ios" ? { textAlign: "right" as const } : {}) },
-});
+		row: {
+			flexDirection: "row",
+			alignItems: "center",
+			gap: space.md,
+			minHeight: touchTarget,
+			paddingHorizontal: space.lg,
+		},
+		label: { ...type.subheadline, color: t.textSecondary, flexShrink: 0 },
+		value: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
+		valueText: { ...type.subheadline, fontFamily: "DMSans_600SemiBold", fontWeight: "600", color: t.textTertiary, flexShrink: 1 },
+	});

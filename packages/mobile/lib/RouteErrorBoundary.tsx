@@ -37,7 +37,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 		navigation.setOptions({ headerRight: undefined });
 	}, [navigation]);
 	// Onboarding is entered with `router.replace` and has no header, so there is
-	// nothing to go back to; the same rule as MinimalBackButton.
+	// nothing to go back to; the same rule as `backOr`.
 	const canGoBack = router.canGoBack();
 
 	return (
@@ -48,8 +48,8 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 				message={canGoBack ? "Try again, or go back and open it again." : "Try again, or go to the board."}
 				action={
 					<View style={styles.actions}>
-						<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void retry()} />
-						{canGoBack ? null : <Button title="Go to board" icon="activity" onPress={() => router.replace("/")} />}
+						<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void retry()} />
+						{canGoBack ? null : <Button title="Go to board" icon="workers" variant="primary" onPress={() => router.replace("/")} />}
 					</View>
 				}
 			/>
@@ -74,7 +74,7 @@ export function SheetErrorBoundary({ error }: ErrorBoundaryProps) {
 				icon="alert-triangle"
 				title="This sheet hit an unexpected error"
 				message="Close it and open it again."
-				action={<Button title="Close" icon="x" variant="ghost" onPress={() => backOr(router)} />}
+				action={<Button title="Close" icon="x" variant="secondary" onPress={() => backOr(router)} />}
 			/>
 		</View>
 	);

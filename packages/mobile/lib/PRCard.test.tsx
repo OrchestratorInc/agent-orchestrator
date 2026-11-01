@@ -1,102 +1,181 @@
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
 
-const fixtures = vi.hoisted(() => ({
-	push: vi.fn(),
+const fixture = vi.hoisted(() => ({
+	platform: { OS: "ios" as "ios" | "android" },
 	openPage: vi.fn(),
-	openGitHub: vi.fn(async (_url: string) => {}),
-	tap: vi.fn(),
-	menu: undefined as undefined | { actions: { id: string; title: string }[]; onAction(id: string): void },
-	theme: new Proxy({}, { get: () => "#000000" }),
+	push: vi.fn(),
+	openGitHub: vi.fn(),
+	copy: vi.fn(),
+	haptics: { tap: vi.fn(), success: vi.fn() },
+	show: vi.fn(),
 }));
 
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Pressable: host("Pressable"), Text: host("Text"), View: host("View"), StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 } };
+	return {
+		Platform: fixture.platform,
+		Pressable: host("Pressable"),
+		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
+		Text: host("Text"),
+		View: host("View"),
+	};
 });
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push }) }));
-vi.mock("./api", () => ({
-	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
-	shortLabel: (value: string) => value,
-}));
-// Captures the menu the card builds, so each action can be chosen directly.
-vi.mock("./long-press-menu", async () => {
+vi.mock("@expo/ui/community/menu", async () => {
 	const React = await import("react");
 	return {
-		LongPressMenu: ({ children, actions, onAction }: { children?: React.ReactNode; actions: { id: string; title: string }[]; onAction(id: string): void }) => {
-			fixtures.menu = { actions, onAction };
-			return React.createElement("LongPressMenu", null, children);
+		MenuView: ({ ref, children, ...props }: { ref?: React.Ref<{ show(): void }>; children?: React.ReactNode }) => {
+			React.useImperativeHandle(ref, () => ({ show: fixture.show }));
+			return React.createElement("MenuView", props, children);
 		},
 	};
 });
-vi.mock("./pageNavigation", () => ({ useOpenPage: () => fixtures.openPage }));
-vi.mock("./openGitHub", () => ({ openGitHub: fixtures.openGitHub }));
-vi.mock("./haptics", () => ({ haptics: { tap: fixtures.tap } }));
+vi.mock("expo-clipboard", () => ({ setStringAsync: fixture.copy }));
+// ./api reaches storage and telemetry modules that need a device.
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
+vi.mock("expo-secure-store", () => ({}));
+vi.mock("./installId", () => ({}));
+vi.mock("./sentry", () => ({}));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
-vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
+vi.mock("./haptics", () => ({ haptics: fixture.haptics }));
+vi.mock("./openGitHub", () => ({ openGitHub: fixture.openGitHub }));
+vi.mock("./pageNavigation", () => ({ useOpenPage: () => fixture.openPage }));
+vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixture.push }) }));
+vi.mock("./ThemeProvider", () => {
+	const theme = new Proxy({}, { get: (_, key) => `#${String(key)}` });
+	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
+});
 
 import { PRCard } from "./PRCard";
+import { symbols } from "./symbols";
 
-const pr = { number: 12, url: "https://api.github.com/repos/acme/repo/pulls/12", state: "open", title: "Improve mobile review" } as DashboardPR;
-const session = { id: "worker-1", projectId: "repo", status: "idle", displayName: "Fix the PR page", branch: "ao/fix" } as DashboardSession;
-const summary = (over: Partial<SessionPRSummary>) => ({ number: 12, title: "Improve mobile review", state: "open", changedFiles: 0, additions: 0, deletions: 0, ...over }) as SessionPRSummary;
+const pr: DashboardPR = { number: 42, url: "https://github.com/ao/app/pull/42", state: "open" };
+const session = {
+	id: "worker-1", hostId: "mac", projectId: "app", displayName: "Fix the build", status: "idle", mode: "chat",
+	branch: "fix-build", createdAt: "2026-10-11T00:00:00Z", lastActivityAt: "2026-10-11T00:00:00Z", pr,
+} as unknown as DashboardSession;
 
 let renderer: ReactTestRenderer | undefined;
+
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const spy of [fixtures.push, fixtures.openPage, fixtures.openGitHub, fixtures.tap]) spy.mockClear();
-	fixtures.menu = undefined;
-	const error = console.error;
-	vi.spyOn(console, "error").mockImplementation((...args) => {
-		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
-		error(...args);
-	});
+	fixture.platform.OS = "ios";
+	for (const fn of [fixture.openPage, fixture.push, fixture.openGitHub, fixture.copy, fixture.show, fixture.haptics.tap, fixture.haptics.success]) fn.mockClear();
 });
 afterEach(() => {
 	act(() => renderer?.unmount());
 	renderer = undefined;
-	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
-function render(cardSummary?: SessionPRSummary) {
-	act(() => renderer?.unmount());
-	act(() => { renderer = create(<PRCard pr={pr} session={session} hostId="host-b" summary={cardSummary} />); });
-	return fixtures.menu!;
+function render(props: { summary?: SessionPRSummary; onLinkCopied?: () => void } = {}) {
+	act(() => {
+		renderer = create(<PRCard pr={pr} session={session} hostId="mac" {...props} />);
+	});
+	return renderer!;
+}
+function row(): ReactTestInstance {
+	return renderer!.root.findByType("Pressable" as never);
 }
 
-it("offers the worker, the pull request and GitHub on long-press", () => {
-	expect(render().actions.map((action) => action.title)).toEqual(["Open worker", "Open pull request", "Open on GitHub"]);
-});
-
-it("opens the worker's chat on the PR's own machine", () => {
-	const menu = render();
-	act(() => menu.onAction("worker"));
-	expect(fixtures.push).toHaveBeenCalledExactlyOnceWith({ pathname: "/session/[id]", params: { id: "worker-1", projectId: "repo", hostId: "host-b" } });
-	// The menu gives the haptic for its own items.
-	expect(fixtures.tap).not.toHaveBeenCalled();
-});
-
-it("opens the pull request as a page, never inside a sheet", () => {
-	const menu = render();
-	act(() => menu.onAction("pr"));
-	expect(fixtures.openPage).toHaveBeenCalledExactlyOnceWith({
-		pathname: "/review/[sessionId]",
-		params: { sessionId: "worker-1", prNumber: "12", prUrl: pr.url, hostId: "host-b" },
+describe("PRCard", () => {
+	// A tap goes to the review; going somewhere is not a moment worth a buzz.
+	it("opens the pull request's review on a tap, without a haptic", () => {
+		render();
+		act(() => row().props.onPress());
+		expect(fixture.openPage).toHaveBeenCalledWith({
+			pathname: "/review/[sessionId]",
+			params: { sessionId: "worker-1", prNumber: "42", prUrl: pr.url, hostId: "mac" },
+		});
+		expect(fixture.haptics.tap).not.toHaveBeenCalled();
 	});
-	expect(fixtures.push).not.toHaveBeenCalled();
-});
 
-it("opens GitHub at the summary's html URL, then its URL, then the PR's", () => {
-	for (const cardSummary of [summary({ htmlUrl: "https://github.com/acme/repo/pull/12", url: "https://api.example/12" }), summary({ url: "https://github.com/acme/repo/pull/12/files" }), undefined]) {
-		const menu = render(cardSummary);
-		act(() => menu.onAction("github"));
-	}
-	expect(fixtures.openGitHub.mock.calls.map(([url]) => url)).toEqual([
-		"https://github.com/acme/repo/pull/12",
-		"https://github.com/acme/repo/pull/12/files",
-		pr.url,
-	]);
+	// The GitHub link used to be a control nested inside the row, which screen
+	// readers could not reach. It is one row now, with the rest in its menu.
+	it("is one control, with no button nested inside it", () => {
+		render();
+		expect(renderer!.root.findAllByType("Pressable" as never)).toHaveLength(1);
+	});
+
+	it("offers Open worker, Open in GitHub and Copy link from a long-press menu", () => {
+		render();
+		const menu = renderer!.root.findByType("MenuView" as never);
+		expect(menu.props.shouldOpenOnLongPress).toBe(true);
+		expect(menu.props.actions.map((action: { id: string; title: string }) => [action.id, action.title])).toEqual([
+			["openWorker", "Open worker"],
+			["openInGitHub", "Open in GitHub"],
+			["copyLink", "Copy link"],
+		]);
+		expect(menu.props.actions.map((action: { image: unknown }) => action.image)).toEqual(["bubble.left", "arrow.up.right.square", "doc.on.doc"]);
+	});
+
+	it("opens the worker's chat from the menu", () => {
+		render();
+		act(() => renderer!.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "openWorker" } }));
+		expect(fixture.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "worker-1", projectId: "app", hostId: "mac" } });
+	});
+
+	it("opens the summary's GitHub page from the menu", () => {
+		render({ summary: { htmlUrl: "https://github.com/ao/app/pull/42#files" } as SessionPRSummary });
+		act(() => renderer!.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "openInGitHub" } }));
+		expect(fixture.openGitHub).toHaveBeenCalledWith("https://github.com/ao/app/pull/42#files");
+	});
+
+	it("copies the link, confirms it, and tells the screen", () => {
+		const onLinkCopied = vi.fn();
+		render({ onLinkCopied });
+		act(() => renderer!.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "copyLink" } }));
+		expect(fixture.copy).toHaveBeenCalledWith(pr.url);
+		expect(fixture.haptics.success).toHaveBeenCalledTimes(1);
+		expect(onLinkCopied).toHaveBeenCalledTimes(1);
+	});
+
+	// VoiceOver's actions rotor and TalkBack's actions menu reach the same choices.
+	it("names the menu's choices as accessibility actions", () => {
+		const onLinkCopied = vi.fn();
+		render({ onLinkCopied });
+		expect(row().props.accessibilityActions).toEqual([
+			{ name: "openWorker", label: "Open worker" },
+			{ name: "openInGitHub", label: "Open in GitHub" },
+			{ name: "copyLink", label: "Copy link" },
+		]);
+		act(() => row().props.onAccessibilityAction({ nativeEvent: { actionName: "openInGitHub" } }));
+		act(() => row().props.onAccessibilityAction({ nativeEvent: { actionName: "copyLink" } }));
+		expect(fixture.openGitHub).toHaveBeenCalledWith(pr.url);
+		expect(onLinkCopied).toHaveBeenCalledTimes(1);
+	});
+
+	// Compose draws a menu item's glyph only from a bundled image source, which
+	// the shared registry provides under the same Material Symbol iOS's entry names.
+	it("draws each Android menu glyph from the shared drawable registry", () => {
+		const android = readFileSync(fileURLToPath(new URL("./pr-card-menu-icons.android.ts", import.meta.url)), "utf8");
+		expect(android).toContain(`openWorker: materialDrawable("${symbols.chat.android}")`);
+		expect(android).toContain(`openInGitHub: materialDrawable("${symbols.openExternal.android}")`);
+		expect(android).toContain(`copyLink: materialDrawable("${symbols.copy.android}")`);
+		expect(android).not.toContain("require(");
+	});
+
+	// The eyebrow, details and blockers are quiet through colour and weight,
+	// never smaller than footnote.
+	it("sets no text below 13pt", () => {
+		const source = readFileSync(fileURLToPath(new URL("./PRCard.tsx", import.meta.url)), "utf8");
+		expect(source).not.toMatch(/type\.caption[12]/);
+		expect(source).toMatch(/blockers:\s*\{[^}]*fontSize: type\.footnote\.fontSize/);
+	});
+
+	// iOS's context menu takes the long press natively. On Android the row's own
+	// press handler holds the touch, so the row opens the dropdown itself.
+	it("opens the menu from the row's long press on Android only", () => {
+		render();
+		expect(row().props.onLongPress).toBeUndefined();
+		act(() => renderer!.unmount());
+		fixture.platform.OS = "android";
+		render();
+		act(() => row().props.onLongPress());
+		expect(fixture.show).toHaveBeenCalledTimes(1);
+	});
 });

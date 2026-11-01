@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -12,16 +12,23 @@ vi.mock("@expo/ui/swift-ui", () => ({
 	Button: "Button", Divider: "Divider", HStack: "HStack", Image: "Image", Spacer: "Spacer",
 	Text: "Text", TextField: "TextField", VStack: "VStack", useNativeState: () => native,
 }));
-vi.mock("@expo/ui/swift-ui/modifiers", () => Object.fromEntries([
-	"buttonStyle", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
-	"multilineTextAlignment", "padding", "textFieldStyle", "tint",
-].map((name) => [name, () => ({})])));
+// Each modifier records its name and arguments, so a test can read what a view was given.
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+	...Object.fromEntries([
+		"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "contentShape", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
+		"multilineTextAlignment", "padding", "textFieldStyle", "tint",
+	].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])),
+	shapes: { rectangle: () => ({ shape: "rectangle" }) },
+}));
 vi.mock("../glass", () => ({ glassPanel: () => ({}) }));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => ({ scheme: "light" }) }));
 
-import { TextField } from "@expo/ui/swift-ui";
-import { ElicitationTextField } from "./elicitation-native-controls.ios";
+import { Host } from "@expo/ui";
+import { Button, Text, TextField } from "@expo/ui/swift-ui";
+import { haptics } from "../haptics";
+import { touchTarget } from "../tokens";
+import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
 
 let renderer: ReactTestRenderer | undefined;
 let resetValue: (value: string | number) => void;
@@ -102,4 +109,88 @@ it.each([false, true])("handles repeated native values followed by an external r
 	expect(native.set).not.toHaveBeenCalled();
 	act(() => resetValue(numeric ? 12 : "AB"));
 	expect(native.value).toBe(numeric ? "12" : "AB");
+});
+
+// The measuring copy renders first, then the button people see.
+function actionParts() {
+	const [measure, visible] = renderer!.root.findAllByType(Host);
+	const [probe, button] = renderer!.root.findAllByType(Button);
+	const [, label] = renderer!.root.findAllByType(Text);
+	return { measure, visible, probe, button, label };
+}
+function modifier(node: ReactTestInstance, name: string): unknown {
+	return (node.props.modifiers as Record<string, unknown>[]).find((entry) => name in entry)?.[name];
+}
+function measure(row: number, label: number) {
+	act(() => {
+		actionParts().measure.props.onLayout({ nativeEvent: { layout: { width: row } } });
+		actionParts().measure.props.onLayoutContent({ nativeEvent: { width: label, height: 50 } });
+	});
+}
+
+it("lets an action take its label's width instead of a guessed one", () => {
+	const onPress = vi.fn();
+	act(() => { renderer = create(<ElicitationAction label="Allow once" primary onPress={onPress} />); });
+	const { measure: copy, visible, probe, button, label } = actionParts();
+	expect(visible.props.matchContents).toBe(true);
+	expect(visible.props.style).toEqual({ maxWidth: "100%" });
+	expect(label.props.children).toBe("Allow once");
+	expect(modifier(button, "frame")).toBeUndefined();
+	// The copy spans the row at its natural width, out of reach of touch and screen readers.
+	expect(copy.props.matchContents).toBeUndefined();
+	expect(copy.props.pointerEvents).toBe("none");
+	expect(copy.props.accessibilityElementsHidden).toBe(true);
+	expect(copy.props.importantForAccessibility).toBe("no-hide-descendants");
+	expect(modifier(probe, "fixedSize")).toEqual([]);
+	expect(modifier(probe, "accessibilityHidden")).toEqual([true]);
+	expect(probe.props.onPress).toBeUndefined();
+	measure(320, 140);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+	act(() => actionParts().button.props.onPress());
+	expect(onPress).toHaveBeenCalledOnce();
+});
+
+it("wraps a decision wider than its row instead of running past the card", () => {
+	const decision = "No, and tell me what to do differently (esc)";
+	const action = (label: string) => <ElicitationAction label={label} primary onPress={vi.fn()} />;
+	act(() => { renderer = create(action(decision)); });
+	measure(300.6, 420);
+	expect(modifier(actionParts().button, "frame")).toEqual([{ width: 300 }]);
+	expect(modifier(actionParts().button, "multilineTextAlignment")).toEqual(["center"]);
+	// The copy is never held, so it keeps reporting the label's own width.
+	expect(modifier(actionParts().probe, "frame")).toBeUndefined();
+	// Given room, it goes back to its own size.
+	measure(480, 420);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+	// A new label is measured afresh; the old one's width says nothing about it.
+	measure(300, 420);
+	act(() => renderer!.update(action("Sending…")));
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+	measure(300, 96);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+});
+
+it("gives every action at least a touch target", () => {
+	act(() => { renderer = create(<ElicitationAction label="Skip" onPress={vi.fn()} />); });
+	const { button, label } = actionParts();
+	expect(modifier(button, "buttonStyle")).toEqual(["plain"]);
+	// A plain button is only as tappable as its label, so the label carries the target.
+	expect(modifier(label, "frame")).toEqual([{ minWidth: touchTarget, minHeight: touchTarget }]);
+	expect(modifier(label, "contentShape")).toEqual([{ shape: "rectangle" }]);
+	act(() => renderer!.update(<ElicitationAction label="Submit" primary onPress={vi.fn()} />));
+	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["borderedProminent"]);
+	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
+	expect(actionParts().label.props.modifiers).toEqual([]);
+});
+
+it("taps on press unless the caller buzzes for the outcome", () => {
+	const onPress = vi.fn();
+	vi.mocked(haptics.tap).mockClear();
+	act(() => { renderer = create(<ElicitationAction label="Cancel" onPress={onPress} />); });
+	act(() => actionParts().button.props.onPress());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	act(() => renderer!.update(<ElicitationAction label="Save" primary reportsOutcome onPress={onPress} />));
+	act(() => actionParts().button.props.onPress());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	expect(onPress).toHaveBeenCalledTimes(2);
 });

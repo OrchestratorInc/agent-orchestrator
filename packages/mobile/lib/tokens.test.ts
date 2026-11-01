@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { fontScaleCap, microLabel, radius, space, type } from "./tokens";
+import { sheetCornerRadius as androidSheetCornerRadius, touchTarget as androidTouchTarget } from "./platformTokens.android";
+import { fontScaleCap, press, radius, sheetCornerRadius, space, stateOpacity, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -14,7 +15,7 @@ describe("spacing scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card gutter at the value cardShell already uses", () => {
+	it("keeps the card gutter at 12", () => {
 		expect(space.md).toBe(12);
 	});
 });
@@ -26,8 +27,37 @@ describe("radius scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card radius at the value cardShell already uses", () => {
+	it("keeps the card radius at 12", () => {
 		expect(radius.md).toBe(12);
+	});
+});
+
+describe("touch target", () => {
+	// vitest resolves the base file, which is what iOS gets; Metro swaps in the
+	// .android file on Android, so that one is read directly.
+	it("meets the HIG on iOS and Material 3 on Android", () => {
+		expect(touchTarget).toBe(44);
+		expect(androidTouchTarget).toBe(48);
+	});
+});
+
+describe("sheet corners", () => {
+	// Unset, iOS draws the system sheet shape; react-native-screens draws an
+	// unset Android sheet square, so Android names Material 3's corner.
+	it("leaves iOS to UIKit and gives Android Material 3's bottom-sheet shape", () => {
+		expect(sheetCornerRadius).toBeUndefined();
+		expect(androidSheetCornerRadius).toBe(28);
+	});
+});
+
+describe("state opacity", () => {
+	it("keeps a pressed control more visible than a disabled one", () => {
+		expect(stateOpacity.pressed).toBeLessThan(1);
+		expect(stateOpacity.disabled).toBeLessThan(stateOpacity.pressed);
+	});
+
+	it("is the opacity press feedback fades to", () => {
+		expect(press.opacity).toBe(stateOpacity.pressed);
 	});
 });
 
@@ -47,8 +77,9 @@ describe("font scale caps", () => {
 });
 
 describe("type scale", () => {
-	// The ramp is Apple's Dynamic Type scale rather than a vocabulary of
-	// per-screen sizes, so the fence is its shape: sizes never decrease as the
+	// The ramp is T3 Code's compact scale, each step named for the Dynamic Type
+	// style it grows with, rather than a vocabulary of per-screen sizes, so the
+	// fence is its shape: sizes never decrease as the
 	// roles get larger, and the anchors below are the steps the app reads at.
 	const steps = [
 		type.caption2,
@@ -69,20 +100,19 @@ describe("type scale", () => {
 		expect(sizes).toEqual([...sizes].sort((a, b) => a - b));
 	});
 
-	it("spans the scale the system uses at its ends", () => {
+	it("spans T3 Code's scale at its ends", () => {
 		expect(type.caption2.fontSize).toBe(11);
-		expect(type.largeTitle.fontSize).toBe(34);
+		expect(type.largeTitle.fontSize).toBe(30);
 	});
 
 	it("keeps the reading sizes where the app reads at them", () => {
-		expect(type.body.fontSize).toBe(17);
+		expect(type.body.fontSize).toBe(16);
 		expect(type.footnote.fontSize).toBe(13);
 	});
 
-	it("gives micro-labels positive tracking and large titles negative", () => {
-		// Optical tracking flips sign at the ends of the ramp; that, not the size,
-		// is what makes a small label read as a label.
-		expect(microLabel.letterSpacing).toBeGreaterThan(0);
-		expect(type.body.letterSpacing).toBeLessThan(0);
+	// DM Sans is spaced for reading already; only titles tighten.
+	it("leaves reading text at the family's own spacing and tightens titles", () => {
+		expect(type.body.letterSpacing).toBe(0);
+		expect(type.largeTitle.letterSpacing).toBeLessThan(0);
 	});
 });

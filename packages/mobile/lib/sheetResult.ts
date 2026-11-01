@@ -37,29 +37,9 @@ export function resetSheetResults(): void {
 	seq = 0;
 }
 
-/**
- * Route + params for opening the project sheet. Kept here beside `parkSheetResult`
- * so callers can't forget to park the callback, and so the "0"/"1" param encoding
- * (route params are strings) lives in one place rather than at every call site.
- */
-export function projectSheetRoute(opts: {
-	selected: string;
-	onSelect: (id: string) => void;
-	includeAll?: boolean;
-	title?: string;
-	subtitle?: string;
-}) {
-	return {
-		pathname: "/sheets/project" as const,
-		params: {
-			resultKey: parkSheetResult(opts.onSelect),
-			selected: opts.selected,
-			includeAll: opts.includeAll === false ? "0" : "1",
-			...(opts.title ? { title: opts.title } : {}),
-			...(opts.subtitle ? { subtitle: opts.subtitle } : {}),
-		},
-	};
-}
+// Route + params for each sheet, kept here beside `parkSheetResult` so callers
+// can't forget to park the callback, and so the string encoding of each param
+// (route params are strings) lives in one place rather than at every call site.
 
 export function agentSheetRoute(opts: { selected: string; onSelect: (id: string) => void; allowed?: string[]; mode?: "chat" | "tui" }) {
 	return {
@@ -110,28 +90,6 @@ export function machineNameSheetRoute(opts: {
 			suggested: opts.suggested,
 			symbol: opts.appearance.symbol,
 			hostId: opts.hostId,
-		},
-	};
-}
-
-/**
- * Route + params for the store-update nudge. One parked callback carries both
- * outcomes: taking the update, or dismissing it (which is what the snooze
- * counter counts, so the opener has to hear about it).
- */
-export function storeUpdateSheetRoute(opts: {
-	version?: string;
-	storeConfirmed: boolean;
-	onAction: (action: "update" | "dismiss") => void;
-}) {
-	return {
-		pathname: "/sheets/store-update" as const,
-		params: {
-			resultKey: parkSheetResult(opts.onAction),
-			// Route params are strings, so the flag is encoded here rather than at
-			// the call site — same reason as projectSheetRoute's "0"/"1".
-			storeConfirmed: opts.storeConfirmed ? "1" : "0",
-			...(opts.version ? { version: opts.version } : {}),
 		},
 	};
 }

@@ -3,8 +3,10 @@ import { useCallback } from "react";
 
 // Routes the root stack presents as a sheet or modal (app/_layout.tsx). A page
 // pushed while one of these is in the stack is presented inside it, so a review
-// opened from a push tap or a sheet action landed as a bottom sheet.
-const PRESENTED_ROUTES = new Set(["settings", "spawn", "pair"]);
+// opened from a push tap or a sheet action landed as a bottom sheet. Every
+// other route, Settings, Notifications, Pull Requests and New task among them,
+// is a page, and a page opened from one goes on top like any other push.
+const PRESENTED_ROUTES = new Set(["pair", "render"]);
 
 export function isPresentedRoute(name: string): boolean {
 	return PRESENTED_ROUTES.has(name) || name.startsWith("sheets/");
@@ -12,7 +14,7 @@ export function isPresentedRoute(name: string): boolean {
 
 /** How many routes to dismiss so nothing presented remains on the stack. */
 export function presentedRouteDepth(routeNames: readonly string[]): number {
-	const first = routeNames.findIndex(isPresentedRoute);
+	const first = routeNames.findIndex((name) => isPresentedRoute(name));
 	return first < 0 ? 0 : routeNames.length - first;
 }
 

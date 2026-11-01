@@ -102,8 +102,9 @@ describe("projectBlockerLine", () => {
 		);
 		expect(projectBlockerLine(rowByProject(rows, "proj"), now)).toEqual({
 			worker: "auth-refactor",
-			reason: "waiting on your reply",
+			reason: "Waiting on your reply",
 			age: "12m",
+			status: "needs_input",
 		});
 	});
 
@@ -134,9 +135,42 @@ describe("projectBlockerLine", () => {
 		);
 		expect(projectBlockerLine(rowByProject(rows, "proj"), now)).toEqual({
 			worker: "auth-refactor",
-			reason: "checks failing",
+			reason: "Unresolved comments",
 			age: "5m",
+			status: "commented",
 		});
+	});
+
+	// Review holds several causes; the row names the worker's own, as its row
+	// on the Workers tab does, rather than calling every one failing checks.
+	it("names the review cause the worker actually has", () => {
+		const reasonFor = (over: Partial<DashboardSession>) =>
+			projectBlockerLine(rowByProject(orchestratorProjectSections([project("proj")], [session(over)], [link()]), "proj"), now)?.reason;
+		expect(reasonFor({ status: "changes_requested" })).toBe("Changes requested");
+		expect(reasonFor({ status: "ci_failed" })).toBe("Checks failing");
+		expect(reasonFor({ status: "stuck" })).toBe("Stuck");
+	});
+});
+
+describe("an orchestrator whose agent exited", () => {
+	const exited = link({ status: "exited", hasRuntime: true, isTerminal: false });
+
+	// Every agent sits here after the daemon restarts; opening the session
+	// resumes it. It is not coordinating, so it must not say so.
+	it("reads as stopped, offers Resume, and leaves Coordinating", () => {
+		const row = rowByProject(orchestratorProjectSections([project("proj")], [], [exited]), "proj");
+		expect(row.section).toBe("not-running");
+		expect(row.action).toBe("open");
+		expect(orchestratorStatus(darkTheme, exited).label).toBe("Stopped");
+		expect(orchestratorButtonCopy(row, false)).toEqual({ label: "Resume orchestrator", short: "Resume", running: false });
+	});
+
+	it("still needs attention when its workers do", () => {
+		const row = rowByProject(
+			orchestratorProjectSections([project("proj")], [session({ status: "needs_input" })], [exited]),
+			"proj",
+		);
+		expect(row.section).toBe("attention");
 	});
 });
 
@@ -303,7 +337,7 @@ describe("orchestratorProjectSections", () => {
 
 		const sections = orchestratorProjectSections(projects, [], orchestrators);
 
-		expect(sections.map((section) => section.title)).toEqual(["Needs Attention", "Coordinating", "Not Running"]);
+		expect(sections.map((section) => section.title)).toEqual(["Needs attention", "Coordinating", "Not running"]);
 		expect(sections.flatMap((section) => section.data).map((row) => row.project.id).sort()).toEqual([
 			"attention",
 			"coordinating",
@@ -471,7 +505,7 @@ describe("orchestratorButtonCopy", () => {
 	});
 
 	it("names what the button will do", () => {
-		expect(orchestratorButtonCopy(rowWith("open"), false)).toEqual({ label: "Open orchestrator", short: "Orchestrator", running: true });
+		expect(orchestratorButtonCopy(rowWith("open"), false)).toEqual({ label: "Open orchestrator", short: "Open", running: true });
 		expect(orchestratorButtonCopy(rowWith("start"), false)).toEqual({ label: "Start orchestrator", short: "Start", running: false });
 		expect(orchestratorButtonCopy(rowWith("resume"), false)).toEqual({ label: "Resume orchestrator", short: "Resume", running: false });
 	});

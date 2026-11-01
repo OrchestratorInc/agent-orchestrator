@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
-const actionsSheetSource = readFileSync(new URL("./ConversationActionsSheet.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
@@ -40,12 +39,10 @@ describe("active turn controls", () => {
 
 	it("keeps the queued row compact without a second labeled steer pill", () => {
 		expect(composerSource).not.toContain("queueSteerText");
-		expect(composerSource).toContain('queueSteer: { width: 40, height: 40');
 	});
 
-	it("keeps settings and active-turn delivery state in one fixed-height row", () => {
-		expect(composerSource).toContain("<View style={styles.metaRow}>");
-		expect(composerSource).toContain('metaRow: { width: "100%", height: 44');
+	it("keeps settings and active-turn delivery state in the pill's controls row", () => {
+		expect(composerSource).toContain("style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>");
 		expect(composerSource).toContain('numberOfLines={1} style={styles.deliveryNoteText}');
 		expect(composerSource).toContain('Sent after this');
 	});
@@ -58,14 +55,11 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
 	});
 
-	it("renames the session, not the conversation", () => {
-		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
-		expect(screenSource).not.toContain("conversation.rename(next)");
-	});
-
-	it("does not offer rename on the project orchestrator", () => {
-		expect(screenSource).toContain('canRename: !("projectName" in session)');
-		expect(actionsSheetSource).toContain('canRename: entry.canRename && can(snapshot, "rename")');
+	// The actions page holds only Terminal, Preview, Pin, PR Review, Compact and Archive.
+	it("offers no rename, history, refresh, usage or MCP reload from the actions page", () => {
+		expect(screenSource).not.toContain("<ConversationRenamePrompt");
+		expect(screenSource).not.toContain('kind: "conversation-map"');
+		expect(screenSource).toContain("contextPercent: menuContextPercent,");
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
@@ -91,9 +85,30 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
 		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
 		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
-		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
 		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
 		expect(screenSource).toContain("<ChatComposer");
+	});
+
+	// The conversation scrolls on under the composer's glass and leaves the
+	// composer's measured height clear at its end.
+	it("floats the composer over the conversation", () => {
+		expect(screenSource).toContain('<View pointerEvents="box-none" style={styles.floatingComposer} onLayout={measureComposer}>');
+		// Taken once it settles, not every frame of the composer's spring.
+		expect(screenSource).toContain("composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);");
+		expect(screenSource).toContain("bottomInset={composerHeight}");
+		expect(screenSource).toContain('floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 }');
+	});
+});
+
+describe("whole-screen states", () => {
+	// The app's one empty state, with its shared buttons, rather than a copy of
+	// it drawn here with a custom pill.
+	it("draws loading and failures with the shared EmptyState", () => {
+		expect(screenSource).not.toContain("function Centered");
+		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
+		expect(screenSource).toContain('action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />}');
+		expect(screenSource).toContain('<Button title="Open worktree shell" icon="terminal" loading={openingShell}');
+		expect(screenSource).toContain('<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>');
 	});
 });
 
@@ -103,6 +118,28 @@ describe("stopped agents", () => {
 		expect(screenSource).toContain("shouldAutoResume(session, terminated, Boolean(config))");
 		expect(screenSource).toContain("controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)");
 		expect(screenSource).toContain("void resume(true);");
+	});
+});
+
+// iOS 26: the conversation scrolls up under the system's glass bar, which blurs
+// it beneath the title, rather than stopping at a painted one.
+describe("header", () => {
+	it("lays the conversation out under iOS 26's clear bar", () => {
+		expect(screenSource).toContain('navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });');
+		expect(screenSource).not.toContain("scrollEdgeEffects:");
+		expect(screenSource).toContain("headerStyle: stackScreenOptions(t).headerStyle");
+		expect(screenSource).toContain("underHeader={headerOverlap}");
+		expect(screenSource).toContain("topInset={bannersHeight}");
+	});
+
+	// Android's bar is clear too, and the conversation frosts out under it as
+	// the board tabs' rows do.
+	it("frosts the conversation out under Android's clear bar", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";');
+		expect(screenSource).toContain("{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (");
+		expect(screenSource).toContain("<Frost from=\"top\" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />");
+		// The frost lies under the floating banners, which keep the page's colour.
+		expect(screenSource.indexOf("<Frost from=")).toBeLessThan(screenSource.indexOf("styles.floatingBanners, { top: headerOverlap }"));
 	});
 });
 
