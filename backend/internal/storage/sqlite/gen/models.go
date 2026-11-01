@@ -172,6 +172,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	CardSummaries      bool
 }
 
 type Automation struct {

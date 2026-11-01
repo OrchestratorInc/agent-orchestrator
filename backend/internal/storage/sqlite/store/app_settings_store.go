@@ -33,7 +33,10 @@ type AppSettings struct {
 	// ComputerUse gives new chat sessions tools to drive desktop apps through
 	// Cua Driver.
 	ComputerUse bool
-	UpdatedAt   time.Time
+	// CardSummaries asks new workers to keep a one-line summary on their
+	// kanban card, and shows it on the board.
+	CardSummaries bool
+	UpdatedAt     time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -54,6 +57,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
 		ComputerUse:        row.ComputerUse,
+		CardSummaries:      row.CardSummaries,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -109,6 +113,19 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 		UpdatedAt:   now,
 	}); err != nil {
 		return fmt.Errorf("set computer use: %w", err)
+	}
+	return nil
+}
+
+// SetCardSummaries persists whether new workers keep a kanban card summary.
+func (s *Store) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetCardSummaries(ctx, gen.SetCardSummariesParams{
+		CardSummaries: enabled,
+		UpdatedAt:     now,
+	}); err != nil {
+		return fmt.Errorf("set card summaries: %w", err)
 	}
 	return nil
 }

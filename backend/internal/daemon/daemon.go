@@ -756,6 +756,7 @@ func Run(buildVersion string) error {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	sessMgr.SetCardSummariesEnabled(settingsSvc.CardSummariesEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})

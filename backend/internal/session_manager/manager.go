@@ -540,6 +540,9 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	// cardSummaries reports the card summaries setting; nil is off.
+	cardSummariesMu sync.Mutex
+	cardSummaries   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -6010,6 +6013,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
+	}
+	if kind == domain.KindWorker && m.cardSummariesEnabled(ctx) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, cardSummaryPrompt)
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)

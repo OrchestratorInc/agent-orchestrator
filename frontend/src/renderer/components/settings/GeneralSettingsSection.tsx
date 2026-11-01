@@ -21,7 +21,8 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCardSummaries, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { markCardSummariesDeveloperDefault } from "../../hooks/useCardSummariesDeveloperDefault";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -138,6 +139,33 @@ function VersionRefreshRow() {
 	);
 }
 
+/**
+ * Developer Mode-only toggle for kanban card summaries. Daemon-owned, because
+ * the daemon decides whether new workers are asked to write one.
+ */
+function CardSummariesRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateCardSummaries();
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow className="rounded-none" label={t("settings.cardSummaries.label")} description={t("settings.cardSummaries.description")}>
+				<Switch
+					aria-label={t("settings.cardSummaries.label")}
+					checked={settings?.cardSummaries ?? false}
+					disabled={isLoading || saving || !settings}
+					onCheckedChange={update}
+				/>
+			</SettingsRow>
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
 function TerminalShellRows() {
 	const { t } = useTranslation();
 	const preference = useTerminalShellStore((state) => state.preference);
@@ -218,6 +246,7 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const { update: updateCardSummaries } = useUpdateCardSummaries();
 	const navigationGestures = useUiStore((state) => state.navigationGestures);
 	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
 	const renderMath = useUiStore((state) => state.renderMath);
@@ -347,9 +376,15 @@ export function GeneralSettingsSection({
 					<Switch
 						aria-label={t("settings.developerMode")}
 						checked={developerMode}
-						onCheckedChange={setDeveloperMode}
+						onCheckedChange={(enabled) => {
+							setDeveloperMode(enabled);
+							// Card summaries follow Developer mode on and off.
+							markCardSummariesDeveloperDefault();
+							updateCardSummaries(enabled);
+						}}
 					/>
 				</SettingsRow>
+				{developerMode && <CardSummariesRow />}
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />

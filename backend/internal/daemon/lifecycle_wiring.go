@@ -223,6 +223,7 @@ type sessionLifecycle interface {
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)
+	SetCardSummariesEnabled(enabled func(context.Context) bool)
 	RetryVersionMoves(ctx context.Context) error
 	ObserveChatVersionSwitch(id domain.SessionID, version, result string)
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error

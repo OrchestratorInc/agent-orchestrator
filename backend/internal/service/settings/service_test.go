@@ -26,6 +26,9 @@ func (*hibernationSettingsStore) SetVersionRefresh(context.Context, bool, time.T
 func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetCardSummaries(context.Context, bool, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -177,6 +180,40 @@ func TestComputerUseToggle(t *testing.T) {
 	}
 	store.err = errors.New("database is locked")
 	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("an unreadable store must count as off")
+	}
+}
+
+type cardSummariesStore struct {
+	hibernationSettingsStore
+	enabled bool
+	err     error
+}
+
+func (s *cardSummariesStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{CardSummaries: s.enabled}, s.err
+}
+
+func (s *cardSummariesStore) SetCardSummaries(_ context.Context, enabled bool, _ time.Time) error {
+	s.enabled = enabled
+	return nil
+}
+
+// Card summaries are off until a client turns them on, apply to the next spawn
+// without a restart, and an unreadable store never turns them on.
+func TestCardSummariesToggle(t *testing.T) {
+	ctx := context.Background()
+	store := &cardSummariesStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.CardSummariesEnabled(ctx) {
+		t.Fatal("card summaries are on by default")
+	}
+	snapshot, err := svc.SetCardSummaries(ctx, true)
+	if err != nil || !snapshot.CardSummaries || !svc.CardSummariesEnabled(ctx) {
+		t.Fatalf("after enabling: snapshot=%+v err=%v", snapshot, err)
+	}
+	store.err = errors.New("database is locked")
+	if svc.CardSummariesEnabled(ctx) {
 		t.Fatal("an unreadable store must count as off")
 	}
 }

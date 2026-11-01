@@ -2713,6 +2713,8 @@
 	"settings.harness.waitReason.resume": "更新后无法恢复",
 	"settings.versionRefresh.label": "自动将打开的会话切换到新版本",
 	"settings.versionRefresh.description": "代理更新后，空闲会话会在新版本上重启，无需等待你手动重启。",
+	"settings.cardSummaries.label": "卡片摘要",
+	"settings.cardSummaries.description": "工作代理在看板卡片上持续显示一行当前工作摘要。会多消耗几个百分点的 token。仅对之后启动的工作代理生效。",
 	"chat.versionSwitch.pending": "正在切换到 {{version}}…",
 	"chat.versionSwitch.pendingHint": "将在代理空闲时或你发送下一条消息时切换。",
 	"chat.versionSwitch.installed": "已安装 {{version}}",

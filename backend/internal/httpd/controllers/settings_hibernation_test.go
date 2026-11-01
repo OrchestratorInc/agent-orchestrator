@@ -109,3 +109,32 @@ func TestSettingsComputerUseRequiresBoolean(t *testing.T) {
 		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
 	}
 }
+
+type cardSummariesSettingsService struct {
+	hibernationSettingsService
+	cardSummaries bool
+}
+
+func (s *cardSummariesSettingsService) SetCardSummaries(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.cardSummaries = enabled
+	s.calls++
+	return settingssvc.Snapshot{CardSummaries: enabled}, nil
+}
+
+func TestSettingsCardSummariesRequiresBoolean(t *testing.T) {
+	svc := &cardSummariesSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		w := httptest.NewRecorder()
+		c.setCardSummaries(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/card-summaries", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setCardSummaries(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/card-summaries", strings.NewReader(`{"enabled":true}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || !got.CardSummaries || !svc.cardSummaries {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}

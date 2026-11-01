@@ -4,6 +4,10 @@ Set the one-line summary on your kanban card. The human watches the board to
 follow what each worker is doing right now, so a worker keeps its card current
 for the whole task.
 
+Use it only when your system prompt has a Card Summary section. The user turns
+card summaries on in AO's settings; without that section they are off, and
+`ao summary` only costs you a tool call.
+
 ## Syntax
 
 ```text

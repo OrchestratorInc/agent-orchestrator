@@ -3622,6 +3622,8 @@ type SettingsResponse struct {
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	// CardSummaries asks new workers to keep a kanban card summary.
+	CardSummaries bool `json:"cardSummaries" description:"New workers keep a one-line summary on their kanban card with ao summary, and the board shows it. The desktop app turns it on with Developer mode."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3663,6 +3665,11 @@ type UpdateVersionRefreshRequest struct {
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
 type UpdateComputerUseRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateCardSummariesRequest flips whether new workers keep a kanban card summary.
+type UpdateCardSummariesRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
