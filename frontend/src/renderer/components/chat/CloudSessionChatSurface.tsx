@@ -147,6 +147,30 @@ function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
 	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
 }
 
+// The model and effort the session's worker last reported as its own, so a
+// catalog read that reports the same ones again (a refocus, a remount, a
+// reconnect) does not override a model or effort picked since.
+function readSeenNativeSettings(key: string): { model?: string; reasoningEffort?: string } | undefined {
+	try {
+		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+		if (!saved || typeof saved !== "object") return undefined;
+		return {
+			model: typeof saved.model === "string" ? saved.model : undefined,
+			reasoningEffort: typeof saved.reasoningEffort === "string" ? saved.reasoningEffort : undefined,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function writeSeenNativeSettings(key: string, native: { model?: string; reasoningEffort?: string }) {
+	try {
+		localStorage.setItem(key, JSON.stringify({ model: native.model || undefined, reasoningEffort: native.reasoningEffort || undefined }));
+	} catch {
+		// Without it, a pick still holds for this mounted session.
+	}
+}
+
 // The project's remembered approval mode. Only "Remember for this project"
 // ever wrote this key, so a value saved before approvalModeChosen existed is
 // still the user's pick.
@@ -1030,6 +1054,7 @@ export function CloudSessionChatSurface({
 		},
 	});
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
+	const nativeKey = `cloud-chat-native:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	// The approval modes the session allows. A pick among them is kept even
 	// while the selected model cannot run it (approvalModes below), so it
@@ -1216,7 +1241,15 @@ export function CloudSessionChatSurface({
 		// only if this worker can run it; otherwise the worker's own model applies.
 		const catalog = native.models ?? [];
 		const runnable = !current.model || catalog.length === 0 || catalog.some((model) => model.id === current.model);
-		if (runnable && (chosenSince || (!native.model && !native.reasoningEffort))) return;
+		// The worker's own model applies where nothing is picked, and when it
+		// changed since it was last seen (the TUI's /model); a refetch that
+		// reports the same one again leaves a pick made since then alone.
+		const seen = readSeenNativeSettings(nativeKey);
+		writeSeenNativeSettings(nativeKey, native);
+		const nativeChanged = seen !== undefined &&
+			((seen.model ?? "") !== (native.model ?? "") || (seen.reasoningEffort ?? "") !== (native.reasoningEffort ?? ""));
+		const picked = Boolean(current.model || current.reasoningEffort);
+		if (runnable && (chosenSince || (picked && !nativeChanged) || (!native.model && !native.reasoningEffort))) return;
 		const next: CloudTurnSettings = {
 			...current,
 			...(runnable ? {} : { model: undefined, reasoningEffort: undefined }),

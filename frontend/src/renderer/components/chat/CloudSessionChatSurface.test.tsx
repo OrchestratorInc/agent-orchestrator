@@ -1381,12 +1381,48 @@ describe("CloudSessionChatSurface", () => {
 			</QueryClientProvider>,
 		);
 		await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
-		await waitFor(() => expect(localStorage.getItem(key)).not.toContain("approvalMode"));
+		// The legacy value is never read as a pick: without approvalModeChosen it is ignored.
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models.length).toBeGreaterThan(0));
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("bypass-permissions");
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "legacy-default");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "go", model: "claude-sonnet", reasoningEffort: "medium", mode: "trusted",
 		}, { idempotencyKey: "legacy-default" });
+	});
+
+	it("keeps a picked model and effort when the worker's catalog is read again", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({
+			models: [
+				{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", default: true, efforts: ["low", "high"] },
+				{ id: "gpt-6-luna", displayName: "GPT-6 Luna", default: false, efforts: ["medium", "high"] },
+			],
+			model: "gpt-6.1-sol",
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const codexSession = { ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" as const } };
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={codexSession} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.model).toBe("gpt-6.1-sol"));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ model: "gpt-6-luna", reasoningEffort: "high" }, "model"));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "gpt-6-luna", reasoningEffort: "high" }));
+		// Leaving and coming back reads the catalog again; it still reports the worker's own model.
+		view.unmount();
+		const calls = cloudMocks.listChatModels.mock.calls.length;
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={codexSession} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.listChatModels.mock.calls.length).toBeGreaterThan(calls));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "gpt-6-luna", reasoningEffort: "high" });
+
+		// A model changed in the terminal since then is the worker's new one, and applies.
+		cloudMocks.listChatModels.mockResolvedValue({
+			models: [
+				{ id: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", default: true, efforts: ["low", "high"] },
+				{ id: "gpt-6-luna", displayName: "GPT-6 Luna", default: false, efforts: ["medium", "high"] },
+			],
+			model: "gpt-6.1-sol", reasoningEffort: "high",
+		});
+		await act(async () => { await queryClient.refetchQueries({ queryKey: ["cloud-chat-models"] }); });
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "high" }));
 	});
 
 	it("surfaces send errors and sends cancellation to the active turn", async () => {
