@@ -37,9 +37,11 @@ export function TerminalTabFrame({
 			className={cn(
 				"group relative inline-flex h-full min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch items-center border-r border-border",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
+				// An inactive tab's name is still navigation, so it keeps muted (not
+				// passive) contrast: passive text vanishes over a translucent window.
 				active
 					? "bg-overlay text-foreground"
-					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
+					: "text-muted-foreground hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
 			data-terminal-tab-frame
 			onClick={(event) => {
