@@ -130,6 +130,7 @@ export interface ConversationTurn {
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
 	errorMessage?: string;
+	failureCode?: "provider_key_missing";
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;

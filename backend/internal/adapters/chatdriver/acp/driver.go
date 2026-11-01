@@ -142,6 +142,9 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// PromptFailureCode classifies a provider-specific failed prompt without
+	// changing its technical error or treating unrelated ACP errors as auth failures.
+	PromptFailureCode func(error) domain.ConversationFailureCode
 	// SessionPromptResponseFailure is PromptResponseFailure given the provider
 	// session, for a binding that reads the failure from the agent's own record,
 	// and whether the turn brought any reply text or tool call.
@@ -798,6 +801,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.promptFailureCode = d.cfg.PromptFailureCode
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate

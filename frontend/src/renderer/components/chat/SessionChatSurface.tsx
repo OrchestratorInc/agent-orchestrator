@@ -20,7 +20,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
 import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
@@ -451,13 +451,65 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	// A pending action owns its destination; an unanswered creation owns only its
+	// request identity. Reselecting text must not turn a lost reply into a new fork.
+	const selectionSideScope = useMemo(() => ({ active: true,
+		processing: new Map<string, Promise<void>>(),
+		receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
+	}), [uiSessionId, snapshot?.conversationId]);
+	const selectionSideScopeRef = useRef(selectionSideScope);
+	selectionSideScopeRef.current = selectionSideScope;
+	const selectionSideChatsRef = useRef(sideChats);
+	selectionSideChatsRef.current = sideChats;
+	useEffect(() => {
+		selectionSideScope.active = true;
+		return () => {
+			selectionSideScope.active = false;
+			selectionSideScope.processing.clear(); selectionSideScope.receipts.clear();
+		};
+	}, [selectionSideScope]);
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-		openSideInspector();
-		if (sideChats.activeId) {
-			sideChats.addReference(sideChats.activeId, excerpt);
-			sideChats.show(sideChats.activeId);
-		} else {
-			await sideChats.create(excerpt);
+		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
+		if (!current()) throw new Error("Side chat is no longer active.");
+		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+		const pending = selectionSideScope.processing.get(identity);
+		if (pending) return pending;
+		const destination = selectionSideChatsRef.current;
+		const destinationId = destination.activeId;
+		// Reserve before any UI update or synchronous failure can trigger activation.
+		const action = Promise.resolve().then(async () => {
+			if (!current()) throw new Error("Side chat is no longer active.");
+			openSideInspector();
+			if (destinationId) {
+				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
+				destination.addReference(destinationId, excerpt);
+				destination.show(destinationId);
+			} else {
+				let receipt = selectionSideScope.receipts.get(identity);
+				if (!receipt) {
+					receipt = { creationKey: crypto.randomUUID(), excerpt: { ...excerpt } };
+					selectionSideScope.receipts.set(identity, receipt);
+				}
+				try {
+					await destination.create(receipt.excerpt, false, receipt.creationKey, {
+						isCurrent: current,
+						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
+					});
+				} catch (error) {
+					// A confirmed close is terminal, not an unanswered creation. Do not retry
+					// automatically; the next deliberate Add may allocate a fresh request.
+					if (apiErrorCode(error) === "CHAT_SIDE_CLOSED") selectionSideScope.receipts.delete(identity);
+					throw error;
+				}
+				if (!current()) throw new Error("Side chat is no longer active.");
+				selectionSideScope.receipts.delete(identity);
+			}
+		});
+		selectionSideScope.processing.set(identity, action);
+		try {
+			await action;
+		} finally {
+			selectionSideScope.processing.delete(identity);
 		}
 	};
 
@@ -642,6 +694,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
+				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}

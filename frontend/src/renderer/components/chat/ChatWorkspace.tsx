@@ -23,6 +23,7 @@ import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 
 import {
 	memo,
+	useContext,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -39,11 +40,11 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
-import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
+import { ChatSelectionActions } from "./ChatSelectionActions";
+import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -340,6 +341,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
@@ -682,6 +684,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	onAddToSideChat,
+	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	snapshot,
 	promptSuggestion,
@@ -1886,6 +1889,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2618,6 +2622,7 @@ const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
  */
 export function Timeline({
 	onAddToSideChat,
+	checkingSideChatAvailability,
 	onAddToChat,
 	onForeignAnnotation,
 	annotationNavigationRef,
@@ -2653,6 +2658,7 @@ export function Timeline({
 	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
 	/** Handles annotations whose source is another conversation. */
@@ -2757,9 +2763,12 @@ export function Timeline({
 		excerpt: ChatDraftExcerptReference;
 		range: Range;
 	} | null>(null);
-	const selectionButton = useRef<HTMLDivElement>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
-	const selectionPosition = useChatSelectionPosition(selectionAction?.range, scroller, selectionButton, clearSelectionAction);
+	const selectionActionRef = useRef(selectionAction);
+	selectionActionRef.current = selectionAction;
+	const dismissedSelection = useRef<typeof selectionAction>(null);
+	const dismissedEscapePress = useRef(false);
+	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
 	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
@@ -2841,7 +2850,10 @@ export function Timeline({
 	const inlineEditSendBlocked =
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
 
-	const captureTranscriptSelection = useCallback(() => {
+	const captureTranscriptSelection = useCallback((event?: Event) => {
+		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions]")) return;
+		if (event instanceof KeyboardEvent && !/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/i.test(event.key) &&
+			!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a")) return;
 		const selection = window.getSelection();
 		if (!excerptsEnabled || !selection || selection.isCollapsed || selection.rangeCount === 0) {
 			setSelectionAction(null);
@@ -2875,18 +2887,68 @@ export function Timeline({
 			setSelectionAction(null);
 			return;
 		}
-		setSelectionAction({
+		const selectedRange = selection.getRangeAt(0).cloneRange();
+		const dismissed = dismissedSelection.current;
+		if (dismissed && dismissed.excerpt.messageId === messageId && dismissed.excerpt.revision === revision &&
+			dismissed.excerpt.text === text && selectionRangesEqual(dismissed.range, selectedRange)) return;
+		dismissedSelection.current = null;
+		const next = {
 			excerpt: {
 				id: crypto.randomUUID(),
 				conversationId: snapshot.conversationId,
 				messageId,
 				revision,
 				text,
-				role,
+				role: role as "user" | "assistant",
 			},
-			range: selection.getRangeAt(0).cloneRange(),
-		});
+			range: selectedRange,
+		};
+		setSelectionAction((previous) => previous && previous.excerpt.messageId === messageId &&
+			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
+			? previous : next);
 	}, [excerptsEnabled, snapshot.conversationId]);
+	useEffect(() => {
+		if (!excerptsEnabled) return;
+		const capture = (event: Event) => captureTranscriptSelection(event);
+		const selectionChanged = () => {
+			const current = window.getSelection();
+			if (!current || current.isCollapsed || !current.rangeCount || !selectionRangesEqual(current.getRangeAt(0), dismissedSelection.current?.range)) dismissedSelection.current = null;
+		};
+		const escape = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isDialogOrMenuOpen()) return;
+			if (event.repeat && dismissedEscapePress.current) { event.preventDefault(); event.stopPropagation(); return; }
+			const origin = event.composedPath()[0];
+			const target = origin instanceof Element ? origin : document.activeElement;
+			if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"], .xterm, webview, [data-browser-view]')) return;
+			const pane = scroller.current?.parentElement;
+			const toolbar = pane?.querySelector<HTMLElement>("[data-chat-selection-actions]");
+			const action = selectionActionRef.current;
+			if (!action || !toolbar || getComputedStyle(toolbar).visibility === "hidden" ||
+				(event.target instanceof Node && event.target !== document && event.target !== document.body && event.target !== document.documentElement && !pane?.contains(event.target))) return;
+			const native = window.getSelection();
+			if (!native?.rangeCount || native.isCollapsed || !selectionRangesEqual(native.getRangeAt(0), action.range)) return;
+			dismissedSelection.current = action;
+			dismissedEscapePress.current = true;
+			clearSelectionAction();
+			event.preventDefault(); event.stopPropagation();
+		};
+		const release = (event: KeyboardEvent) => { if (event.key === "Escape") dismissedEscapePress.current = false; };
+		document.addEventListener("selectionchange", selectionChanged);
+		document.addEventListener("keyup", release);
+		const blur = () => { dismissedEscapePress.current = false; };
+		window.addEventListener("blur", blur);
+		document.addEventListener("pointerup", capture);
+		document.addEventListener("keyup", capture);
+		document.addEventListener("keydown", escape, true);
+		return () => {
+			document.removeEventListener("pointerup", capture);
+			document.removeEventListener("keyup", capture);
+			document.removeEventListener("keydown", escape, true);
+			document.removeEventListener("selectionchange", selectionChanged);
+			document.removeEventListener("keyup", release);
+			window.removeEventListener("blur", blur);
+		};
+	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
@@ -2919,29 +2981,6 @@ export function Timeline({
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction]);
-	useEffect(() => {
-		if (!selectionAction || !selectionPosition?.visible) return;
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.defaultPrevented || event.key.toLowerCase() !== "l" || event.shiftKey || event.altKey ||
-				(isMacPlatform() ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)) return;
-			const toolbar = selectionButton.current;
-			const target = event.target instanceof Element ? event.target : document.activeElement;
-			if (!toolbar || isDialogOrMenuOpen() ||
-				target?.closest('input, textarea, select, [contenteditable], .xterm, webview, [data-browser-view]')) return;
-			if (target && target !== document.body && !scroller.current?.contains(target) && !toolbar.contains(target)) return;
-			const native = window.getSelection();
-			const range = native?.rangeCount ? native.getRangeAt(0) : undefined;
-			const saved = selectionAction.range;
-			if (!range || native?.isCollapsed || !saved.startContainer.isConnected || !saved.endContainer.isConnected ||
-				!scroller.current?.contains(saved.startContainer) ||
-				range.startContainer !== saved.startContainer || range.startOffset !== saved.startOffset ||
-				range.endContainer !== saved.endContainer || range.endOffset !== saved.endOffset) return;
-			event.preventDefault(); event.stopPropagation();
-			if (!event.repeat) void addSelectionToChat();
-		};
-		document.addEventListener("keydown", onKeyDown, true);
-		return () => document.removeEventListener("keydown", onKeyDown, true);
-	}, [selectionAction, selectionPosition?.visible, addSelectionToChat]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -4242,23 +4281,11 @@ export function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
-			{selectionAction ? (
-				<div
-					ref={selectionButton} data-chat-selection-actions=""
-					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
-					onMouseDown={(event) => event.preventDefault()}
-					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full")}
-				>
-					<button type="button" title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`} onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
-						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
-					</button>
-					{onAddToSideChat ? <button type="button" className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")} onClick={() => { void onAddToSideChat(selectionAction.excerpt); clearSelectionAction(); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus aria-hidden="true" className="size-3.5" /> {t("sideChat.addToSideChat")}</button> : null}
-				</div>
-			) : null}
+			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
+				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
 				ref={scroller}
-				onMouseUp={captureTranscriptSelection}
-				onKeyUp={captureTranscriptSelection}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
@@ -4334,6 +4361,7 @@ export function Timeline({
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
 									group={group}
+									harness={snapshot.harness}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
@@ -4553,6 +4581,7 @@ export function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
+	harness,
 	activityDisclosureOverrides,
 	onActivityDisclosureChange,
 	sessionId,
@@ -4590,6 +4619,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight = false,
 }: {
 	group: TimelineGroup;
+	harness: string;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
 	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
@@ -4631,6 +4661,7 @@ const TurnGroup = memo(function TurnGroup({
 	workerUpdates?: boolean;
 	tight?: boolean;
 }) {
+	const hostId = useContext(ChatHostId);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -4919,6 +4950,10 @@ const TurnGroup = memo(function TurnGroup({
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
+					failureCode={group.outcome.failureCode}
+					onConfigure={harness === "deepseek-harness" && group.outcome.failureCode === "provider_key_missing"
+						? () => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: harness, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true, startLogin: true })
+						: undefined}
 					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 					copyText={copyableMessage?.text}
@@ -5306,6 +5341,7 @@ type TimelineGroup = {
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
+		failureCode?: "provider_key_missing";
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -5531,6 +5567,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",
 				)?.summary
 				: undefined),
+			failureCode: turn.failureCode,
 		};
 	}
 
