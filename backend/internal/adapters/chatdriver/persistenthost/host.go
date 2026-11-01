@@ -637,6 +637,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer releaseLock()
+	// A record left by an earlier provider must not explain this one's exit.
+	removeProviderExit(cfg.DataDir, cfg.SessionID)
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -659,7 +661,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// Provider stderr is not part of the wire protocol. Keep only its tail so
+	// a provider that dies before answering can be explained to the daemon.
+	stderrTail := &tailBuffer{}
+	child.Stderr = stderrTail
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err
@@ -756,8 +761,10 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
+	providerExited := false
 	select {
 	case runErr = <-providerDone:
+		providerExited = true
 		reapProvider()
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
@@ -773,6 +780,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	_ = listener.Close()
 	_ = wait()
+	if providerExited && child.ProcessState != nil {
+		// Publish before the deferred descriptor removal: WaitProviderExit
+		// treats a missing descriptor as proof that no record is coming.
+		_ = writeProviderExit(cfg.DataDir, cfg.SessionID, ProviderExit{
+			State: child.ProcessState.String(), StderrTail: stderrTail.String(), ExitedAt: time.Now().UTC(),
+		})
+	}
 	return runErr
 }
 
@@ -997,8 +1011,8 @@ func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 }
 
 // watchPromptStall terminates an in-flight prompt whose adapter went silent.
-// Turn settlement lives inside the ACP adapter, and the host discards the
-// adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
+// Turn settlement lives inside the ACP adapter, and the host keeps only an
+// exit-time tail of the adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
 // class) leaves the session's Working indicator hanging with nothing to
 // observe. The watchdog gives such turns a terminal error and cancels the
 // adapter's turn. It never races forwardProvider: both relay under h.mu.
