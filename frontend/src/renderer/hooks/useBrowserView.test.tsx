@@ -1069,6 +1069,41 @@ describe("useBrowserView", () => {
 		);
 	});
 
+	it("keeps the inspector viewport width while sliding out of and back into the workspace", async () => {
+		const bridge = setupBridge();
+		const split = document.createElement("div");
+		split.className = "session-split";
+		const column = document.createElement("div");
+		column.setAttribute("data-panel", "");
+		column.dataset.slot = "inspector-container";
+		const slot = createSlot();
+		const rect = slot.getBoundingClientRect();
+		let offset = 0;
+		split.getBoundingClientRect = () => ({ ...rect, x: 0, left: 0, right: 800, width: 800 });
+		column.getBoundingClientRect = () => ({
+			...rect, x: 500 + offset, left: 500 + offset, right: 800 + offset, width: 300,
+		});
+		slot.getBoundingClientRect = () => ({
+			...rect, x: 506 + offset, left: 506 + offset, right: 800 + offset, width: 294,
+		});
+		column.appendChild(slot);
+		split.appendChild(column);
+		document.body.appendChild(split);
+
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => result.current.slotRef(slot));
+
+		for (const position of [0, 150, 300, 150, 0]) {
+			offset = position;
+			act(() => window.dispatchEvent(new Event("resize")));
+			await waitFor(() => expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({
+				rect: { x: 506 + position, y: 34, width: 294, height: 240 },
+				visible: true,
+			})));
+		}
+	});
+
 	it("re-measures after a layout transition settles, catching a position-only shift", async () => {
 		// A ResizeObserver fires on size changes only; entering pop-out / opening the
 		// inspector moves the slot to a new x without resizing it, so the transition
