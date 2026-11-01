@@ -44,7 +44,9 @@ import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, getApiBaseUrl, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { connectQueryPersistence } from "../lib/query-persistence";
+import { isRestoredQueryData } from "../lib/restored-query";
 import { cachedCloudBillingMode } from "../lib/cloud-offering";
 import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
@@ -128,18 +130,28 @@ export const Route = createFileRoute("/_shell")({
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
+		// Restoring the last launch's cache runs alongside the fetch below.
+		const restoring = usesPreviewWorkspaceData ? undefined : connectQueryPersistence(context.queryClient, getApiBaseUrl()).catch(() => undefined);
 		// Fresh on navigation, but deduped: a hover preload followed by its click,
 		// or a quick run of navigations, shares one /projects + /sessions fetch
 		// instead of one each. Mutations and CDC events invalidate regardless.
 		// A refetch of the same key (e.g. a session's refreshWorkspaces while this
 		// navigation loads) cancels this fetch. The newer fetch warms the same
 		// cache, so a cancellation must not fail the whole shell match.
-		return context.queryClient
+		const fetched = context.queryClient
 			.fetchQuery({ ...workspaceQueryOptions, staleTime: SHELL_LOADER_STALE_MS })
 			.catch((error: unknown) => {
 				if (isCancelledError(error)) return undefined;
 				throw error;
 			});
+		await restoring;
+		// A list restored from the last launch renders at once while this fetch
+		// replaces it.
+		if (isRestoredQueryData(context.queryClient.getQueryState(workspaceQueryKey))) {
+			fetched.catch(() => undefined);
+			return;
+		}
+		return fetched;
 	},
 	component: ShellLayoutWithSettings,
 });
