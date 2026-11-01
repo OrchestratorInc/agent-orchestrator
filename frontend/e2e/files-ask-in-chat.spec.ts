@@ -224,7 +224,7 @@ test.describe("Add to chat from highlighted code", () => {
 	});
 
 	test("Escape dismisses a native mouse transcript selection without focusing the log", async ({ page }) => {
-		await openChatSession(page, after, filePath, "Select this sentence with the mouse to dismiss its toolbar.", true, true);
+		await openChatSession(page, after, filePath, "Select this sentence with the mouse to dismiss its toolbar.", false, true);
 		const body = page.getByRole("log", { name: "Conversation" }).locator("[data-chat-message-body]");
 		await expect(body).toBeVisible();
 		const box = (await body.boundingBox())!;
@@ -243,7 +243,7 @@ test.describe("Add to chat from highlighted code", () => {
 
 	test("a tall chat selection flips below its first line, pins after scrolling, and keeps the disabled side-chat label", async ({ page }) => {
 		const text = Array.from({ length: 80 }, (_, i) => `Selected parent context line ${i + 1}.`).join("\n\n");
-		await openChatSession(page, after, filePath, text, true, true);
+		await openChatSession(page, after, filePath, text, false, true);
 		const log = page.getByRole("log", { name: "Conversation" });
 		await expect(log.locator("[data-chat-message-body]")).toBeVisible();
 		const timing = await log.evaluate(async (pane) => {
