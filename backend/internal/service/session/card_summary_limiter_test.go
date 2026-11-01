@@ -38,14 +38,14 @@ func TestCardSummaryLimiter(t *testing.T) {
 	if wait := update("Reading the board code", false); wait != 0 {
 		t.Fatalf("first summary held back for %v", wait)
 	}
-	now = now.Add(time.Minute)
+	now = now.Add(20 * time.Second)
 	if wait := update("Reading the board code", false); wait != 0 {
 		t.Fatalf("repeat of the accepted text held back for %v", wait)
 	}
-	if wait := update("Adding the summary field", false); wait != 2*time.Minute {
-		t.Fatalf("early summary wait = %v, want 2m", wait)
+	if wait := update("Adding the summary field", false); wait != 40*time.Second {
+		t.Fatalf("early summary wait = %v, want 40s", wait)
 	}
-	now = now.Add(2 * time.Minute)
+	now = now.Add(40 * time.Second)
 	if wait := update("Adding the summary field", false); wait != 0 {
 		t.Fatalf("summary after the interval held back for %v", wait)
 	}
