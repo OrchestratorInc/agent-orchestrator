@@ -1531,6 +1531,23 @@ describe("SessionView", () => {
 		expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2);
 	});
 
+	it("refetches the conversation and board after opening Chat only when the view woke the agent", async () => {
+		workerSession("sess-1").mode = "chat";
+		const answers: Array<(result: { data?: { woke: boolean }; error: undefined }) => void> = [];
+		chatViewPostMock.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
+		const view = render(<SessionView sessionId="sess-1" />);
+		const invalidate = vi.spyOn(view.client, "invalidateQueries");
+		await waitFor(() => expect(answers).toHaveLength(1));
+		await act(async () => { answers[0]({ data: { woke: false }, error: undefined }); });
+		expect(invalidate).not.toHaveBeenCalled();
+
+		view.rerender(<SessionView sessionId="sess-2" />);
+		view.rerender(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(answers.length).toBeGreaterThanOrEqual(3));
+		await act(async () => { for (const answer of answers.slice(1)) answer({ data: { woke: true }, error: undefined }); });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+	});
+
 	it("retries a failed automatic wake only after reopening Chat", async () => {
 		workerSession("sess-1").mode = "chat";
 		chatViewPostMock.mockReset()

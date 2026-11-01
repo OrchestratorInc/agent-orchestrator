@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -73,14 +74,15 @@ type fakeConversationService struct {
 	reviewOwner       domain.ConversationOwner
 	reviewRequestID   string
 	reviewInterrupted bool
+	viewWakes         bool
 }
 
-func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domain.SessionID, viewID string, active bool) error {
+func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domain.SessionID, viewID string, active bool) (bool, error) {
 	f.viewSessionID = sessionID
 	f.viewID = viewID
 	f.viewActive = active
 	f.viewCalls++
-	return nil
+	return active && f.viewWakes, nil
 }
 
 func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
@@ -106,7 +108,7 @@ func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
 }
 
 func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
-	service := &fakeConversationService{}
+	service := &fakeConversationService{viewWakes: true}
 	server := conversationTestServer(t, service)
 	for _, tc := range []struct {
 		body       string
@@ -117,8 +119,8 @@ func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
 		{body: `{"viewId":"","active":true}`, status: http.StatusBadRequest},
 		{body: `{"viewId":"viewer-1"}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
 		{body: `{"viewId":"viewer-1","active":null}`, status: http.StatusBadRequest, code: "CHAT_VIEW_ACTIVE_INVALID"},
-		{body: `{"viewId":"viewer-1","active":true}`, status: http.StatusNoContent, wantActive: true},
-		{body: `{"viewId":"viewer-1","active":false}`, status: http.StatusNoContent},
+		{body: `{"viewId":"viewer-1","active":true}`, status: http.StatusOK, wantActive: true},
+		{body: `{"viewId":"viewer-1","active":false}`, status: http.StatusOK},
 	} {
 		resp, err := http.Post(server.URL+"/api/v1/sessions/p1-1/chat-view", "application/json", bytes.NewBufferString(tc.body))
 		if err != nil {
@@ -135,8 +137,13 @@ func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
 		if tc.code != "" && !bytes.Contains(body, []byte(`"code":"`+tc.code+`"`)) {
 			t.Fatalf("POST %s body = %s, want code %s", tc.body, body, tc.code)
 		}
-		if tc.status == http.StatusNoContent && service.viewActive != tc.wantActive {
-			t.Fatalf("POST %s active = %v, want %v", tc.body, service.viewActive, tc.wantActive)
+		if tc.status == http.StatusOK {
+			if service.viewActive != tc.wantActive {
+				t.Fatalf("POST %s active = %v, want %v", tc.body, service.viewActive, tc.wantActive)
+			}
+			if want := fmt.Sprintf(`{"woke":%v}`, tc.wantActive); strings.TrimSpace(string(body)) != want {
+				t.Fatalf("POST %s body = %s, want %s", tc.body, body, want)
+			}
 		}
 	}
 	if service.viewCalls != 2 || service.viewSessionID != "p1-1" || service.viewID != "viewer-1" || service.viewActive {

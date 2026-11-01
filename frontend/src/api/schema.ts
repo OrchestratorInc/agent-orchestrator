@@ -7248,6 +7248,9 @@ export interface components {
             active: boolean;
             viewId: string;
         };
+        SetChatViewResponse: {
+            woke: boolean;
+        };
         SetConversationConfigOptionRequest: {
             enabled?: null | boolean;
             value?: string;
@@ -16743,12 +16746,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description No Content */
-            204: {
+            /** @description OK */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["SetChatViewResponse"];
+                };
             };
             /** @description Bad Request */
             400: {
