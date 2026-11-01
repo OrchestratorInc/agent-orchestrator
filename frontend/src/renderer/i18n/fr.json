@@ -1470,6 +1470,8 @@
 	"settings.renderMath": "Afficher les formules",
 	"settings.renderMathHint": "Affiche $…$, $$…$$, \\(…\\) et \\[…\\] comme des équations dans les chats et les aperçus Markdown. Un prix écrit avec $ peut s’afficher comme une formule.",
 	"settings.terminalCopyOnSelect": "Copier lors de la sélection",
+	"settings.projectAvatars": "Avatars des projets",
+	"settings.projectAvatars.description": "Affiche l'avatar du propriétaire du dépôt à la place de l'icône de dossier.",
 	"settings.general": "Général",
 	"settings.appearance": "Apparence",
 	"settings.privacy": "Confidentialité",

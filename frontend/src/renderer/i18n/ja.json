@@ -1443,6 +1443,8 @@
 	"settings.renderMath": "数式を表示",
 	"settings.renderMathHint": "チャットと Markdown プレビューで $…$、$$…$$、\\(…\\)、\\[…\\] を数式として表示します。$ を使った価格が数式として表示されることがあります。",
 	"settings.terminalCopyOnSelect": "選択時にコピー",
+	"settings.projectAvatars": "プロジェクトのアバター",
+	"settings.projectAvatars.description": "各プロジェクトのフォルダーアイコンの代わりにリポジトリ所有者のアバターを表示します。",
 	"settings.general": "一般",
 	"settings.appearance": "外観",
 	"settings.privacy": "プライバシー",
