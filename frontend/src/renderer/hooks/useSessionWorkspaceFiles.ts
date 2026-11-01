@@ -160,7 +160,8 @@ export function isStaleWorkspaceSnapshotError(error: unknown): boolean {
 	return error instanceof WorkspaceRequestError && error.code === "WORKSPACE_SNAPSHOT_STALE" && error.status === 409;
 }
 
-const missingWorkspaces = new Map<string, WorkspaceRequestError>();
+const missingWorkspaces = new Map<string, { error: WorkspaceRequestError; expiresAt: number }>();
+const MISSING_WORKSPACE_TTL_MS = 60_000;
 const workspaceRecoveryEpochs = new Map<string, number>();
 const missingWorkspaceKey = (sessionId: string, hostId?: string) => sessionUiKey(sessionId, hostId);
 
@@ -175,13 +176,20 @@ export function clearMissingWorkspace(sessionId: string, hostId?: string): void 
 }
 
 export function knownMissingWorkspace(sessionId: string, hostId?: string): WorkspaceRequestError | undefined {
-	return missingWorkspaces.get(missingWorkspaceKey(sessionId, hostId));
+	const key = missingWorkspaceKey(sessionId, hostId);
+	const entry = missingWorkspaces.get(key);
+	if (entry && entry.expiresAt <= Date.now()) {
+		missingWorkspaces.delete(key);
+		return undefined;
+	}
+	return entry?.error;
 }
 
 export function recordWorkspaceResult(sessionId: string, hostId: string | undefined, error: unknown, response: Response | undefined, fallback: string, epoch = workspaceRecoveryEpoch(sessionId, hostId)): WorkspaceRequestError {
 	const typed = workspaceRequestError(error, response, fallback);
 	if (isMissingWorkspaceError(typed) && epoch === workspaceRecoveryEpoch(sessionId, hostId)) {
-		missingWorkspaces.set(missingWorkspaceKey(sessionId, hostId), typed);
+		missingWorkspaces.set(missingWorkspaceKey(sessionId, hostId), { error: typed, expiresAt: Date.now() + MISSING_WORKSPACE_TTL_MS });
+		if (missingWorkspaces.size > 256) missingWorkspaces.delete(missingWorkspaces.keys().next().value!);
 	}
 	return typed;
 }

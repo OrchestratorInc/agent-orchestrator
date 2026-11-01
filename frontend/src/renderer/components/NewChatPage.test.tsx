@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
 	launchFallback: vi.fn(),
 	fallbackAction: undefined as string | undefined,
 	error: undefined as string | undefined,
+	status: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
@@ -35,6 +36,7 @@ vi.mock("./TaskComposer", () => ({
 		fallbackAction: h.fallbackAction,
 		fallbackLabel: "Create as Terminal UI",
 		error: h.error,
+		status: h.status,
 		errorAction: h.errorAction,
 		submitMode: undefined,
 		isCloudProject: false,
@@ -76,6 +78,7 @@ beforeEach(() => {
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
 	h.error = undefined;
+	h.status = undefined;
 	h.errorAction = undefined;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
@@ -83,6 +86,12 @@ beforeEach(() => {
 });
 
 describe("NewChatPage", () => {
+	it("shows a confirmed branch choice as status before the next send", () => {
+		h.status = "Branch fix/login selected for your next task.";
+		renderPage();
+		expect(screen.getByRole("status").textContent).toContain("fix/login");
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
 	it("creates the session on first send and hands its brief to the session chat", async () => {
 		let resolve!: (sessionId: string) => void;
 		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));

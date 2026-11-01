@@ -236,7 +236,7 @@ describe("TaskComposer", () => {
 		expect(choose).toBeDisabled();
 		fireEvent.change(screen.getByRole("textbox", { name: "New branch name" }), { target: { value: "ao/new-task" } });
 		fireEvent.click(choose);
-		expect(await screen.findByText("Branch ao/new-task selected. Press Start task to confirm.")).toBeInTheDocument();
+		expect(await screen.findByRole("status")).toHaveTextContent("Branch ao/new-task selected for your next task.");
 		expect(delegates).toBe(1);
 		fireEvent.click(startTask());
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-task"));

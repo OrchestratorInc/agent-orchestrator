@@ -3716,5 +3716,17 @@
 	"newTask.cloudModelsUnavailable": "클라우드에 {{agent}} 모델 목록이 없습니다. 기본값을 사용하거나 모델 ID를 입력하세요.",
 	"newTask.cloudModelsVerified": "내 클라우드 워커에서 확인됨",
 	"newTask.cloudModelUnlisted": "{{model}}은(는) 클라우드의 {{agent}} 모델 목록에 없어 실행되지 않을 수 있습니다.",
-	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용"
+	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용",
+	"newTask.savedModelUnsupported": "저장된 모델을 사용할 수 없습니다. 에이전트 기본값을 선택했습니다. 확인한 뒤 다시 시작하세요.",
+	"newTask.selectedModelUnsupported": "선택한 모델을 사용할 수 없습니다. 시작하기 전에 다른 모델을 선택하세요.",
+	"newTask.savedEffortUnsupported": "저장된 추론 수준을 사용할 수 없습니다. 에이전트 기본값을 선택했습니다. 확인한 뒤 다시 시작하세요.",
+	"newTask.selectedEffortUnsupported": "선택한 추론 수준을 사용할 수 없습니다. 시작하기 전에 다른 수준을 선택하세요.",
+	"newTask.agentNotInstalled": "이 에이전트는 설치되지 않았습니다. 에이전트 설정에서 설치한 뒤 다시 시도하세요.",
+	"newTask.branchUnresolved": "프로젝트 설정에서 기준 브랜치를 선택한 뒤 다시 시작하세요.",
+	"newTask.branchInUse": "이 브랜치는 다른 작업 트리에서 열려 있습니다. 이 작업에 사용할 새 브랜치를 선택하세요.",
+	"newTask.branchInUseElsewhere": "이 브랜치는 다른 곳에서 열려 있습니다. 다른 프로젝트를 선택하거나 나중에 다시 시도하세요.",
+	"newTask.openHarnessSettings": "에이전트 설정 열기",
+	"newTask.chooseNewBranch": "새 브랜치 선택",
+	"newTask.newBranchPrompt": "새 브랜치 이름",
+	"newTask.newBranchReady": "다음 작업에 사용할 {{branch}} 브랜치를 선택했습니다."
 }

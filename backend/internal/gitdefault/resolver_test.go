@@ -58,29 +58,16 @@ func TestResolveFallsBackToCachedHeadWhenRemoteIsOffline(t *testing.T) {
 	}
 }
 
-func TestResolveFallsBackToCommittedCurrentBranchWithoutRemote(t *testing.T) {
+func TestResolveNeverFallsBackToCurrentOrConventionalBranch(t *testing.T) {
 	repo := localRepo(t, "main")
 	runGit(t, repo, "switch", "-c", "feature/temporary")
-	runGit(t, repo, "commit", "--allow-empty", "-m", "feature work")
 
-	got, err := New("", nil).Resolve(context.Background(), context.Background(), repo)
-	if err != nil || got.Branch != "feature/temporary" || got.Ref != "refs/heads/feature/temporary" || got.Source != SourceCurrentBranch {
-		t.Fatalf("Resolve = %#v, %v, want committed current branch", got, err)
-	}
-}
-
-func TestResolveFallsBackToTrackedCurrentBranchWithoutRemoteHead(t *testing.T) {
-	origin, repo := remoteRepo(t, "main")
-	runGit(t, repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
-	runGit(t, origin, "symbolic-ref", "HEAD", "refs/heads/missing")
-	got, err := New("", nil).Resolve(context.Background(), context.Background(), repo)
-	if err != nil || got.Branch != "main" || got.Ref != "refs/remotes/origin/main" || got.Source != SourceCurrentBranch {
-		t.Fatalf("Resolve = %#v, %v, want tracked current branch", got, err)
-	}
-	runGit(t, repo, "checkout", "--detach")
-	_, err = New("", nil).Resolve(context.Background(), context.Background(), repo)
+	_, err := New("", nil).Resolve(context.Background(), context.Background(), repo)
 	if !errors.Is(err, ErrUnresolved) {
-		t.Fatalf("detached Resolve error = %v, want ErrUnresolved", err)
+		t.Fatalf("Resolve error = %v, want ErrUnresolved", err)
+	}
+	if !strings.Contains(err.Error(), "no remote or AO-recorded default") {
+		t.Fatalf("Resolve error = %v, want missing authoritative metadata detail", err)
 	}
 }
 

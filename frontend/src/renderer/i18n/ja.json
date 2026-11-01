@@ -3716,5 +3716,17 @@
 	"newTask.cloudModelsUnavailable": "クラウドには {{agent}} のモデル一覧がありません。既定を使うか、モデル ID を入力してください。",
 	"newTask.cloudModelsVerified": "あなたのクラウドワーカーで確認済み",
 	"newTask.cloudModelUnlisted": "{{model}} はクラウドの {{agent}} のモデル一覧にないため、動作しない可能性があります。",
-	"settings.models.useConfiguredDefault": "プロジェクトまたはエージェントの既定を使用"
+	"settings.models.useConfiguredDefault": "プロジェクトまたはエージェントの既定を使用",
+	"newTask.savedModelUnsupported": "保存済みのモデルは利用できません。エージェントの既定値を選択しました。確認してから再開してください。",
+	"newTask.selectedModelUnsupported": "選択したモデルは利用できません。開始前に別のモデルを選んでください。",
+	"newTask.savedEffortUnsupported": "保存済みの推論レベルは利用できません。エージェントの既定値を選択しました。確認してから再開してください。",
+	"newTask.selectedEffortUnsupported": "選択した推論レベルは利用できません。開始前に別のレベルを選んでください。",
+	"newTask.agentNotInstalled": "このエージェントは未インストールです。エージェント設定からインストールして再試行してください。",
+	"newTask.branchUnresolved": "プロジェクト設定でベースブランチを選択してから再開してください。",
+	"newTask.branchInUse": "このブランチは別のワークツリーで開かれています。このタスク用に新しいブランチを選んでください。",
+	"newTask.branchInUseElsewhere": "このブランチは別の場所で開かれています。別のプロジェクトを選ぶか、後で再試行してください。",
+	"newTask.openHarnessSettings": "エージェント設定を開く",
+	"newTask.chooseNewBranch": "新しいブランチを選ぶ",
+	"newTask.newBranchPrompt": "新しいブランチ名",
+	"newTask.newBranchReady": "次のタスク用にブランチ {{branch}} を選択しました。"
 }

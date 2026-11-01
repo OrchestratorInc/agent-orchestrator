@@ -3785,5 +3785,17 @@
 	"newTask.cloudModelsUnavailable": "La nube no tiene una lista de modelos para {{agent}}. Use el predeterminado o introduzca un ID de modelo.",
 	"newTask.cloudModelsVerified": "Verificado en sus workers en la nube",
 	"newTask.cloudModelUnlisted": "{{model}} no está en la lista de modelos de {{agent}} en la nube, así que es posible que no funcione.",
-	"settings.models.useConfiguredDefault": "Usar el predeterminado del proyecto o del agente"
+	"settings.models.useConfiguredDefault": "Usar el predeterminado del proyecto o del agente",
+	"newTask.savedModelUnsupported": "El modelo guardado no está disponible. Se seleccionó el predeterminado del agente. Revísalo y vuelve a iniciar.",
+	"newTask.selectedModelUnsupported": "El modelo seleccionado no está disponible. Elige otro modelo antes de iniciar.",
+	"newTask.savedEffortUnsupported": "El esfuerzo guardado no está disponible. Se seleccionó el predeterminado del agente. Revísalo y vuelve a iniciar.",
+	"newTask.selectedEffortUnsupported": "El esfuerzo seleccionado no está disponible. Elige otro nivel antes de iniciar.",
+	"newTask.agentNotInstalled": "Este agente no está instalado. Abre la configuración de agentes para instalarlo y vuelve a intentarlo.",
+	"newTask.branchUnresolved": "Elige una rama base en la configuración del proyecto y vuelve a iniciar.",
+	"newTask.branchInUse": "Esa rama está abierta en otro árbol de trabajo. Elige una rama nueva para iniciar esta tarea.",
+	"newTask.branchInUseElsewhere": "Esa rama está abierta en otro lugar. Elige otro proyecto o inténtalo más tarde.",
+	"newTask.openHarnessSettings": "Abrir configuración de agentes",
+	"newTask.chooseNewBranch": "Elegir rama nueva",
+	"newTask.newBranchPrompt": "Nombre de la rama nueva",
+	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea."
 }

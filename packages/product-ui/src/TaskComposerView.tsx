@@ -113,6 +113,7 @@ export type TaskComposerAttachments = {
 export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
+	status?: string;
 	errorAction?: { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } };
 	isSubmitting: boolean;
 	// A string renders as plain warning text; a node lets the host render its
@@ -382,7 +383,7 @@ export function TaskComposerView({
 				<p className="px-4 pb-2 text-caption text-destructive" role="alert">{attachments.error}</p>
 			)}
 
-			{(submission.error || submission.modelWarning) && (
+			{(submission.error || submission.status || submission.modelWarning) && (
 				<div className="px-3 pb-2">
 					{submission.error && (
 						<div
@@ -415,6 +416,7 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
+					{submission.status && <p className="text-caption text-foreground" role="status">{submission.status}</p>}
 					{!submission.error && submission.modelWarning ? (
 						typeof submission.modelWarning === "string"
 							? <p className="text-caption text-warning" role="status">{submission.modelWarning}</p>

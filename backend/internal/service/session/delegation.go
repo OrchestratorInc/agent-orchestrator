@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -83,6 +84,11 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	if in.RequestedMode != "" && !in.RequestedMode.Valid() {
 		return DelegateTaskOutcome{}, apierr.Invalid("INVALID_SESSION_MODE", "mode must be chat or tui", nil)
 	}
+	if in.Branch != "" && project.Kind.WithDefault() != domain.ProjectKindScratch {
+		if err := s.requireUnusedTaskBranch(ctx, project, in.Branch); err != nil {
+			return DelegateTaskOutcome{}, err
+		}
+	}
 	prompt := in.Brief
 	if strings.TrimSpace(prompt) == "" {
 		prompt = ""
@@ -96,6 +102,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		Kind:              domain.KindWorker,
 		Harness:           in.RequestedAgent,
 		Branch:            in.Branch,
+		RequireNewBranch:  in.Branch != "",
 		Prompt:            prompt,
 		DisplayName:       delegatedTaskDisplayName(in.Brief),
 		NameFromPrompt:    prompt != "" && in.Branch == "" && project.Kind.WithDefault() != domain.ProjectKindScratch,
@@ -124,6 +131,33 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}
 	return DelegateTaskOutcome{WorkerID: worker.ID}, nil
+}
+
+func (s *Service) requireUnusedTaskBranch(ctx context.Context, project domain.ProjectRecord, branch string) error {
+	paths := []string{project.Path}
+	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
+		repos, err := s.store.ListWorkspaceRepos(ctx, project.ID)
+		if err != nil {
+			return err
+		}
+		for _, repo := range repos {
+			if repo.GitStatus.WithDefault() == domain.GitStatusReady {
+				paths = append(paths, filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath)))
+			}
+		}
+	}
+	for _, path := range paths {
+		refs, err := gitWorkspaceOutput(ctx, path, "for-each-ref", "--format=%(refname)", "refs/heads/", "refs/remotes/")
+		if err != nil {
+			return fmt.Errorf("check task branch in %q: %w", path, err)
+		}
+		for _, ref := range strings.Fields(refs) {
+			if ref == "refs/heads/"+branch || strings.HasPrefix(ref, "refs/remotes/") && strings.HasSuffix(ref, "/"+branch) {
+				return apierr.Conflict("BRANCH_ALREADY_EXISTS", "Choose a branch name that does not already exist locally or on a remote", nil)
+			}
+		}
+	}
+	return nil
 }
 
 func optionalTuningValue(value *string) (string, bool) {

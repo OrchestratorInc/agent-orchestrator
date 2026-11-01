@@ -333,6 +333,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
 			</div> : null}
 		</div>
+	) : task.status ? (
+		<p role="status" className="px-1 text-xs text-foreground">{task.status}</p>
 	) : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
 			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>

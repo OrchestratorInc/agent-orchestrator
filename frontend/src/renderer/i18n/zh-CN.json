@@ -3698,5 +3698,17 @@
 	"newTask.cloudModelsUnavailable": "云端没有 {{agent}} 的模型列表。请使用默认值或输入模型 ID。",
 	"newTask.cloudModelsVerified": "已在你的云端工作节点上验证",
 	"newTask.cloudModelUnlisted": "{{model}} 不在云端 {{agent}} 的模型列表中，可能无法运行。",
-	"settings.models.useConfiguredDefault": "使用项目或智能体默认值"
+	"settings.models.useConfiguredDefault": "使用项目或智能体默认值",
+	"newTask.savedModelUnsupported": "保存的模型不可用。已选择代理默认模型。请检查后重新开始。",
+	"newTask.selectedModelUnsupported": "所选模型不可用。开始前请选择其他模型。",
+	"newTask.savedEffortUnsupported": "保存的推理强度不可用。已选择代理默认值。请检查后重新开始。",
+	"newTask.selectedEffortUnsupported": "所选推理强度不可用。开始前请选择其他级别。",
+	"newTask.agentNotInstalled": "此代理尚未安装。请打开代理设置进行安装，然后重试。",
+	"newTask.branchUnresolved": "请在项目设置中选择基础分支，然后重新开始。",
+	"newTask.branchInUse": "该分支已在另一个工作树中打开。请为此任务选择新分支。",
+	"newTask.branchInUseElsewhere": "该分支已在其他位置打开。请选择其他项目或稍后重试。",
+	"newTask.openHarnessSettings": "打开代理设置",
+	"newTask.chooseNewBranch": "选择新分支",
+	"newTask.newBranchPrompt": "新分支名称",
+	"newTask.newBranchReady": "已为下一个任务选择分支 {{branch}}。"
 }

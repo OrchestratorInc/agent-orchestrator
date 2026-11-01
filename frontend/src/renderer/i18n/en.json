@@ -3697,5 +3697,17 @@
 	"newTask.cloudModelsUnavailable": "Cloud has no model list for {{agent}}. Use the default or enter a model ID.",
 	"newTask.cloudModelsVerified": "Verified on your Cloud workers",
 	"newTask.cloudModelUnlisted": "{{model}} isn't in Cloud's model list for {{agent}}, so it may not run.",
-	"settings.models.useConfiguredDefault": "Use project or agent default"
+	"settings.models.useConfiguredDefault": "Use project or agent default",
+	"newTask.savedModelUnsupported": "The saved model is unavailable. The agent default is selected. Review it and start again.",
+	"newTask.selectedModelUnsupported": "The selected model is unavailable. Choose another model before starting.",
+	"newTask.savedEffortUnsupported": "The saved effort is unavailable. The agent default is selected. Review it and start again.",
+	"newTask.selectedEffortUnsupported": "The selected effort is unavailable. Choose another level before starting.",
+	"newTask.agentNotInstalled": "This agent is not installed. Open Agent Harnesses settings to install it, then try again.",
+	"newTask.branchUnresolved": "Choose a base branch in project settings, then start again.",
+	"newTask.branchInUse": "That branch is open in another worktree. Choose a new branch to start this task.",
+	"newTask.branchInUseElsewhere": "That branch is open elsewhere. Choose another project or try again later.",
+	"newTask.openHarnessSettings": "Open Agent Harnesses",
+	"newTask.chooseNewBranch": "Choose new branch",
+	"newTask.newBranchPrompt": "New branch name",
+	"newTask.newBranchReady": "Branch {{branch}} selected for your next task."
 }

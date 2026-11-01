@@ -83,6 +83,20 @@ describe("missing workspace boundary", () => {
 		recordWorkspaceResult(sessionId, undefined, error, new Response(null, { status: 404 }), "missing", epoch);
 		expect(knownMissingWorkspace(sessionId)).toBeUndefined();
 	});
+	it("expires a missing folder result so restored folders can be read again", async () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const sessionId = "restored-folder";
+		try {
+			recordWorkspaceResult(sessionId, undefined, { code: "PROJECT_FOLDER_MISSING", message: "missing" }, new Response(null, { status: 404 }), "missing");
+			expect(knownMissingWorkspace(sessionId)?.code).toBe("PROJECT_FOLDER_MISSING");
+			now.mockReturnValue(61_001);
+			expect(knownMissingWorkspace(sessionId)).toBeUndefined();
+		} finally {
+			now.mockRestore();
+			clearMissingWorkspace(sessionId);
+		}
+	});
 });
 
 it("recognizes only the typed stale snapshot conflict", () => {

@@ -173,6 +173,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
+	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
 	const [branchDraft, setBranchDraft] = useState("");
@@ -180,6 +181,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		setBranchOverride("");
 		setBranchDraft("");
 		setErrorAction(undefined);
+		setStatus(undefined);
 	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
@@ -413,22 +415,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// (the single source), with readiness derived from the user's provider connections.
 	const cloudConnectionsQuery = useProviderConnections();
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
-	const standaloneDefaultAgent = useMemo(() => {
-		if (!isStandalone || !agentCatalog) return "";
-		return (
-			buildRankedAgentOptions({
-				agents: agentCatalog.agents,
-				priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
-				fallbackAgents: [],
-			}).find(isReadyAgent)?.id ?? ""
-		);
-	}, [agentCatalog, isStandalone]);
 	const readyFallbackAgent = agentCatalog && (isStandalone || projectQuery.data) ? buildRankedAgentOptions({
 		agents: agentCatalog.agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents: [],
 	}).find(isReadyAgent)?.id ?? "" : "";
-	const configuredDefaultAgent = isStandalone ? standaloneDefaultAgent
+	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
 		: configuredProjectAgent || (isCloudProject ? "" : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
@@ -856,6 +848,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 
 		setIsSubmitting(true);
 		setError(undefined);
+		setStatus(undefined);
 		setErrorAction(undefined);
 		setFallbackAction(undefined);
 		const heldPreparation = taskPreparationRef.current;
@@ -983,6 +976,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
 				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
 					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
+				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
+					setErrorAction("choose-branch");
+					message = err.message;
 				} else if (err.code === "BRANCH_CHECKED_OUT_ELSEWHERE") {
 					if (!isCloudProject && !isStandalone) {
 						setErrorAction("choose-branch");
@@ -1008,6 +1004,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 
 	const changeAgent = (value: string) => {
 		setError(undefined);
+		setStatus(undefined);
 		setErrorAction(undefined);
 		setBranchOverride("");
 		if (selectedAgent) {
@@ -1119,6 +1116,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
 		error,
+		status,
 		errorAction: errorAction === "install-agent" ? {
 			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
 			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
@@ -1133,7 +1131,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				if (!branchDraft.trim()) return;
 				setBranchOverride(branchDraft.trim());
 				setErrorAction(undefined);
-				setError(t("newTask.newBranchReady", { branch: branchDraft.trim(), defaultValue: "Branch {{branch}} selected. Press Start task to confirm." }));
+				setError(undefined);
+				setStatus(t("newTask.newBranchReady", { branch: branchDraft.trim(), defaultValue: "Branch {{branch}} selected for your next task." }));
 			},
 		} : undefined,
 		remoteLoadError,
@@ -1318,6 +1317,7 @@ export function TaskComposer({
 			submission={{
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
+				status: task.status,
 				errorAction: task.errorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,

@@ -3843,5 +3843,17 @@
 	"newTask.cloudModelsUnavailable": "В Cloud нет списка моделей для {{agent}}. Используйте модель по умолчанию или введите ID модели.",
 	"newTask.cloudModelsVerified": "Проверены на ваших воркерах Cloud",
 	"newTask.cloudModelUnlisted": "{{model}} нет в списке моделей Cloud для {{agent}}, поэтому она может не работать.",
-	"settings.models.useConfiguredDefault": "Использовать модель проекта или агента по умолчанию"
+	"settings.models.useConfiguredDefault": "Использовать модель проекта или агента по умолчанию",
+	"newTask.savedModelUnsupported": "Сохранённая модель недоступна. Выбрана модель агента по умолчанию. Проверьте выбор и запустите снова.",
+	"newTask.selectedModelUnsupported": "Выбранная модель недоступна. Перед запуском выберите другую модель.",
+	"newTask.savedEffortUnsupported": "Сохранённый уровень усилий недоступен. Выбран уровень агента по умолчанию. Проверьте выбор и запустите снова.",
+	"newTask.selectedEffortUnsupported": "Выбранный уровень усилий недоступен. Перед запуском выберите другой уровень.",
+	"newTask.agentNotInstalled": "Этот агент не установлен. Откройте настройки агентов, установите его и повторите попытку.",
+	"newTask.branchUnresolved": "Выберите базовую ветку в настройках проекта и запустите снова.",
+	"newTask.branchInUse": "Эта ветка открыта в другом рабочем дереве. Выберите новую ветку для этой задачи.",
+	"newTask.branchInUseElsewhere": "Эта ветка открыта в другом месте. Выберите другой проект или повторите попытку позже.",
+	"newTask.openHarnessSettings": "Открыть настройки агентов",
+	"newTask.chooseNewBranch": "Выбрать новую ветку",
+	"newTask.newBranchPrompt": "Имя новой ветки",
+	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи."
 }

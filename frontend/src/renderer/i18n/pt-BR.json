@@ -3785,5 +3785,17 @@
 	"newTask.cloudModelsUnavailable": "A nuvem não tem uma lista de modelos para o {{agent}}. Use o padrão ou digite um ID de modelo.",
 	"newTask.cloudModelsVerified": "Verificado nos seus workers na nuvem",
 	"newTask.cloudModelUnlisted": "{{model}} não está na lista de modelos do {{agent}} na nuvem, então pode não funcionar.",
-	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente"
+	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente",
+	"newTask.savedModelUnsupported": "O modelo salvo não está disponível. O padrão do agente foi selecionado. Revise e inicie novamente.",
+	"newTask.selectedModelUnsupported": "O modelo selecionado não está disponível. Escolha outro modelo antes de iniciar.",
+	"newTask.savedEffortUnsupported": "O esforço salvo não está disponível. O padrão do agente foi selecionado. Revise e inicie novamente.",
+	"newTask.selectedEffortUnsupported": "O esforço selecionado não está disponível. Escolha outro nível antes de iniciar.",
+	"newTask.agentNotInstalled": "Este agente não está instalado. Abra as configurações de agentes para instalá-lo e tente novamente.",
+	"newTask.branchUnresolved": "Escolha uma ramificação base nas configurações do projeto e inicie novamente.",
+	"newTask.branchInUse": "Essa ramificação está aberta em outra árvore de trabalho. Escolha uma nova ramificação para esta tarefa.",
+	"newTask.branchInUseElsewhere": "Essa ramificação está aberta em outro lugar. Escolha outro projeto ou tente mais tarde.",
+	"newTask.openHarnessSettings": "Abrir configurações de agentes",
+	"newTask.chooseNewBranch": "Escolher nova ramificação",
+	"newTask.newBranchPrompt": "Nome da nova ramificação",
+	"newTask.newBranchReady": "Ramificação {{branch}} selecionada para sua próxima tarefa."
 }

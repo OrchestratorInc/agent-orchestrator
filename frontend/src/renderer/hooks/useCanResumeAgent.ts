@@ -4,8 +4,7 @@ import {
 	useSessionInterfaceTransitionStatus,
 } from "./useSessionInterfaceTransition";
 import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
-import { apiErrorMessage } from "../lib/api-client";
-import { apiErrorCode } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { appI18n } from "../i18n";
 import { clientForSessionHost } from "../lib/host-clients";
 

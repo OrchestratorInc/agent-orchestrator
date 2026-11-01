@@ -3716,5 +3716,17 @@
 	"newTask.cloudModelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
 	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
 	"newTask.cloudModelUnlisted": "{{model}} steht nicht in der Cloud-Modellliste für {{agent}} und läuft daher möglicherweise nicht.",
-	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden"
+	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden",
+	"newTask.savedModelUnsupported": "Das gespeicherte Modell ist nicht verfügbar. Der Agentenstandard wurde ausgewählt. Prüfe ihn und starte erneut.",
+	"newTask.selectedModelUnsupported": "Das ausgewählte Modell ist nicht verfügbar. Wähle vor dem Start ein anderes Modell.",
+	"newTask.savedEffortUnsupported": "Die gespeicherte Denkstufe ist nicht verfügbar. Der Agentenstandard wurde ausgewählt. Prüfe ihn und starte erneut.",
+	"newTask.selectedEffortUnsupported": "Die ausgewählte Denkstufe ist nicht verfügbar. Wähle vor dem Start eine andere Stufe.",
+	"newTask.agentNotInstalled": "Dieser Agent ist nicht installiert. Öffne die Agenteneinstellungen, installiere ihn und versuche es erneut.",
+	"newTask.branchUnresolved": "Wähle in den Projekteinstellungen einen Basisbranch und starte erneut.",
+	"newTask.branchInUse": "Dieser Branch ist in einem anderen Arbeitsverzeichnis geöffnet. Wähle für diese Aufgabe einen neuen Branch.",
+	"newTask.branchInUseElsewhere": "Dieser Branch ist anderswo geöffnet. Wähle ein anderes Projekt oder versuche es später erneut.",
+	"newTask.openHarnessSettings": "Agenteneinstellungen öffnen",
+	"newTask.chooseNewBranch": "Neuen Branch wählen",
+	"newTask.newBranchPrompt": "Name des neuen Branches",
+	"newTask.newBranchReady": "Branch {{branch}} für die nächste Aufgabe ausgewählt."
 }

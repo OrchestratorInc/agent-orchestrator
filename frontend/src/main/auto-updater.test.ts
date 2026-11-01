@@ -1291,6 +1291,21 @@ describe("startAutoUpdates", () => {
     expect(latestInterval(intervals).delay).toBe(15 * 60 * 1000);
   });
 
+  it("backs off from the base interval when settings fail before a check", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const readUpdateSettings = vi.fn<() => Promise<UpdateSettings>>().mockRejectedValue(new Error("settings unavailable"));
+    const { module, autoUpdater } = await importAutoUpdater(readUpdateSettings);
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
   it("keeps backing off when an available update repeatedly fails to download", async () => {
     vi.useFakeTimers();
     const intervals = vi.spyOn(globalThis, "setInterval");

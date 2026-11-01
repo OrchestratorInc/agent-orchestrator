@@ -460,6 +460,7 @@ var (
 	// ErrWorkspaceBranchCheckedOutElsewhere reports the requested branch is
 	// already checked out in another worktree of the same repo.
 	ErrWorkspaceBranchCheckedOutElsewhere = errors.New("workspace: branch is already checked out in another worktree")
+	ErrWorkspaceBranchAlreadyExists       = errors.New("workspace: branch name already exists")
 	// ErrWorkspaceBranchNotFetched reports the requested branch exists nowhere
 	// reachable (no local head, no remote-tracking branch, no tag).
 	ErrWorkspaceBranchNotFetched = errors.New("workspace: branch is not fetched")
@@ -558,7 +559,8 @@ type WorkspaceConfig struct {
 	Branch        string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
-	FreshBranch bool
+	FreshBranch      bool
+	RequireNewBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -593,13 +595,14 @@ type WorkspaceInfo struct {
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
 // and child RepoPath values are absolute paths to the canonical repositories.
 type WorkspaceProjectConfig struct {
-	ProjectID     domain.ProjectID
-	SessionID     domain.SessionID
-	Kind          domain.SessionKind
-	SessionPrefix string
-	Branch        string
-	FreshBranch   bool
-	RootRepoPath  string
+	ProjectID        domain.ProjectID
+	SessionID        domain.SessionID
+	Kind             domain.SessionKind
+	SessionPrefix    string
+	Branch           string
+	FreshBranch      bool
+	RequireNewBranch bool
+	RootRepoPath     string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string

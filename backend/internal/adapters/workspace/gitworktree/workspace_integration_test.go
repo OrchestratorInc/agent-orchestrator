@@ -63,6 +63,53 @@ func TestWorkspaceIntegrationCreateRestoreDestroy(t *testing.T) {
 	}
 }
 
+func TestWorkspaceIntegrationExplicitNewBranchRejectsExistingName(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "repo"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fresh := range []bool{false, true} {
+		_, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "task", Branch: "main", FreshBranch: fresh, RequireNewBranch: true})
+		if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+			t.Fatalf("fresh=%v, err=%v, want existing branch conflict", fresh, err)
+		}
+	}
+	runGit(t, git, repo, "update-ref", "refs/remotes/origin/remote-only", "refs/heads/main")
+	_, err = ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "task", Branch: "remote-only", RequireNewBranch: true})
+	if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+		t.Fatalf("remote branch conflict = %v, want existing branch conflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "managed", "proj", "task")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected task worktree stat = %v, want absent", err)
+	}
+}
+
+func TestWorkspaceIntegrationExplicitNewBranchRejectsChildCollision(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	runGit(t, git, childRepo, "branch", "fix/login")
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "task", Kind: domain.KindWorker, Branch: "fix/login",
+		FreshBranch: true, RequireNewBranch: true, RootRepoPath: rootRepo, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{{Name: "api", RelativePath: "api", RepoPath: childRepo}},
+	})
+	if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+		t.Fatalf("child branch conflict = %v, want existing branch conflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "managed", "proj", "task")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected workspace stat = %v, want absent", err)
+	}
+}
+
 func TestWorkspaceIntegrationCancelledPreparedAddLeavesNoWorktreeOrBranch(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -401,9 +448,9 @@ func TestWorkspaceIntegrationRestoreExistingBranchDoesNotResolveDefault(t *testi
 	// only needs to reattach it and must not attempt automatic default
 	// resolution again.
 	runGit(t, git, repo, "remote", "remove", "origin")
-	probe, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "probe", Branch: "feature/new"})
-	if err != nil || probe.BaseRef != "refs/heads/main" {
-		t.Fatalf("Create from committed current branch = %#v, %v", probe, err)
+	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "probe", Branch: "feature/new"})
+	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
+		t.Fatalf("Create without remote metadata error = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
 	}
 
 	cfg.Path = created.Path
@@ -834,9 +881,15 @@ func TestWorkspaceIntegrationAutoRejectsUnmarkedRemotelessRepo(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 	ctx := context.Background()
-	created, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/proj-1"})
-	if err != nil || created.BaseRef != "refs/heads/feature/temporary" {
-		t.Fatalf("Create from committed current branch = %#v, %v", created, err)
+	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/proj-1"})
+	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
+		t.Fatalf("Create error = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
+	}
+	if !strings.Contains(err.Error(), "remote set-head") || !strings.Contains(err.Error(), repo) {
+		t.Fatalf("Create error = %v, want repository-specific remote HEAD remediation", err)
+	}
+	if out, err := exec.Command(git, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/ao/proj-1").CombinedOutput(); err == nil {
+		t.Fatalf("unresolved auto selection leaked a session branch: %s", out)
 	}
 }
 

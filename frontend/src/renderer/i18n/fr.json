@@ -3785,5 +3785,17 @@
 	"newTask.cloudModelsUnavailable": "Le cloud n’a pas de liste de modèles pour {{agent}}. Utilisez la valeur par défaut ou saisissez un identifiant de modèle.",
 	"newTask.cloudModelsVerified": "Vérifié sur vos workers cloud",
 	"newTask.cloudModelUnlisted": "{{model}} ne figure pas dans la liste de modèles cloud de {{agent}} et risque de ne pas fonctionner.",
-	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent"
+	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent",
+	"newTask.savedModelUnsupported": "Le modèle enregistré est indisponible. Le modèle par défaut de l’agent est sélectionné. Vérifiez avant de relancer.",
+	"newTask.selectedModelUnsupported": "Le modèle sélectionné est indisponible. Choisissez un autre modèle avant de démarrer.",
+	"newTask.savedEffortUnsupported": "L’effort enregistré est indisponible. La valeur par défaut de l’agent est sélectionnée. Vérifiez avant de relancer.",
+	"newTask.selectedEffortUnsupported": "L’effort sélectionné est indisponible. Choisissez un autre niveau avant de démarrer.",
+	"newTask.agentNotInstalled": "Cet agent n’est pas installé. Ouvrez les paramètres des agents pour l’installer, puis réessayez.",
+	"newTask.branchUnresolved": "Choisissez une branche de base dans les paramètres du projet, puis réessayez.",
+	"newTask.branchInUse": "Cette branche est ouverte dans un autre arbre de travail. Choisissez une nouvelle branche pour cette tâche.",
+	"newTask.branchInUseElsewhere": "Cette branche est ouverte ailleurs. Choisissez un autre projet ou réessayez plus tard.",
+	"newTask.openHarnessSettings": "Ouvrir les paramètres des agents",
+	"newTask.chooseNewBranch": "Choisir une nouvelle branche",
+	"newTask.newBranchPrompt": "Nom de la nouvelle branche",
+	"newTask.newBranchReady": "Branche {{branch}} sélectionnée pour votre prochaine tâche."
 }

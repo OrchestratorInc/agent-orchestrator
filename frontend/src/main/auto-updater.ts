@@ -2415,8 +2415,7 @@ async function awaitStartedDownload(result: UpdateCheckOutcome): Promise<void> {
 async function runAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number> {
-  let nextIntervalMs =
-    automaticUpdateTimerIntervalMs ?? AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
+  let nextIntervalMs = AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
   let failed = false;
   try {
     await runSerializedUpdaterOperation("automatic-check", async () => {
