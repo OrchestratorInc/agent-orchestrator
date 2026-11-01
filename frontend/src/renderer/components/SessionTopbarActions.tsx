@@ -95,6 +95,7 @@ export function SessionTopbarActions({
 			data-compact-actions={compactActions ? "true" : "false"}
 			data-testid="workspace-topbar-actions"
 		>
+			{session ? <SessionOwnerTag session={session} /> : null}
 			{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 			{isOrchestrator ? (
 				<>

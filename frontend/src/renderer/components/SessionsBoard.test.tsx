@@ -26,7 +26,6 @@ const {
 	postMock,
 	patchMock,
 	workspaceQueryMock,
-	boardActionsInPanelMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
 } = vi.hoisted(() => ({
@@ -37,7 +36,6 @@ const {
 	postMock: vi.fn(),
 	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	boardActionsInPanelMock: vi.fn(() => false),
 	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 	spawnCloudOrchestratorMock: vi.fn(),
 }));

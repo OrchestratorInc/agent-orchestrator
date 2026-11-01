@@ -17,7 +17,6 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => h.navigate,
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
 }));
-vi.mock("./ShellTopbar", () => ({ topbarDragStyle: undefined }));
 vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mobile-devices"], fetchDevices: async () => [] }));
 vi.mock("./chat/ChatWorkspace", () => ({
 	ChatWorkspace: (props: ChatWorkspaceProps) => {
