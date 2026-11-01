@@ -2226,6 +2226,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
+		recordUserMessage(r.Context(), recorder, sessionID(r), in.SenderSessionID, false)
+	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
 }
 

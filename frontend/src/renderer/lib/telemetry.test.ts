@@ -392,6 +392,12 @@ describe("telemetry sanitizers", () => {
 		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");
 	});
 
+	it("stamps the shared experiment cohort only when the main process knows it", () => {
+		expect(buildTelemetryContext("1.2.3", "darwin", "stable", undefined, 0)).toMatchObject({ experiment_cohort: 0 });
+		expect(buildTelemetryContext("1.2.3", "darwin", "stable", undefined, 57)).toMatchObject({ experiment_cohort: 57 });
+		expect(buildTelemetryContext("1.2.3", "darwin")).not.toHaveProperty("experiment_cohort");
+	});
+
 	it("uses v2 PostHog event names for streams that have noisy legacy producers", () => {
 		expect(postHogEventName("ao.app.active")).toBe("ao.v2.app.active");
 		expect(postHogEventName("ao.renderer.route_viewed")).toBe("ao.v2.renderer.route_viewed");

@@ -930,24 +930,49 @@ func (q *Queries) HasPendingConversationInteractions(ctx context.Context, conver
 }
 
 const incrementUsageMessageSummary = `-- name: IncrementUsageMessageSummary :exec
-INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
-SELECT ?1, 1, ?2, ?3 WHERE EXISTS (
+INSERT INTO usage_message_summary (session_id, pending_count, steer_count, send_count,
+    desktop_count, mobile_count, cli_count, first_at, last_at)
+SELECT ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7, ?8, ?9 WHERE EXISTS (
     SELECT 1 FROM sessions WHERE id = ?1 AND project_id IS NOT NULL
 )
 ON CONFLICT(session_id) DO UPDATE SET
-    pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
+    pending_count = MIN(usage_message_summary.pending_count + excluded.pending_count, 1000000000),
+    steer_count = MIN(usage_message_summary.steer_count + excluded.steer_count, 1000000000),
+    send_count = MIN(usage_message_summary.send_count + excluded.send_count, 1000000000),
+    desktop_count = MIN(usage_message_summary.desktop_count + excluded.desktop_count, 1000000000),
+    mobile_count = MIN(usage_message_summary.mobile_count + excluded.mobile_count, 1000000000),
+    cli_count = MIN(usage_message_summary.cli_count + excluded.cli_count, 1000000000),
     first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
     last_at = excluded.last_at
 `
 
 type IncrementUsageMessageSummaryParams struct {
 	SessionID string
+	Chat      int64
+	Steer     int64
+	Send      int64
+	Desktop   int64
+	Mobile    int64
+	Cli       int64
 	FirstAt   sql.NullTime
 	LastAt    sql.NullTime
 }
 
+// Adds one human message: a direct Chat message (pending_count), a steer, or
+// a `/send`, plus at most one of the surface counters. Each counter is 0 or 1.
 func (q *Queries) IncrementUsageMessageSummary(ctx context.Context, arg IncrementUsageMessageSummaryParams) error {
-	_, err := q.db.ExecContext(ctx, incrementUsageMessageSummary, arg.SessionID, arg.FirstAt, arg.LastAt)
+	_, err := q.db.ExecContext(ctx, incrementUsageMessageSummary,
+		arg.SessionID,
+		arg.Chat,
+		arg.Steer,
+		arg.Send,
+		arg.Desktop,
+		arg.Mobile,
+		arg.Cli,
+		arg.FirstAt,
+		arg.LastAt,
+	)
 	return err
 }
 

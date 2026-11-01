@@ -28,6 +28,11 @@ type SpawnConfig struct {
 	// through `ao spawn`. The daemon validates this reference and derives any
 	// inherited settings itself; callers never supply an inherited policy.
 	ParentSessionID domain.SessionID
+	// CreatedBy names an unattended source the daemon cannot infer from the
+	// other fields (tracker intake sets automation). Empty derives it: an
+	// AutomationRunID is scheduled, a parent orchestrator is orchestrator, any
+	// other parent session is automation, and everything else is user.
+	CreatedBy domain.SessionCreator
 	// TrackerProvider is the issue-tracker provider hint from the CLI's
 	// --tracker-provider flag (defaults to "github"). It is used as a fallback
 	// when the project's SCM origin cannot be classified by the configured
