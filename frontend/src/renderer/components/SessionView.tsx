@@ -2263,7 +2263,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						>
 							{browserOnly ? (
 								<span className="relative inline-flex">
-									<Globe2 aria-hidden="true" className="size-icon-md" />
+									<BrowserIcon aria-hidden="true" className="size-icon-md" />
 									{!isInspectorOpen && browserUnseen ? (
 										<span
 											aria-hidden="true"

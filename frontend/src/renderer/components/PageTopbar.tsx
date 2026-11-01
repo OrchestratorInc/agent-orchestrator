@@ -16,7 +16,7 @@ import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
  */
 
 const usesNativeDragRegion = isMacPlatform() || isLinuxPlatform();
-const dragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
+export const dragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
 const noDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
 const TopbarTrailingActionsContext = createContext<HTMLDivElement | null>(null);

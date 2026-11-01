@@ -22,7 +22,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { Button } from "./ui/button";
 import {
@@ -250,7 +250,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
 	const headerContent = <>
-		<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
+		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
 			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
 			<span className="truncate">{name}</span>
 		</span>
