@@ -265,7 +265,7 @@ func TestEmbeddedSummaryGuidanceIsLinkedFromTheCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	guidance := strings.Join(strings.Fields(string(body)), " ")
-	for _, want := range []string{"ao summary --done", "at most once a minute", "do not retry it"} {
+	for _, want := range []string{"ao summary --done", "at most once a minute", "do not retry it", "only when your system prompt has a Card Summary section"} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("summary guidance missing %q", want)
 		}

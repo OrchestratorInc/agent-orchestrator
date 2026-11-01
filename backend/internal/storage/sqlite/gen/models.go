@@ -173,6 +173,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	CardSummaries        bool
 }
 
 type Automation struct {

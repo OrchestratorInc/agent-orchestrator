@@ -13,6 +13,9 @@ UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1;
 -- name: SetComputerUse :exec
 UPDATE app_settings SET computer_use = ?, updated_at = ? WHERE id = 1;
 
+-- name: SetCardSummaries :exec
+UPDATE app_settings SET card_summaries = ?, updated_at = ? WHERE id = 1;
+
 -- name: SetSessionRetentionDays :exec
 UPDATE app_settings SET session_retention_days = ?, updated_at = ? WHERE id = 1;
 
