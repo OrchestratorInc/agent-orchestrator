@@ -37,6 +37,7 @@ var expectedUsageTableColumns = map[string][]string{
 		// more than the adjacency is worth.
 		"billing_provider_source",
 		"service_tier",
+		"provider_message_id",
 	},
 }
 
