@@ -62,6 +62,19 @@ type pendingNudge struct {
 	// merge-conflict nudge (see ApplyPRObservation) — every other nudge type
 	// keeps the ordinary Nudge gate.
 	urgent bool
+	// items and build, when set, make this one message covering several
+	// independently deduped items (the review-feedback batch). key/sig/msg are
+	// then unused: build receives which items are still due and renders only
+	// those.
+	items []nudgeItem
+	build func(due []bool) string
+}
+
+// nudgeItem is one reaction-dedup slot: its key and the signature that, once
+// stored, marks it delivered.
+type nudgeItem struct {
+	key string
+	sig string
 }
 
 // ApplyPRObservation reacts to a fetched PR observation after the PR service has
@@ -200,44 +213,47 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			}
 		}
 
-		if hasUnresolvedComments(o.Comments) {
-			comments := unresolvedReviewComments(o.Comments)
-			for _, comment := range comments {
-				if !comment.AutoInjectReview {
+		// Every review-feedback item that is due goes out as ONE message per PR.
+		// A review lands on the SCM atomically (body plus all inline comments),
+		// so one observation already holds the full set; sending each comment as
+		// its own message made a chat worker start a turn on the first comment,
+		// push and request a re-review before it had seen the rest. Dedup stays
+		// per item (see commentNudgeKey), so the batch carries only the items
+		// not yet delivered and each keeps its own attempt budget.
+		var feedback reviewFeedback
+		feedback.allReviews = reviews
+		for _, comment := range unresolvedReviewComments(o.Comments) {
+			if !comment.AutoInjectReview {
+				continue
+			}
+			sig := reviewCommentsSignature([]ports.PRCommentObservation{comment})
+			if sig == "" {
+				sig = string(o.Review)
+			}
+			feedback.items = append(feedback.items, nudgeItem{key: commentNudgeKey(o.URL, comment), sig: sig})
+			feedback.comments = append(feedback.comments, comment)
+		}
+		if o.Review == domain.ReviewChangesRequest {
+			for _, review := range reviews {
+				if review.State != domain.ReviewChangesRequest || !review.AutoInjectReview {
 					continue
 				}
-				commentSlice := []ports.PRCommentObservation{comment}
-				msg := formatReviewCommentsMessage(commentSlice)
+				feedback.items = append(feedback.items, nudgeItem{key: "review:" + o.URL + ":" + review.ID, sig: string(review.State)})
+				feedback.reviews = append(feedback.reviews, review)
+			}
+		}
+		if len(feedback.items) > 0 {
+			feedback.aoReviewIDs = m.aoReviewIDs(ctx, id, o.URL)
+			nudges = append(nudges, pendingNudge{items: feedback.items, build: func(due []bool) string {
+				msg := feedback.format(due)
 				if ident != "your PR" {
 					msg = strings.Replace(msg, "your PR", ident, 1)
 				}
 				if o.URL != "" {
 					msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
 				}
-				sig := reviewCommentsSignature(commentSlice)
-				if sig == "" {
-					sig = string(o.Review)
-				}
-				// Per comment, like the review loop below: a shared key is a
-				// shared signature slot and a shared attempt budget.
-				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
-			}
-		}
-
-		if o.Review == domain.ReviewChangesRequest {
-			for _, review := range reviews {
-				if review.State != domain.ReviewChangesRequest || !review.AutoInjectReview {
-					continue
-				}
-				msg := formatReviewChangesRequestedMessage(review)
-				if ident != "your PR" {
-					msg = strings.Replace(msg, "your PR", ident, 1)
-				}
-				if o.URL != "" && review.URL == "" {
-					msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
-				}
-				nudges = append(nudges, pendingNudge{key: "review:" + o.URL + ":" + review.ID, sig: string(review.State), msg: msg, maxAttempts: reviewMaxNudge})
-			}
+				return msg
+			}, maxAttempts: reviewMaxNudge})
 		}
 	}
 
@@ -273,7 +289,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// other deferred read errors.
 
 	for _, n := range nudges {
-		if _, err := m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent); err != nil {
+		var err error
+		if n.build != nil {
+			_, err = m.sendBatchOnce(ctx, id, o.URL, n.items, n.build, n.maxAttempts, n.urgent)
+		} else {
+			_, err = m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -755,15 +777,6 @@ func prIdentity(o ports.PRObservation) string {
 	return id
 }
 
-func hasUnresolvedComments(comments []ports.PRCommentObservation) bool {
-	for _, c := range comments {
-		if !c.Resolved {
-			return true
-		}
-	}
-	return false
-}
-
 func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservation {
 	failed := make([]ports.PRCheckObservation, 0, len(checks))
 	for _, ch := range checks {
@@ -843,59 +856,218 @@ func reviewCommentsSignature(comments []ports.PRCommentObservation) string {
 	return strings.Join(parts, "\x01")
 }
 
-func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string {
+// reviewFeedback is the review-feedback batch for one PR observation. items
+// holds one dedup slot per comment (in comments order) followed by one per
+// changes-requested review (in reviews order); format renders the due subset.
+type reviewFeedback struct {
+	comments   []ports.PRCommentObservation
+	reviews    []domain.PullRequestReview
+	allReviews []domain.PullRequestReview
+	items      []nudgeItem
+	// aoReviewIDs are the provider review ids posted by the worker's own AO
+	// review passes; see aoReviewIDs.
+	aoReviewIDs []string
+}
+
+// reviewRunLister reads a worker's AO review passes. It is optional on the
+// lifecycle store so stores without AO review support keep working.
+type reviewRunLister interface {
+	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
+}
+
+// aoReviewIDs returns the provider review ids that the worker's AO review
+// passes posted on prURL. A failed lookup is logged and returns none, so the
+// feedback reads as it would for any other reviewer.
+func (m *Manager) aoReviewIDs(ctx context.Context, id domain.SessionID, prURL string) []string {
+	store, ok := m.store.(reviewRunLister)
+	if !ok {
+		return nil
+	}
+	runs, err := store.ListReviewRunsBySession(ctx, id)
+	if err != nil {
+		slog.Default().WarnContext(ctx, "lifecycle: list AO review runs for review feedback", "session", id, "err", err)
+		return nil
+	}
+	var ids []string
+	for _, run := range runs {
+		if run.PRURL == prURL && strings.TrimSpace(run.GithubReviewID) != "" {
+			ids = append(ids, strings.TrimSpace(run.GithubReviewID))
+		}
+	}
+	return ids
+}
+
+// postedByAO reports whether review was posted by one of the worker's AO
+// review passes.
+func (f reviewFeedback) postedByAO(review domain.PullRequestReview) bool {
+	for _, id := range f.aoReviewIDs {
+		if reviewMatchesID(review, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// format renders every due item as one message, grouping comments under the
+// review they were submitted with (and that review's body when AO has it), and
+// closes with the PR's total unresolved thread count so the agent fixes the
+// whole set before pushing and asking for another review.
+func (f reviewFeedback) format(due []bool) string {
+	type group struct {
+		review   *domain.PullRequestReview
+		comments []ports.PRCommentObservation
+	}
+	var groups []*group
+	byReview := map[string]*group{}
+	groupFor := func(reviewID string) *group {
+		var review *domain.PullRequestReview
+		if reviewID != "" {
+			if r, ok := findReview(f.allReviews, reviewID); ok {
+				review, reviewID = &r, r.ID
+			}
+		}
+		if g, ok := byReview[reviewID]; ok {
+			return g
+		}
+		g := &group{review: review}
+		byReview[reviewID] = g
+		groups = append(groups, g)
+		return g
+	}
+	reviewCount, commentCount := 0, 0
+	for i, r := range f.reviews {
+		if !due[len(f.comments)+i] {
+			continue
+		}
+		g := groupFor(r.ID)
+		g.review = &f.reviews[i]
+		reviewCount++
+	}
+	for i, c := range f.comments {
+		if !due[i] {
+			continue
+		}
+		g := groupFor(strings.TrimSpace(c.ReviewID))
+		g.comments = append(g.comments, c)
+		commentCount++
+	}
+
 	var msg strings.Builder
+	var parts []string
+	if reviewCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d changes-requested review(s)", reviewCount))
+	}
+	if commentCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d unresolved review comment(s)", commentCount))
+	}
+	fmt.Fprintf(&msg, "The following review feedback is on your PR as of just now, delivered together: %s. You should not need to re-fetch this data unless you need additional context.\n", strings.Join(parts, " and "))
+	n := 0
+	for _, g := range groups {
+		if g.review != nil {
+			// The body follows the review's own delivery setting: a comment
+			// still eligible for injection must not carry the body of a review
+			// whose delivery is off.
+			writeReviewHeader(&msg, *g.review, g.review.AutoInjectReview && !f.postedByAO(*g.review))
+		} else if len(groups) > 1 {
+			msg.WriteString("\n---\nOther review comments:\n")
+		}
+		for _, c := range g.comments {
+			n++
+			writeReviewComment(&msg, n, c)
+		}
+	}
+	if threads := countThreads(f.comments); threads > 0 {
+		fmt.Fprintf(&msg, "\n%d unresolved review thread(s) are open on this PR. Address all of them, push once, and resolve each thread (use its thread ID when available); if you request a re-review, request it once, after every thread is handled.", threads)
+	} else {
+		msg.WriteString("\nAddress the requested changes and push once.")
+	}
+	msg.WriteString(" You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
+	return msg.String()
+}
+
+// writeReviewHeader writes one review's header. withBody is false for a review
+// whose delivery is off, and for a review an AO review pass posted: its
+// required changes are its inline comments, and its summary holds optional
+// suggestions the worker must not take as required work, so only the inline
+// comments reach the worker.
+func writeReviewHeader(msg *strings.Builder, review domain.PullRequestReview, withBody bool) {
 	author := domain.SanitizeControlChars(review.Author)
 	if strings.TrimSpace(author) == "" {
 		author = "unknown reviewer"
 	}
-	fmt.Fprintf(&msg, "A changes-requested review from @%s is on your PR.", author)
-	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
-		fmt.Fprintf(&msg, "\n\nReview body:\n%s", body)
+	fmt.Fprintf(msg, "\n---\nReview from @%s", author)
+	if review.State == domain.ReviewChangesRequest {
+		msg.WriteString(" (changes requested)")
 	}
+	msg.WriteString(":")
 	if review.URL != "" {
-		fmt.Fprintf(&msg, "\n\nReview URL: %s", domain.SanitizeControlChars(review.URL))
+		fmt.Fprintf(msg, "\nReview URL: %s", domain.SanitizeControlChars(review.URL))
 	}
 	if review.ID != "" {
-		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
+		fmt.Fprintf(msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
 	}
-	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.")
-	return msg.String()
+	// Review and comment bodies are attacker-influenced (anyone who can review
+	// the PR) and get pasted into the agent's live pane; strip control/escape
+	// chars before formatting them.
+	if body := domain.SanitizeControlChars(review.Body); withBody && strings.TrimSpace(body) != "" {
+		fmt.Fprintf(msg, "\nReview body:\n%s", body)
+	}
+	msg.WriteString("\n")
 }
 
-func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
-	if len(comments) == 0 {
-		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here."
+func writeReviewComment(msg *strings.Builder, n int, c ports.PRCommentObservation) {
+	location := "(general)"
+	if c.File != "" {
+		location = domain.SanitizeControlChars(c.File)
+		if c.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, c.Line)
+		}
 	}
-	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
-	for i, c := range comments {
-		location := "(general)"
-		if c.File != "" {
-			location = domain.SanitizeControlChars(c.File)
-			if c.Line > 0 {
-				location = fmt.Sprintf("%s:%d", location, c.Line)
-			}
-		}
-		author := domain.SanitizeControlChars(c.Author)
-		if strings.TrimSpace(author) == "" {
-			author = "unknown reviewer"
-		}
-		// Comment bodies are attacker-influenced (anyone who can comment on the
-		// PR) and get pasted into the agent's live pane; strip control/escape
-		// chars before formatting them.
-		body := domain.SanitizeControlChars(c.Body)
-		fmt.Fprintf(&msg, "\n%d. %s (@%s):\n%s", i+1, location, author, body)
-		if c.URL != "" {
-			fmt.Fprintf(&msg, "\n   %s", domain.SanitizeControlChars(c.URL))
-		}
-		if c.ThreadID != "" {
-			fmt.Fprintf(&msg, "\n   Thread ID: %s", domain.SanitizeControlChars(c.ThreadID))
-		}
-		msg.WriteString("\n")
+	author := domain.SanitizeControlChars(c.Author)
+	if strings.TrimSpace(author) == "" {
+		author = "unknown reviewer"
 	}
-	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
-	return msg.String()
+	fmt.Fprintf(msg, "\n%d. %s (@%s):\n%s", n, location, author, domain.SanitizeControlChars(c.Body))
+	if c.URL != "" {
+		fmt.Fprintf(msg, "\n   %s", domain.SanitizeControlChars(c.URL))
+	}
+	if c.ThreadID != "" {
+		fmt.Fprintf(msg, "\n   Thread ID: %s", domain.SanitizeControlChars(c.ThreadID))
+	}
+	msg.WriteString("\n")
+}
+
+// findReview returns the persisted review a comment was submitted with. A
+// comment carries its parent review's numeric database id while GitHub review
+// rows are keyed by node id, so the review URL's #pullrequestreview-<id>
+// anchor is the join; an exact id match covers providers that use one id.
+func findReview(reviews []domain.PullRequestReview, reviewID string) (domain.PullRequestReview, bool) {
+	for _, r := range reviews {
+		if reviewMatchesID(r, reviewID) {
+			return r, true
+		}
+	}
+	return domain.PullRequestReview{}, false
+}
+
+// reviewMatchesID reports whether review is the one with the given provider
+// review id: its node id, or the numeric database id in its URL anchor.
+func reviewMatchesID(review domain.PullRequestReview, reviewID string) bool {
+	return review.ID == reviewID || strings.HasSuffix(review.URL, "#pullrequestreview-"+reviewID)
+}
+
+// countThreads counts distinct review threads among comments; a comment
+// without a thread id counts as its own thread.
+func countThreads(comments []ports.PRCommentObservation) int {
+	seen := map[string]bool{}
+	for _, c := range comments {
+		key := strings.TrimSpace(c.ThreadID)
+		if key == "" {
+			key = "comment:" + strings.TrimSpace(c.ID)
+		}
+		seen[key] = true
+	}
+	return len(seen)
 }
 
 func markdownCodeFence(s string) string {
@@ -936,6 +1108,14 @@ const (
 )
 
 func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int, urgent bool) (sendOnceOutcome, error) {
+	return m.sendBatchOnce(ctx, id, prURL, []nudgeItem{{key: key, sig: sig}}, func([]bool) string { return msg }, maxAttempts, urgent)
+}
+
+// sendBatchOnce sends one message covering every item that is still due -- not
+// yet stored with its signature and within its attempt budget -- and then
+// records each of those items as sent. build renders the message from the due
+// mask (due[i] reports items[i]); nothing is sent when no item is due.
+func (m *Manager) sendBatchOnce(ctx context.Context, id domain.SessionID, prURL string, items []nudgeItem, build func(due []bool) string, maxAttempts int, urgent bool) (sendOnceOutcome, error) {
 	if m.guard == nil {
 		return sendOnceAccounted, nil
 	}
@@ -949,13 +1129,22 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		m.react.loaded[prURL] = true
 	}
 
-	if m.react.seen[key] == sig {
+	due := make([]bool, len(items))
+	anyDue := false
+	for i, it := range items {
+		if m.react.seen[it.key] == it.sig {
+			continue
+		}
+		if maxAttempts > 0 && m.react.attempts[it.key] >= maxAttempts {
+			continue
+		}
+		due[i] = true
+		anyDue = true
+	}
+	if !anyDue {
 		return sendOnceAccounted, nil
 	}
-	attempts := m.react.attempts[key]
-	if maxAttempts > 0 && attempts >= maxAttempts {
-		return sendOnceAccounted, nil
-	}
+	msg := build(due)
 	// The guard re-reads the session immediately before pasting: the caller's
 	// NeedsInput() entry check ran before this function's dedup/persist I/O, so
 	// a permission hook could have stored blocked (or the session could have
@@ -993,8 +1182,12 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 	// in-memory dedup). A persist failure that survives until a daemon restart
 	// degrades to one extra nudge — preferred over the inverse (persist before
 	// send, then crash mid-call) which would silently lose a real nudge.
-	m.react.seen[key] = sig
-	m.react.attempts[key] = attempts + 1
+	for i, it := range items {
+		if due[i] {
+			m.react.seen[it.key] = it.sig
+			m.react.attempts[it.key]++
+		}
+	}
 	if prURL != "" {
 		if err := m.persistPRSignaturesLocked(ctx, prURL); err != nil {
 			return sendOnceAccounted, err

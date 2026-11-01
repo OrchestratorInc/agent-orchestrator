@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2251,7 +2250,7 @@ func TestPRObservation_ReviewCommentsNudgeAgent(t *testing.T) {
 		t.Fatalf("want review nudge, got %v", msg.msgs)
 	}
 	for _, want := range []string{
-		"The following 1 unresolved review comment(s)",
+		"1 unresolved review comment(s)",
 		"foo.go:12 (@alice):",
 		"fix this",
 		"https://github.com/o/r/pull/1#discussion_r1",
@@ -4886,10 +4885,11 @@ func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	}
 }
 
-// Each unresolved comment gets its own dedup slot. Sharing one key per PR made
-// every poll re-send whichever comments were not the most recent signature
-// written, and made them share the reviewMaxNudge budget so a PR with more
-// comments than that could never deliver the last of them.
+// Each unresolved comment keeps its own dedup slot even though the comments are
+// delivered together. Sharing one key per PR made every poll re-send whichever
+// comments were not the most recent signature written, and made them share the
+// reviewMaxNudge budget so a PR with more comments than that could never
+// deliver the last of them.
 func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -4911,22 +4911,117 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) != len(comments) {
-		t.Fatalf("first poll sent %d nudges, want one per comment (%d)", len(msg.msgs), len(comments))
+	if len(msg.msgs) != 1 {
+		t.Fatalf("first poll sent %d nudges, want one batch: %v", len(msg.msgs), msg.msgs)
 	}
 	for _, c := range comments {
-		if !slices.ContainsFunc(msg.msgs, func(m string) bool { return strings.Contains(m, "finding "+c.ID) }) {
-			t.Fatalf("comment %s never nudged; the attempt budget is shared", c.ID)
+		if !strings.Contains(msg.msgs[0], "finding "+c.ID) {
+			t.Fatalf("comment %s missing from the batch:\n%s", c.ID, msg.msgs[0])
 		}
 	}
 
-	sent := len(msg.msgs)
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) != sent {
-		t.Fatalf("second poll re-sent %d nudges for unchanged comments:\n%v",
-			len(msg.msgs)-sent, msg.msgs[sent:])
+	if len(msg.msgs) != 1 {
+		t.Fatalf("second poll re-sent unchanged comments:\n%v", msg.msgs[1:])
+	}
+
+	// A later comment goes out on its own; already-delivered ones stay deduped.
+	st.comments["pr1"] = append(comments, domain.PullRequestComment{
+		ID: "late", ThreadID: "T2", Author: "alice", File: "bar.go", Line: 3, Body: "late finding", AutoInjectReview: true,
+	})
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want one more batch for the new comment, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	if !strings.Contains(msg.msgs[1], "late finding") || strings.Contains(msg.msgs[1], "finding 1\n") {
+		t.Fatalf("second batch should carry only the new comment:\n%s", msg.msgs[1])
+	}
+	if !strings.Contains(msg.msgs[1], "2 unresolved review thread(s) are open") {
+		t.Fatalf("second batch should count every open thread, not just the new one:\n%s", msg.msgs[1])
+	}
+}
+
+// One review with several inline comments reaches the agent as a single
+// message carrying the review body and every comment, so a chat worker does not
+// start a fix-push-rereview turn on the first comment before seeing the rest.
+func TestPRObservation_ReviewWithInlineCommentsIsOneBatch(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.reviews["pr1"] = []domain.PullRequestReview{{
+		ID: "PRR_node", Author: "reviewer", State: domain.ReviewNone,
+		URL: "https://github.com/o/r/pull/1#pullrequestreview-55", Body: "Three problems found.", AutoInjectReview: true,
+	}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "55", Author: "reviewer", File: "a.go", Line: 1, Body: "first", AutoInjectReview: true},
+		{ID: "c2", ThreadID: "T2", ReviewID: "55", Author: "reviewer", File: "b.go", Line: 2, Body: "second", AutoInjectReview: true},
+		{ID: "c3", ThreadID: "T3", ReviewID: "55", Author: "reviewer", File: "c.go", Line: 3, Body: "third", AutoInjectReview: true},
+	}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Number: 1, Title: "t"}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{
+		"PR #1",
+		"3 unresolved review comment(s)",
+		"Review from @reviewer:",
+		"Review body:\nThree problems found.",
+		"1. a.go:1 (@reviewer):\nfirst",
+		"2. b.go:2 (@reviewer):\nsecond",
+		"3. c.go:3 (@reviewer):\nthird",
+		"3 unresolved review thread(s) are open on this PR. Address all of them, push once",
+		"request it once, after every thread is handled",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "Three problems found.") != 1 {
+		t.Fatalf("review body should appear once:\n%s", got)
+	}
+}
+
+// A changes-requested review and its inline comments share one message, and
+// both kinds of item are recorded so neither is re-sent on the next poll.
+func TestPRObservation_ChangesRequestedReviewAndCommentsShareOneBatch(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.reviews["pr1"] = []domain.PullRequestReview{{
+		ID: "PRR_cr", Author: "alice", State: domain.ReviewChangesRequest,
+		URL: "https://github.com/o/r/pull/1#pullrequestreview-77", Body: "Please rework this.", AutoInjectReview: true,
+	}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "77", Author: "alice", File: "a.go", Line: 4, Body: "inline one", AutoInjectReview: true},
+		{ID: "c2", ThreadID: "T2", ReviewID: "77", Author: "alice", File: "a.go", Line: 9, Body: "inline two", AutoInjectReview: true},
+	}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{"1 changes-requested review(s) and 2 unresolved review comment(s)", "(changes requested)", "Review ID: PRR_cr", "inline one", "inline two"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "Please rework this.") != 1 || strings.Count(got, "Review from @alice") != 1 {
+		t.Fatalf("review header should appear once:\n%s", got)
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("re-observation re-sent the batch: %v", msg.msgs[1:])
 	}
 }
 
@@ -4968,5 +5063,121 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 				t.Fatalf("idle proof = %v, want %v", got.LastActivityAt, want)
 			}
 		})
+	}
+}
+
+// aoRunStore adds the worker's AO review passes to the lifecycle fake.
+type aoRunStore struct {
+	*fakeStore
+	runs []domain.ReviewRun
+}
+
+func (s *aoRunStore) ListReviewRunsBySession(_ context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	var out []domain.ReviewRun
+	for _, run := range s.runs {
+		if run.SessionID == id {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+// A review an AO review pass posted keeps its inline comments, thread IDs and
+// URLs in the batch, but not its summary: the reviewer's required changes are
+// its inline comments, and the summary's optional suggestions must not read as
+// required work. Another reviewer's body on the same PR still comes through.
+func TestPRObservation_AOReviewBatchLeavesOutItsSummary(t *testing.T) {
+	st := &aoRunStore{fakeStore: newFakeStore()}
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	st.sessions["mer-1"] = working("mer-1")
+	st.runs = []domain.ReviewRun{
+		{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, GithubReviewID: "77"},
+		// Another PR's pass with the same database id must not match.
+		{ID: "run-2", SessionID: "mer-1", PRURL: "pr2", Status: domain.ReviewRunComplete, GithubReviewID: "88"},
+	}
+	st.reviews["pr1"] = []domain.PullRequestReview{
+		{ID: "PRR_ao", Author: "me", State: domain.ReviewChangesRequest, URL: "https://github.com/o/r/pull/1#pullrequestreview-77", Body: "Optional: rename x.", AutoInjectReview: true},
+		{ID: "PRR_human", Author: "alice", State: domain.ReviewNone, URL: "https://github.com/o/r/pull/1#pullrequestreview-88", Body: "Human summary.", AutoInjectReview: true},
+	}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "77", Author: "me", File: "a.go", Line: 4, Body: "nil check", URL: "https://github.com/o/r/pull/1#discussion_r1", AutoInjectReview: true},
+		{ID: "c2", ThreadID: "T2", ReviewID: "88", Author: "alice", File: "b.go", Line: 9, Body: "typo", AutoInjectReview: true},
+	}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{
+		"Review from @me (changes requested):",
+		"Review URL: https://github.com/o/r/pull/1#pullrequestreview-77",
+		"1. a.go:4 (@me):\nnil check",
+		"https://github.com/o/r/pull/1#discussion_r1",
+		"Thread ID: T1",
+		"Review from @alice:",
+		"Review body:\nHuman summary.",
+		"typo",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Optional: rename x.") {
+		t.Fatalf("batch carried the AO review summary:\n%s", got)
+	}
+}
+
+// Without an AO pass behind it, the same review keeps its body.
+func TestPRObservation_ReviewBodyKeptWithoutAOPass(t *testing.T) {
+	st := &aoRunStore{fakeStore: newFakeStore()}
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	st.sessions["mer-1"] = working("mer-1")
+	// A cancelled pass has no provider review id.
+	st.runs = []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", Status: domain.ReviewRunCancelled}}
+	st.reviews["pr1"] = []domain.PullRequestReview{
+		{ID: "PRR_cr", Author: "alice", State: domain.ReviewChangesRequest, URL: "https://github.com/o/r/pull/1#pullrequestreview-77", Body: "Please rework this.", AutoInjectReview: true},
+	}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "77", Author: "alice", File: "a.go", Line: 4, Body: "inline one", AutoInjectReview: true},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "Review body:\nPlease rework this.") {
+		t.Fatalf("want the human review body in the batch, got %v", msg.msgs)
+	}
+}
+
+// A comment still eligible for injection does not carry the body of a parent
+// review whose own delivery is off; the comment and the review header stay.
+func TestPRObservation_ReviewBodyFollowsItsOwnDeliverySetting(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.reviews["pr1"] = []domain.PullRequestReview{{
+		ID: "PRR_off", Author: "alice", State: domain.ReviewNone,
+		URL: "https://github.com/o/r/pull/1#pullrequestreview-55", Body: "Body not to deliver.", AutoInjectReview: false,
+	}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "55", Author: "alice", File: "a.go", Line: 1, Body: "inline still on", AutoInjectReview: true},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{"Review from @alice:", "inline still on", "Thread ID: T1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Body not to deliver.") {
+		t.Fatalf("batch carried the body of a review with delivery off:\n%s", got)
 	}
 }
