@@ -10,6 +10,8 @@ import (
 // ompSessionLocked looks for OMP's per-transcript OS lock. A released lock file
 // can survive its owner, so only an actively held lock is ownership evidence.
 // Search both the original cwd folder and any AO copy by the same native id.
+// OMP 18.14.0 leaves no held lock after ACP load or a completed prompt, so this
+// cannot detect every idle CLI/ACP session. A file's existence alone is unsafe.
 func ompSessionLocked(ctx context.Context, configDir, nativeID string) bool {
 	if strings.TrimSpace(configDir) == "" || nativeID == "" {
 		return false
