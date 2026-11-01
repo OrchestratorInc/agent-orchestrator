@@ -92,6 +92,25 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
 	});
 
+	it("shows missing-key recovery while keeping retry and technical details", () => {
+		const onRetry = vi.fn();
+		const onConfigure = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="provider_key_missing" error="ACP internal detail" retry={{ onRetry }} onConfigure={onConfigure} />);
+		expect(screen.getByText("DeepSeek needs an API key for this model route")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(onConfigure).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
+	});
+
+	it("leaves generic ACP failures without configuration guidance", () => {
+		render(<TurnOutcome state="failed" error="ACP internal detail" />);
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Set up DeepSeek" })).not.toBeInTheDocument();
+	});
+
 	it("presents a non-retryable usage limit as a historical notice without controls", () => {
 		render(
 			<TurnOutcome

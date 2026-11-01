@@ -23,6 +23,7 @@ import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 
 import {
 	memo,
+	useContext,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -4334,6 +4335,7 @@ export function Timeline({
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
 									group={group}
+									harness={snapshot.harness}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
@@ -4553,6 +4555,7 @@ export function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
+	harness,
 	activityDisclosureOverrides,
 	onActivityDisclosureChange,
 	sessionId,
@@ -4590,6 +4593,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight = false,
 }: {
 	group: TimelineGroup;
+	harness: string;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
 	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
@@ -4631,6 +4635,7 @@ const TurnGroup = memo(function TurnGroup({
 	workerUpdates?: boolean;
 	tight?: boolean;
 }) {
+	const hostId = useContext(ChatHostId);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -4919,6 +4924,10 @@ const TurnGroup = memo(function TurnGroup({
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
+					failureCode={group.outcome.failureCode}
+					onConfigure={harness === "deepseek-harness" && group.outcome.failureCode === "provider_key_missing"
+						? () => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: harness, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true, startLogin: true })
+						: undefined}
 					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 					copyText={copyableMessage?.text}
@@ -5306,6 +5315,7 @@ type TimelineGroup = {
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
+		failureCode?: "provider_key_missing";
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -5531,6 +5541,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",
 				)?.summary
 				: undefined),
+			failureCode: turn.failureCode,
 		};
 	}
 
