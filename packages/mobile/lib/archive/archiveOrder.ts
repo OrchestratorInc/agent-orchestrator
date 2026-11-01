@@ -1,3 +1,4 @@
+import { eventAtOf } from "../agentsView";
 import type { DashboardSession } from "../api";
 
 /**
@@ -58,4 +59,39 @@ export function mergeArchiveStreams(streams: readonly ArchiveStream[]): { rows: 
 	}
 	const rows = streams.flatMap((stream) => stream.rows).sort(compareArchived);
 	return { rows: boundary ? rows.filter((row) => compareArchived(row, boundary) <= 0) : rows, limiting };
+}
+
+/** The newest event among some sessions, or undefined when none has a usable time. */
+export function latestEventAt(sessions: readonly DashboardSession[]): string | undefined {
+	let latest: string | undefined;
+	let latestTime = -Infinity;
+	for (const session of sessions) {
+		const at = eventAtOf(session);
+		const time = Date.parse(at);
+		if (time > latestTime) {
+			latest = at;
+			latestTime = time;
+		}
+	}
+	return latest;
+}
+
+/**
+ * Archive pages up to and including the first unpinned row, which holds the
+ * newest finish unless a pinned row before it is newer. Stops early at the end
+ * of the archive or after `maxPages`, returning what it read.
+ */
+export async function readPastPinned(
+	readPage: (cursor: string | null) => Promise<{ sessions: DashboardSession[]; nextCursor: string | null }>,
+	maxPages: number,
+): Promise<DashboardSession[]> {
+	const seen: DashboardSession[] = [];
+	let cursor: string | null = null;
+	for (let read = 0; read < maxPages; read++) {
+		const page = await readPage(cursor);
+		seen.push(...page.sessions);
+		cursor = page.nextCursor;
+		if (!cursor || page.sessions.some((session) => !session.isPinned)) break;
+	}
+	return seen;
 }
