@@ -25,6 +25,15 @@ func (r ChangeRequestReference) Key() string {
 	return fmt.Sprintf("%s|%s|%s|%d", r.Provider, r.Host, r.Repository, r.Number)
 }
 
+// RepositoryRename is the provider's current name for a renamed or
+// transferred repository that is still reachable under its old name.
+// Names are lowercase "owner/name".
+type RepositoryRename struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
 // ParseChangeRequestURL accepts complete GitHub PR and GitLab MR web URLs.
 // It never fetches the URL or grants SCM tracking authority.
 func ParseChangeRequestURL(raw string) (ChangeRequestReference, error) {

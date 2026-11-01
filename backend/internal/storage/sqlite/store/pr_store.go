@@ -474,6 +474,30 @@ func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload str
 	return nil
 }
 
+// RecordRepositoryRename stores the provider's current name for a renamed or
+// transferred repository.
+func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertRepositoryRename(ctx, gen.UpsertRepositoryRenameParams(r)); err != nil {
+		return fmt.Errorf("record repository rename %s/%s: %w", r.Host, r.OldName, err)
+	}
+	return nil
+}
+
+// ListRepositoryRenames returns every known repository rename.
+func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error) {
+	rows, err := s.qr.ListRepositoryRenames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list repository renames: %w", err)
+	}
+	out := make([]domain.RepositoryRename, len(rows))
+	for i, row := range rows {
+		out[i] = domain.RepositoryRename(row)
+	}
+	return out, nil
+}
+
 // GetPR returns the PR facts for a URL, or ok=false if absent.
 func (s *Store) GetPR(ctx context.Context, url string) (domain.PullRequest, bool, error) {
 	p, err := s.qr.GetPRByURLOrAlias(ctx, url)
