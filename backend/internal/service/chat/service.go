@@ -2918,6 +2918,12 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 					choice.PermissionMode = mode
 					choice.Name = label
 				}
+			case domain.HarnessDevin:
+				// Devin's ask and plan modes are execution stances, not AO
+				// approval policies, and stay unannotated.
+				if mode, ok := devinApprovalMode(choice.Value); ok {
+					choice.PermissionMode = mode
+				}
 			}
 		}
 	}
@@ -3038,6 +3044,23 @@ func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
 	case "default":
 		return domain.PermissionModeDefault, true
 	case "auto-accept":
+		return domain.PermissionModeAuto, true
+	case "bypass":
+		return domain.PermissionModeBypassPermissions, true
+	default:
+		return "", false
+	}
+}
+
+// devinApprovalMode maps Devin's ACP session-mode ids onto AO's approval
+// tiers. Devin's "smart" is the model-judged tier AO's auto selects, and its
+// "ask" and "plan" stances are execution modes, not approval policies, so
+// they return ok=false.
+func devinApprovalMode(value string) (domain.PermissionMode, bool) {
+	switch value {
+	case "accept-edits":
+		return domain.PermissionModeAcceptEdits, true
+	case "smart":
 		return domain.PermissionModeAuto, true
 	case "bypass":
 		return domain.PermissionModeBypassPermissions, true
