@@ -742,7 +742,7 @@ function shortenPaths(text: string): string {
 	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
 	// Status labels are intentionally discrete: start at one second and advance
 	// in whole seconds so the live and settled rows never show fractional time.
 	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;

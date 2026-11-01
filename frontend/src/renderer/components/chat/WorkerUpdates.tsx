@@ -1,25 +1,26 @@
 /**
  * The orchestrator chat's view of its workers.
  *
- * A worker's message or report is drawn as one quiet row — who, state, a headline,
- * time — that opens to the full text, instead of a full-width card. When the
- * orchestrator's answer asks the user nothing, it hangs under the rows as one line
- * that opens to the work behind it, so the chat reads as the user's conversation
- * rather than a log of worker traffic. A turn that spawned workers lists them
- * with where each one is now.
+ * A turn that spawned workers shows one box per worker while it runs: who, what it
+ * is doing, and for how long. Once the worker answers, its box goes and the answer
+ * reads in full under its name, as any message in the chat does. When the
+ * orchestrator's answer to it asks the user nothing, that answer hangs under the
+ * worker's message as one line that opens to the work behind it, so the chat reads
+ * as the user's conversation rather than a log of worker traffic.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
-import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowUpRight, Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, Split, Tag, Undo2 } from "lucide-react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
-import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
+import type { WorkspaceSession } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
-import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces, useOpenSessionLink } from "./ChatMarkdown";
+import { formatDuration, formatTime, humanVisibleText, QueuedNote, ResponseSpinner, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
 
 export interface WorkerUpdate {
@@ -200,6 +201,8 @@ export interface WorkerUpdateIndex {
 	latestKeys: ReadonlySet<string>;
 	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
+	/** Workers whose spawn the daemon recorded, so their box draws where that record is. */
+	spawnRecorded: ReadonlySet<string>;
 }
 
 export const WorkerUpdateIndexContext = createContext<WorkerUpdateIndex | null>(null);
@@ -211,8 +214,14 @@ export function indexWorkerUpdates(items: readonly ConversationItem[]): WorkerUp
 			latest.set(update.sessionId ?? update.key, update);
 		}
 	}
-	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)) };
+	return {
+		latest,
+		latestKeys: new Set([...latest.values()].map((update) => update.key)),
+		spawnRecorded: new Set(items.flatMap((item) => spawnedBy(item) ?? [])),
+	};
 }
+
+const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((key) => b.has(key));
 
 /**
  * The index for a timeline, keeping the same object until some worker's newest
@@ -223,8 +232,7 @@ export function useWorkerUpdateIndex(items: readonly ConversationItem[] | undefi
 	return useMemo(() => {
 		const next = items ? indexWorkerUpdates(items) : null;
 		const before = previous.current;
-		const unchanged = before && next && before.latestKeys.size === next.latestKeys.size
-			&& [...next.latestKeys].every((key) => before.latestKeys.has(key));
+		const unchanged = before && next && sameSet(before.latestKeys, next.latestKeys) && sameSet(before.spawnRecorded, next.spawnRecorded);
 		previous.current = unchanged ? before : next;
 		return previous.current;
 	}, [items]);
@@ -234,9 +242,6 @@ function isCurrent(index: WorkerUpdateIndex | null, update: WorkerUpdate): boole
 	return !index || index.latestKeys.has(update.key);
 }
 
-const plain = (text: string) =>
-	text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/`([^`]*)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1");
-
 function splitArtifacts(body: string): { text: string; artifacts: string[] } {
 	const artifacts: string[] = [];
 	const lines = body.split("\n").filter((line) => {
@@ -245,17 +250,6 @@ function splitArtifacts(body: string): { text: string; artifacts: string[] } {
 		return !path;
 	});
 	return { text: lines.join("\n").trim(), artifacts };
-}
-
-/** A short first line followed by more is the worker's headline; otherwise its first sentence is. */
-export function splitHeadline(body: string): { headline: string; detail: string } {
-	const newline = body.indexOf("\n");
-	const firstLine = (newline < 0 ? body : body.slice(0, newline)).trim();
-	if (newline > 0 && firstLine.length <= 100) {
-		return { headline: plain(firstLine), detail: body.slice(newline + 1).trim() };
-	}
-	const sentence = /^.+?[.;](?=\s)/.exec(firstLine)?.[0] ?? firstLine;
-	return { headline: plain(sentence.replace(/[.;]$/, "")), detail: body };
 }
 
 const sessionHref = (update: Pick<WorkerUpdate, "sessionId" | "projectId">) =>
@@ -307,55 +301,51 @@ function AgentProse({ text, muted, className }: { text: string; muted?: boolean;
 	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
 }
 
-function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
-	const [open, setOpen] = useState(false);
+/** What a worker sent, in full under its name, as any message in the chat reads. */
+function WorkerMessage({ update }: { update: WorkerUpdate }) {
 	const session = useWorkerSession(update.sessionId, update.projectId);
 	const index = useContext(WorkerUpdateIndexContext);
 	const { text, artifacts } = splitArtifacts(update.body);
-	const { headline, detail } = splitHeadline(text);
 	const state = update.state ? STATES[update.state] : undefined;
 	const attention = state?.attention && isCurrent(index, update);
 	// An older message names its sender only by session id; the session supplies its project and title.
 	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session?.workspaceId });
-	const name = <span className="block truncate">{update.name === update.sessionId ? session?.title || update.name : update.name}</span>;
+	const name = update.name === update.sessionId ? session?.title || update.name : update.name;
 	return (
-		<div className="min-w-0 text-xs" data-testid="worker-update">
-			<div className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover">
-				{session?.provider ? (
-					<AgentAvatar provider={session.provider} decorative className="size-4 shrink-0" />
-				) : (
-					<Bot aria-hidden="true" className="size-3.5 shrink-0" />
-				)}
-				{/* The sender opens its session, as the "[from …]" label on a worker message does; the rest of the row expands. */}
-				{href ? (
-					<SessionLabelLink
-						href={href}
-						className="max-w-[40%] shrink-0 font-medium text-foreground decoration-foreground/40 underline-offset-2 hover:underline"
-					>
-						{name}
-					</SessionLabelLink>
-				) : (
-					<span className="max-w-[40%] shrink-0 font-medium text-foreground">{name}</span>
-				)}
-				<button
-					type="button"
-					aria-expanded={open}
-					onClick={() => setOpen((current) => !current)}
-					className="flex h-full min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+		<div className="relative min-w-0 pl-6" data-testid="worker-update">
+			{session?.provider ? (
+				<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />
+			) : (
+				<Bot aria-hidden="true" className="absolute left-0 top-[3px] size-4 text-muted-foreground" />
+			)}
+			{/* A worker's name is its task title, often long, so it heads the message on its own line and truncates,
+			    with its state and time beside it rather than across the chat. */}
+			<div className="flex h-[22px] min-w-0 items-baseline gap-2">
+				<span
+					className="min-w-0 truncate text-[length:var(--font-size-base)] font-medium leading-[22px] text-foreground"
+					title={name}
 				>
+					{href ? (
+						<SessionLabelLink href={href} className="decoration-foreground/40 underline-offset-2 hover:underline">
+							{name}
+						</SessionLabelLink>
+					) : (
+						name
+					)}
+				</span>
+				<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
 					{state ? (
-						<span className={cn("shrink-0", attention && "font-medium text-status-needs-you")}>{state.label}</span>
+						<>
+							<span className={cn(attention && "font-medium text-status-needs-you")}>{state.label}</span>
+							{" · "}
+						</>
 					) : null}
-					<span className="min-w-0 flex-1 truncate transition-colors group-hover:text-foreground">{headline}</span>
-					<span className="shrink-0 tabular-nums">{formatTime(update.createdAt)}</span>
-					<ChevronRight
-						aria-hidden="true"
-						className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")}
-					/>
-				</button>
+					{formatTime(update.createdAt)}
+				</span>
 			</div>
+			{text ? <AgentProse text={text} /> : null}
 			{artifacts.map((path) => (
-				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
+				<p key={path} className="flex h-6 min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
 					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
 					<span className="min-w-0 truncate font-mono" title={path}>
@@ -363,11 +353,6 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 					</span>
 				</p>
 			))}
-			{open ? (
-				<div className="mb-2 ml-6 mt-1 min-w-0">
-					<AgentProse text={detail} muted className="whitespace-pre-wrap text-xs leading-relaxed" />
-				</div>
-			) : null}
 		</div>
 	);
 }
@@ -378,11 +363,11 @@ function artifactReference(path: string, sessionId: string | undefined): string 
 	return absolute || !sessionId ? path : `${sessionId}/${path}`;
 }
 
-export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[] }) {
+export function WorkerMessages({ updates }: { updates: readonly WorkerUpdate[] }) {
 	return (
-		<div className="flex min-w-0 flex-col">
+		<div className="flex min-w-0 flex-col gap-2.5">
 			{updates.map((update) => (
-				<WorkerUpdateRow key={update.key} update={update} />
+				<WorkerMessage key={update.key} update={update} />
 			))}
 		</div>
 	);
@@ -428,7 +413,6 @@ export function FromAgent({ item, queued, children }: { item: ConversationItem; 
 }
 
 const SENDER_NAME = "float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground";
-
 function SenderRow({ avatar, createdAt, body, queued, children }: { avatar: ReactNode; createdAt: string; body: string; queued?: boolean; children: ReactNode }) {
 	return (
 		<div className="relative min-w-0 pl-6" data-testid="agent-message">
@@ -571,9 +555,6 @@ export function OrchestratorReply({
 	);
 }
 
-const readyToMerge = (pr: PullRequestFacts | undefined) =>
-	pr?.state === "open" && pr.ci === "passing" && pr.review === "approved" && pr.mergeability !== "conflicting";
-
 // What `ao spawn` prints: `spawned session <id> "<name>" (<status>)`.
 // ponytail: reads command output; #6507's session.spawned rows replace this once merged.
 const SPAWNED = /\bspawned\s+session\s+([\w.-]+)/i;
@@ -589,95 +570,136 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
-export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
-	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
-		&& item.detail?.action === "session.spawned"
-		&& typeof item.detail.targetSessionId === "string"
-		&& item.detail.operationId === item.detail.targetSessionId
-		&& spawnedIds.has(item.detail.targetSessionId);
+function completedActionTarget(item: ConversationItem, action: string): string | undefined {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || item.status !== "completed") return undefined;
+	if (item.detail?.action !== action) return undefined;
+	const target = item.detail.targetSessionId;
+	return typeof target === "string" && target !== "" ? target : undefined;
 }
 
-/** The workers a turn started, each showing where it is now. */
-export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const [open, setOpen] = useState(false);
+/**
+ * The worker a spawn the daemon recorded started. The daemon writes it the moment
+ * the session exists, well before the provider reports `ao spawn` finished, and
+ * outside any turn, so it lands just after the turn that spawned the worker.
+ */
+export function spawnedBy(item: ConversationItem): string | undefined {
+	return completedActionTarget(item, "session.spawned");
+}
+
+/** The worker a termination the daemon recorded ended. */
+export function terminatedBy(item: ConversationItem): string | undefined {
+	return completedActionTarget(item, "session.terminated");
+}
+
+/**
+ * The workers a turn started, one box each, until each one answers. The answer
+ * reads as the worker's own message where it arrived, so the box would only
+ * repeat it.
+ */
+export function SpawnedAgents({ sessionIds, fromCommand = false }: {
+	sessionIds: readonly string[];
+	/** Read from `ao spawn` output at the end of the turn: only a daemon too old to record the spawn needs these. */
+	fromCommand?: boolean;
+}) {
+	const index = useContext(WorkerUpdateIndexContext);
+	const waiting = sessionIds.filter((id) => !index?.latest.has(id) && !(fromCommand && index?.spawnRecorded.has(id)));
+	if (waiting.length === 0) return null;
 	return (
-		<div className="min-w-0 text-xs">
-			<button
-				type="button"
-				aria-expanded={open}
-				onClick={() => setOpen((current) => !current)}
-				className="inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
-			>
-				<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-				<Split aria-hidden="true" className="size-3.5" />
-				{sessionIds.length === 1 ? "Spawned 1 agent" : `Spawned ${sessionIds.length} agents`}
-			</button>
-			{open ? (
-				<div className="mt-1 flex flex-col">
-					{sessionIds.map((id) => (
-						<SpawnedAgentLine key={id} sessionId={id} />
-					))}
-				</div>
-			) : null}
+		<div className="flex min-w-0 flex-col gap-2">
+			{waiting.map((id) => (
+				<SpawnedAgentBox key={id} sessionId={id} />
+			))}
 		</div>
 	);
 }
 
-function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
-	const session = useWorkerSession(sessionId);
-	const latest = useContext(WorkerUpdateIndexContext)?.latest.get(sessionId);
-	const pr = session?.prs[0];
-	const name = session?.title || latest?.name || sessionId;
-	const href = session?.workspaceId ? sessionHref({ sessionId, projectId: session.workspaceId }) : latest ? sessionHref(latest) : undefined;
-	let lead: ReactNode;
-	let status: ReactNode;
-	if (latest?.state === "needs_input" || latest?.state === "stuck"
-		|| session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = <span className="text-status-needs-you">{latest?.state === "stuck" ? "Stuck" : "Needs input"}</span>;
-	} else if (pr) {
-		const ready = readyToMerge(pr);
-		lead = <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", ready ? "text-status-ready" : "text-muted-foreground")} />;
-		status = ready ? `#${pr.number} · ready to merge` : `#${pr.number}`;
-	} else if (latest?.state === "done") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-ready" />;
-		status = "Done";
-	} else if (session?.isTerminated || session?.status === "terminated") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Terminated";
-	} else if (session?.provisionState === "provisioning") {
-		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
-		status = "Spawning";
-	} else if (session?.provisionState === "failed") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = "Start failed";
-	} else if (session?.activity?.state === "exited" || session?.status === "exited") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Exited";
-	} else if (session?.statusReadiness === "checking") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Checking status";
-	} else if (!session || session.statusReadiness === "unavailable"
-		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Status unavailable";
-	} else if (session.activity?.state === "idle" || session.status === "idle") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Idle";
-	} else if (session.activity?.state === "active" || session.status === "working") {
-		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
-		status = latest ? splitHeadline(splitArtifacts(latest.body).text).headline : "Working";
-	} else {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
-		status = "Status unavailable";
+type WaitingState = { label: string; tone: "working" | "attention" | "quiet" };
+
+/** Where a worker that has not answered yet is now, read from its session's durable facts. */
+function waitingState(session: WorkspaceSession | undefined): WaitingState {
+	if (session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
+		return { label: "Needs input", tone: "attention" };
 	}
+	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", tone: "quiet" };
+	if (session?.provisionState === "provisioning") return { label: "Spawning", tone: "working" };
+	if (session?.provisionState === "failed") return { label: "Start failed", tone: "attention" };
+	if (session?.activity?.state === "exited" || session?.status === "exited") return { label: "Exited", tone: "quiet" };
+	if (session?.statusReadiness === "checking") return { label: "Checking status", tone: "quiet" };
+	if (!session || session.statusReadiness === "unavailable"
+		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
+		return { label: "Status unavailable", tone: "quiet" };
+	}
+	if (session.activity?.state === "idle" || session.status === "idle") return { label: "Idle", tone: "quiet" };
+	if (session.activity?.state === "active" || session.status === "working") return { label: "Working", tone: "working" };
+	return { label: "Status unavailable", tone: "quiet" };
+}
+
+/** Time since `startedAt`, ticking each second; absent without a start. */
+function useElapsed(startedAt: string | undefined): string | undefined {
+	const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!Number.isFinite(started)) return;
+		setNow(Date.now());
+		const timer = window.setInterval(() => setNow(Date.now()), 1000);
+		return () => window.clearInterval(timer);
+	}, [started]);
+	return Number.isFinite(started) ? formatDuration(Math.max(0, now - started)) : undefined;
+}
+
+function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
+	const { t } = useTranslation();
+	const openSession = useOpenSessionLink();
+	const session = useWorkerSession(sessionId);
+	const state = waitingState(session);
+	const working = state.tone === "working";
+	const elapsed = useElapsed(working ? session?.createdAt : undefined);
+	const name = session?.title || sessionId;
+	const href = session ? sessionHref({ sessionId, projectId: session.workspaceId }) : undefined;
+	// The daemon's phrase for the stage the worker is in, when it says more than the state does.
+	const phrase = session?.provisionState === "failed" ? session.provisionError : session?.displayStatus;
+	const phase = phrase && !["working", state.label.toLowerCase()].includes(phrase.toLowerCase()) ? phrase : undefined;
 	return (
-		<div className="flex min-w-0 items-center gap-2 py-0.5 pl-5">
-			{lead}
-			<span className="min-w-0 shrink truncate text-foreground">
-				{href ? <SessionLabelLink href={href} className="decoration-foreground/40 underline-offset-2 hover:underline">{name}</SessionLabelLink> : name}
-			</span>
-			<span className="ml-auto max-w-[48%] shrink-0 truncate text-muted-foreground" title={typeof status === "string" ? status : undefined}>{status}</span>
+		<div data-testid="spawned-agent" className="cursor-chat-explore-box flex min-w-0 items-start gap-2.5 rounded-lg border px-3 py-2.5">
+			{/* The spawn's own mark, as the turn's "Spawned" row had, then the agent that runs the worker. */}
+			<Split aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
+			{session?.provider ? (
+				<AgentAvatar provider={session.provider} decorative className="mt-px size-4 shrink-0" />
+			) : (
+				<Bot aria-hidden="true" className="mt-px size-4 shrink-0 text-muted-foreground" />
+			)}
+			<div className="min-w-0 flex-1">
+				<div className="flex min-w-0 items-center gap-3">
+					<span className="min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium text-foreground">
+						{href ? <SessionLabelLink href={href} className="decoration-foreground/40 underline-offset-2 hover:underline">{name}</SessionLabelLink> : name}
+					</span>
+					<span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+						{working ? (
+							<ResponseSpinner />
+						) : (
+							<span aria-hidden="true" className={cn("mx-[2.5px] size-[7px] shrink-0 rounded-full", state.tone === "attention" ? "bg-status-needs-you" : "bg-status-idle")} />
+						)}
+						<span className={cn(state.tone === "attention" && "text-status-needs-you")}>{state.label}</span>
+						{elapsed ? <span className="tabular-nums">· {elapsed}</span> : null}
+					</span>
+					{href && openSession ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={() => openSession(href)}
+									aria-label={t("chat.action.openSession")}
+									className="-my-1 -mr-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									<ArrowUpRight aria-hidden="true" className="size-3.5" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t("chat.action.openSession")}</TooltipContent>
+						</Tooltip>
+					) : null}
+				</div>
+				{phase ? <p className="mt-0.5 truncate text-xs text-muted-foreground" title={phase}>{phase}</p> : null}
+			</div>
 		</div>
 	);
 }

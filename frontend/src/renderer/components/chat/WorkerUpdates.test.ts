@@ -3,12 +3,11 @@ import type { ConversationActivity, ConversationItem, ConversationMessage } from
 import {
 	asksUser,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	piggybackedUpdates,
 	quietWorkerReply,
 	renamedTitle,
+	spawnedBy,
 	spawnedSessionIds,
-	splitHeadline,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 
@@ -92,11 +91,6 @@ describe("worker updates", () => {
 		expect(piggybackedUpdates(message({ origin: "human", text: "How is it going?" }))).toEqual([]);
 	});
 
-	it("takes a short first line as the headline, else the first sentence", () => {
-		expect(splitHeadline("Fixed the menu\nIt now renders in a portal.")).toEqual({ headline: "Fixed the menu", detail: "It now renders in a portal." });
-		expect(splitHeadline("Rebased **#5051**; disk full during validation. Retrying.").headline).toBe("Rebased #5051");
-	});
-
 	it("tells a question from a ? in code, links and chained calls", () => {
 		expect(asksUser("Merged #7054. Should I start a fix?")).toBe(true);
 		expect(asksUser("#7043 の修正を始めますか？")).toBe(true);
@@ -114,18 +108,17 @@ describe("worker updates", () => {
 		expect(spawnedSessionIds(items)).toEqual(["proj-288", "proj-285"]);
 	});
 
-	it("matches only the completed action for the worker shown by a spawn command", () => {
-		const spawned = new Set(spawnedSessionIds([command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)')]));
+	it("reads the worker a recorded spawn started, and nothing from a failed or other action", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 3, revision: 0,
 			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt,
 			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
 		};
-		expect(isDuplicateSpawnAction(action, spawned)).toBe(true);
-		expect(isDuplicateSpawnAction({ ...action, detail: { ...action.detail, targetSessionId: "proj-285" } }, spawned)).toBe(false);
-		expect(isDuplicateSpawnAction({ ...action, detail: { ...action.detail, operationId: "another-operation" } }, spawned)).toBe(false);
-		expect(isDuplicateSpawnAction({ ...action, status: "failed" }, spawned)).toBe(false);
-		expect(isDuplicateSpawnAction(command("ao spawn --prompt audit"), spawned)).toBe(false);
+		expect(spawnedBy(action)).toBe("proj-288");
+		expect(spawnedBy({ ...action, status: "failed" })).toBeUndefined();
+		expect(spawnedBy({ ...action, detail: { ...action.detail, action: "session.terminated" } })).toBeUndefined();
+		expect(spawnedBy({ ...action, detail: { action: "session.spawned", operationId: "x" } })).toBeUndefined();
+		expect(spawnedBy(command("ao spawn --prompt audit"))).toBeUndefined();
 		expect(spawnedSessionIds([{ ...command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)'), status: "failed" }])).toEqual([]);
 	});
 

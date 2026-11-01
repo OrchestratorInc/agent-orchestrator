@@ -139,18 +139,19 @@ import {
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
 	TaskNamedLine,
+	terminatedBy,
 	useWorkerUpdateIndex,
+	WorkerMessages,
 	WorkerUpdateIndexContext,
-	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
@@ -3635,10 +3636,22 @@ export function Timeline({
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
 		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return groups;
+		// A worker this chat spawned is drawn by its box and then by its own messages, so
+		// the daemon's records of it would only repeat them: its termination, and its
+		// spawn once it has answered and the box is gone. Dropped here, before they can
+		// leave an empty group behind.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		const answered = new Set(snapshot.items.flatMap((item) =>
+			[...piggybackedUpdates(item), ...workerUpdatesOf(item)].flatMap((update) => update.sessionId ?? [])));
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended);
+		};
+		if (!timelineItems.some(repeats)) return groups;
 		return groups
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.items.length > 0);
 	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
@@ -4900,18 +4913,28 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
-	// report batch, or reports folded into the user's message) draws as rows, and
-	// AO's task-naming prompt as the name it produced.
+	// report batch, or reports folded into the user's message) draws in full under
+	// the worker's name, and AO's task-naming prompt as the name it produced.
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
+		// A spawn the daemon recorded draws as the worker's box, from the moment the
+		// worker exists rather than once the turn that spawned it settles.
+		const recorded = workerUpdates && run.kind === "activities" ? run.items.flatMap((entry) => spawnedBy(entry) ?? []) : [];
+		if (recorded.length > 0) {
+			const rest = run.items.filter((entry) => !spawnedBy(entry));
+			return [
+				...(rest.length > 0 ? [renderRun({ kind: "activities", key: run.key, items: rest })] : []),
+				<SpawnedAgents key={`${run.key}:spawned`} sessionIds={recorded} />,
+			];
+		}
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
-		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		if (updates.length > 0) return <WorkerMessages key={run.key} updates={updates} />;
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
 		const piggybacked = piggybackedUpdates(item);
 		if (piggybacked.length === 0) return renderRun(run);
-		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+		return [<WorkerMessages key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	// The live row sits at the end of the turn, under what the agent has written so
@@ -4988,7 +5011,7 @@ const TurnGroup = memo(function TurnGroup({
 		body.push(renderRun(finalRun));
 	}
 	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
+	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} fromCommand />);
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}
