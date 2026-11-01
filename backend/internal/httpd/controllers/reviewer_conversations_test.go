@@ -124,9 +124,10 @@ func TestReviewerConversationRoutesPreserveServiceErrorEnvelope(t *testing.T) {
 	} {
 		status, body := reviewConversationRequest(t, server.Client(), tc.method, base+tc.path, tc.body)
 		wantCode := "INTERNAL_ERROR"
-		if tc.path == "/messages" {
+		switch tc.path {
+		case "/messages":
 			wantCode = "CHAT_DELIVERY_FAILED"
-		} else if tc.path == "" {
+		case "":
 			wantCode = "CONVERSATION_READ_FAILED"
 		}
 		if status != http.StatusInternalServerError || !bytes.Contains(body, []byte(`"code":"`+wantCode+`"`)) || !bytes.Contains(body, []byte(`"requestId":"`)) {

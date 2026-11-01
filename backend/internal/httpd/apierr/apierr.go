@@ -103,6 +103,7 @@ func Internal(code, message string) *Error {
 	return New(KindInternal, code, message, nil)
 }
 
+// InternalCause keeps an unclassified cause behind a safe internal API error.
 func InternalCause(code, message string, cause error) *Error {
 	e := Internal(code, message)
 	e.Cause = cause
