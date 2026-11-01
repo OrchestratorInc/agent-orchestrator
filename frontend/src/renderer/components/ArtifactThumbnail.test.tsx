@@ -88,6 +88,14 @@ describe("cloud artifact thumbnails", () => {
 		expect(container.querySelector("img")).toHaveAttribute("src", `${ROOT}reports/assets/chart.png`);
 	});
 
+	it("renders the plain-text files a local card previews", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => new Response(`text of ${new URL(url).pathname.split("/").pop()}`));
+		renderThumbnails(["events.jsonl", "setup.ini", "nginx.conf", "fix.diff", "fix.patch"].map((path) => artifact(path)));
+
+		for (const name of ["events.jsonl", "setup.ini", "nginx.conf", "fix.diff", "fix.patch"]) expect(await screen.findByText(`text of ${name}`)).toBeInTheDocument();
+		expect(screen.queryByTitle("No preview available")).not.toBeInTheDocument();
+	});
+
 	it("frames cloud HTML with the cloud sandbox and verifies availability through the bridge", async () => {
 		renderThumbnails([artifact("index.html", "html")]);
 
@@ -215,10 +223,10 @@ describe("cloud artifact thumbnails", () => {
 	});
 
 	it("does not request access for unsupported cloud file types", async () => {
-		const { client } = renderThumbnails([artifact("report.pdf"), artifact("events.jsonl"), artifact("archive.zip")]);
+		const { client } = renderThumbnails([artifact("archive.zip"), artifact("data.bin")]);
 
 		await act(async () => {});
-		expect(screen.getAllByTitle("No preview available")).toHaveLength(3);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
 		expect(client.isFetching()).toBe(0);
 		expect(mocks.access).not.toHaveBeenCalled();
 		expect(mocks.fetch).not.toHaveBeenCalled();
