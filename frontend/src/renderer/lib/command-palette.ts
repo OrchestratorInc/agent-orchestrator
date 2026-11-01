@@ -116,6 +116,8 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
+	/** Developer Mode is on; the Usage page is shown only then for now. */
+	developerMode?: boolean;
 };
 
 export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
@@ -561,13 +563,15 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["add", "import", "repo", "workspace"],
 		action: { kind: "open-new-project" },
 	});
-	items.push({
-		id: "global-usage",
-		group: "global",
-		title: t("command.openUsage"),
-		keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
-		action: { kind: "navigate", target: { to: "/usage" } },
-	});
+	if (ctx.developerMode) {
+		items.push({
+			id: "global-usage",
+			group: "global",
+			title: t("command.openUsage"),
+			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
+			action: { kind: "navigate", target: { to: "/usage" } },
+		});
+	}
 	items.push({
 		id: "global-settings",
 		group: "global",

@@ -294,6 +294,7 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
 			...buildShortcutCommands(t),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
