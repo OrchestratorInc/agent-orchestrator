@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
@@ -20,6 +21,10 @@ type fakeClaimer struct {
 func (f *fakeClaimer) ClaimPR(_ context.Context, _ domain.SessionID, _ string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error) {
 	f.opts = opts
 	return sessionsvc.ClaimPRResult{}, f.err
+}
+
+func (f *fakeClaimer) FindBranchPRs(context.Context, domain.SessionID) (sessionsvc.BranchPRs, error) {
+	return sessionsvc.BranchPRs{Own: []string{"own"}, OtherAuthor: []string{"other"}}, f.err
 }
 
 // The review refresher reuses the session claim, which never takes a PR over
@@ -53,5 +58,29 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 		if !errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.text) {
 			t.Fatalf("claim err %v -> %v, want %v containing %q", tc.err, err, tc.want, tc.text)
 		}
+	}
+}
+
+// The session service finds a just-opened branch PR only when the daemon's
+// SCM provider can list a branch's open PRs and name the signed-in account
+// that must have opened it; keep both capabilities wired.
+func TestDaemonSCMProviderListsBranchPRs(t *testing.T) {
+	var provider any = (*scmmulti.Provider)(nil)
+	if _, ok := provider.(interface {
+		ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
+	}); !ok {
+		t.Fatal("daemon SCM provider cannot list a branch's open PRs")
+	}
+	if _, ok := provider.(ports.ScopedIdentityResolver); !ok {
+		t.Fatal("daemon SCM provider cannot resolve the signed-in account")
+	}
+}
+
+// The review refresher hands the branch lookup's own and other-author PRs to
+// the review service unchanged.
+func TestReviewPRRefresherKeepsBranchPRAuthorship(t *testing.T) {
+	found, err := reviewPRRefresher{sessions: &fakeClaimer{}}.FindBranchPRs(context.Background(), "mer-1")
+	if err != nil || strings.Join(found.Own, ",") != "own" || strings.Join(found.OtherAuthor, ",") != "other" {
+		t.Fatalf("found = %+v err = %v, want own and other-author PRs kept apart", found, err)
 	}
 }

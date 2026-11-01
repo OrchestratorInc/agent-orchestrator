@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -2143,7 +2144,28 @@ type GitHubAuthRequirementResponse = systemcheck.Requirement
 
 // InstallTargetParam is the {target} path parameter for /system/install routes.
 type InstallTargetParam struct {
-	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared."`
+	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared,cua-driver" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver."`
+}
+
+// ComputerUseStatusResponse is the body of GET /api/v1/computer-use/status and
+// of the daemon-start and permission-grant actions.
+type ComputerUseStatusResponse = computeruse.Status
+
+// ComputerUseCallRequest is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallRequest = computeruse.CallRequest
+
+// ComputerUseCallResponse is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallResponse = computeruse.CallResult
+
+// ComputerUseDoctorResponse is the body of GET /api/v1/computer-use/doctor.
+type ComputerUseDoctorResponse struct {
+	Report string `json:"report" description:"Cua Driver's own environment report (cua-driver doctor)."`
+}
+
+// ComputerUseAgentToolsResponse lists the driver tools AO offers agents as
+// MCP tools, with their input schemas.
+type ComputerUseAgentToolsResponse struct {
+	Tools []computeruse.AgentTool `json:"tools"`
 }
 
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
@@ -2594,7 +2616,12 @@ type LinkPreviewResponse struct {
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
-	Enabled             bool `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// AccountLinked means an AO account holds this machine's account token,
+	// whether or not it still lists the machine. Signing in links only a
+	// machine no account holds, so it never moves one to another account or
+	// lists one again that its account removed.
+	AccountLinked       bool `json:"accountLinked"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
@@ -3205,8 +3232,11 @@ type ConversationMessageResponse struct {
 	Streaming bool `json:"streaming"`
 	// Continuation is the user's one-click "continue" after stopping a turn,
 	// shown as a marker instead of a message bubble.
-	Continuation bool   `json:"continuation,omitempty"`
-	CreatedAt    string `json:"createdAt"`
+	Continuation bool `json:"continuation,omitempty"`
+	// AuthoredByUser marks user-written content AO delivered as automation, such
+	// as Browser-panel annotations. Its queued turn can be steered or cancelled.
+	AuthoredByUser bool   `json:"authoredByUser,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
@@ -3588,6 +3618,8 @@ type SettingsResponse struct {
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
+	// ComputerUse gives new chat sessions the computer-use tools.
+	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3624,6 +3656,11 @@ type UpdateCloudOfferingRequest struct {
 
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
+type UpdateComputerUseRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

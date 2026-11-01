@@ -1193,7 +1193,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				continue
 			}
 			id := identities[identityKey(repo.Provider, repo.Host)]
-			if !strings.EqualFold(strings.TrimSpace(pr.Author), id.Login) {
+			if !id.Authored(pr.Author) {
 				continue
 			}
 			if _, ok := subjects[prKey(repo, pr.Number)]; ok {

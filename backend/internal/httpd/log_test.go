@@ -10,9 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // TestRequestLoggerRecords5xxCause: the wire envelope collapses unrecognized
@@ -67,8 +70,8 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["method"]; got != http.MethodPost {
 				t.Fatalf("payload.method = %#v, want POST", got)
 			}
-			if got := payload["path"]; got != "/api/v1/sessions/x/kill" {
-				t.Fatalf("payload.path = %#v, want request path fallback", got)
+			if got := payload["path"]; got != "unmatched" {
+				t.Fatalf("payload.path = %#v, want fixed unmatched fallback", got)
 			}
 			if got := payload["status"]; got != http.StatusInternalServerError {
 				t.Fatalf("payload.status = %#v, want 500", got)
@@ -82,7 +85,57 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["fingerprint"]; got == "" {
 				t.Fatalf("payload.fingerprint = %#v, want non-empty", got)
 			}
+			if got, want := payload["fingerprint"], telemetrymeta.Fingerprint("httpd", "http_request", http.MethodPost, "unmatched", "500", "internal", ""); got != want {
+				t.Fatalf("PostHog fingerprint = %v, want %s", got, want)
+			}
 		})
+	}
+}
+
+func TestRequestLoggerSeparatesStatusWithoutCapturedError(t *testing.T) {
+	var fingerprints []string
+	handler := requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, _ telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		fingerprints = append(fingerprints, fingerprint)
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("gateway") == "1" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	for _, path := range []string{"/failure?gateway=1", "/failure", "/failure?gateway=1"} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] == fingerprints[1] || fingerprints[0] != fingerprints[2] {
+		t.Fatalf("status fingerprints = %v", fingerprints)
+	}
+}
+
+func TestRequestLoggerGroupsByRouteAndCodeWithoutProjectName(t *testing.T) {
+	var fingerprints []string
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, route telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		if route.String() != "/api/v1/projects/{projectID}/workspace/git" {
+			t.Fatalf("unsafe route = %q", route.String())
+		}
+		fingerprints = append(fingerprints, fingerprint)
+	}))
+	router.Get("/api/v1/projects/{projectID}/workspace/git", func(w http.ResponseWriter, r *http.Request) {
+		code := "WORKSPACE_GIT_READ_FAILED"
+		if r.URL.Query().Get("other") == "1" {
+			code = "PROJECT_LOAD_FAILED"
+		}
+		envelope.WriteError(w, r, apierr.Internal(code, "Unable to read workspace Git state"))
+	})
+	for _, path := range []string{
+		"/api/v1/projects/ai-sports-coach-113/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git?other=1",
+	} {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] != fingerprints[1] || fingerprints[0] == fingerprints[2] {
+		t.Fatalf("route and code fingerprints = %v", fingerprints)
 	}
 }
 
@@ -135,7 +188,7 @@ func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *tes
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 	sink := &captureSink{}
 	captures := 0
-	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string) {
+	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite) {
 		captures++
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/unavailable" {
@@ -152,6 +205,41 @@ func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *tes
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/real", nil))
 	if len(sink.events) != 1 || sink.events[0].Name != "ao.http.5xx" || captures != 1 {
 		t.Fatalf("real failure events=%#v captures=%d, want one PostHog event and one Sentry capture", sink.events, captures)
+	}
+}
+
+func TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	captures := 0
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(log, nil, func(_ context.Context, _ error, _ map[string]string, _ string, _ telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+		captures++
+		if !strings.Contains(site.String(), "TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway") {
+			t.Fatalf("failure site = %q", site.String())
+		}
+	}))
+	router.Get("/api/v1/link-preview", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("expected") == "1" {
+			envelope.CaptureError(r, apierr.Internal("LINK_PREVIEW_FETCH_FAILED", "Link preview fetch failed"))
+		}
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "LINK_PREVIEW_FETCH_FAILED", "upstream fetch failed", nil)
+	})
+	router.Get("/api/v1/other", func(w http.ResponseWriter, r *http.Request) {
+		envelope.CaptureError(r, errors.New("other gateway failure"))
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "OTHER_GATEWAY_FAILURE", "other gateway failed", nil)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?expected=1&url=https://example.test", nil))
+	if captures != 0 {
+		t.Fatalf("expected link preview failure captured %d times", captures)
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?url=https://example.test", nil))
+	if captures != 1 {
+		t.Fatalf("unmarked link preview failure captured %d times, want one", captures)
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/other", nil))
+	if captures != 2 {
+		t.Fatalf("unrelated failure captured %d times, want two", captures)
 	}
 }
 

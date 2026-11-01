@@ -319,7 +319,7 @@ function ArtifactLine({ path, update, hostId }: { path: string; update: WorkerUp
 		<Pressable
 			accessibilityRole="link"
 			accessibilityLabel={`Open ${name}`}
-			onPress={() => { haptics.tap(); router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, entry, hostId: hostId ?? config?.hostId } }); }}
+			onPress={() => { haptics.tap(); router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, path: entry, hostId: hostId ?? config?.hostId } }); }}
 			style={({ pressed }) => [styles.artifact, pressed && styles.pressed]}
 		>
 			{content}

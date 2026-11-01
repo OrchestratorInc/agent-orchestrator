@@ -43,6 +43,7 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
+	DataDir             string
 	Agents              []agentregistry.HarnessAgent
 	Factory             func() []agentregistry.HarnessAgent
 	Context             context.Context
@@ -87,6 +88,7 @@ type readinessCallKey struct {
 }
 
 type readinessCoordinator struct {
+	dataDir             string
 	ctx                 context.Context
 	factory             func() []agentregistry.HarnessAgent
 	logger              *slog.Logger
@@ -146,7 +148,8 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		}
 	}
 	c := &readinessCoordinator{
-		ctx: cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
+		dataDir: cfg.DataDir,
+		ctx:     cfg.Context, factory: cfg.Factory, logger: cfg.Logger, now: cfg.Now,
 		displayTTL: cfg.DisplayTTL, launchTTL: cfg.LaunchTTL,
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
@@ -622,7 +625,11 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
+		// Verify the credential local session launch will use, including a
+		// login AO saved itself (Claude's setup token).
+		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
+	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
 	} else {
 		status, err = checker.AuthStatus(ctx)

@@ -494,6 +494,12 @@ var (
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
+	// ErrWorkspacePathOccupied reports that the path a new worktree must be
+	// created at is already taken by something git does not track as a
+	// worktree of the project's repository and that is not a recoverable
+	// leftover of one. The adapter never moves or deletes such a path; the
+	// user has to clear it before the workspace can be created.
+	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session

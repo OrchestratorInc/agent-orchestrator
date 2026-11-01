@@ -10,6 +10,7 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting w
 - `frontend/`: Electron + React supervisor wired to the daemon through the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
 - `docs/`: Current architecture and status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
 - `test/`: External smoke/e2e assets, including the CLI fresh-install container check.
+- `contracts/cloud/` and `packages/cloud-client/`: the AO Cloud API contract and its typed client. The AO Cloud control plane is not in this repository: it lives in the private `OrchestratorInc/ao-control-plane`, and code here reaches it only through this contract (`scripts/check-public-boundary.sh` enforces it).
 - `.github/workflows/`: CI definitions. Mirror these commands locally when possible.
 
 ## Commands

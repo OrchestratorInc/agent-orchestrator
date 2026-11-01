@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// EnvComputerUse is set to "1" on a chat session's `ao mcp` server when the
+// user had "Let agents use this computer" on as the session started; the
+// server then offers the computer-use tools. The session manager sets it and
+// the CLI reads it.
+const EnvComputerUse = "AO_COMPUTER_USE"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray

@@ -2,6 +2,7 @@ import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -39,7 +40,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
-import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
@@ -106,7 +107,7 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -136,6 +137,7 @@ import {
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
+	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
@@ -149,7 +151,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage } from "./AutomationMessage";
+import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -179,7 +181,9 @@ import {
 	can,
 	isCompaction,
 	isSteer,
+	fullQueuedTurnOrder,
 	hiddenTimelineTurnIds,
+	isUserQueuePrompt,
 	queuedTurnIds,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -268,30 +272,6 @@ type ChatAuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: WorkspaceTab };
 
-function DraggableChatTab({ children, value }: { children: ReactNode; value: string }) {
-	const dragControls = useDragControls();
-	return (
-		<Reorder.Item
-			as="div"
-			className="flex shrink-0 self-stretch touch-pan-y"
-			data-terminal-tab-key={value}
-			drag="x"
-			dragControls={dragControls}
-			dragListener={false}
-			onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
-				if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
-				dragControls.start(event);
-			}}
-			// Reorder needs layout measurement, but tabs should snap into place
-			// when a sibling opens or closes rather than slide.
-			transition={{ layout: { duration: 0 } }}
-			value={value}
-		>
-			{children}
-		</Reorder.Item>
-	);
-}
-
 // The tab strip re-renders with every session view update. A shell tab only
 // changes with its shell or selection, so it skips the rest; with a dozen
 // tabs this is most of the strip's render work.
@@ -311,7 +291,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onRename?: (handleId: string, title: string) => void;
 }) {
 	return (
-		<DraggableChatTab value={tabKey}>
+		<DraggableWorkspaceTab value={tabKey}>
 			<ShellTerminalTab
 				appearance="connected"
 				isActive={isActive}
@@ -320,7 +300,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
 			/>
-		</DraggableChatTab>
+		</DraggableWorkspaceTab>
 	);
 });
 
@@ -339,13 +319,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 	return useMemo(() => {
 		const messagesByTurn = new Map(
 			snapshot.items
-				.filter(
-					(item): item is ConversationMessage =>
-						item.kind === "message" &&
-						item.role === "user" &&
-						item.origin === "human" &&
-						Boolean(item.turnId),
-				)
+				.filter((item): item is ConversationMessage => isUserQueuePrompt(item) && Boolean(item.turnId))
 				.map((message) => [message.turnId as string, message]),
 		);
 		const next = snapshot.turns.flatMap((queuedTurn) => {
@@ -392,7 +366,7 @@ export interface ChatWorkspaceProps {
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
 	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -423,6 +397,12 @@ export interface ChatWorkspaceProps {
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
 	newWorkDisabled?: boolean;
+	/**
+	 * A Freestyle cloud orchestrator being created, before its session exists:
+	 * drawn as that session's in-place start (prompt suggestions and the queue
+	 * placeholder) so the handoff to it changes nothing on screen.
+	 */
+	pendingInPlaceStart?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -718,7 +698,7 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -735,6 +715,7 @@ function ChatWorkspaceContent({
 	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
+	pendingInPlaceStart = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -1093,6 +1074,12 @@ function ChatWorkspaceContent({
 			...pendingQueuedMessages,
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages],
+	);
+	// The dock omits queued turns that are not the user's own; the daemon needs
+	// the whole queue, with those turns left where they were.
+	const reorderQueuedTurns = useCallback(
+		(dockOrder: string[]) => onReorderQueuedTurns?.(fullQueuedTurnOrder(snapshot, dockOrder)) ?? Promise.resolve(),
+		[onReorderQueuedTurns, snapshot],
 	);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
@@ -1587,7 +1574,7 @@ function ChatWorkspaceContent({
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
-					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
+					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
 				/>
@@ -1601,6 +1588,7 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
+			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
@@ -1624,6 +1612,13 @@ function ChatWorkspaceContent({
 		startupState === "provisioning" || agentResuming ||
 		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
+	// A Freestyle Chat session starting or waking stays on its conversation:
+	// the composer shimmers and its messages wait in the control plane's turn
+	// queue until the worker connects (cloudChatStartingInPlace).
+	const cloudStarting = cloudChatStartingInPlace(session);
+	// A local or other-provider orchestrator opens its composer once it is up.
+	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
+	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
 		: currentSetupStep === "worktree" ? "Preparing your workspace"
@@ -1777,7 +1772,7 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
+				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -1963,9 +1958,9 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
-									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
 								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
@@ -2035,23 +2030,23 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
+										willQueue={Boolean(turn) || startupQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning"
+											session?.provisionState === "provisioning" || cloudStarting
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder
-												: openingStarting && !session
+												: (openingStarting && !session) || pendingInPlaceStart
 												// Same words the session shows once it can queue, so nothing changes on handoff.
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-												: orchestratorStarting
+												: orchestratorBlocksComposer
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
@@ -2286,7 +2281,7 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2314,7 +2309,7 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2327,7 +2322,6 @@ function ChatHeader({
 	slideIn?: boolean;
 }) {
 	const { t } = useTranslation();
-	const providerLabel = agentLabel(snapshot.harness);
 	const sessionIsOrchestrator = session
 		? isOrchestratorSession(session)
 		: sessionRole === "orchestrator";
@@ -2380,41 +2374,33 @@ function ChatHeader({
 						ref={tabListRef}
 						role="tablist"
 					>
-						{session ? (
-							<SessionPaneTab
-								isActive={timelineActive}
-								label={label}
-								onSelect={timelineActive ? undefined : onSelectChat}
-								onRenamed={onSessionRenamed}
-								session={session}
-								tabAction={sessionTabAction}
-								tabActionWide={sessionTabActionWide}
-							/>
-						) : (
-							<button
-								aria-current={timelineActive ? true : undefined}
-								aria-label={`${label} · ${providerLabel}`}
-								aria-selected={timelineActive}
-								data-terminal-role="primary"
-								className={cn(
-									"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-									timelineActive
-										? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-										: "text-muted-foreground hover:bg-raised hover:text-foreground",
-								)}
-								onClick={timelineActive ? undefined : onSelectChat}
-								role="tab"
-								tabIndex={timelineActive || orderedAuxiliaryTabs.length === 0 ? 0 : -1}
-								title={label}
-								type="button"
-							>
-								<AgentAvatar className="size-icon-base" decorative provider={snapshot.harness} />
-								<span className="truncate">{label}</span>
-							</button>
-						)}
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
-								<div className="flex w-max items-stretch">
+							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
+								{/* The macOS header is a window drag region outside its controls; the
+								    whole tab row opts out so separators and tab edges still take
+								    wheel scrolling and clicks. */}
+								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
+								<div className="flex shrink-0 self-stretch">
+									{session ? (
+										<SessionPaneTab
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											onRenamed={onSessionRenamed}
+											session={session}
+											tabAction={sessionTabAction}
+											tabActionPinned={sessionTabActionPinned}
+										/>
+									) : (
+										<SessionPaneTab
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											provider={snapshot.harness}
+											title={label}
+										/>
+									)}
+								</div>
 								<Reorder.Group
 									as="div"
 									axis="x"
@@ -2433,31 +2419,19 @@ function ChatHeader({
 											tabKey={tab.key}
 										/>
 									) : (
-										<DraggableChatTab key={tab.key} value={tab.key}>
+										<DraggableWorkspaceTab key={tab.key} value={tab.key}>
 											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
-												<button
-													aria-current={reviewerActive && !workspaceActiveTabKey ? true : undefined}
-													aria-label="Reviewer"
-													aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
-													className={cn(
-														"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-														reviewerActive && !workspaceActiveTabKey
-															? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-															: "text-muted-foreground hover:bg-raised hover:text-foreground",
-													)}
-													onClick={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
-													role="tab"
-													tabIndex={reviewerActive && !workspaceActiveTabKey ? 0 : -1}
+												<SessionPaneTab
+													icon={<AgentAvatar className="size-icon-sm!" decorative provider={tab.terminal.harness} />}
+													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
+													label={t("terminal.reviewer")}
+													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
 													title={tab.terminal.harness}
-													type="button"
-												>
-													<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
-													<span className="truncate">Reviewer</span>
-												</button>
+												/>
 											) : (
 												tab.tab.content
 											)}
-										</DraggableChatTab>
+										</DraggableWorkspaceTab>
 									))}
 								</Reorder.Group>
 								{workspaceTabActions}
@@ -2472,7 +2446,7 @@ function ChatHeader({
 					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
 					data-testid="session-action-region"
 				>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 					{headerActions}
 				</div>
 			</div>
@@ -3579,12 +3553,18 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		return groupByTurn({ ...snapshot, items: timelineItems })
+		const groups = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
+		if (!workerUpdates) return groups;
+		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return groups;
+		return groups
+			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+			.filter((group) => group.items.length > 0);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5141,9 +5121,14 @@ function TimelineItem({
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
+		const annotations = steeredBrowserFeedback(item);
 		return (
 			<FromAgent item={item}>
-				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				{annotations ? (
+					<SteeredBrowserFeedback annotations={annotations} />
+				) : (
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				)}
 			</FromAgent>
 		);
 	}

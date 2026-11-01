@@ -68,7 +68,9 @@ export function AgentModelCombobox({
 	retryAt,
 	onChange,
 	onCustom,
+	onUseDefault,
 	emptyLabel,
+	footer,
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
@@ -93,8 +95,12 @@ export function AgentModelCombobox({
 	retryAt?: string | null;
 	onChange: (value: string) => void;
 	onCustom?: (value: string) => void;
+	/** Offers the agent's native default as a choice, above the listed models. */
+	onUseDefault?: () => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
+	/** A note under the models, such as where they come from. */
+	footer?: ReactNode;
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
@@ -416,6 +422,16 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
+						{onUseDefault && normalizedSearch === "" && (
+							<>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+									<span className="truncate text-settings-label">
+										{t("settings.models.useConfiguredDefault")}
+									</span>
+								</DropdownMenuItem>
+								{visibleModels.length > 0 && <DropdownMenuSeparator />}
+							</>
+						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -520,6 +536,12 @@ export function AgentModelCombobox({
 						aria-hidden="true"
 					/>
 				</div>
+				{footer && (
+					<div className="shrink-0">
+						<DropdownMenuSeparator />
+						<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">{footer}</p>
+					</div>
+				)}
 				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
 				{variant && tuning && (variant.family.efforts.length > 1 || variant.family.hasThinkingChoice) && (
 					<div className="shrink-0">
