@@ -241,7 +241,7 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(toolbar).toBeHidden();
 	});
 
-	test("a tall chat selection sticks to the pane top and keeps the disabled side-chat label", async ({ page }) => {
+	test("a tall chat selection flips below its first line, pins after scrolling, and keeps the disabled side-chat label", async ({ page }) => {
 		const text = Array.from({ length: 80 }, (_, i) => `Selected parent context line ${i + 1}.`).join("\n\n");
 		await openChatSession(page, after, filePath, text, true, true);
 		const log = page.getByRole("log", { name: "Conversation" });
@@ -250,6 +250,8 @@ test.describe("Add to chat from highlighted code", () => {
 			const body = pane.querySelector("[data-chat-message-body]")!;
 			pane.scrollTop = 0;
 			const range = document.createRange(); range.selectNodeContents(body);
+			const first = Array.from(range.getClientRects()).find(rect => rect.width > 0 && rect.height > 0)!;
+			pane.scrollTop += first.top - pane.getBoundingClientRect().top - 20;
 			const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
 			const start = performance.now();
 			document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
@@ -269,7 +271,8 @@ test.describe("Add to chat from highlighted code", () => {
 			expect(box.x).toBeGreaterThanOrEqual(pane.x);
 			expect(box.x + box.width).toBeLessThanOrEqual(pane.x + pane.width);
 		};
-		await check();
+		const firstBottom = await page.evaluate(() => Array.from(getSelection()!.getRangeAt(0).getClientRects()).find(rect => rect.width > 0 && rect.height > 0)!.bottom);
+		expect(Math.abs((await toolbar.boundingBox())!.y - firstBottom - 6)).toBeLessThan(2);
 		await log.evaluate((pane) => { pane.scrollTop += 300; });
 		await check();
 		const highlighted = await page.evaluate(() => getSelection()?.toString());
@@ -337,10 +340,10 @@ test.describe("Add to chat from highlighted code", () => {
 		await page.screenshot({ path: test.info().outputPath("file-selection.png") });
 		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
 		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
-  await composer.fill("Ask about this large selection"); await composer.press("Enter");
-  await expect.poll(() => sentToChat.length).toBe(1);
-  expect(sentToChat[0].fileReferences[0]).toMatchObject({line:1,endLine:80});
-  expect(sentToChat[0].fileReferences[0].lines).toHaveLength(80);
+		await composer.fill("Ask about this large selection"); await composer.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({line:1,endLine:80});
+		expect(sentToChat[0].fileReferences[0].lines).toHaveLength(80);
 	});
 
 	test("Cmd/Ctrl+L asks about the highlighted lines", async ({ page }) => {
@@ -391,29 +394,29 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
 	});
 
- for (const mode of ["file", "diff"] as const) test(mode + ": selection survives idle, focus and background cache completion", async ({ page }) => {
-  const { inspector } = await openChatSession(page);
-  await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
-  const first = row(page, CENTER, 3);
-  await selectText(page, first, row(page, CENTER, 6));
-  await expect(askButton(page)).toBeVisible();
-  await first.evaluate(element => { (window as unknown as { selectionProbe: Element }).selectionProbe = element; });
-  await page.evaluate(async () => {
-   const modulePath = "/src/renderer/lib/query-client.ts";
-   const { queryClient } = await import(/* @vite-ignore */ modulePath);
-   // A cache write represents a request already in flight when selection began.
-   queryClient.setQueriesData({ predicate: (query: { state: { data?: unknown } }) => {
-    const data = query.state.data as { path?: string; content?: string } | undefined;
-    return data?.path === "src/retry.ts" && typeof data.content === "string";
-   } }, (data: { content: string; fileFingerprint?: string } | undefined) => data ? { ...data, content: data.content + "\n// refreshed", fileFingerprint: "new-background-revision" } : data);
-   window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus"));
-  });
-  await page.waitForTimeout(6000); // Exceed the viewer's five-second freshness interval.
-  await expect(askButton(page)).toBeVisible();
-  expect(await first.evaluate(element => element === (window as unknown as { selectionProbe: Element }).selectionProbe)).toBe(true);
-  await askButton(page).getByRole("button", { name: "Add to chat" }).click();
-  await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
- });
+	for (const mode of ["file", "diff"] as const) test(mode + ": selection survives idle, focus and background cache completion", async ({ page }) => {
+		const { inspector } = await openChatSession(page);
+		await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
+		const first = row(page, CENTER, 3);
+		await selectText(page, first, row(page, CENTER, 6));
+		await expect(askButton(page)).toBeVisible();
+		await first.evaluate(element => { (window as unknown as { selectionProbe: Element }).selectionProbe = element; });
+		await page.evaluate(async () => {
+			const modulePath = "/src/renderer/lib/query-client.ts";
+			const { queryClient } = await import(/* @vite-ignore */ modulePath);
+			// A cache write represents a request already in flight when selection began.
+			queryClient.setQueriesData({ predicate: (query: { state: { data?: unknown } }) => {
+				const data = query.state.data as { path?: string; content?: string } | undefined;
+				return data?.path === "src/retry.ts" && typeof data.content === "string";
+			} }, (data: { content: string; fileFingerprint?: string } | undefined) => data ? { ...data, content: data.content + "\n// refreshed", fileFingerprint: "new-background-revision" } : data);
+			window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus"));
+		});
+		await page.waitForTimeout(6000); // Exceed the viewer's five-second freshness interval.
+		await expect(askButton(page)).toBeVisible();
+		expect(await first.evaluate(element => element === (window as unknown as { selectionProbe: Element }).selectionProbe)).toBe(true);
+		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+	});
 
 	test("the button hides on Escape, when scrolled away (returning when back), and when the rows redraw", async ({ page }) => {
 		const { inspector } = await openChatSession(page);
