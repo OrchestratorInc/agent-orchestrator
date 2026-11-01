@@ -129,8 +129,8 @@ func (q *Queries) ClearReviewerHandleByHarness(ctx context.Context, arg ClearRev
 
 const failUnsubmittedReviewBatchForChatTurn = `-- name: FailUnsubmittedReviewBatchForChatTurn :exec
 UPDATE review_run SET status = 'failed', body = COALESCE(
-    (SELECT NULLIF(trim(turn.error_message, char(9) || char(10) || char(11) || char(12) || char(13) || ' '), '') FROM conversation_turns AS turn
-     WHERE turn.id = ?1 AND turn.state = 'failed'),
+    (SELECT NULLIF(CAST(?1 AS TEXT), '') FROM conversation_turns AS turn
+     WHERE turn.id = ?2 AND turn.state = 'failed'),
     'reviewer Chat turn ended without submitting a result'
 )
 WHERE status = 'running' AND verdict = '' AND batch_id != ''
@@ -138,7 +138,7 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
     SELECT 1 FROM conversation_turns AS turn
     JOIN conversation_messages AS message ON message.turn_id = turn.id AND message.conversation_id = turn.conversation_id
     JOIN review ON review.id = turn.handled_by_review_id
-    WHERE turn.id = ?1
+    WHERE turn.id = ?2
       AND turn.state IN ('completed', 'recovered', 'failed', 'interrupted', 'cancelled')
       AND turn.handled_by_review_id = review_run.review_id
       AND turn.controller_generation != '' AND turn.controller_generation = review.controller_generation
@@ -148,8 +148,13 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
   )
 `
 
-func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, turnID string) error {
-	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, turnID)
+type FailUnsubmittedReviewBatchForChatTurnParams struct {
+	ErrorSummary string
+	TurnID       string
+}
+
+func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, arg FailUnsubmittedReviewBatchForChatTurnParams) error {
+	_, err := q.db.ExecContext(ctx, failUnsubmittedReviewBatchForChatTurn, arg.ErrorSummary, arg.TurnID)
 	return err
 }
 
