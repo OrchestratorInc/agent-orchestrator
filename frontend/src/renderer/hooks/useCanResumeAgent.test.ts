@@ -17,14 +17,15 @@ const exitedSession: WorkspaceSession = {
 	prs: [],
 };
 
-// A Qwen chat imported read-only: the daemon marks it historyOnly, so it is
-// shown but never resumable from AO's worktree.
+// An import the daemon marked history-only (historyOnly=true): shown but never
+// resumable from AO's worktree, so it must offer no resume. Keyed off the flag,
+// not the harness, so it stays correct as harnesses gain full-import support.
 const historyOnlyImport: WorkspaceSession = {
 	id: "session-2",
 	workspaceId: "project-1",
 	workspaceName: "Project One",
-	title: "Imported Qwen chat",
-	provider: "qwen",
+	title: "Imported read-only chat",
+	provider: "codex",
 	kind: "worker",
 	status: "idle",
 	needsResume: true,

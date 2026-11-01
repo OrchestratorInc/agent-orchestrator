@@ -178,6 +178,11 @@ type SessionImportSource struct {
 	Transferred   bool   `json:"transferred"`
 	Prepared      bool   `json:"prepared"`
 	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// ResumeCwd is the working directory AO last relocated a cwd-keyed provider's
+	// transcript for (see AgentNativeSessionResumePreparer). Persisted so a later
+	// open whose launch cwd drifted re-keys from the copy that holds AO's turns,
+	// never from the untouched original. Empty until the first successful prepare.
+	ResumeCwd string `json:"resumeCwd,omitempty"`
 	// HistoryOnly marks an import that AO can show but never resume, because the
 	// provider cannot reopen a CLI-created conversation from AO's worktree (its
 	// native resume is keyed to the original folder). Such a session keeps its

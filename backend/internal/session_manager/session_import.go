@@ -90,7 +90,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -119,6 +119,48 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 		value = filepath.Dir(source.ConfigDir)
 	}
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
+}
+
+// prepareImportedNativeResume relocates an imported conversation so a cwd-keyed
+// provider can resume it from the AO worktree. It is called on every launch but
+// is idempotent: the adapter copies the transcript to the worktree's native
+// lookup path on the first open and leaves that copy — which then carries AO's
+// own turns — untouched on later opens. It is a no-op for harnesses that resume
+// cwd-independently (no AgentNativeSessionResumePreparer) and for non-import
+// launches. It fails clearly when the copy does not land at the lookup path, so
+// a provider that silently starts an empty session is caught rather than shipped.
+func (m *Manager) prepareImportedNativeResume(ctx context.Context, rec domain.SessionRecord, launchPath string) error {
+	source := rec.Metadata.ImportSource
+	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
+		return nil
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return nil
+	}
+	preparer, ok := agent.(ports.AgentNativeSessionResumePreparer)
+	if !ok {
+		return nil
+	}
+	prepared, err := preparer.PrepareNativeSessionResume(ctx, ports.NativeSessionRef{NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir}, launchPath, source.ResumeCwd)
+	if err != nil {
+		return err
+	}
+	if info, statErr := os.Stat(prepared); statErr != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("prepared native transcript is not at the provider's lookup path %q: %w", prepared, statErr)
+	}
+	// Remember the cwd we prepared for so a later open whose launch cwd drifted
+	// re-keys from this copy, not the untouched original. Only written when it
+	// changed (first open, or a drift), so steady-state opens do no DB write.
+	if source.ResumeCwd != launchPath {
+		next := *source
+		next.ResumeCwd = launchPath
+		if _, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock()); err != nil {
+			// Best effort: the copy is already in place, and the next open recomputes.
+			m.logger.Warn("could not persist imported resume cwd", "sessionID", rec.ID, "error", err)
+		}
+	}
+	return nil
 }
 
 func sameDirectory(a, b string) bool {
@@ -157,6 +199,10 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Kimi publishes a per-session lock file holding the live writer's pid;
 		// its transcript is append-open-close so it is never held open for lsof.
 		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
+	case domain.HarnessQwen:
+		// Qwen registers each live process under sessions/<pid>.json; its
+		// transcript is append-open-close so lsof never sees a held writer.
+		return qwenSessionLive(ctx, source.ConfigDir, source.NativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
 		// per-session lock or live-session registry, and its transcript path is a
@@ -184,6 +230,8 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
 	case domain.HarnessKimi:
 		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
+	case domain.HarnessQwen:
+		return qwenSessionLive(ctx, source.ConfigDir, nativeID, rec.Metadata.WorkspacePath)
 	}
 	return false
 }

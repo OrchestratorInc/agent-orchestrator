@@ -527,6 +527,12 @@ func (m *Manager) resumeChatController(
 	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
 		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
 	}
+	// A cwd-keyed provider (Qwen and other Gemini/Pi forks) finds a chat by the
+	// folder it runs in, so relocate the imported transcript to the worktree's
+	// native path before resuming. Idempotent and a no-op for other harnesses.
+	if err := m.prepareImportedNativeResume(ctx, rec, launchPath); err != nil {
+		return RestoreResult{}, relaunchFailed("native resume prep", fmt.Errorf("%s %s: prepare native resume: %w", operation, rec.ID, err))
+	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
 	if len(awakeTargets) > 0 {

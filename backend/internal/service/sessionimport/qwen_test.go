@@ -159,9 +159,11 @@ func TestQwenPromptlessIsNotAConversation(t *testing.T) {
 	}
 }
 
-func TestQwenImportIsHistoryOnly(t *testing.T) {
-	if !historyOnlyImport(domain.HarnessQwen) {
-		t.Fatal("Qwen imports must be history-only")
+func TestQwenImportIsFullResume(t *testing.T) {
+	// Qwen now does a full copy-and-resume import, so it must NOT be flagged
+	// history-only (that would lock the composer and block resume).
+	if historyOnlyImport(domain.HarnessQwen) {
+		t.Fatal("Qwen imports must not be history-only; they resume via transcript relocation")
 	}
 	ctx := context.Background()
 	root := t.TempDir()
@@ -183,8 +185,8 @@ func TestQwenImportIsHistoryOnly(t *testing.T) {
 		t.Fatalf("import: %v %v", results, err)
 	}
 	rec := st.sessions[0]
-	if rec.Metadata.ImportSource == nil || !rec.Metadata.ImportSource.HistoryOnly {
-		t.Fatalf("import source not history-only: %#v", rec.Metadata.ImportSource)
+	if rec.Metadata.ImportSource == nil || rec.Metadata.ImportSource.HistoryOnly {
+		t.Fatalf("import source must be resumable, not history-only: %#v", rec.Metadata.ImportSource)
 	}
 	if !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat {
 		t.Fatalf("unexpected record: %#v", rec)
