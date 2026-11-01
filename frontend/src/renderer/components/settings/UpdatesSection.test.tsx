@@ -128,6 +128,19 @@ it("names the newer build when a full disk holds it back (#6607)", async () => {
 	expect(screen.getByText("v0.13.8-nightly.202610121355 is available")).toBeVisible();
 });
 
+it("does not offer restart when native staging is no longer ready", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "0.13.7-nightly.202610101220",
+		staged: { version: "0.13.7-nightly.202610101220", stagedAt: 1, escalated: false, ready: false },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText(/0.13.7/)).toBeVisible();
+	expect(screen.queryByRole("button", { name: "Restart & install" })).not.toBeInTheDocument();
+	expect(screen.queryByText("Downloaded. Restart to finish updating.")).not.toBeInTheDocument();
+});
+
 // A dump the main process has not learned to rewrite yet must still stay out
 // of Settings: no response body, headers or app.asar paths (#5755).
 const UPDATER_DUMP =
