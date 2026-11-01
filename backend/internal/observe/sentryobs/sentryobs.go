@@ -1,8 +1,7 @@
 // Package sentryobs is the daemon-side Sentry integration. It captures genuine
-// server faults (5xx and panics) with their Go stack, grouped by the caller's
-// stable fingerprint. It is the
-// surface where the daemon's INTERNAL_ERROR 500 root causes
-// finally get a stack instead of an opaque count.
+// server faults (5xx and panics) with a stable fingerprint. Recovered panics
+// keep their interrupted frame. Ordinary Go errors have no captured stack;
+// their wrapped causes expose bounded types instead of an opaque count.
 //
 // It is a no-op until a DSN is configured (AO_SENTRY_DSN), and deny-by-default
 // on privacy: no PII, no server name, no request data, no breadcrumbs, and
@@ -38,6 +37,17 @@ var installID atomic.Pointer[string]
 var release atomic.Pointer[string]
 var environment atomic.Pointer[string]
 var approvedRoutes sync.Map
+var errorBudget = struct {
+	sync.Mutex
+	day    int
+	groups map[string]errorBudgetGroup
+}{groups: make(map[string]errorBudgetGroup)}
+
+type errorBudgetGroup struct {
+	minute      int64
+	minuteCount int
+	dayCount    int
+}
 
 var captureGate = struct {
 	sync.Mutex
@@ -112,6 +122,12 @@ var safeErrorCodes = map[string]struct{}{
 	"PROJECT_PERMISSIONS_UPDATE_FAILED":         {},
 	"PROJECT_REMOVE_FAILED":                     {},
 	"PROJECT_SETTINGS_UPDATE_FAILED":            {},
+	"REPORT_CREATE_FAILED":                      {},
+	"REPORT_LIST_FAILED":                        {},
+	"REVIEW_OPERATION_FAILED":                   {},
+	"CHAT_DELIVERY_FAILED":                      {},
+	"CONVERSATION_READ_FAILED":                  {},
+	"ORCHESTRATOR_SPAWN_FAILED":                 {},
 	"RUNTIME_CREATE_FAILED":                     {},
 	"SHELL_TERMINAL_NO_PROJECT_LOOKUP":          {},
 	"SHELL_TERMINAL_NO_SESSION_LOOKUP":          {},
@@ -146,6 +162,10 @@ type Config struct {
 // no-op. Safe to call once at daemon startup.
 func Init(cfg Config) error {
 	enabled.Store(false)
+	errorBudget.Lock()
+	errorBudget.day = 0
+	errorBudget.groups = make(map[string]errorBudgetGroup)
+	errorBudget.Unlock()
 	installID.Store(&cfg.InstallID)
 	version := cfg.Release
 	if !safeRelease.MatchString(version) {
@@ -273,6 +293,8 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 	}
 	if code := event.Tags["error_code"]; safeErrorCode(code) {
 		label += " (" + code + ")"
+	} else if typ := event.Tags["error_type"]; safeErrorType(typ) && typ != "unknown" {
+		label += " (" + typ + ")"
 	}
 	event.Message = label
 	event.ServerName = "" // never leak the machine hostname
@@ -368,6 +390,8 @@ func safeSentryTag(key, value string) bool {
 		return ok
 	case "error_kind":
 		return telemetrymeta.IsErrorKind(value)
+	case "error_type":
+		return safeErrorType(value)
 	case "panic_kind":
 		return telemetrymeta.IsPanicKind(value)
 	case "error_code":
@@ -384,6 +408,14 @@ func safeErrorCode(code string) bool {
 	return ok
 }
 
+func safeErrorType(value string) bool {
+	switch value {
+	case "unknown", "context_deadline", "context_canceled", "sqlite", "exec_exit", "filesystem", "network", "api_error":
+		return true
+	}
+	return false
+}
+
 // ShouldCaptureStatus reports whether an HTTP status is a genuine server fault
 // worth an issue. 5xx qualifies, except 503 (transient/retryable contention).
 func ShouldCaptureStatus(status int) bool {
@@ -397,7 +429,40 @@ func CaptureError(ctx context.Context, err error, tags map[string]string, finger
 		return
 	}
 	defer leaveCapture()
-	capture(sentry.LevelError, tags, fingerprint, route, site)
+	if !allowErrorFingerprint(fingerprint, time.Now().UTC()) {
+		return
+	}
+	capture(sentry.LevelError, tags, fingerprint, route, site, false)
+}
+
+func allowErrorFingerprint(fingerprint string, now time.Time) bool {
+	if !safeFingerprint.MatchString(fingerprint) {
+		fingerprint = "unknown"
+	}
+	errorBudget.Lock()
+	defer errorBudget.Unlock()
+	day := now.YearDay() + now.Year()*366
+	if errorBudget.day != day {
+		errorBudget.day = day
+		errorBudget.groups = make(map[string]errorBudgetGroup)
+	}
+	group, known := errorBudget.groups[fingerprint]
+	if !known && len(errorBudget.groups) >= 1024 {
+		fingerprint = "unknown"
+		group = errorBudget.groups[fingerprint]
+	}
+	minute := now.Unix() / 60
+	if group.minute != minute {
+		group.minute = minute
+		group.minuteCount = 0
+	}
+	if group.minuteCount >= 5 || group.dayCount >= 200 {
+		return false
+	}
+	group.minuteCount++
+	group.dayCount++
+	errorBudget.groups[fingerprint] = group
+	return true
 }
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.
@@ -406,7 +471,7 @@ func CapturePanic(ctx context.Context, tags map[string]string, fingerprint strin
 		return
 	}
 	defer leaveCapture()
-	capture(sentry.LevelFatal, tags, fingerprint, route, site)
+	capture(sentry.LevelFatal, tags, fingerprint, route, site, true)
 }
 
 // RecoverBackground reports a panic without sending its value to Sentry, then
@@ -427,7 +492,7 @@ func RecoverBackground() {
 	panic(rec)
 }
 
-func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, isPanic bool) {
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(level)
 		applyTags(scope, tags, route)
@@ -436,7 +501,11 @@ func capture(level sentry.Level, tags map[string]string, fingerprint string, rou
 		}
 		event := sentry.NewEvent()
 		event.Level = level
-		event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site, tags["operation"])}}
+		if isPanic {
+			event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site, tags["operation"])}}
+		} else {
+			event.Exception = []sentry.Exception{{}}
+		}
 		sentry.CaptureEvent(event)
 	})
 }

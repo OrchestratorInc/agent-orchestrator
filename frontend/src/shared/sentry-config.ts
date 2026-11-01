@@ -15,6 +15,19 @@ export function daemonSentryDsn(override: string | undefined, isDev: boolean): s
 }
 
 export const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
+export const SAFE_APP_ASSET = /^assets\/[A-Za-z][A-Za-z0-9_-]{0,50}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/;
+
+// Stack text is writable by JavaScript. Only fixed names can cross the sender.
+const SAFE_FUNCTION_NAMES = new Set([
+	"App", "LazyChunkBoundary", "TelemetryBoundary", "bindRendererErrorHandlers",
+	"captureRendererException", "initMainSentry", "renderWithHooks",
+	"commitRoot", "startDaemon", "openWindow", "loadProject", "loadState",
+	"renderWidget", "updateView",
+]);
+
+export function safeSentryFunctionName(value: unknown, fallback: string): string {
+	return typeof value === "string" && SAFE_FUNCTION_NAMES.has(value) ? value : fallback;
+}
 
 const SAFE_EXCEPTION_TYPES = new Set([
 	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",

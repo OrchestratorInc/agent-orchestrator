@@ -35,13 +35,20 @@ describe("classifyError — severity + owner", () => {
 		for (const meta of [
 			{ code: "SERVICE_UNAVAILABLE", httpStatus: 503 },
 			{ category: "http_5xx", code: "SERVICE_UNAVAILABLE", httpStatus: 503 },
-			{ category: "http_5xx", httpStatus: 503 },
 		]) {
 			const t = classifyError(meta);
 			expect(t.transient).toBe(true);
 			expect(t.report).toBe(false);
 			expect(t.severity).toBe("P2");
 		}
+	});
+
+	it("reports unknown 503 failures and skips only confirmed expected conflicts", () => {
+		expect(classifyError({ category: "http_5xx", httpStatus: 503 })).toMatchObject({ severity: "P1", report: true });
+		for (const code of ["REVIEW_ALREADY_RUNNING", "REVIEW_HEAD_ALREADY_REVIEWED", "CHAT_REQUEST_NOT_PENDING"]) {
+			expect(classifyError({ category: "conflict", httpStatus: 409, code }).report).toBe(false);
+		}
+		expect(classifyError({ category: "conflict", httpStatus: 409, code: "UNKNOWN_CONFLICT" }).report).toBe(true);
 	});
 
 	it("a genuinely unreachable daemon (503 synthetic) still pages as P1", () => {

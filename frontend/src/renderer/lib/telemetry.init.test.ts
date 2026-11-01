@@ -85,8 +85,12 @@ describe("initTelemetry recovery", () => {
 		}));
 
 		const { initTelemetry } = await import("./telemetry");
+		const listen = vi.spyOn(window, "addEventListener");
 		expect(await initTelemetry()).toBe(false);
 		expect(await initTelemetry()).toBe(false);
+		expect(listen).toHaveBeenCalledWith("error", expect.any(Function));
+		expect(listen).toHaveBeenCalledWith("unhandledrejection", expect.any(Function));
+		listen.mockRestore();
 		// Memoized: the withheld result is not re-attempted.
 		expect(getBootstrap).toHaveBeenCalledTimes(1);
 	});

@@ -41,6 +41,33 @@ func TestShouldCaptureStatus(t *testing.T) {
 	}
 }
 
+func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
+	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	fingerprint := "9999999999999999"
+	for i := 0; i < 5; i++ {
+		if !allowErrorFingerprint(fingerprint, when) {
+			t.Fatalf("event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprint(fingerprint, when) {
+		t.Fatal("sixth event in a minute was accepted")
+	}
+	if !allowErrorFingerprint(fingerprint, when.Add(time.Minute)) {
+		t.Fatal("new minute did not admit a new event")
+	}
+	for minute := 2; minute < 42; minute++ {
+		for i := 0; i < 5; i++ {
+			allowErrorFingerprint(fingerprint, when.Add(time.Duration(minute)*time.Minute))
+		}
+	}
+	if allowErrorFingerprint(fingerprint, when.Add(42*time.Minute)) {
+		t.Fatal("daily budget exceeded")
+	}
+	if !allowErrorFingerprint(fingerprint, when.Add(24*time.Hour)) {
+		t.Fatal("new day did not reset the budget")
+	}
+}
+
 func TestInitNoDSNIsNoOp(t *testing.T) {
 	if err := Init(Config{}); err != nil {
 		t.Fatalf("Init with empty DSN: %v", err)
@@ -233,7 +260,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
 		}
-		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || event.Exception[0].Stacktrace != nil {
 			t.Fatalf("diagnostics lost: %+v", event)
 		}
 		if event.Fingerprint[0] != "0123456789abcdef" {
@@ -367,9 +394,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
 		t.Fatalf("route and code fingerprint = %v, want %q", event.Fingerprint, wantGroup)
 	}
-	frames := event.Exception[0].Stacktrace.Frames
-	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureError") {
-		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	if event.Exception[0].Stacktrace != nil {
+		t.Fatalf("ordinary Go error acquired a synthetic stack: %+v", event.Exception[0].Stacktrace)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {

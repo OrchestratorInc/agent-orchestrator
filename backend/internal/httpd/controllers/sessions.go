@@ -2633,7 +2633,7 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{

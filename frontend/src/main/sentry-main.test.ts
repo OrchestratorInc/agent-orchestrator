@@ -243,7 +243,7 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
 			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "loadProject", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "Renderer error", user: { id: "ins_test" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "loadProject", "renderer"] });
+		expect(result).toMatchObject({ message: "Renderer Error in loadProject (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_test" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "loadProject", "renderer"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
 		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "loadProject", lineno: undefined, in_app: true });
@@ -253,7 +253,7 @@ describe("Electron main Sentry configuration", () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (type: string, functionName: string, message: string) => {
-			transport.capture({ consentGeneration: "generation-1", kind: "exception", message, exception: { type, frames: [{ function: functionName, lineno: 42 }] } });
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message, exception: { type, frames: [{ function: functionName, filename: "assets/app-A1B2C3D4.js", lineno: 42 }] } });
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
 		const first = capture("TypeError", "renderWidget", "resume agent ai-sports-coach-113");
@@ -264,8 +264,18 @@ describe("Electron main Sentry configuration", () => {
 		expect(same.fingerprint).toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherFrame.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderWidget", lineno: 42, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderWidget", filename: "assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
+	});
+
+	it("titles renderer API failures with the actual allowlisted code", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED" } });
+		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		expect(event.message).toBe("Renderer API error (CHAT_DELIVERY_FAILED)");
+		expect(event.tags).toMatchObject({ code: "CHAT_DELIVERY_FAILED", category: "http_5xx" });
+		expect(JSON.stringify(event)).not.toContain("private session");
 	});
 
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
@@ -353,6 +363,8 @@ describe("sanitizeRendererCapture", () => {
 		expect(sanitizeRendererCapture({ ...base, level: "debug" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "ProjectError", frames: [] } })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "/Users/alice/private-repo" }] } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "assets/../private.js" }] } })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "private-repo" }] } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", filename: "assets/app-A1B2C3D4.js", lineno: 5 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 5 }]);
 	});
 });
