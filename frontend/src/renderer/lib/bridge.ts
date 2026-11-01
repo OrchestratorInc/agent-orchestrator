@@ -109,6 +109,7 @@ export const aoBridge: AoBridge =
 		},
 		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 		editorHandoff: {
+			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
 				targets: [],
 				preferredEditorId: "cursor",

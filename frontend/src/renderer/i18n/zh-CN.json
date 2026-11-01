@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "复制路径",
+	"chat.path.revealInFinder": "在 Finder 中显示",
+	"chat.path.revealInFileManager": "在文件管理器中显示",
+	"chat.path.openWith": "使用 {{editor}} 打开",
+	"chat.path.actionFailed": "无法完成路径操作",
 	"sideChat.closingTab": "正在关闭",
 	"sideChat.closing": "正在关闭侧边聊天。确认停止后将消失。",
 	"sideChat.retryClose": "重试关闭",
@@ -916,7 +921,7 @@
 	"inspector.openInSystemBrowser": "在系统浏览器中打开",
 	"link.copy": "复制链接",
 	"link.openInAOBrowser": "在 AO 浏览器中打开",
-	"link.openInFiles": "在文件中打开",
+	"link.openInAO": "在 AO 中打开",
 	"link.openInExternalBrowser": "在外部浏览器中打开",
 	"inspector.openInlineComments": "{{count}} 条未解决的行内评论",
 	"inspector.requestRereviewPR": "请求重新评审 PR",

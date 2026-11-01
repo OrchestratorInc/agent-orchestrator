@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Copiar caminho",
+	"chat.path.revealInFinder": "Mostrar no Finder",
+	"chat.path.revealInFileManager": "Mostrar no gerenciador de arquivos",
+	"chat.path.openWith": "Abrir com {{editor}}",
+	"chat.path.actionFailed": "Não foi possível concluir a ação do caminho",
 	"sideChat.closingTab": "Fechando",
 	"sideChat.closing": "Fechando conversa lateral. Ela desaparecerá após a confirmação.",
 	"sideChat.retryClose": "Tentar fechar novamente",
@@ -926,7 +931,7 @@
 	"inspector.openInSystemBrowser": "Abrir no navegador do sistema",
 	"link.copy": "Copiar link",
 	"link.openInAOBrowser": "Abrir no navegador do AO",
-	"link.openInFiles": "Abrir em Arquivos",
+	"link.openInAO": "Abrir no AO",
 	"link.openInExternalBrowser": "Abrir no navegador externo",
 	"inspector.openInlineComments": "{{count}} comentários inline abertos",
 	"inspector.requestRereviewPR": "Solicitar nova revisão do PR",

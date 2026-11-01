@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Copy path",
+	"chat.path.revealInFinder": "Reveal in Finder",
+	"chat.path.revealInFileManager": "Reveal in file manager",
+	"chat.path.openWith": "Open with {{editor}}",
+	"chat.path.actionFailed": "Could not complete the path action",
 	"sideChat.closingTab": "Closing",
 	"sideChat.closing": "Closing side chat. It will disappear once shutdown is confirmed.",
 	"sideChat.retryClose": "Retry close",
@@ -913,7 +918,7 @@
 	"inspector.openInSystemBrowser": "Open in System Browser",
 	"link.copy": "Copy link",
 	"link.openInAOBrowser": "Open in ao browser",
-	"link.openInFiles": "Open in Files",
+	"link.openInAO": "Open in AO",
 	"link.openInExternalBrowser": "Open in external browser",
 	"inspector.openInlineComments": "{{count}} open comments",
 	"inspector.requestRereviewPR": "Request to re-review PR",

@@ -52,10 +52,13 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	findWorkspaceFilePath,
+	isAbsoluteFileReference,
+	normalizeWorkspaceFileReference,
 	workspaceFileOpenTarget,
 	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
@@ -113,6 +116,7 @@ const OpenChatLink = createContext<{
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
+	sessionId,
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
@@ -122,6 +126,7 @@ export function ChatLinkProvider({
 	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
+	sessionId?: string;
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
@@ -135,7 +140,13 @@ export function ChatLinkProvider({
 		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
 		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
 	);
-	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
+	const pathMenuValue = useMemo(
+		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
+		[sessionId, remoteHost, sessionLinkHostId, sessionLinkSourceKind],
+	);
+	return <ChatPathMenuContext.Provider value={pathMenuValue}>
+		<OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>
+	</ChatPathMenuContext.Provider>;
 }
 
 function chatUrlTransform(url: string, key: string): string | undefined {
@@ -347,7 +358,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-function MarkdownLink({ href, children, className }: { href?: string; children?: ReactNode; className?: string }) {
+function MarkdownLink({ href, children, className, menuPath }: { href?: string; children?: ReactNode; className?: string; menuPath?: string }) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -357,9 +368,12 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
 	const openInFiles = filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
-		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
+		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
+		return isPotentialWorkspaceFileLink(href)
+			? <ChatPathMenu path={normalizeWorkspaceFileReference(href)}>{unavailable}</ChatPathMenu>
+			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
 	return (
@@ -368,6 +382,7 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
+			menuPath={menuPath ?? (href && (filePath || isPotentialWorkspaceFileLink(href)) ? normalizeWorkspaceFileReference(href) : undefined)}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -521,7 +536,9 @@ export function useChatLinkWorkspaces() {
 export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
-	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
+	const path = explicitWorkspaceFilePath(text);
+	if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
+	return path ? <ChatPathMenu path={path}><span>{children}</span></ChatPathMenu> : <>{children}</>;
 }
 
 function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
@@ -536,16 +553,23 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 		</code>
 	);
 	if (insideLink) return code;
-	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
+	if (!file) {
+		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text}>{code}</ArtifactPathCode>;
+		const path = text ? explicitWorkspaceFilePath(text) : undefined;
+		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
+	}
+	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
 	return (
-		<button
-			type="button"
-			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
-			aria-label={`Open ${file.filePath} in Files`}
-			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
-		>
-			{code}
-		</button>
+		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
+			<button
+				type="button"
+				onClick={openFile}
+				aria-label={`Open ${file.filePath} in Files`}
+				className="inline rounded text-left transition-colors hover:bg-interactive-hover"
+			>
+				{code}
+			</button>
+		</ChatPathMenu>
 	);
 }
 
