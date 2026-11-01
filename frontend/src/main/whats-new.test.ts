@@ -172,6 +172,25 @@ describe("WhatsNewService", () => {
 		await expect(httpError.refresh()).resolves.toBe(false);
 	});
 
+	it("re-evaluates the cached feed against the clock on every list without fetching", async () => {
+		await writeFile(
+			path.join(stateDir, WHATS_NEW_FILE_NAME),
+			JSON.stringify({
+				fetchedAt: NOW,
+				feed: { enabled: true, items: [{ ...announcement, publishedAt: "2026-10-30T00:00:00Z", expiresAt: "2026-11-02T00:00:00Z" }] },
+				dismissed: [],
+			}),
+		);
+		const fetchImpl = vi.fn();
+		const whatsNew = service(fetchImpl as unknown as typeof fetch);
+		await expect(whatsNew.list()).resolves.toEqual([]);
+		now = Date.parse("2026-10-30T00:00:01Z");
+		expect((await whatsNew.list()).map((item) => item.id)).toEqual(["2026-10-notifications"]);
+		now = Date.parse("2026-11-02T00:00:00Z");
+		await expect(whatsNew.list()).resolves.toEqual([]);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
 	it("does nothing when turned off locally", async () => {
 		const fetchImpl = vi.fn();
 		const whatsNew = service(fetchImpl as unknown as typeof fetch, { AO_WHATS_NEW: "0" });

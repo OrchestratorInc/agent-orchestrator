@@ -6,13 +6,23 @@ import { captureRendererEvent } from "./telemetry";
 
 export const whatsNewQueryKey = ["whats-new"] as const;
 
+/**
+ * How often the open app re-asks main which items are live. Eligibility is a
+ * function of the clock (publishedAt, expiresAt), so an item can go live or
+ * expire while the app stays open. list() reads the local cache only; this
+ * never refetches the feed.
+ */
+export const WHATS_NEW_RECHECK_MS = 15 * 60 * 1000;
+
 /** Eligible feed items (main filters by date, version and the kill switches), newest first. */
 export function useWhatsNew() {
 	const queryClient = useQueryClient();
 	const query = useQuery({
 		queryKey: whatsNewQueryKey,
 		queryFn: (): Promise<WhatsNewEntry[]> => aoBridge.whatsNew.list(),
-		staleTime: Infinity,
+		// Stale on the same cadence, so returning to a hidden window rechecks too.
+		staleTime: WHATS_NEW_RECHECK_MS,
+		refetchInterval: WHATS_NEW_RECHECK_MS,
 		retry: false,
 		throwOnError: false,
 	});

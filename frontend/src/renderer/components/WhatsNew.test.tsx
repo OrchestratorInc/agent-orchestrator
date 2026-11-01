@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhatsNewEntry } from "../../shared/whats-new";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +23,7 @@ vi.mock("../stores/ui-store", () => ({
 		selector({ openGlobalSettings: mocks.openGlobalSettings }),
 }));
 
-import { setWhatsNewPanelOpen } from "../lib/whats-new";
+import { WHATS_NEW_RECHECK_MS, setWhatsNewPanelOpen } from "../lib/whats-new";
 import { WhatsNewCard, WhatsNewDialog, formatPublishedAt } from "./WhatsNew";
 
 const announcement: WhatsNewEntry = {
@@ -118,5 +118,40 @@ describe("WhatsNewCard", () => {
 describe("formatPublishedAt", () => {
 	it("keeps a date-only publish date on its calendar day", () => {
 		expect(formatPublishedAt("2026-11-03")).toBe(new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(2026, 10, 3)));
+	});
+});
+
+describe("WhatsNewCard while the app stays open", () => {
+	beforeEach(() => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		mocks.capture.mockClear();
+		act(() => setWhatsNewPanelOpen(false));
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("rechecks eligibility so items go live and expire without a restart", async () => {
+		// Main filters by date; nothing is live yet when the app opens.
+		mocks.items = [];
+		renderWithClient();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1_000);
+		});
+		expect(screen.queryByTestId("whats-new-card")).not.toBeInTheDocument();
+
+		// publishedAt passes while the app is open.
+		mocks.items = [announcement];
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(WHATS_NEW_RECHECK_MS);
+		});
+		expect(screen.getByText("Know when agents finish")).toBeInTheDocument();
+
+		// expiresAt passes while the card is on screen.
+		mocks.items = [];
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(WHATS_NEW_RECHECK_MS);
+		});
+		expect(screen.queryByTestId("whats-new-card")).not.toBeInTheDocument();
 	});
 });
