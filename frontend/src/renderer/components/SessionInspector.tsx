@@ -428,7 +428,8 @@ const SummaryView = memo(function SummaryView({
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
-	const openPRNumber = sessionBranchPR(session, prSummaries)?.number;
+	const branchPR = sessionBranchPR(session, prSummaries);
+	const openPRNumber = branchPR?.number;
 	// "Merged into main" only while the branch tip is what a merged PR shipped;
 	// a new commit after the merge is unshipped work again.
 	const shippedMerge = openPRNumber === undefined && session.branchState?.head
@@ -463,6 +464,7 @@ const SummaryView = memo(function SummaryView({
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={
 				<SessionBranchSummary
+					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
 					hostId={hostId}
 					mergedAt={shippedMerge?.stateChangedAt ?? undefined}
 					onOpenFiles={onOpenFiles}
