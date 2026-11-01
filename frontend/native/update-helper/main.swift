@@ -36,7 +36,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.setActivationPolicy(.accessory)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 270),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Updating Agent Orchestrator"
+        window.title = "Updating Orchestrator"
         window.isReleasedWhenClosed = false
         window.delegate = self
         title.font = .systemFont(ofSize: 22, weight: .semibold)
