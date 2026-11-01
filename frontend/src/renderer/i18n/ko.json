@@ -3615,6 +3615,8 @@
 	"sessionImport.offerDescription": "이 컴퓨터에서 사용하는 에이전트의 대화를 AO에서 이어서 진행하세요. 아직 프로젝트가 아닌 Git 폴더는 프로젝트로 추가됩니다.",
 	"sessionImport.offerDismiss": "나중에",
 	"sessionImport.offerAction": "{{agent}} 대화 가져오기",
+	"sessionImport.offerChoose": "대화 가져오기",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}} (새 프로젝트)",
 	"sessionImport.addsProjects_one": "폴더 {{count}}개를 프로젝트로 추가: {{names}}",
 	"sessionImport.addsProjects_other": "폴더 {{count}}개를 프로젝트로 추가: {{names}}",

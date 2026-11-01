@@ -3615,6 +3615,8 @@
 	"sessionImport.offerDescription": "Unterhaltungen der Agents auf diesem Computer in AO fortsetzen. Git-Ordner, die noch keine Projekte sind, werden als Projekte hinzugefügt.",
 	"sessionImport.offerDismiss": "Nicht jetzt",
 	"sessionImport.offerAction": "{{agent}}-Unterhaltungen importieren",
+	"sessionImport.offerChoose": "Unterhaltungen importieren",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}} (neues Projekt)",
 	"sessionImport.addsProjects_one": "Fügt {{count}} Ordner als Projekt hinzu: {{names}}",
 	"sessionImport.addsProjects_other": "Fügt {{count}} Ordner als Projekte hinzu: {{names}}",

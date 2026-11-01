@@ -3685,6 +3685,8 @@
 	"sessionImport.offerDescription": "Continue no AO as conversas dos agentes que você usa neste computador. Pastas Git que ainda não são projetos são adicionadas como projetos.",
 	"sessionImport.offerDismiss": "Agora não",
 	"sessionImport.offerAction": "Importar conversas do {{agent}}",
+	"sessionImport.offerChoose": "Importar conversas",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}} (novo projeto)",
 	"sessionImport.addsProjects_one": "Adiciona {{count}} pasta como projeto: {{names}}",
 	"sessionImport.addsProjects_many": "Adiciona {{count}} pastas como projetos: {{names}}",

@@ -3597,6 +3597,8 @@
 	"sessionImport.offerDescription": "在 AO 中继续你在此电脑上使用的代理的对话。尚未成为项目的 Git 文件夹会被添加为项目。",
 	"sessionImport.offerDismiss": "以后再说",
 	"sessionImport.offerAction": "导入 {{agent}} 对话",
+	"sessionImport.offerChoose": "导入对话",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}}(新项目)",
 	"sessionImport.addsProjects_one": "将 {{count}} 个文件夹添加为项目:{{names}}",
 	"sessionImport.addsProjects_other": "将 {{count}} 个文件夹添加为项目:{{names}}",

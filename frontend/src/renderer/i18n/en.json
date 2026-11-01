@@ -3596,6 +3596,8 @@
 	"sessionImport.offerDescription": "Continue chats from the agents you use on this computer. Git folders that are not projects yet are added as projects.",
 	"sessionImport.offerDismiss": "Not now",
 	"sessionImport.offerAction": "Import {{agent}} chats",
+	"sessionImport.offerChoose": "Import chats",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}} (new project)",
 	"sessionImport.addsProjects_one": "Adds {{count}} folder as a project: {{names}}",
 	"sessionImport.addsProjects_other": "Adds {{count}} folders as projects: {{names}}",

@@ -3858,6 +3858,8 @@
 	"sessionImport.offerDescription": "Продолжайте чаты агентов, которыми вы пользуетесь на этом компьютере. Git-папки, которые ещё не являются проектами, добавляются как проекты.",
 	"sessionImport.offerDismiss": "Не сейчас",
 	"sessionImport.offerAction": "Импортировать чаты {{agent}}",
+	"sessionImport.offerChoose": "Импортировать чаты",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}} (новый проект)",
 	"sessionImport.addsProjects_one": "Добавляет {{count}} папку как проект: {{names}}",
 	"sessionImport.addsProjects_few": "Добавляет {{count}} папки как проекты: {{names}}",

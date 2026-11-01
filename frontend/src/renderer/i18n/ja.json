@@ -3615,6 +3615,8 @@
 	"sessionImport.offerDescription": "このコンピューターで使っているエージェントの会話を AO で続けられます。まだプロジェクトではない Git フォルダーはプロジェクトとして追加されます。",
 	"sessionImport.offerDismiss": "後で",
 	"sessionImport.offerAction": "{{agent}} の会話をインポート",
+	"sessionImport.offerChoose": "会話をインポート",
+	"sessionImport.offerMore": "+{{count}}",
 	"sessionImport.newProject": "{{name}}(新しいプロジェクト)",
 	"sessionImport.addsProjects_one": "{{count}} 個のフォルダーをプロジェクトとして追加: {{names}}",
 	"sessionImport.addsProjects_other": "{{count}} 個のフォルダーをプロジェクトとして追加: {{names}}",

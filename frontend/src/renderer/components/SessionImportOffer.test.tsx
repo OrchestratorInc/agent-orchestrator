@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { useUiStore } from "../stores/ui-store";
@@ -26,18 +27,26 @@ beforeEach(() => {
 	useUiStore.setState({ settingsModal: null });
 });
 
-it("offers one button per configured agent, each opening that agent's Import tab", () => {
+it("offers a direct button when only one importable agent is configured", () => {
 	renderOffer(agent("claude-code", true, "authorized"), agent("codex", true, "unauthorized"), agent("cursor", true, "authorized"));
-	expect(screen.queryByRole("button", { name: "Import Codex chats" })).not.toBeInTheDocument();
-	expect(screen.queryByRole("button", { name: /Cursor/ })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /Import chats/ })).not.toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Import Claude Code chats" }));
 	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", harnessTab: "import" });
 });
 
-it("offers OpenCode, whose local chats AO can import", () => {
-	renderOffer(agent("opencode", true, "authorized"));
-	fireEvent.click(screen.getByRole("button", { name: "Import OpenCode chats" }));
+it("groups several agents under one menu, each opening that agent's Import tab", async () => {
+	renderOffer(agent("claude-code", true, "authorized"), agent("opencode", true, "authorized"), agent("codex", true, "unauthorized"));
+	expect(screen.queryByRole("button", { name: /Claude Code chats/ })).not.toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Import chats" }));
+	const menu = await screen.findByRole("menu");
+	expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Claude Code", "OpenCode"]);
+	await userEvent.click(within(menu).getByRole("menuitem", { name: "OpenCode" }));
 	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "opencode", harnessTab: "import" });
+});
+
+it("keeps the card to one row by collapsing extra agent logos into a count", () => {
+	renderOffer(...["claude-code", "codex", "droid", "kimi", "opencode", "pi"].map((id) => agent(id, true, "authorized")));
+	expect(screen.getByRole("img", { name: "Claude Code, Codex, Droid, Kimi, OpenCode, Pi" })).toHaveTextContent("+2");
 });
 
 it("shows nothing when no importable agent is configured", () => {
