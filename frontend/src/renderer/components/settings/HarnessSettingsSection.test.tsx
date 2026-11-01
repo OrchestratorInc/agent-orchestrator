@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import { connectHost, disconnectHost } from "../../lib/host-clients";
+import { isAgentLoginPending, resetAgentLoginLifecycle } from "../../lib/agent-login-lifecycle";
 import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
@@ -881,6 +883,76 @@ describe("HarnessSettingsSection", () => {
 			expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
 		} finally {
 			finishStop();
+		}
+	});
+
+	it("blocks remote updates across disconnect until cancellation reaches the reconnected host", async () => {
+		mockInstalledOperations("npm");
+		const hostId = "remote-login-reconnect";
+		const host = { hostId, label: "Remote login test", url: "https://remote-login.example", base: "http://remote-login.test" };
+		const operation = { id: "remote-login", agentId: "codex", method: "device_code", status: "running", loginUrl: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGH", expiresAt: "2026-11-02T12:00:00Z" };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+		let finishCancellation!: (response: Response) => void;
+		const cancelled = new Promise<Response>((resolve) => { finishCancellation = resolve; });
+		const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+		vi.spyOn(aoBridge.remotes, "connect").mockResolvedValue(host);
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = input instanceof Request ? input : new Request(input, init);
+			const path = new URL(request.url).pathname;
+			const body = request.method === "POST" ? await request.clone().json() : undefined;
+			requests.push({ method: request.method, path, body });
+			if (request.method === "DELETE") return cancelled;
+			if (path === "/api/v1/agents/auth-plans") return json({ plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, methods: [{ id: "device_code", label: "Device code", secret: false }] }] });
+			if (path.includes("/auth/operations")) return json(operation);
+			const match = path.match(/^\/api\/v1\/agents\/(codex|claude-code|cursor|goose|codewhale)\/(.+)$/);
+			const template = match ? `/api/v1/agents/{agent}/${match[2]}` : path;
+			const call = request.method === "GET" ? get : post;
+			const result = await (call as (path: string, options: unknown) => Promise<{ data?: unknown }>)(template, { params: { path: { agent: match?.[1] } }, body });
+			return json(result.data ?? {});
+		}));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const showRemote = () => render(<QueryClientProvider client={queryClient}><TooltipProvider><HarnessSettingsSection hostId={hostId} focusAgentId="codex" /></TooltipProvider></QueryClientProvider>);
+		try {
+			await connectHost(host.url, hostId);
+			hostMocks.connected = [hostId];
+			const first = showRemote();
+			let page = await findAgentRow("codex");
+			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
+			await userEvent.click(within(page).getByRole("button", { name: "Log in again" }));
+			await userEvent.click(within(page).getByRole("button", { name: "Device code" }));
+			await waitFor(() => expect(requests.some((request) => request.method === "POST" && request.path.endsWith("/auth/operations"))).toBe(true));
+			expect(await within(page).findByRole("button", { name: "Open sign-in page" })).toBeVisible();
+			await act(async () => {
+				// disconnectHost removes the real client synchronously, before
+				// the panel's cleanup attempts to resolve it and send DELETE.
+				const disconnected = disconnectHost(hostId);
+				first.unmount();
+				await disconnected;
+			});
+			expect(requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
+			await connectHost(host.url, hostId);
+			showRemote();
+			page = await findAgentRow("codex");
+			expect(within(page).queryByRole("button", { name: "Update" }), "Update must stay blocked until cancellation is acknowledged").toBeNull();
+			expect(isAgentLoginPending("codex", hostId)).toBe(true);
+			await waitFor(() => expect(requests.filter((request) => request.method === "DELETE")).toEqual([{ method: "DELETE", path: "/api/v1/agents/codex/auth/operations/remote-login", body: undefined }]), { timeout: 5_000 });
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			expect(requests.some((request) => request.path.endsWith("/install"))).toBe(false);
+			await act(async () => finishCancellation(json({})));
+			const update = await within(page).findByRole("button", { name: "Update" });
+			expect(update).toBeEnabled();
+			await userEvent.click(update);
+			await waitFor(() => expect(requests).toContainEqual({ method: "POST", path: "/api/v1/agents/codex/install", body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
+		} finally {
+			finishCancellation(json({}));
+			await act(async () => cleanup());
+			resetAgentLoginLifecycle();
+			await disconnectHost(hostId);
+			hostMocks.connected = [];
+			queryClient.clear();
+			vi.unstubAllGlobals();
 		}
 	});
 
