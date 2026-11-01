@@ -660,7 +660,6 @@
 	"createProject.cloudSignInPrompt": "Inicia sesión en la nube para que cada agente tenga su propio sandbox alojado.",
 	"createProject.kindChoice": "Dónde crear el proyecto",
 	"createProject.kindCloud": "Nube",
-	"createProject.kindCloudHint": "Cada sesión se ejecuta en su propio entorno aislado en la nube",
 	"createProject.kindLocal": "Local",
 	"createProject.kindLocalHint": "Las sesiones se ejecutan en este equipo",
 	"createProject.loadingAgents": "Cargando agentes...",
@@ -3786,5 +3785,7 @@
 	"createProject.placementLocalDesc": "Los agentes se ejecutan aquí, en tus carpetas",
 	"createProject.placementCloud": "Nube",
 	"createProject.backToPlacement": "Atrás",
-	"createProject.placementCloudDesc": "Un sandbox alojado por agente"
+	"createProject.placementCloudDesc": "Un sandbox alojado por agente",
+	"createProject.placementMachines": "En tus equipos",
+	"createProject.placementMachinesDesc": "Este equipo o uno conectado"
 }

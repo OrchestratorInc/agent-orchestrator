@@ -660,7 +660,6 @@
 	"createProject.cloudSignInPrompt": "Connectez-vous au cloud pour donner à chaque agent son propre sandbox hébergé.",
 	"createProject.kindChoice": "Où créer le projet",
 	"createProject.kindCloud": "Cloud",
-	"createProject.kindCloudHint": "Chaque session s’exécute dans son propre environnement cloud isolé",
 	"createProject.kindLocal": "Local",
 	"createProject.kindLocalHint": "Les sessions s’exécutent sur cette machine",
 	"createProject.loadingAgents": "Chargement des agents...",
@@ -3786,5 +3785,7 @@
 	"createProject.placementLocalDesc": "Les agents tournent ici, dans vos dossiers",
 	"createProject.placementCloud": "Cloud",
 	"createProject.backToPlacement": "Retour",
-	"createProject.placementCloudDesc": "Un sandbox hébergé par agent"
+	"createProject.placementCloudDesc": "Un sandbox hébergé par agent",
+	"createProject.placementMachines": "Sur vos machines",
+	"createProject.placementMachinesDesc": "Cet ordinateur ou une machine connectée"
 }

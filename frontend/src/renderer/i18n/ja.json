@@ -656,7 +656,6 @@
 	"createProject.cloudSignInPrompt": "クラウドにサインインすると、エージェントごとに専用のホスト型サンドボックスを使えます。",
 	"createProject.kindChoice": "プロジェクトの作成場所",
 	"createProject.kindCloud": "クラウド",
-	"createProject.kindCloudHint": "各セッションは専用のクラウドサンドボックスで実行されます",
 	"createProject.kindLocal": "ローカル",
 	"createProject.kindLocalHint": "セッションはこのマシンで実行されます",
 	"createProject.loadingAgents": "エージェントを読み込み中...",
@@ -3717,5 +3716,7 @@
 	"createProject.placementLocalDesc": "エージェントはここで、あなたのフォルダーで動きます",
 	"createProject.placementCloud": "クラウド",
 	"createProject.backToPlacement": "戻る",
-	"createProject.placementCloudDesc": "エージェントごとのサンドボックス"
+	"createProject.placementCloudDesc": "エージェントごとのサンドボックス",
+	"createProject.placementMachines": "あなたのマシンで",
+	"createProject.placementMachinesDesc": "このコンピューターまたは接続済みのマシン"
 }

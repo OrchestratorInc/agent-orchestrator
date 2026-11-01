@@ -678,7 +678,6 @@
 	"createProject.cloudSignInPrompt": "Sign in to Cloud to give each agent its own hosted sandbox.",
 	"createProject.kindChoice": "Where to create the project",
 	"createProject.kindCloud": "Cloud",
-	"createProject.kindCloudHint": "Each session runs in its own cloud sandbox",
 	"createProject.kindLocal": "Local",
 	"createProject.kindLocalHint": "Sessions run on this machine",
 	"createProject.loadingAgents": "Loading agents...",
@@ -3698,5 +3697,7 @@
 	"createProject.placementLocalDesc": "Agents run here, in your own folders",
 	"createProject.placementCloud": "Cloud",
 	"createProject.backToPlacement": "Back",
-	"createProject.placementCloudDesc": "A hosted sandbox for each agent"
+	"createProject.placementCloudDesc": "A hosted sandbox for each agent",
+	"createProject.placementMachines": "On your machines",
+	"createProject.placementMachinesDesc": "This computer or a connected machine"
 }

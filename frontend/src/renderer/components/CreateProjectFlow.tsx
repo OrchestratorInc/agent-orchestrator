@@ -784,7 +784,7 @@ export function CreateProjectFlow({
 			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={!settingsOpen && (modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null)} /> : null}
 			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
-					{cloudEnabled && offering === "cloud" ? (
+					{!hostId && cloudEnabled && offering === "cloud" ? (
 						cloudAvailable ? (
 							<CloudProjectCard onAuthRequired={cloudSignIn} onBack={() => setOffering("local")} onCreated={onCloudProjectCreated} />
 						) : (
@@ -1251,7 +1251,7 @@ function CreateProjectSourceDialog({
 					<Dialog.Title className="sr-only">{hostLabel ? t("remote.addProjectOn", { label: hostLabel, defaultValue: "New project on {{label}}" }) : t("createProject.addCodeTitle")}</Dialog.Title>
 					<Dialog.Description className="sr-only">{t("createProject.addCodeDescription")}</Dialog.Description>
 					<div className="flex w-full flex-col items-center gap-3">
-						{cloudEnabled && offering === "cloud" ? (
+						{!hostId && cloudEnabled && offering === "cloud" ? (
 							cloudAvailable ? (
 								<CloudProjectCard dialog onAuthRequired={onSignIn} onBack={onCloudBack} onClose={() => onOpenChange(false)} onCreated={onCloudCreated} />
 							) : (
@@ -2121,13 +2121,26 @@ function ImportSourcePicker({
 		observer.observe(body);
 		return () => observer.disconnect();
 	}, []);
+	// The outgoing step overlaps the incoming one while it fades, so it stops
+	// taking clicks at once: a quick double-click must not hit the next step.
 	const fade = {
 		initial: { opacity: 0 },
 		animate: { opacity: 1 },
-		exit: { opacity: 0 },
+		exit: { opacity: 0, pointerEvents: "none" as const },
 		transition: { duration: reduceMotion ? 0 : 0.12, ease: "easeOut" as const },
 	};
+	// The focused tile unmounts when the step changes; hand focus to the new
+	// step's first control so keyboard users are not dropped to the top.
+	const step = !gateKnown ? "none" : askPlacement ? "placement" : "sources";
+	const previousStep = useRef(step);
+	useEffect(() => {
+		const previous = previousStep.current;
+		previousStep.current = step;
+		if (previous === "none" || previous === step) return;
+		bodyRef.current?.querySelector<HTMLElement>(`[data-step="${step}"] button:not(:disabled)`)?.focus({ preventScroll: true });
+	}, [step]);
 	const showBack = cloudOffered && !askPlacement;
+	const hasRemoteHosts = remoteHosts.length > 0 && Boolean(onSelectHost);
 	const backToPlacement = () => {
 		if (hostId) onSelectHost?.(undefined);
 		onLocalChosenChange(false);
@@ -2180,7 +2193,7 @@ function ImportSourcePicker({
 		: askPlacement
 		? t("createProject.placementQuestion")
 		: hostLabel
-			? t("remote.projectPathHint", { label: hostLabel, defaultValue: "Use a repository folder on {{label}}, or clone one there from Git." })
+			? t("remote.projectPathHint", { label: hostLabel, defaultValue: "How do you want to start on {{label}}?" })
 			: t("createProject.addCodeDescription");
 	return (
 		<div className={onboardingPanelClass}>
@@ -2208,13 +2221,20 @@ function ImportSourcePicker({
 			<div ref={bodyRef} className="flow-root">
 			<AnimatePresence mode="popLayout" initial={false}>
 			{!gateKnown ? null : askPlacement ? (
-				<motion.div key="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
-					{tile("local", <Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementLocal"), t("createProject.placementLocalDesc"), () => onLocalChosenChange(true))}
+				<motion.div key="placement" data-step="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
+					{tile(
+						"local",
+						<Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+						// With remote machines connected, the machine picker lives behind this tile.
+						hasRemoteHosts ? t("createProject.placementMachines") : t("createProject.placementLocal"),
+						hasRemoteHosts ? t("createProject.placementMachinesDesc") : t("createProject.placementLocalDesc"),
+						() => onLocalChosenChange(true),
+					)}
 					{tile("cloud", <Cloud className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
-				<motion.div key="sources" {...fade}>
-					{remoteHosts.length > 0 && onSelectHost && <div className="mx-4 mb-4 flex items-center justify-between gap-3">
+				<motion.div key="sources" data-step="sources" {...fade}>
+					{hasRemoteHosts && onSelectHost && <div className="mx-4 mb-4 flex items-center justify-between gap-3">
 						<Label htmlFor="create-project-machine">{t("createProject.machine")}</Label>
 						<Select value={hostId ?? "__local__"} onValueChange={(value) => onSelectHost(value === "__local__" ? undefined : value)}>
 							<SelectTrigger id="create-project-machine" className="max-w-[65%]"><SelectValue /></SelectTrigger>

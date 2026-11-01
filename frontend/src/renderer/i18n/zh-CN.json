@@ -656,7 +656,6 @@
 	"createProject.cloudSignInPrompt": "登录云端，让每个智能体拥有自己的托管沙盒。",
 	"createProject.kindChoice": "在哪里创建项目",
 	"createProject.kindCloud": "云端",
-	"createProject.kindCloudHint": "每个会话都在各自的云沙盒中运行",
 	"createProject.kindLocal": "本地",
 	"createProject.kindLocalHint": "会话在此计算机上运行",
 	"createProject.loadingAgents": "正在加载代理...",
@@ -3699,5 +3698,7 @@
 	"createProject.placementLocalDesc": "智能体在本机、你自己的文件夹中运行",
 	"createProject.placementCloud": "云端",
 	"createProject.backToPlacement": "返回",
-	"createProject.placementCloudDesc": "每个智能体一个托管沙盒"
+	"createProject.placementCloudDesc": "每个智能体一个托管沙盒",
+	"createProject.placementMachines": "在你的机器上",
+	"createProject.placementMachinesDesc": "这台电脑或已连接的机器"
 }

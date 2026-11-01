@@ -688,7 +688,6 @@
 	"createProject.cloudSignInPrompt": "Войдите в облако, чтобы у каждого агента была своя размещённая песочница.",
 	"createProject.kindChoice": "Где создать проект",
 	"createProject.kindCloud": "Облако",
-	"createProject.kindCloudHint": "Каждая сессия запускается в отдельной облачной песочнице",
 	"createProject.kindLocal": "Локально",
 	"createProject.kindLocalHint": "Сессии запускаются на этом компьютере",
 	"createProject.loadingAgents": "Загрузка агентов...",
@@ -3844,5 +3843,7 @@
 	"createProject.placementLocalDesc": "Агенты работают здесь, в ваших папках",
 	"createProject.placementCloud": "Облако",
 	"createProject.backToPlacement": "Назад",
-	"createProject.placementCloudDesc": "Своя песочница для каждого агента"
+	"createProject.placementCloudDesc": "Своя песочница для каждого агента",
+	"createProject.placementMachines": "На ваших машинах",
+	"createProject.placementMachinesDesc": "Этот компьютер или подключённая машина"
 }

@@ -88,6 +88,8 @@ vi.mock("../lib/github-daemon", () => ({
 // and the typed client's createProject; everything else stays out of scope.
 const cloudMocks = vi.hoisted(() => ({
 	cloudEnabled: false,
+	// The settings query behind the cloud gate has not settled yet.
+	gateLoading: false,
 	coderAvailable: false,
 	// Whether the control plane's default sandbox provider is coder.
 	coderDefault: false,
@@ -138,7 +140,7 @@ vi.mock("../hooks/useCoderTemplates", () => ({
 }));
 
 vi.mock("../hooks/useCloudGate", () => ({
-	useCloudGate: () => ({ cloudEnabled: cloudMocks.cloudEnabled, localEnabled: true, client: "" }),
+	useCloudGate: () => ({ cloudEnabled: cloudMocks.cloudEnabled, localEnabled: true, client: "", loading: cloudMocks.gateLoading }),
 }));
 
 vi.mock("../lib/cloud-session", () => ({
@@ -374,6 +376,7 @@ beforeEach(() => {
 	hostMocks.bGet.mockReset(); hostMocks.bPost.mockReset();
 	apiMocks.apiErrorMessage.mockClear();
 	cloudMocks.cloudEnabled = false;
+	cloudMocks.gateLoading = false;
 	cloudMocks.coderAvailable = false;
 	cloudMocks.coderDefault = false;
 	cloudMocks.providers = null;
@@ -1915,6 +1918,55 @@ describe("CreateProjectFlow project import validation", () => {
 
 		expect(screen.getByRole("button", { name: "Cloud" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Open a local folder" })).not.toBeInTheDocument();
+	});
+
+	it("waits for the cloud gate instead of flashing the local sources", () => {
+		cloudMocks.gateLoading = true;
+		cloudMocks.sessionStatus = "authenticated";
+		const view = render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		expect(screen.queryByRole("button", { name: "Clone a repo" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "On this computer" })).not.toBeInTheDocument();
+
+		cloudMocks.gateLoading = false;
+		cloudMocks.cloudEnabled = true;
+		view.rerender(<CreateProjectFlow embedded mode="choose" {...noop} />);
+
+		expect(screen.getByRole("button", { name: "On this computer" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Clone a repo" })).not.toBeInTheDocument();
+	});
+
+	it("moves keyboard focus into the next step and back", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		screen.getByRole("button", { name: "On this computer" }).focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Clone a repo" })).toHaveFocus());
+
+		screen.getByRole("button", { name: "Back" }).focus();
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(screen.getByRole("button", { name: "On this computer" })).toHaveFocus());
+	});
+
+	it("names the local tile for remote machines when any are connected", () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		render(
+			<CreateProjectFlow
+				embedded
+				mode="choose"
+				remoteHosts={[{ hostId: "box-a", label: "Box A", url: "http://box-a:3011", status: "connected" }]}
+				onSelectHost={vi.fn()}
+				{...noop}
+			/>,
+			{ wrapper: CloudTestProviders },
+		);
+
+		expect(screen.getByRole("button", { name: "On your machines" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "On this computer" })).not.toBeInTheDocument();
 	});
 
 	it("starts with connecting a repository, with no project name or manual setup", async () => {
