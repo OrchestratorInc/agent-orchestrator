@@ -5,6 +5,15 @@
 // session's file is copied by the control plane inside its bucket. The
 // renderer names a file and shows progress; it never sees the file's bytes or
 // the token.
+//
+// There is no second, native confirmation: Publish in the app's share popover
+// is the person's decision. Only the app's own window can ask. The bridge
+// exists in its main frame alone, never in the frames artifacts render in,
+// and agents, the ao CLI, MCP and the daemon have no route to it. Code
+// running in the app's own renderer could publish without a click; that is
+// the trade-off of dropping the native dialog. What is published is what the
+// popover showed: publish carries the inspection's fingerprint and refuses a
+// file that changed since.
 
 /**
  * A file to share: one in a local session's artifacts folder, or, with
@@ -27,6 +36,8 @@ export interface CloudShareFile {
 	projectId: string;
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
+	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */
+	fingerprint?: string;
 }
 
 /** One committed file of a cloud session. */
@@ -61,7 +72,7 @@ export interface CloudShareLinks {
 	unlimited: boolean;
 }
 
-/** What the share dialog shows before the person confirms. */
+/** What the share popover shows before the person publishes. */
 export interface CloudShareInspection {
 	name: string;
 	size: number;
@@ -71,18 +82,25 @@ export interface CloudShareInspection {
 	unsupported: boolean;
 	/** The link this file was last published to from this computer, if any. */
 	shareId?: string;
+	/** Names exactly what was scanned: the hash of the file's start, its size and modification time. */
+	fingerprint: string;
 }
 
 export type CloudSharePublishResult =
 	| { status: "published"; share: CloudShareLink; replaced: boolean }
-	/** The person dismissed the confirmation; nothing was uploaded. */
+	/** The person cancelled before the upload finished; nothing was published. */
 	| { status: "cancelled" }
+	/** The file changed since it was inspected; nothing was uploaded. Show this inspection instead. */
+	| { status: "changed"; inspection: CloudShareInspection }
 	/** Over the free plan's link limit: offer Upgrade. */
 	| { status: "limit"; message: string }
 	| { status: "unsupported"; message: string }
 	| { status: "signed_out" };
 
-/** Upload progress, sent to the window that asked to publish. */
+/**
+ * Publishing progress, sent to the window that asked to publish: preparing
+ * the snapshot is the first half of totalBytes, uploading it the second.
+ */
 export interface CloudShareProgress {
 	sessionId: string;
 	path: string;

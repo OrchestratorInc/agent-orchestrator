@@ -976,8 +976,8 @@ paths:
         link serves a copy of the file, so it outlives the session's file;
         unpublishing deletes only the copy. 404 when the caller is not a
         member of the organization or the session holds no file at path; 409
-        artifact_share_source_changed when the file changed while it was
-        being shared (share again); 415 artifact_share_type_unsupported for a
+        artifact_share_source_changed when the session's file is no longer
+        the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a
         video.
       requestBody:
         required: true
@@ -6482,12 +6482,19 @@ components:
     SessionArtifactShareInput:
       type: object
       additionalProperties: false
-      required: [path]
+      required: [path, sha256]
       properties:
         path:
           type: string
           minLength: 1
           description: The file's path in the session's artifact directory, as SessionArtifact.path.
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The SessionArtifact.sha256 the person was shown. When the session
+            has committed another version since, the route answers 409
+            artifact_share_source_changed and shares nothing.
         shareId:
           type: string
           format: uuid

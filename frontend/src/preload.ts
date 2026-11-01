@@ -392,8 +392,9 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
-	// Public share links. Publishing asks the person in a native dialog the
-	// renderer cannot answer; the renderer never sees the file or the token.
+	// Public share links, published from the share popover's Publish button.
+	// The main process reads and uploads the file; the renderer never sees
+	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,

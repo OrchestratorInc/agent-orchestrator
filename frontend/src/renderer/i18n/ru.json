@@ -3164,6 +3164,7 @@
 	"artifacts.share.secrets": "Похоже, этот файл содержит {{kinds}}. При публикации эти данные станут общедоступными.",
 	"artifacts.share.publish": "Опубликовать",
 	"artifacts.share.publishing": "Публикация… {{percent}}%",
+	"artifacts.share.changed": "Файл изменился после того, как вы открыли «Поделиться». Проверьте его и опубликуйте снова.",
 	"artifacts.share.upgradeTitle": "Перейдите на платный план, чтобы делиться больше",
 	"artifacts.share.limitReached": "Бесплатный план: до {{limit}} активных ссылок. Перейдите на платный план, чтобы делиться больше.",
 	"artifacts.share.upgrade": "Перейти на платный план",

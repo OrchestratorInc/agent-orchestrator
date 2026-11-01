@@ -3038,6 +3038,7 @@
 	"artifacts.share.secrets": "此文件似乎包含 {{kinds}}。发布后这些内容将会公开。",
 	"artifacts.share.publish": "发布",
 	"artifacts.share.publishing": "正在发布… {{percent}}%",
+	"artifacts.share.changed": "打开“分享”后此文件已更改。请检查后重新发布。",
 	"artifacts.share.upgradeTitle": "升级以分享更多",
 	"artifacts.share.limitReached": "免费版：最多 {{limit}} 个有效链接。升级即可分享更多。",
 	"artifacts.share.upgrade": "升级",

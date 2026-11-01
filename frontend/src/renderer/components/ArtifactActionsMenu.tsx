@@ -54,7 +54,7 @@ export function ArtifactActionsMenu({
 	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt">;
 	downloadUrl?: string;
 	hostId?: string;
-	session: Pick<WorkspaceSession, "id" | "cloud"> & Partial<Pick<WorkspaceSession, "workspaceId">>;
+	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;

@@ -3040,6 +3040,7 @@
 	"artifacts.share.secrets": "This file looks like it contains a {{kinds}}. Publishing it makes that public.",
 	"artifacts.share.publish": "Publish",
 	"artifacts.share.publishing": "Publishing… {{percent}}%",
+	"artifacts.share.changed": "This file changed since you opened Share. Check it and publish again.",
 	"artifacts.share.upgradeTitle": "Upgrade to share more",
 	"artifacts.share.limitReached": "Free plan: up to {{limit}} active links. Upgrade to share more.",
 	"artifacts.share.upgrade": "Upgrade",

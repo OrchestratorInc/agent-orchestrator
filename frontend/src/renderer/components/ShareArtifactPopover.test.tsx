@@ -19,7 +19,7 @@ vi.mock("../stores/ui-store", () => ({
 
 const SHARE_ID = "0b6e7a3c-2f4d-4a51-9c8e-1d2f3a4b5c6d";
 const file = { sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
-const inspection: CloudShareInspection = { name: "report.html", size: 2048, secretFindings: [], unsupported: false };
+const inspection: CloudShareInspection = { name: "report.html", size: 2048, secretFindings: [], unsupported: false, fingerprint: "fp-1" };
 const links: CloudShareLinks = { shares: [], limit: 3, used: 1, unlimited: false };
 const share: CloudShareLink = {
 	id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://viewer.test/artifact/abc",
@@ -74,7 +74,8 @@ describe("ShareArtifactButton", () => {
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
 		await openPopover();
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
-		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test" });
+		// The publish names the inspection it was shown.
+		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-1" });
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
 		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
 		expect(writeText).toHaveBeenCalledWith("https://viewer.test/artifact/abc");
@@ -93,7 +94,8 @@ describe("ShareArtifactButton", () => {
 	it("says Publishing while the file uploads", async () => {
 		stub(inspection, links);
 		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
-		await openPopover();
+		// A publish that never ends outlives this test: give it its own file.
+		await openPopover("docs/slow.html");
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
 		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
@@ -137,6 +139,46 @@ describe("ShareArtifactButton", () => {
 		await openPopover();
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
 		expect(screen.getByText("5.0 GB")).toBeTruthy();
+	});
+
+	it("shows the server's limit refusal at once, even when another link has the file's name", async () => {
+		stub(inspection, { ...links, used: 3, shares: [{ ...share, id: "other" }] }, { status: "limit", message: "Free plan: up to 3 active links. Upgrade to share more." });
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("Free plan: up to 3 active links. Upgrade to share more.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Upgrade" })).toBeTruthy();
+	});
+
+	it("shows the file again, with what it now holds, when it changed since Share opened", async () => {
+		const { publishSpy } = stub(inspection, links, {
+			status: "changed",
+			inspection: { ...inspection, size: 4096, secretFindings: ["GitHub token"], fingerprint: "fp-2" },
+		});
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("This file changed since you opened Share. Check it and publish again.")).toBeTruthy();
+		expect(screen.getByRole("alert").textContent).toContain("GitHub token");
+		expect(screen.getByText("4.0 KB · Free plan: 2 of 3 links left.")).toBeTruthy();
+		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publishSpy).toHaveBeenLastCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-2" });
+	});
+
+	it("keeps publishing when the popover closes, and shows it again when Share reopens", async () => {
+		stub(inspection, links);
+		let finish: (result: CloudSharePublishResult) => void = () => undefined;
+		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		const cancel = vi.spyOn(aoBridge.cloudShare, "cancel").mockResolvedValue();
+		await openPopover("docs/long.html", "long.html");
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		await screen.findByRole("button", { name: "Publishing… 0%" });
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(cancel).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Share: long.html" }));
+		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
+		finish({ status: "published", replaced: false, share });
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
 	});
 
 	it("returns to Publish when the upload is cancelled", async () => {

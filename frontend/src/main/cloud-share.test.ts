@@ -98,7 +98,15 @@ describe("secret scanning", () => {
 	it("scans a resolved file", async () => {
 		await fs.writeFile(path.join(artifacts, "config.yaml"), `token: "${GITHUB_TOKEN_PREFIX}${"x".repeat(36)}"\ndb_password: "hunter2hunter2"`);
 		const file = await resolveShareFile(dataDir, "sess-1", "config.yaml");
-		expect(await scanShareFile(file)).toEqual(["GitHub token", "password or secret"]);
+		const scan = await scanShareFile(file);
+		expect(scan.secretFindings).toEqual(["GitHub token", "password or secret"]);
+		// The fingerprint names what was scanned: the snapshot of the same
+		// file has it, a rewritten file does not.
+		const snapshot = await snapshotShareFile(file, path.join(dataDir, "snapshots"));
+		expect(snapshot.fingerprint).toBe(scan.fingerprint);
+		await fs.writeFile(path.join(artifacts, "config.yaml"), "token: none");
+		const rewritten = await scanShareFile(await resolveShareFile(dataDir, "sess-1", "config.yaml"));
+		expect(rewritten.fingerprint).not.toBe(scan.fingerprint);
 	});
 });
 
@@ -117,6 +125,34 @@ describe("snapshotShareFile", () => {
 		await fs.symlink(path.join(dataDir, "secret.txt"), file.realPath);
 		await expect(snapshotShareFile(file, path.join(dataDir, "snapshots"))).rejects.toThrow();
 		expect(await fs.readdir(path.join(dataDir, "snapshots")).catch(() => [])).toEqual([]);
+	});
+
+	it("refuses a folder on the way swapped for a symlink after the file resolved", async () => {
+		const outside = path.join(dataDir, "outside");
+		await fs.mkdir(outside);
+		await fs.writeFile(path.join(outside, "report.html"), "private");
+		const file = await resolveShareFile(dataDir, "sess-1", "docs/report.html");
+		await fs.rename(path.join(artifacts, "docs"), path.join(artifacts, "docs-old"));
+		await fs.symlink(outside, path.join(artifacts, "docs"));
+		await expect(snapshotShareFile(file, path.join(dataDir, "snapshots"))).rejects.toThrow("changed");
+		await expect(scanShareFile(file)).rejects.toThrow("changed");
+		expect(await fs.readdir(path.join(dataDir, "snapshots")).catch(() => [])).toEqual([]);
+	});
+
+	it("reports progress and stops when cancelled", async () => {
+		await fs.writeFile(path.join(artifacts, "big.bin"), Buffer.alloc(3 << 20, 1));
+		const file = await resolveShareFile(dataDir, "sess-1", "big.bin");
+		const copied: number[] = [];
+		await snapshotShareFile(file, path.join(dataDir, "snapshots"), { onProgress: (bytes) => copied.push(bytes) });
+		expect(copied).toEqual([1 << 20, 2 << 20, 3 << 20]);
+
+		const controller = new AbortController();
+		const stopped = snapshotShareFile(file, path.join(dataDir, "cancelled"), {
+			signal: controller.signal,
+			onProgress: () => controller.abort(),
+		});
+		await expect(stopped).rejects.toMatchObject({ code: "cancelled" });
+		expect(await fs.readdir(path.join(dataDir, "cancelled"))).toEqual([]);
 	});
 });
 
@@ -216,6 +252,17 @@ describe("uploadShare", () => {
 		const refused = fakeControlPlane(4, { finalizeError: { status: 409, code: "artifact_share_limit_reached" } });
 		await expect(uploadShare(refused.api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f" }, () => undefined))
 			.rejects.toMatchObject({ code: "artifact_share_limit_reached", status: 409 });
+	});
+
+	it("stops every part once one fails, before the upload is aborted", async () => {
+		const snapshot = await snapshotOf("0123456789abcdefghij");
+		const failing = fakeControlPlane(4, { failPart: 1 });
+		await expect(uploadShare(failing.api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f" }, () => undefined)).rejects.toThrow("part 1");
+		const abort = failing.calls.findIndex((call) => call.url.endsWith("/uploads/abort"));
+		expect(abort).toBeGreaterThan(0);
+		expect(failing.calls.slice(abort).filter((call) => call.url.startsWith("https://s3.test/"))).toEqual([]);
+		// Not every part was sent: the second worker stopped.
+		expect(failing.calls.filter((call) => call.url.startsWith("https://s3.test/")).length).toBeLessThan(5);
 	});
 
 	it("needs a signed-in user and a safe control plane URL", async () => {

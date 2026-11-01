@@ -89,7 +89,7 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
-		// Publishing reads local files and asks in a native dialog: desktop only.
+		// Publishing reads local files in the main process: desktop only.
 		cloudShare: {
 			inspect: async () => {
 				throw new Error("Sharing needs the AO desktop app.");

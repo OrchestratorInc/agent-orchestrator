@@ -3114,6 +3114,7 @@
 	"artifacts.share.secrets": "Parece que este archivo contiene un {{kinds}}. Al publicarlo, será público.",
 	"artifacts.share.publish": "Publicar",
 	"artifacts.share.publishing": "Publicando… {{percent}} %",
+	"artifacts.share.changed": "Este archivo cambió desde que abriste Compartir. Revísalo y vuelve a publicarlo.",
 	"artifacts.share.upgradeTitle": "Mejora tu plan para compartir más",
 	"artifacts.share.limitReached": "Plan gratuito: hasta {{limit}} enlaces activos. Mejora tu plan para compartir más.",
 	"artifacts.share.upgrade": "Mejorar plan",

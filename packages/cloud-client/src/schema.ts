@@ -655,7 +655,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the file changed while it was being shared (share again); 415 artifact_share_type_unsupported for a video. */
+        /** @description Publishes one of this session's committed artifact files as a share link, as finalizeArtifactShare publishes a local file: the same link limit (409 artifact_share_limit_reached), one link per file, and shareId to point an existing link at the file's current version. The link serves a copy of the file, so it outlives the session's file; unpublishing deletes only the copy. 404 when the caller is not a member of the organization or the session holds no file at path; 409 artifact_share_source_changed when the session's file is no longer the sha256 the caller was shown (inspect it again); 415 artifact_share_type_unsupported for a video. */
         post: operations["shareSessionArtifact"];
         delete?: never;
         options?: never;
@@ -3585,6 +3585,8 @@ export interface components {
         SessionArtifactShareInput: {
             /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
             path: string;
+            /** @description The SessionArtifact.sha256 the person was shown. When the session has committed another version since, the route answers 409 artifact_share_source_changed and shares nothing. */
+            sha256: string;
             /**
              * Format: uuid
              * @description An active link of the caller's, for a file of the same name, to point at this file.

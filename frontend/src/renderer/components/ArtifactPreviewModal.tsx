@@ -57,7 +57,10 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
-							{artifact.cloud?.shared ? null : (
+							{/* A local file's project names its document: without one, sharing
+							    it here would make a second link for the same file. A guest of a
+							    shared project does not publish its files. */}
+							{artifact.cloud?.shared || (!artifact.cloud && !artifact.projectId) ? null : (
 								<ShareArtifactButton
 									className="transition-none"
 									file={artifact.cloud
@@ -68,7 +71,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							)}
 							<ArtifactActionsMenu
 								artifact={artifact}
-								session={{ id: artifact.sessionId, cloud: artifact.cloud, workspaceId: artifact.projectId }}
+								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
 								pinInMenu
 								pinned={pinned}
