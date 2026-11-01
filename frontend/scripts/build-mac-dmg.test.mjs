@@ -238,7 +238,7 @@ describe("buildMacDmg", () => {
 	afterEach(() => rmSync(work, { recursive: true, force: true }));
 
 	it("wraps the given .app without signing it, the dmg, or writing a blockmap", async () => {
-		const output = path.join(work, "out", "agent-orchestrator-darwin-arm64.dmg");
+		const output = path.join(work, "out", "Orchestrator-darwin-arm64.dmg");
 		buildForge.mockResolvedValue([output]);
 		expect(await buildMacDmg({ app, arch: "arm64", output }, { buildForge })).toBe(output);
 
@@ -253,8 +253,8 @@ describe("buildMacDmg", () => {
 			...macDmgLayout(),
 			sign: false,
 			writeUpdateInfo: false,
-			// The conductor's published asset name, unchanged.
-			artifactName: "agent-orchestrator-darwin-arm64.dmg",
+			// The conductor's published asset name.
+			artifactName: "Orchestrator-darwin-arm64.dmg",
 		});
 	});
 
