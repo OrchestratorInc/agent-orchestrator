@@ -74,7 +74,7 @@ describe("HarnessLoginPanel", () => {
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
 		// The billing note sits above Save as a warning, not as muted help text.
-		expect(screen.getByText(/instead of your Claude subscription/).closest("p")).toHaveClass("border-warning/30");
+		expect(screen.getByText(/instead of your Claude subscription/).closest("p")).toHaveClass("bg-warning/8");
 		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
 	});
 	it("offers the harness's provider catalog and needs a provider before saving", async () => {
