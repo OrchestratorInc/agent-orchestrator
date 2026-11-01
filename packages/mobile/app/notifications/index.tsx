@@ -1,11 +1,11 @@
-import { Stack, useFocusEffect, useRouter, type Href } from "expo-router";
+import { Stack, useFocusEffect, type Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../../lib/pageNavigation";
+import { StackRootBack } from "../../lib/StackRootBack";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
-	Platform,
 	Pressable,
 	RefreshControl,
 	SectionList,
@@ -23,7 +23,6 @@ import {
 	type NotificationRecord,
 } from "../../lib/api";
 import { AppSymbol } from "../../lib/AppSymbol";
-import { backOr } from "../../lib/backNavigation";
 import { rowDividerWidth } from "../../lib/divider";
 import { haptics } from "../../lib/haptics";
 import { NotificationTypeIcon } from "../../lib/notification-type-icon";
@@ -78,7 +77,6 @@ export default function NotificationsScreen() {
 function NotificationsContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
 	const { hostStates, configForHost, refreshHost, restore } = useApp();
@@ -304,12 +302,9 @@ function NotificationsContent() {
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.hostId, notification.sessionId));
-		// Through openPage: on iOS this page is a sheet, and a session pushed
-		// while it is up would open inside it.
+		// Through openPage, which dismisses any sheet still up before pushing.
 		if (action.kind === "open") openPage({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
 		else if (action.kind === "review") openPage(notificationTarget(notification, knownHostIds) as Href);
-		// Pull Requests is a sheet of its own on iOS, so this one closes first
-		// rather than presenting the second inside it.
 		else if (action.kind === "prs") openPage({ pathname: "/prs", params: { hostId: notification.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
@@ -437,30 +432,22 @@ function NotificationsContent() {
 	const confirmClearAllRef = useRef(confirmClearAll);
 	confirmClearAllRef.current = confirmClearAll;
 	const clearable = items.length > 0;
-	// iOS presents Notifications as a sheet, which closes from its bar as
-	// Settings does; Clear all moves to the bar's other end. Android's page has
-	// the system back, and Clear all keeps the trailing end.
-	const closeSheet = Platform.OS === "ios";
+	// A pushed page on both platforms: the bar's back button leaves it, and
+	// Clear all takes the trailing end.
 	const headerItems = useMemo(() => (
-		<>
-			{clearable ? (
-				<Stack.Toolbar placement={closeSheet ? "left" : "right"}>
-					<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
-				</Stack.Toolbar>
-			) : null}
-			{closeSheet ? (
-				<Stack.Toolbar placement="right">
-					<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close notifications" onPress={() => backOr(router)} />
-				</Stack.Toolbar>
-			) : null}
-		</>
-	), [clearable, closeSheet, router]);
+		clearable ? (
+			<Stack.Toolbar placement="right">
+				<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
+			</Stack.Toolbar>
+		) : null
+	), [clearable]);
 
 	return (
 		// Not collapsable, as in Settings: flattened away, it leaves the list a
 		// direct child of the sheet, which react-native-screens then resizes
 		// wrongly and the page shows blank under its bar.
 		<View style={styles.screen} collapsable={false}>
+			<StackRootBack />
 			{headerItems}
 			{/* The list is the page's first view: on iOS 26 the clear bar blurs it
 			    as it scrolls under. It is the only scroll view the page ever has,

@@ -25,14 +25,13 @@ vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
-vi.mock("./layoutGrid", () => ({ LayoutGrid: () => null }));
 
 import RootLayout from "../app/_layout";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Settings presentation", () => {
-	it.each(["android", "ios"])("presents Settings the %s way", async (platform) => {
+	it.each(["android", "ios"])("pushes Settings as a page on %s", async (platform) => {
 		fixtures.platform.OS = platform;
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		const error = console.error;
@@ -50,25 +49,19 @@ describe("Settings presentation", () => {
 			// names it in the history of a page opened over it.
 			expect(settings.headerShown).toBe(false);
 			expect(settings.title).toBe("Settings");
-			// Nothing stops a swipe for the whole flow; a machine page holds the
-			// sheet still on its own (app/settings/machine/[id]/edit.tsx and index.tsx).
+			// A page pushed over the board on both platforms, with the stack's
+			// own push and back, as every page opened from it is: no sheet.
+			expect(settings.presentation).toBeUndefined();
+			expect(settings.sheetAllowedDetents).toBeUndefined();
+			expect(settings.sheetGrabberVisible).toBeUndefined();
+			// Nothing stops a swipe for the whole flow; a machine page holds it
+			// on its own (app/settings/machine/[id]/edit.tsx and index.tsx).
 			expect(settings.gestureEnabled).toBeUndefined();
 			if (platform === "android") {
-				// A full-screen page with a top app bar and the system back, not a
-				// bottom sheet holding a stack of pages.
-				expect(settings.presentation).toBe("card");
-				expect(settings.sheetAllowedDetents).toBeUndefined();
-				expect(settings.sheetGrabberVisible).toBeUndefined();
 				expect(naming.presentation).toBe("transparentModal");
 				expect(naming.sheetAllowedDetents).toBeUndefined();
 				expect(naming.contentStyle.backgroundColor).toBe("transparent");
 			} else {
-				// A full-height sheet in the system's own shape, with the grabber
-				// that says it swipes away.
-				expect(settings.presentation).toBe("formSheet");
-				expect(settings.sheetAllowedDetents).toEqual([1]);
-				expect(settings.sheetGrabberVisible).toBe(true);
-				expect(settings.sheetCornerRadius).toBeUndefined();
 				expect(naming.presentation).toBe("formSheet");
 				// A SwiftUI Form fills the sheet instead of measuring to fit.
 				expect(naming.sheetAllowedDetents).toEqual([0.5]);

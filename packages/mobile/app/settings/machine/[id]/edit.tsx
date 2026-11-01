@@ -75,15 +75,15 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 		</Stack.Toolbar>
 	), [canSave, saving]);
 
-	// Unsaved edits hold the page: the Settings sheet can't be swiped away, the
-	// way iOS keeps any sheet with unsaved edits in place, and going back asks
+	// Unsaved edits hold the page: no swipe back from it, nor from Settings
+	// around it (a native swipe can't be asked first), and the back button asks
 	// first. A save in flight can't be called back, so it holds too.
 	const holding = !saved && (editor.dirty || saving);
 	useEffect(() => {
 		if (!holding) return;
-		const settings = navigation.getParent();
-		settings?.setOptions({ gestureEnabled: false });
-		return () => settings?.setOptions({ gestureEnabled: true });
+		const held = [navigation, navigation.getParent()];
+		for (const screen of held) screen?.setOptions({ gestureEnabled: false });
+		return () => { for (const screen of held) screen?.setOptions({ gestureEnabled: true }); };
 	}, [holding, navigation]);
 	usePreventRemove(holding, ({ data }) => {
 		if (saving) return;

@@ -357,14 +357,6 @@ export default function SpawnScreen() {
 			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
 		}));
 	};
-	const voiceFeedback = listening ? (
-		<View style={styles.voice}>
-			<AppSymbol name="mic" size={iconSize.sm} color={t.red} />
-			<Text numberOfLines={2} style={styles.voiceText}>
-				{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}
-			</Text>
-		</View>
-	) : null;
 	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
 		if (pickingAttachments.current) return;
 		pickingAttachments.current = true;
@@ -509,7 +501,6 @@ export default function SpawnScreen() {
 				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
-					{voiceFeedback}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
 					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
@@ -540,7 +531,7 @@ export default function SpawnScreen() {
 					onSelectEffort={setEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
-					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}
+					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={setPrompt}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
@@ -579,8 +570,6 @@ const makeStyles = (t: Theme) =>
 		// The chat composer's dock: its side margin and the gap to the keyboard.
 		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
 		messages: { gap: space.xs, paddingHorizontal: space.xs },
-		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

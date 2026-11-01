@@ -34,7 +34,10 @@ export const COMPOSER_DISC = 34;
 export const COMPOSER_RADIUS = COMPOSER_HEIGHT / 2;
 
 export const composerStyleRules = (t: Theme) => StyleSheet.create({
-	dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs, backgroundColor: t.bgBase },
+	// A narrow gutter, as the system's own message fields keep: the pill is the
+	// widest thing on the screen, and every point given to the margin is taken
+	// from the line being written.
+	dock: { paddingHorizontal: space.sm, paddingTop: space.xs, gap: space.xs, backgroundColor: t.bgBase },
 	// One glass panel for selected quotes, attach, the field, dictation and the filled
 	// control that commits. The pill's radius is half its resting height, so a
 	// single line reads as a capsule; quotes and long replies grow a rounded panel —
@@ -48,9 +51,11 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	// that panel rather than receiving a separately measured height.
 	composer: { minHeight: COMPOSER_HEIGHT, flexDirection: "column", paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
 	composerRow: { maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
-	// The native content-size event grows this from its one-line resting height;
-	// at the cap, the multiline field scrolls while the controls remain in place.
-	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
+	// A multiline field grows with its text from its one-line resting height; at
+	// the cap it scrolls while the controls remain in place. No side padding of
+	// its own: Android's text field brings some from the platform's theme, which
+	// set the text further in than iOS's, and the row already insets the field.
+	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, paddingHorizontal: 0, textAlignVertical: "top" },
 	// Clipped so the Android ripple keeps to the circle.
 	send: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	stop: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
@@ -62,6 +67,4 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	attachmentName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
 	attachmentRemove: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
-	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, borderCurve: "continuous", paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
-	voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

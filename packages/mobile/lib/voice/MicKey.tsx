@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Pressable, StyleSheet, View, type AccessibilityActionEvent } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import Animated, { cancelAnimation, Easing, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -9,18 +9,13 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { iconSize, radius, stateOpacity } from "../tokens";
 import { useReducedMotion } from "../useReducedMotion";
-import type { VoiceMode, VoiceState } from "./types";
+import type { VoiceState } from "./types";
 import { MicGlass } from "./mic-glass";
 
-// The dictation control, with two gestures:
-//
-//   hold        - push-to-talk. Cheapest audio session, fastest to capture,
-//                 built-in mic. For short phrases where warm-up dominates.
-//   double-tap  - latch on, hands-free, Bluetooth-capable. Tap once more to
-//                 finish. For long prompts where warm-up stops mattering.
-//
-// A screen reader has no hold to time, so its activation latches and finishes
-// hands-free dictation directly.
+// The dictation control: tap to start hands-free dictation, tap again to
+// finish. It used to be held to talk, with a double-tap to latch, but a press
+// shorter than the mic's warm-up captured nothing and read as broken, and the
+// double-tap was undiscoverable. A screen reader's activation is the same tap.
 //
 // Sized to the send button and sitting beside it: dictation is a primary way to
 // talk to an agent from a phone, and as one more outlined grey pill in the key
@@ -40,9 +35,6 @@ const PULSE_MS = 900;
 
 export function MicKey({
 	state,
-	mode,
-	onPressIn,
-	onPressOut,
 	onToggleLatched,
 	circular = false,
 	size = MIC_SIZE,
@@ -51,13 +43,7 @@ export function MicKey({
 	disabled: disabledByOwner = false,
 }: {
 	state: VoiceState;
-	mode: VoiceMode;
-	onPressIn(): void;
-	onPressOut(): void;
-	/**
-	 * Starts or finishes hands-free dictation in one step (`useVoiceInput`'s
-	 * `toggleLatched`), for a screen reader's activation.
-	 */
+	/** Starts or finishes hands-free dictation (`useVoiceInput`'s `toggleLatched`). */
 	onToggleLatched(): void;
 	circular?: boolean;
 	size?: number;
@@ -77,7 +63,6 @@ export function MicKey({
 	const reduceMotion = useReducedMotion();
 	const feedback = usePressFeedback(variant === "plain" ? "icon" : "button");
 	const live = state === "recording" || state === "starting";
-	const latched = live && mode === "latched";
 	const denied = state === "denied";
 	// Rendered even with no recogniser on the device. Returning null here used to
 	// remove the control from the row entirely, reflowing everything beside it.
@@ -111,29 +96,14 @@ export function MicKey({
 	const ink = live ? t.onDestructive : denied ? t.red : unavailable ? t.textFaint : t.textPrimary;
 	const shapeRadius = circular ? size / 2 : MIC_RADIUS;
 
-	const onAccessibilityAction = (event: AccessibilityActionEvent) => {
-		if (event.nativeEvent.actionName === "activate") onToggleLatched();
-	};
-
 	return (
 		<View style={[styles.slot, { width: size, height: size }]}>
 			{breathing ? <Animated.View pointerEvents="none" style={[styles.ring, controlShape, ringStyle]} /> : null}
 			{glass ? <MicGlass size={size} radius={shapeRadius} /> : null}
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={
-					unavailable
-						? "Dictation unavailable on this device"
-						: latched
-							? "Stop dictating"
-							: "Hold to dictate, or double-tap for hands-free"
-				}
+				accessibilityLabel={unavailable ? "Dictation unavailable on this device" : live ? "Stop dictating" : "Dictate"}
 				accessibilityState={{ busy: live, disabled }}
-				// TalkBack's double-tap arrives as `activate`; VoiceOver's as an
-				// accessibility tap. Either one latches instead of tapping the key.
-				accessibilityActions={disabled ? undefined : [{ name: "activate", label: latched ? "Stop dictating" : "Dictate hands-free" }]}
-				onAccessibilityAction={disabled ? undefined : onAccessibilityAction}
-				onAccessibilityTap={disabled ? undefined : onToggleLatched}
 				disabled={disabled}
 				android_ripple={feedback.android_ripple}
 				style={({ pressed }) => [
@@ -141,20 +111,14 @@ export function MicKey({
 					controlShape,
 					{ backgroundColor: fill },
 					variant === "glass" && circular && !glass && styles.circular,
-					latched && styles.latched,
 					unavailable && styles.unavailable,
-					// A held key is recording; it keeps its full red rather than dimming.
+					// A recording key keeps its full red rather than dimming.
 					pressed && !disabled && !live && feedback.pressed,
 				]}
-				onPressIn={() => {
+				onPress={() => {
 					haptics.tap();
-					onPressIn();
+					onToggleLatched();
 				}}
-				onPressOut={onPressOut}
-				// A finger sliding off still ends a held phrase — otherwise the mic
-				// would stay open with no obvious way to close it. Latched mode is
-				// unaffected: it ignores the finger by design.
-				onTouchCancel={onPressOut}
 			>
 				<AppSymbol name={denied || unavailable ? "micOff" : "mic"} size={glyphSize} color={ink} />
 			</Pressable>
@@ -169,8 +133,5 @@ const makeStyles = (t: Theme) =>
 		mic: { alignItems: "center", justifyContent: "center", overflow: "hidden" },
 		circular: { borderWidth: rowDividerWidth, borderColor: t.borderDefault },
 		ring: { position: "absolute", backgroundColor: t.red },
-		// Latched holds the mic open with no finger on it, so it gets an outline the
-		// held state doesn't — this is the state that must never be missed.
-		latched: { borderWidth: 2, borderColor: t.textPrimary },
 		unavailable: { borderWidth: rowDividerWidth, borderColor: t.borderSubtle, opacity: stateOpacity.disabled },
 	});

@@ -2,26 +2,24 @@ import * as Application from "expo-application";
 import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
 import { ApiError, pingServer } from "../../lib/api";
 import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
 import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
-import { backOr } from "../../lib/backNavigation";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
 import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
 import { describeDesktopStatus } from "../../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../../lib/discord";
-import { environmentSummary } from "../../lib/environmentView";
+import { environmentStatus, environmentSummary } from "../../lib/environmentView";
 import { haptics } from "../../lib/haptics";
 import { activeHost, loadHosts, type Host as PairedHost } from "../../lib/hosts";
 import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
-import { toggleLayoutGrid, useLayoutGrid } from "../../lib/layoutGrid";
-import { MachineSelector, MachineStatusRow } from "../../lib/MachineSelector";
+import { MachineConnectionRow, MachineSelector, machineStatusTone } from "../../lib/MachineSelector";
 import { canRepairWithQr } from "../../lib/machineRecovery";
 import { openGitHub } from "../../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
@@ -35,8 +33,10 @@ import {
 	SettingsToggleRow,
 	SettingsValueRow,
 	type SettingsOption,
+	type SettingsTone,
 } from "../../lib/SettingsForm";
 import { Spinner } from "../../lib/Spinner";
+import { StackRootBack } from "../../lib/StackRootBack";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { useApp } from "../../lib/store";
 import {
@@ -52,8 +52,9 @@ import {
 import { promptStoreUpdate } from "../../lib/storeUpdatePrompt";
 import { useTheme, useThemeState } from "../../lib/ThemeProvider";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
-import { toolbarIcon } from "../../lib/toolbarIcon";
+import { ToastHost, type ToastController } from "../../lib/Toast";
 import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../lib/updates";
+import { useToast } from "../../lib/useToast";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
 
@@ -65,10 +66,12 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
 export default function SettingsScreen() {
 	const t = useTheme();
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, hostStates, phoneOffline, reloadConfig } = useApp();
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
+	const toast = useToast();
+	const connectionTests = useConnectionTests(selectedHostId, toast.show);
 	// SwiftUI's menu picker keeps showing a pick until its selection prop
 	// changes, which a failed switch never does; a new key remounts it on the
 	// machine that is still the default.
@@ -134,18 +137,10 @@ export default function SettingsScreen() {
 		}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
 	}
 
-	// iOS presents Settings as a sheet, which closes from its bar. Android's
-	// Settings is a page, and its top app bar has the system back button.
-	const headerItems = useMemo(() => Platform.OS === "ios" ? (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close settings" onPress={() => backOr(router)} />
-		</Stack.Toolbar>
-	) : null, [router]);
-
 	if (!loaded) {
 		return (
 			<View style={[styles.center, { backgroundColor: t.bgBase }]}>
-				{headerItems}
+				<StackRootBack />
 				<Spinner size="large" accessibilityLabel="Loading settings" />
 			</View>
 		);
@@ -162,9 +157,22 @@ export default function SettingsScreen() {
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
 	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });
+	// Every paired machine, each with its connection and its own Test. A phone
+	// paired before machines were saved has only the selected config, which
+	// stands in as the one row.
+	const connectionRows = pairedHosts.length > 0
+		? pairedHosts.map((host) => ({ hostId: host.id, name: host.name }))
+		: paired ? [{ hostId: "", name: selectedHostName ?? "This machine" }] : [];
+	function connectionStatus(hostId: string): { label: string; tone: SettingsTone } {
+		// The default machine's status is the board poll's, which can say why it
+		// fails; the others' is their own poll's.
+		if (!hostId || hostId === selectedHostId) return { label: machineStatus.label, tone: machineStatusTone(machineStatus.tone) };
+		const status = environmentStatus(hostStates.find((snapshot) => snapshot.hostId === hostId));
+		return { label: status.label, tone: status.kind === "connected" ? "good" : status.kind === "offline" ? "bad" : "default" };
+	}
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]} collapsable={false}>
-			{headerItems}
+			<StackRootBack />
 			<SettingsForm testID="settings-form">
 				<SettingsSection title="Machines">
 					<MachineSelector
@@ -175,7 +183,18 @@ export default function SettingsScreen() {
 						switchingHostId={switchingHostId}
 						onSelect={(id) => { void selectHost(id); }}
 					/>
-					<MachineStatusRow hosts={pairedHosts} statusLabel={machineStatus.label} statusTone={machineStatus.tone} switchingHostId={switchingHostId} />
+					{connectionRows.map(({ hostId, name }) => (
+						<MachineConnectionRow
+							key={hostId || "current"}
+							hostId={hostId}
+							name={name}
+							status={connectionStatus(hostId)}
+							switching={switchingHostId === hostId}
+							testing={connectionTests.testing.has(hostId)}
+							disabled={phoneOffline || switchingHostId !== null}
+							onTest={() => { void connectionTests.test(hostId, name); }}
+						/>
+					))}
 					{selectedHost && canRepairWithQr(failure) ? (
 						<SettingsButtonRow
 							icon="scan"
@@ -184,7 +203,6 @@ export default function SettingsScreen() {
 							testID="settings-scan-new-code"
 						/>
 					) : null}
-					<ConnectionTestRow paired={paired} selectedHostId={selectedHostId} />
 					<SettingsButtonRow icon="addMachine" label="Add a machine" onPress={() => router.navigate("/pair")} testID="settings-add-machine" />
 					{selectedHost && !selectedConfigReady ? (
 						<SettingsButtonRow icon="retry" label="Retry selected machine" onPress={() => { void reloadConfig(); }} testID="settings-retry-machine" />
@@ -210,12 +228,6 @@ export default function SettingsScreen() {
 					) : null}
 				</SettingsSection>
 
-				{__DEV__ ? (
-					<SettingsSection title="Developer" footer="Layout grid draws the app's 4pt steps, with the 44pt control lines emphasised.">
-						<LayoutGridRow />
-					</SettingsSection>
-				) : null}
-
 				<SettingsSection title="Preferences">
 					<AppearanceRow />
 					<ColorThemeRow />
@@ -227,10 +239,11 @@ export default function SettingsScreen() {
 				</SettingsSection>
 
 				<SettingsSection title="Support" footer={`Orchestrator ${formatVersionLine(buildInfo())}`}>
-					<ReportProblemRow />
+					<ReportProblemRow toast={toast.show} />
 					<FeatureRequestRow />
 				</SettingsSection>
 			</SettingsForm>
+			<ToastHost toast={toast} />
 		</View>
 	);
 }
@@ -251,28 +264,38 @@ function confirmSignOut(signOut: () => void) {
 	);
 }
 
-function ConnectionTestRow({ paired, selectedHostId }: { paired: boolean; selectedHostId: string | null }) {
-	const { config, reloadConfig, refresh } = useApp();
-	const [testing, setTesting] = useState(false);
-	const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+/**
+ * Tests a machine's connection on demand, each machine on its own. The row's
+ * status line stays the live one; what the test found is said in a toast, so
+ * the state is never shown twice.
+ */
+function useConnectionTests(selectedHostId: string | null, notify: ToastController["show"]) {
+	const { config, configForHost, reloadConfig, refresh, refreshHost } = useApp();
+	const [testing, setTesting] = useState<ReadonlySet<string>>(() => new Set());
 
-	useEffect(() => setResult(null), [config?.host, config?.httpPort, selectedHostId]);
-
-	async function test() {
-		setTesting(true);
-		setResult(null);
-		// Race every known path first, like the app itself does, rather than
-		// pinging only the last address that happened to win. Without the
-		// endpoint refresh: it is authenticated, so with a stale password it and
-		// the ping would spend two failed attempts per tap towards the lockout.
-		let target = config;
+	async function test(hostId: string, name: string) {
+		const isDefault = !hostId || hostId === selectedHostId;
+		setTesting((current) => new Set(current).add(hostId));
+		let target = isDefault ? config : configForHost(hostId);
 		let rejected = false;
 		try {
-			target = await reloadConfig({ refreshEndpoints: false });
-			if (!target) throw new Error("No verified connection to the selected machine");
+			if (isDefault) {
+				// Race every known path first, like the app itself does, rather than
+				// pinging only the last address that happened to win. Without the
+				// endpoint refresh: it is authenticated, so with a stale password it
+				// and the ping would spend two failed attempts per tap towards the
+				// lockout.
+				target = await reloadConfig({ refreshEndpoints: false });
+			} else if (!target) {
+				// No verified route to this machine yet: its own runner races its
+				// routes first, as its poll would.
+				await refreshHost(hostId);
+				target = configForHost(hostId);
+			}
+			if (!target) throw new Error("No verified connection to this machine");
 			await pingServer(target);
 			haptics.success();
-			setResult({ ok: true, msg: "Connected" });
+			notify(`${name} is connected.`, { tone: "success" });
 		} catch (error) {
 			haptics.error();
 			const status = error instanceof ApiError ? error.status : undefined;
@@ -283,36 +306,24 @@ function ConnectionTestRow({ paired, selectedHostId }: { paired: boolean; select
 				port: target?.httpPort ?? "",
 				platform: Platform.OS,
 			});
-			setResult({ ok: false, msg: title });
+			notify(`${name}: ${title}`, { tone: "warning", duration: "long" });
 		} finally {
-			// Poll now so the status row above lands on the same answer instead
-			// of waiting out the poll interval — unless the desktop rejected the
+			// Poll now so the row's status lands on the same answer instead of
+			// waiting out the poll interval — unless the desktop rejected the
 			// password: another request would spend a second failed attempt
 			// towards its lockout, and the poll already reports a rejection on its
 			// own. Not awaited: against a dead address it is another full request
 			// timeout.
-			if (!rejected) void refresh();
-			setTesting(false);
+			if (!rejected) void (isDefault ? refresh() : refreshHost(hostId));
+			setTesting((current) => {
+				const next = new Set(current);
+				next.delete(hostId);
+				return next;
+			});
 		}
 	}
 
-	return (
-		<SettingsButtonRow
-			icon="testConnection"
-			label="Test connection"
-			value={testing ? "Testing…" : result?.msg ?? "Test now"}
-			tone={result ? (result.ok ? "good" : "bad") : "default"}
-			disabled={!paired}
-			loading={testing}
-			onPress={() => { void test(); }}
-			testID="settings-test-connection"
-		/>
-	);
-}
-
-function LayoutGridRow() {
-	const active = useLayoutGrid();
-	return <SettingsToggleRow icon="layoutGrid" label="Layout grid" value={active} onValueChange={(next) => toggleLayoutGrid(next)} testID="settings-layout-grid" />;
+	return { testing, test };
 }
 
 /**
@@ -402,6 +413,12 @@ function NotificationsRow() {
 			refresh();
 		}
 	}
+
+	// Notifications are on by default (PushManager registers as soon as the
+	// system allows it), so the row only shows when they are off and can be
+	// turned on here; one just switched stays up until the change lands.
+	// Still being checked, or impossible here (no device, nothing paired): hidden too.
+	if (pending === null && (toggle.value || toggle.disabled)) return null;
 
 	return (
 		<SettingsToggleRow
@@ -508,10 +525,8 @@ function buildInfo(): BuildInfo {
 	};
 }
 
-function ReportProblemRow() {
+function ReportProblemRow({ toast }: { toast: ToastController["show"] }) {
 	const { config, connection } = useApp();
-	// Says what just happened, so the copy is discoverable if the form comes up empty.
-	const [copied, setCopied] = useState(false);
 	function report() {
 		const environment = {
 			build: buildInfo(),
@@ -525,10 +540,12 @@ function ReportProblemRow() {
 		// intercepts the link anyway, can drop the form and leave the reporter
 		// typing into an empty box with no idea what to include.
 		void Clipboard.setStringAsync(bugReportClipboard(environment));
-		setCopied(true);
+		// Said once, so the copy is discoverable if the form comes up empty,
+		// without leaving it on the row for the rest of the visit.
+		toast("Details copied. Paste them in if the report comes up empty.", { duration: "long" });
 		void openGitHub(bugReportOpenUrl(bugReportUrl(environment), Platform.OS));
 	}
-	return <SettingsButtonRow icon="report" label="Report a problem" value={copied ? "Details copied" : undefined} onPress={report} testID="settings-report-problem" />;
+	return <SettingsButtonRow icon="report" label="Report a problem" onPress={report} testID="settings-report-problem" />;
 }
 
 function FeatureRequestRow() {

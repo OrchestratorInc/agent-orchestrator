@@ -12,6 +12,8 @@ import {
 	Text,
 	useWindowDimensions,
 	View,
+	type NativeScrollEvent,
+	type NativeSyntheticEvent,
 } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
@@ -54,9 +56,12 @@ import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
 import { JumpToLatest } from "./JumpToLatest";
+import { atTail, openingRow } from "./timelineScroll";
 
 /** The jump back to the newest message fades in and out rather than popping. */
 const JUMP_FADE_MS = 160;
+/** Rows drawn first: the newest ones, enough to fill the screen at the end (see `openingRow`). */
+const OPENING_ROWS = 4;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -160,7 +165,14 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const styles = useThemedStyles(makeStyles);
 	const olderFeedback = usePressFeedback("button");
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
+	// Follows new output only while the person is at the newest message: a drag
+	// stops it, and only coming to rest at the end starts it again. Rows drawn
+	// above as they scroll up change the content's size, and that must not read
+	// as a reason to pull them back down.
 	const followsTail = useRef(true);
+	const dragging = useRef(false);
+	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
+	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
 	// Held above the virtualized list so a "Worked for" fold keeps its state when its row scrolls away and back.
 	const [openWorked, setOpenWorked] = useState<ReadonlySet<string>>(() => new Set());
@@ -237,6 +249,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
 
+	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
 		// No brief in the timeline (a promptless start): the checklist stands alone.
 		return (
@@ -256,6 +269,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
+	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		dragging.current = false;
+		followsTail.current = atTail(event.nativeEvent);
+		setShowJump(!followsTail.current);
+	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
 	const standaloneStartup = placement === "standalone" && startup ? (
@@ -290,17 +310,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 							contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}
 							scrollIndicatorInsets={{ bottom: bottomInset }}
 							keyboardShouldPersistTaps="handled"
-							initialNumToRender={4}
+							initialNumToRender={OPENING_ROWS}
+							initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}
 							maxToRenderPerBatch={4}
 							updateCellsBatchingPeriod={32}
 							windowSize={5}
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
+							onScrollEndDrag={settle}
+							onMomentumScrollBegin={() => { dragging.current = true; }}
+							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
-								const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-								followsTail.current = contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
-								setShowJump(!followsTail.current);
+								// Only the person's own scrolling stops the follow (see `followsTail`);
+								// passing the end without a drag, as a jump does, resumes it.
+								const tail = atTail(event.nativeEvent);
+								if (tail && !dragging.current) followsTail.current = true;
+								setShowJump(!followsTail.current && !tail);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -309,6 +336,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
+								// The opening scroll can ask before its rows have measured; the end is where it was going.
+								if (index === initialScrollIndex && followsTail.current) {
+									requestAnimationFrame(() => scrollToLatest(false));
+									return;
+								}
 								listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 								setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 							}}

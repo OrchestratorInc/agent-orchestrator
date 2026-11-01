@@ -5,22 +5,27 @@ const source = (path: string) => readFileSync(new URL(path, import.meta.url), "u
 const screen = source("./TerminalSessionScreen.tsx");
 
 describe("the terminal screen's native chrome", () => {
-	it("declares its header actions as native toolbar items", () => {
+	it("declares its header actions as native toolbar items, shared with Chat", () => {
+		const buttons = source("./sessionHeaderButtons.tsx");
 		expect(screen).toContain('<Stack.Toolbar placement="right">');
-		expect(screen).toContain('icon={toolbarIcon("chat")}');
-		expect(screen).toContain('icon={toolbarIcon(hasPreview && ios ? PREVIEW_READY_GLYPH : "globe")}');
-		expect(screen).toContain('icon={toolbarIcon("fileSearch")}');
+		expect(screen).toContain("{shellOnly ? null : sessionHeaderButtons({");
+		expect(screen).toContain('switchTo: "chat",');
+		expect(screen).toContain("const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);");
+		expect(buttons).toContain('icon={toolbarIcon(previewReady && ios ? PREVIEW_READY_GLYPH : "globe")}');
+		expect(buttons).toContain('icon={toolbarIcon("fileSearch")}');
 		// The preview-ready dot is the system badge, not a view placed by hand.
-		expect(screen).toContain("<Stack.Toolbar.Badge style={{ backgroundColor: t.green }} />");
+		expect(buttons).toContain("<Stack.Toolbar.Badge style={{ backgroundColor: t.green }} />");
 		// iOS has no empty badge, so the globe changes shape there, not only colour.
-		expect(screen).toContain('const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };');
+		expect(buttons).toContain('export const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };');
 		expect(screen).not.toContain("headerRight: () =>");
 		expect(screen).not.toContain("browserReadyDot");
 	});
 
 	it("keeps the Chat switch's spinner and the swap's empty frame", () => {
-		expect(screen).toMatch(/chatSwitchBusy \? \(\s*<Stack\.Toolbar\.View hidesSharedBackground>/);
-		expect(screen).toContain("disabled={interfaceTransitionActive}");
+		const buttons = source("./sessionHeaderButtons.tsx");
+		expect(buttons).toMatch(/switchBusy \? \(\s*<Stack\.Toolbar\.View key="switch" hidesSharedBackground>/);
+		expect(screen).toContain("switchBusy: chatSwitchBusy,");
+		expect(screen).toContain("switchDisabled: interfaceTransitionActive,");
 		expect(screen).toContain("resetHeaderRightForSwap(");
 		expect(screen).toContain("if (!headerRightReady) return null;");
 	});

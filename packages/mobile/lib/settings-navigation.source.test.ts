@@ -15,16 +15,16 @@ describe("Settings environment navigation", () => {
 
 		expect(settingsLayout).not.toBe("");
 		expect(rootLayout).not.toMatch(/name="environments"/);
-		expect(settingsLayout).toContain('<Stack.Screen name="environments" options={{ title: "Machines", fullScreenGestureEnabled: true }} />');
+		expect(settingsLayout).toContain('<Stack.Screen name="environments" options={{ title: "Machines" }} />');
 		expect(settings).toContain('label="Paired machines"');
 		expect(settings).toContain('router.push("/settings/environments")');
 		expect(settings).not.toContain('label="All machines"');
 	});
 
 	// A cold link to /settings/theme lands with the Settings list beneath it,
-	// so the back button goes back to the list instead of closing Settings.
-	// On iOS, where Settings is a sheet. Android's Settings list is a tab, so a
-	// page opens alone over it and back returns to the tab.
+	// so the back button goes back to the list instead of leaving Settings.
+	// On iOS, where Settings is pushed from the board. Android's Settings list
+	// is a tab, so a page opens alone over it and back returns to the tab.
 	it("opens every Settings page above the Settings list on iOS", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
@@ -39,9 +39,12 @@ describe("Settings environment navigation", () => {
 
 		expect(settingsLayout).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>");
 		expect(settingsLayout).toContain('<Stack.Screen name="index" options={{ title: "Settings" }} />');
-		expect(settingsLayout).toContain('<Stack.Screen name="theme" options={{ title: "Theme", fullScreenGestureEnabled: true }} />');
+		expect(settingsLayout).toContain('<Stack.Screen name="theme" options={{ title: "Theme" }} />');
 		expect(settingsLayout).not.toContain("headerShown");
+		// Every page pushes and goes back like any other: no transition or
+		// gesture of its own.
 		expect(settingsLayout).not.toContain("animation:");
+		expect(settingsLayout).not.toContain("fullScreenGestureEnabled");
 	});
 
 	// No page draws a bar of its own: no fixed-height header row, no absolutely
@@ -57,12 +60,14 @@ describe("Settings environment navigation", () => {
 		}
 	});
 
-	it("closes the iOS Settings sheet from its bar and adds machines from Environments' bar", () => {
+	// Settings is a pushed page on both platforms, so it leaves by the bar's
+	// back button, never a close item of its own.
+	it("leaves Settings by the back button and adds machines from Environments' bar", () => {
 		const settings = read("../app/settings/index.tsx");
 		const environments = read("../app/settings/environments.tsx");
 
-		expect(settings).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (');
-		expect(settings).toContain('<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close settings" onPress={() => backOr(router)} />');
+		expect(settings).not.toContain("Close settings");
+		expect(settings).not.toContain("Stack.Toolbar");
 		expect(environments).toContain('<Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Add machine" onPress={() => router.push("/pair")} />');
 	});
 
@@ -74,7 +79,7 @@ describe("Settings environment navigation", () => {
 
 		expect(environments).toContain("<EnvironmentMachineList");
 		expect(environments).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id } });');
-		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/index" options={{ title: "Machine", fullScreenGestureEnabled: true }} />');
+		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />');
 		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />');
 	});
 });

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { EffortChoice } from "./modelEffort";
-import type { VoiceMode, VoiceState } from "./voice/types";
+import type { VoiceState } from "./voice/types";
 
 export type SpawnComposerOption = {
 	id: string;
@@ -25,10 +25,11 @@ export type SpawnAgentModels = {
 
 export type SpawnComposerVoice = {
 	state: VoiceState;
-	mode: VoiceMode;
-	onPressIn: () => void;
-	onPressOut: () => void;
-	/** Starts or finishes hands-free dictation in one step, for screen readers. */
+	/** The live transcript, drawn in the field's place while the mic is open. */
+	partial: string;
+	/** The input level for the field's waveform (`useVoiceInput`). */
+	subscribeLevel: (listener: (level: number) => void) => () => void;
+	/** Starts or finishes hands-free dictation: the mic's tap. */
 	onToggleLatched: () => void;
 };
 
@@ -66,7 +67,7 @@ export type SpawnComposerControlsProps = {
 	/** The attach button offers both the photo library and the file picker. */
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;
-	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
+	/** Dictation into the prompt: tap to start, tap again to finish. */
 	voice: SpawnComposerVoice;
 	/** The task's prompt, written in the composer's field. */
 	prompt: string;

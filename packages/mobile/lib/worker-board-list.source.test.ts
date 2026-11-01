@@ -120,3 +120,16 @@ describe("board tab roots", () => {
 		},
 	);
 });
+
+describe("worker row machine", () => {
+	const archived = source("./archived-worker-row.tsx");
+
+	// A board whose rows are all on one machine names it once at its head; the
+	// same name on every row only crowded the details. Archived rows too.
+	it("leaves each row's machine off when the page names the one machine", () => {
+		expect(list).toContain("showMachine ? sessionMachineIdentity(session) : undefined");
+		expect(archived).toContain("showMachine ? sessionMachineIdentity(session) : undefined");
+		expect(list.match(/showMachine=\{showMachine\}/g)).toHaveLength(2);
+		expect(board).toContain("showMachine={!boardMachine}");
+	});
+});

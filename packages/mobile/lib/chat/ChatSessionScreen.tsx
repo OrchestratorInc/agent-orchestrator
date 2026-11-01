@@ -29,8 +29,7 @@ import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationRenamePrompt, type ConversationRenameRequest } from "./ConversationRenamePrompt";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
-import { conversationActionsMenu } from "./conversationActionsMenu";
-import { conversationMenuGroups, type ConversationMenuAction } from "./conversationMenuModel";
+import { conversationMenuGroups, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
@@ -45,6 +44,9 @@ import { sessionStartupView, startupVisible } from "../session/sessionStartup";
 import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
+import { sessionHeaderButtons } from "../session/sessionHeaderButtons";
+import { useSessionPreview } from "../session/useSessionPreview";
+import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
@@ -467,9 +469,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuRefreshing = manualRefreshing;
 	const menuCompacting = conversation.pendingActions.includes("compact");
 	const menuMcpReloading = conversation.pendingActions.includes("mcp");
-	const menuInterfaceSupported = Boolean(interfaceSwitch.status?.supported);
-	const menuInterfaceReason = interfaceSwitch.status?.reason || interfaceSwitch.error;
-	const menuInterfaceSwitching = interfaceTransitionActive || interfaceSwitch.starting;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		canRename: menuCanRename,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
@@ -484,17 +483,24 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		mcpReloading: menuMcpReloading,
 		turnInFlight: turnActive,
-		interfaceSupported: menuInterfaceSupported,
-		interfaceReason: menuInterfaceReason,
-		interfaceSwitching: menuInterfaceSwitching,
-	}) : undefined, [isOrchestrator, menuCanCompact, menuCanReloadMcp, menuCanRename, menuCompacting, menuHasUsage, menuInterfaceReason, menuInterfaceSupported, menuInterfaceSwitching, menuMcpReloading, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
+	}) : undefined, [isOrchestrator, menuCanCompact, menuCanRename, menuCanReloadMcp, menuCompacting, menuHasUsage, menuMcpReloading, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
+	// The actions page follows what it shows while it is up (see `ConversationActionsEntry`).
+	const latestMenuGroups = useRef(menuGroups);
+	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
+	useEffect(() => {
+		latestMenuGroups.current = menuGroups;
+		if (menuGroups) menuGroupListeners.current.forEach((listener) => listener(menuGroups));
+	}, [menuGroups]);
+	const subscribeMenuGroups = useCallback((listener: (groups: readonly ConversationMenuGroup[]) => void) => {
+		if (latestMenuGroups.current) listener(latestMenuGroups.current);
+		menuGroupListeners.current.add(listener);
+		return () => { menuGroupListeners.current.delete(listener); };
+	}, []);
 
 	// Each menu item's work, read when it is chosen, so the menu does not have to
 	// change whenever a callback does.
 	const menuActions: Record<ConversationMenuAction, () => void> = {
-		files: filesNavigation.openChanges,
 		shell: () => void openShell(),
-		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
 		pull_requests: () => {
 			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 				? reviewRouteForSession(session, currentHostId)
@@ -523,7 +529,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
-		terminal_ui: requestInterfaceSwitch,
 		reload_mcp: () => void conversation.reloadMcp().catch(() => {}),
 		delete: () => {
 			haptics.warning();
@@ -543,13 +548,41 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	menuActionsRef.current = menuActions;
 	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
 
-	// The actions are the native pull-down menu. A folded PR card comes back from
-	// the strip it leaves in the composer, not from here.
-	const headerItems = useMemo(() => menuGroups ? (
+	// The header leads with the same buttons as the terminal's (see
+	// `sessionHeaderButtons`), and its "⋯" opens the rest of the actions as a
+	// page. A folded PR card comes back from the strip it leaves in the composer,
+	// not from here. Each button's work is read when it is pressed, so the header
+	// is registered again only when what it shows changes.
+	const previewReady = useSessionPreview(config, session.id);
+	const headerPress = useRef({ requestInterfaceSwitch, openPreview: () => {}, openFiles: filesNavigation.openChanges });
+	headerPress.current = {
+		requestInterfaceSwitch,
+		openPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		openFiles: filesNavigation.openChanges,
+	};
+	const interfaceSwitchReady = Boolean(interfaceSwitch.status?.supported);
+	const interfaceSwitchBusy = interfaceSwitch.starting;
+	const openActions = useCallback(() => {
+		const groups = latestMenuGroups.current;
+		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
+	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
+	const headerItems = useMemo(() => menuReady ? (
 		<Stack.Toolbar placement="right">
-			{conversationActionsMenu(menuGroups, runMenuAction)}
+			{sessionHeaderButtons({
+				switchTo: "terminal",
+				switchReady: interfaceSwitchReady,
+				switchBusy: interfaceSwitchBusy,
+				switchBusyLabel: "Switching to Terminal UI",
+				switchDisabled: interfaceTransitionActive,
+				previewReady,
+				onSwitch: () => headerPress.current.requestInterfaceSwitch(),
+				onPreview: () => headerPress.current.openPreview(),
+				onFiles: () => headerPress.current.openFiles(),
+				t,
+			})}
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
-	) : null, [menuGroups, runMenuAction]);
+	) : null, [interfaceSwitchBusy, interfaceSwitchReady, interfaceTransitionActive, menuReady, openActions, previewReady, t]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else

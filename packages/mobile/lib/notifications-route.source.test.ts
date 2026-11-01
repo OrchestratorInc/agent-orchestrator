@@ -49,13 +49,13 @@ describe("notifications header", () => {
 		expect(page).toMatch(/ListEmptyComponent=\{\s*loading \? \(\s*<View style=\{styles\.center\}>\s*<ActivityIndicator/);
 	});
 
-	// On iOS the sheet closes from its bar, as Settings does, and Clear all
-	// takes the leading end; Android's page keeps it trailing beside the back.
-	it("closes the sheet from the bar and clears all from the other end", () => {
-		expect(page).toContain('<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close notifications" onPress={() => backOr(router)} />');
-		expect(page).toContain('<Stack.Toolbar placement={closeSheet ? "left" : "right"}>');
+	// A pushed page on both platforms: the bar's back button leaves it, with
+	// no close item of its own, and Clear all takes the trailing end.
+	it("leaves by the back button and clears all from the trailing end", () => {
+		expect(page).not.toContain("Close notifications");
+		expect(page).toContain('<Stack.Toolbar placement="right">');
 		expect(page).toContain('<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />');
-		expect(page).toContain("[clearable, closeSheet, router]);");
+		expect(page).toContain("[clearable]);");
 	});
 });
 

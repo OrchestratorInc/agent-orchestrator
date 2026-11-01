@@ -19,11 +19,15 @@ export type VoiceState =
 /**
  * How a recording was started, which decides the audio session it gets.
  *
+ * Every mic in the app now starts `latched`, on a tap: holding a key to talk
+ * read as broken whenever the warm-up outlasted a short press. `push` stays for
+ * the hook's hold gesture (`pressIn`/`pressOut`).
+ *
  * `push` — hold the key. Optimised for the shortest possible time-to-capture,
  * because a ~1s warm-up is intolerable before a three-second phrase. Uses the
  * bare `record` category: built-in mic, no Bluetooth route negotiation.
  *
- * `latched` — double-tap, hands-free until tapped again. Here the warm-up is
+ * `latched` — tap, hands-free until tapped again. Here the warm-up is
  * amortised over a long dictation and stops mattering, so this one pays for the
  * richer session that can route through a Bluetooth headset.
  */
@@ -42,6 +46,12 @@ export type VoiceCallbacks = {
 	onFinal(text: string): void;
 	/** Human-readable failure. The provider is back to idle once this fires. */
 	onError(message: string): void;
+	/**
+	 * How loud the input is right now, 0 (silence) to 1, a few times a second
+	 * while capturing. Drives the composer's waveform; a provider without a
+	 * meter simply never calls it.
+	 */
+	onLevel?(level: number): void;
 };
 
 export interface VoiceProvider {

@@ -192,8 +192,8 @@ describe("NotificationsScreen", () => {
 	it("clears every connected machine's history from the header after confirming", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		const clearAll = () => renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
-		// The sheet's close takes the trailing end, so Clear all leads.
-		expect(toolbarOf(clearAll()).props!.placement).toBe("left");
+		// The bar's back button leads, so Clear all takes the trailing end.
+		expect(toolbarOf(clearAll()).props!.placement).toBe("right");
 		expect(clearAll().props).toEqual(expect.objectContaining({ icon: "trash", accessibilityLabel: "Clear all" }));
 
 		act(() => { clearAll().props.onPress(); });
@@ -394,11 +394,10 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
 	});
 
-	it("closes the sheet from the bar's trailing end", async () => {
+	// A pushed page: the bar's back button leaves it.
+	it("draws no close item of its own", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
-		const close = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Close notifications");
-		expect(toolbarOf(close).props!.placement).toBe("right");
-		expect(close.props.icon).toBe("xmark");
+		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Close notifications")).toHaveLength(0);
 	});
 
 	it("hides Clear all when there is nothing to clear", async () => {
@@ -407,7 +406,7 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all")).toHaveLength(0);
 	});
 
-	// Pull Requests is a sheet of its own on iOS, so it opens once this one closes.
+	// Through openPage, like every page this one opens.
 	it("opens Pull Requests for a PR outcome through openPage", async () => {
 		const base = fixtures.getNotifications.getMockImplementation()!;
 		fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) => config.hostId === "mac"

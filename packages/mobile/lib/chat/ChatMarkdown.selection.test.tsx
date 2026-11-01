@@ -385,3 +385,38 @@ it("asks once for the name of a session the surface does not know, then shows it
 	expect(wanted).toHaveBeenCalledTimes(1);
 	act(() => renderer.unmount());
 });
+
+describe("inline Markdown nested in emphasis", () => {
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+
+	it.each(["ios", "android"])("draws a link inside bold as a link, not its source, on %s", (os) => {
+		platform.OS = os;
+		const open = vi.fn();
+		let renderer!: ReactTestRenderer;
+		try {
+			act(() => { renderer = create(<ChatLinkProvider onLinkOpen={open}><ChatMarkdown text="Read **the [setup guide](https://example.com/setup) first** please." /></ChatLinkProvider>); });
+			const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+			expect(text).toBe("Read the setup guide first please.");
+			const [link] = links(renderer);
+			expect(textOf(link)).toBe("setup guide");
+			act(() => link.props.onPress());
+			expect(open).toHaveBeenCalledWith("https://example.com/setup");
+			// iOS keeps a paragraph with a link on RN Text so VoiceOver can focus it, nested or not.
+			let surface = link.parent;
+			while (surface && surface.props.selectable !== true) surface = surface.parent;
+			if (os === "ios") expect(surface?.props.uiTextView).toBe(false);
+			act(() => renderer.unmount());
+		} finally {
+			platform.OS = "ios";
+		}
+	});
+
+	it("nests code, italic and strikethrough inside bold and italic", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text="**run `make` *now* please** and *see ~~old~~ [new](https://x.dev)*" />); });
+		const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+		expect(text).toBe("run make now please and see old new");
+		expect(links(renderer).map(textOf)).toEqual(["new"]);
+		act(() => renderer.unmount());
+	});
+});

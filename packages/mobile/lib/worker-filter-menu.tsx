@@ -65,39 +65,45 @@ export function workerFilterMenu({
 			{/* Each submenu is titled with its current choice. Android's menu items
 			    draw the check without a selected state, so TalkBack learns the
 			    choice from the title. Naming the menu in front of it pushed the row
-			    past the width the menu reserves, and it wrapped. */}
-			<Stack.Toolbar.Menu title={environmentLabel} icon={toolbarIcon({ ios: "tray.2", android: "devices" })}>
-				{workerEnvironmentOptions(environments).map((environment) => (
-					<Stack.Toolbar.MenuAction
-						key={environment.id}
-						// Each machine's own glyph: an SF Symbol on iOS, its bundled
-						// Material drawable on Android, which takes only image sources.
-						icon={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
-						isOn={environment.id === selectedEnvironmentId}
-						onPress={() => {
-							haptics.select();
-							// Preparing a replacement board must not block native menu dismissal.
-							startTransition(() => onSelectEnvironment(environment.id));
-						}}
-					>
-						{environment.label}
-					</Stack.Toolbar.MenuAction>
-				))}
+			    past the width the menu reserves, and it wrapped, so what each one
+			    filters by heads it as an inline section's title instead: a row
+			    reading "All machines" alone did not say it was a choice of machine. */}
+			<Stack.Toolbar.Menu inline title="Machine">
+				<Stack.Toolbar.Menu title={environmentLabel} icon={toolbarIcon({ ios: "tray.2", android: "devices" })}>
+					{workerEnvironmentOptions(environments).map((environment) => (
+						<Stack.Toolbar.MenuAction
+							key={environment.id}
+							// Each machine's own glyph: an SF Symbol on iOS, its bundled
+							// Material drawable on Android, which takes only image sources.
+							icon={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
+							isOn={environment.id === selectedEnvironmentId}
+							onPress={() => {
+								haptics.select();
+								// Preparing a replacement board must not block native menu dismissal.
+								startTransition(() => onSelectEnvironment(environment.id));
+							}}
+						>
+							{environment.label}
+						</Stack.Toolbar.MenuAction>
+					))}
+				</Stack.Toolbar.Menu>
 			</Stack.Toolbar.Menu>
-			<Stack.Toolbar.Menu title={projectLabel} icon={toolbarIcon("folder")}>
-				{workerProjectOptions(projects, selectedEnvironmentId).map((project) => (
-					<Stack.Toolbar.MenuAction
-						key={project.id}
-						icon={ios ? "folder" : undefined}
-						isOn={project.id === selectedProjectId}
-						onPress={() => {
-							haptics.select();
-							startTransition(() => onSelectProject(project.id));
-						}}
-					>
-						{project.label}
-					</Stack.Toolbar.MenuAction>
-				))}
+			<Stack.Toolbar.Menu inline title="Project">
+				<Stack.Toolbar.Menu title={projectLabel} icon={toolbarIcon("folder")}>
+					{workerProjectOptions(projects, selectedEnvironmentId).map((project) => (
+						<Stack.Toolbar.MenuAction
+							key={project.id}
+							icon={ios ? "folder" : undefined}
+							isOn={project.id === selectedProjectId}
+							onPress={() => {
+								haptics.select();
+								startTransition(() => onSelectProject(project.id));
+							}}
+						>
+							{project.label}
+						</Stack.Toolbar.MenuAction>
+					))}
+				</Stack.Toolbar.Menu>
 			</Stack.Toolbar.Menu>
 		</Stack.Toolbar.Menu>
 	);

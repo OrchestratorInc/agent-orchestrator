@@ -35,6 +35,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 	offline,
 	restoreError,
 	onRestore,
+	showMachine = true,
 }: {
 	session: DashboardSession;
 	projectName?: string;
@@ -47,6 +48,8 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 	offline: boolean;
 	restoreError?: string;
 	onRestore(session: DashboardSession): void;
+	/** Off when the page already names the one machine every row is on. */
+	showMachine?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -54,7 +57,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 	const visual = statusVisual(t, session.status);
 	const prs = prLine(session);
 	const details = prs?.text ?? row.branch ?? "";
-	const machine = useMemo(() => sessionMachineIdentity(session), [session]);
+	const machine = useMemo(() => showMachine ? sessionMachineIdentity(session) : undefined, [session, showMachine]);
 	const feedback = usePressFeedback("icon");
 	const disabled = restoring || restoreDisabled || offline;
 

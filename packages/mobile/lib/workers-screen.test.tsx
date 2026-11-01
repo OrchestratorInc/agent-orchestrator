@@ -194,13 +194,14 @@ describe("Workers header", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		const [settings, prs, notifications] = headerButtons();
 		expect(prs.props).toMatchObject({ icon: "arrow.triangle.pull", accessibilityLabel: "Pull Requests" });
+		// All three open the same way.
 		act(() => prs.props.onPress());
-		expect(fixtures.push).toHaveBeenCalledWith("/prs");
+		expect(fixtures.navigate).toHaveBeenCalledWith("/prs");
 		expect(settings.props).toMatchObject({ icon: "gear", accessibilityLabel: "Settings" });
 		expect(notifications.props).toMatchObject({ icon: "bell", accessibilityLabel: "Notifications" });
 		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 		act(() => settings.props.onPress());
-		expect(fixtures.push).toHaveBeenCalledWith("/settings");
+		expect(fixtures.navigate).toHaveBeenCalledWith("/settings");
 		act(() => notifications.props.onPress());
 		expect(fixtures.navigate).toHaveBeenCalledWith("/notifications");
 	});
@@ -315,6 +316,14 @@ describe("Workers filter menu", () => {
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac, AO");
 	});
 
+	// A row reading "All machines" alone did not say it was a choice of
+	// machine, so each submenu sits under a section saying what it filters by.
+	it("heads the machine and project choices with what they filter by", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		const sections = filterMenu().props.children.filter((child: { props?: { inline?: boolean } } | null) => child?.props?.inline);
+		expect(sections.map((section: { props: { title: string } }) => section.props.title)).toEqual(["Machine", "Project"]);
+	});
+
 	it("scopes the project choices to the environment and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
@@ -399,6 +408,47 @@ describe("Workers environment chips", () => {
 		act(() => chips.props.onSelectEnvironment("z"));
 		expect(selectedEnvironment()).toBe("Zeta");
 		expect(renderer.root.findByType(WorkerEnvironmentFilter).props.selectedEnvironmentId).toBe("z");
+	});
+});
+
+describe("Workers machine heading", () => {
+	function heading() {
+		return renderer.root.findAllByProps({ testID: "worker-machine-heading" }).find((node) => typeof node.type === "string");
+	}
+
+	// Every row on one machine said its name on every row; the list says it once.
+	it("names a filtered machine once above its rows, which leave it off", () => {
+		fixtures.hostStates[1] = snapshot({ connection: "open", error: null, sessions: [session("worker-2")] });
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(heading()).toBeUndefined();
+		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(true);
+		choose(environmentMenu(), "Windows");
+		expect(heading()!.props.accessibilityLabel).toBe("Machine Windows");
+		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
+	});
+
+	it("names the only paired machine once", () => {
+		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(heading()!.props.accessibilityLabel).toBe("Machine Mac");
+		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
+	});
+
+	// Android's chips already name the chosen machine, and an empty board's
+	// own state names it too.
+	it("leaves the naming to the chips on Android and to an empty board's state", () => {
+		fixtures.platform = "android";
+		fixtures.hostStates[1] = snapshot({ connection: "open", error: null, sessions: [session("worker-2")] });
+		act(() => { renderer = create(<FleetScreen />); });
+		choose(environmentMenu(), "Windows");
+		expect(heading()).toBeUndefined();
+		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
+
+		fixtures.platform = "ios";
+		fixtures.hostStates[1] = snapshot({});
+		act(() => { renderer = create(<FleetScreen />); });
+		choose(environmentMenu(), "Windows");
+		expect(heading()).toBeUndefined();
 	});
 });
 

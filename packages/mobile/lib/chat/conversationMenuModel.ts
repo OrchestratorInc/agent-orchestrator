@@ -1,10 +1,14 @@
 import type { IOSSymbol } from "../symbols";
+import type { MaterialDrawableName } from "../toolbarIcon.types";
 import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
 
+/**
+ * What the conversation's actions page offers. The switch to Terminal UI, the
+ * preview and the session's files are not here: they are the header's own
+ * buttons, as on the terminal (see `sessionHeaderButtons`).
+ */
 export type ConversationMenuAction =
-	| "files"
 	| "shell"
-	| "preview"
 	| "pull_requests"
 	| "map"
 	| "refresh"
@@ -12,7 +16,6 @@ export type ConversationMenuAction =
 	| "rename"
 	| "pin"
 	| "compact"
-	| "terminal_ui"
 	| "reload_mcp"
 	| "delete";
 
@@ -41,7 +44,7 @@ export function conversationMenuSections({
 	hasUsage: boolean;
 }): ConversationMenuSection[] {
 	return [
-		{ title: "Workspace", actions: ["files", "shell", "preview", "pull_requests"] },
+		{ title: "Workspace", actions: ["shell", "pull_requests"] },
 		{
 			title: "Conversation",
 			actions: [
@@ -53,18 +56,13 @@ export function conversationMenuSections({
 				...(canCompact ? ["compact" as const] : []),
 			],
 		},
-		{
-			title: "Agent",
-			actions: [
-				"terminal_ui",
-				...(canReloadMcp ? ["reload_mcp" as const] : []),
-			],
-		},
+		// A section only when it has something in it: no page shows an empty group.
+		...(canReloadMcp ? [{ title: "Agent" as const, actions: ["reload_mcp" as const] }] : []),
 		...(canDelete ? [{ title: "Session" as const, actions: ["delete" as const] }] : []),
 	];
 }
 
-/** Everything the conversation menu shows, as plain values, so it can be compared and kept still. */
+/** Everything the actions page shows, as plain values, so it can be compared and kept still. */
 export type ConversationMenuState = {
 	canRename: boolean;
 	canPin: boolean;
@@ -79,26 +77,23 @@ export type ConversationMenuState = {
 	mcpReloading: boolean;
 	/** A turn is running or queued, which compaction and an MCP reload both wait for. */
 	turnInFlight: boolean;
-	interfaceSupported: boolean;
-	interfaceReason?: string;
-	interfaceSwitching: boolean;
 };
 
 export type ConversationMenuItem = {
 	action: ConversationMenuAction;
 	label: string;
-	/** A second line under the label. iOS menus draw it; Android's have no place for it. */
+	/** A second line under the label. */
 	subtitle?: string;
 	disabled?: boolean;
 	destructive?: boolean;
-	/** The SF Symbol iOS draws beside the label. Android's overflow menu is text only. */
-	icon: IOSSymbol;
+	/** The row's glyph: an SF Symbol on iOS, a bundled Material Symbol on Android. */
+	icon: { ios: IOSSymbol; android: MaterialDrawableName };
 };
 
 export type ConversationMenuGroup = { title: ConversationMenuSection["title"]; items: ConversationMenuItem[] };
 
 /**
- * The conversation's overflow menu: every action, grouped as the sections
+ * The conversation's actions page: every action, grouped as the sections
  * above, with the label, state and glyph it shows right now. An action that is
  * running says so in its label and cannot be chosen again until it finishes.
  */
@@ -111,27 +106,16 @@ export function conversationMenuGroups(state: ConversationMenuState): Conversati
 
 function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
 	switch (action) {
-		case "files": return { action, label: "Review changes", icon: "plus.forwardslash.minus" };
-		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Open worktree shell", disabled: state.openingShell, icon: "terminal" };
-		case "preview": return { action, label: "Open preview", icon: "globe" };
-		case "pull_requests": return { action, label: "PR Review", icon: "arrow.triangle.pull" };
-		case "map": return { action, label: "Conversation history", icon: "list.bullet" };
-		case "refresh": return { action, label: state.refreshing ? "Refreshing conversation…" : "Refresh conversation", disabled: state.refreshing, icon: "arrow.clockwise" };
-		case "usage": return { action, label: "Context & usage", icon: "chart.bar" };
-		case "rename": return { action, label: "Rename conversation", icon: "pencil" };
-		case "pin": return { action, label: state.pinned ? "Unpin worker" : "Pin worker", icon: state.pinned ? "pin.slash" : "pin" };
-		case "compact": return { action, label: state.compacting ? "Compacting history…" : "Compact history", disabled: state.turnInFlight || state.compacting, icon: "arrow.down.right.and.arrow.up.left" };
-		// Left enabled when the agent cannot hand off, so choosing it explains why;
-		// Android's menu has no subtitle to carry the reason.
-		case "terminal_ui": return {
-			action,
-			label: state.interfaceSwitching ? "Switching interface…" : "Open Terminal UI",
-			subtitle: state.interfaceSupported ? undefined : state.interfaceReason || "This agent does not support a compatible handoff",
-			disabled: state.interfaceSwitching,
-			icon: "rectangle.2.swap",
-		};
-		case "reload_mcp": return { action, label: state.mcpReloading ? "Reloading MCP servers…" : "Reload MCP servers", disabled: state.turnInFlight || state.mcpReloading, icon: "wrench.and.screwdriver" };
-		case "delete": return { action, label: "Archive session", subtitle: ARCHIVE_SESSION_HINT, destructive: true, icon: "archivebox" };
+		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Open worktree shell", disabled: state.openingShell, icon: { ios: "terminal", android: "terminal" } };
+		case "pull_requests": return { action, label: "PR Review", icon: { ios: "arrow.triangle.pull", android: "rate_review" } };
+		case "map": return { action, label: "Conversation history", icon: { ios: "list.bullet", android: "history" } };
+		case "refresh": return { action, label: state.refreshing ? "Refreshing conversation…" : "Refresh conversation", disabled: state.refreshing, icon: { ios: "arrow.clockwise", android: "refresh" } };
+		case "usage": return { action, label: "Context & usage", icon: { ios: "chart.bar", android: "data_usage" } };
+		case "rename": return { action, label: "Rename conversation", icon: { ios: "pencil", android: "edit" } };
+		case "pin": return { action, label: state.pinned ? "Unpin worker" : "Pin worker", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };
+		case "compact": return { action, label: state.compacting ? "Compacting history…" : "Compact history", disabled: state.turnInFlight || state.compacting, icon: { ios: "arrow.down.right.and.arrow.up.left", android: "compress" } };
+		case "reload_mcp": return { action, label: state.mcpReloading ? "Reloading MCP servers…" : "Reload MCP servers", disabled: state.turnInFlight || state.mcpReloading, icon: { ios: "wrench.and.screwdriver", android: "build" } };
+		case "delete": return { action, label: "Archive session", subtitle: ARCHIVE_SESSION_HINT, destructive: true, icon: { ios: "archivebox", android: "archive" } };
 	}
 }
 

@@ -19,6 +19,7 @@ import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type 
 import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
+import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
@@ -31,7 +32,7 @@ import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
@@ -82,6 +83,8 @@ const sentLater = { ios: "clock", android: "schedule" } as const;
 const approvalGlyph = { ios: "shield", android: "shield" } as const;
 /** Dictate, filled as on the new-task sheet's round button. */
 const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
+/** The field's text inset once the pill has opened: just clear of the card's rounded corner. */
+const OPEN_FIELD_INSET = space.xs;
 
 export function ChatComposer({
 	quoteRequest,
@@ -207,7 +210,6 @@ export function ChatComposer({
 	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
-	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	// Not component state: an Android pick can resolve after this composer has
 	// unmounted (see composerAttachments.ts).
 	const attachmentKey = config ? `${machineIdentity(config)}.${sessionId}` : sessionId;
@@ -370,7 +372,6 @@ export function ChatComposer({
 			if (latestText.current === text && latestQuotes.current === quotes) {
 				latestText.current = "";
 				setText("");
-				setFieldHeight(COMPOSER_FIELD_HEIGHT);
 				latestQuotes.current = [];
 				setQuotes([]);
 			}
@@ -381,6 +382,11 @@ export function ChatComposer({
 			haptics.error();
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
+
+	// The full-screen editor sends after it has closed, by which time this
+	// composer has re-rendered with the draft it wrote back.
+	const submitRef = useRef(submit);
+	submitRef.current = submit;
 
 	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
 		setLocalError(undefined);
@@ -457,6 +463,18 @@ export function ChatComposer({
 		openingSuggestion.current = key;
 		void openPicker(suggestion.kind, suggestion);
 	}, [cursor, openPicker, pickerGate, text]);
+	const placeholder = stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder;
+	const openEditor = () => {
+		Keyboard.dismiss();
+		router.push(chatSheetRoute({
+			kind: "composer-editor",
+			text: latestText.current,
+			placeholder,
+			sendLabel: active ? "Queue" : "Send",
+			onChange: (value) => { latestText.current = value; setText(value); },
+			onSend: () => void submitRef.current("send"),
+		}));
+	};
 	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
 	const sendBlocked = Boolean(disabled || stopped || pending || submitting || (draftKey && !draftLoaded));
 	const nothingToSend = !hasDraft && attachments.length === 0;
@@ -502,8 +520,8 @@ export function ChatComposer({
 	// field starts between them and is let out to the pill's full width, and the
 	// controls row opens under it, its settings rising into place.
 	const fieldInsets = useAnimatedStyle(() => ({
-		paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm]),
-		paddingRight: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm]),
+		paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
+		paddingRight: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
 	}));
 	const controlsOpening = useAnimatedStyle(() => ({
 		height: interpolate(openness.value, [0, 1], [0, touchTarget], "clamp"),
@@ -547,7 +565,6 @@ export function ChatComposer({
 		<Animated.View style={[styles.dock, styles.floatingDock, { paddingBottom: restingInset }, dockRise]}>
 			<DockFade />
 			{chips}
-			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><AppSymbol name="mic" size={iconSize.xs} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
 			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice }))} />)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
@@ -640,8 +657,11 @@ export function ChatComposer({
 					</View>)}
 				</ScrollView> : null}
 				{/* The field keeps one place in the tree whatever the pill's shape, so it
-				    keeps its focus as the pill opens around it. */}
+				    keeps its focus as the pill opens around it. While the mic is open
+				    the dictation takes its place, and the field waits hidden with the
+				    draft the transcript will be added to. */}
 				<Animated.View style={[styles.composerRow, fieldInsets]}>
+					{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
 					<TextInput
 						ref={inputRef}
 						onLayout={pasteLayout}
@@ -652,21 +672,14 @@ export function ChatComposer({
 						onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
 						onFocus={() => setFocused(true)}
 						onBlur={() => setFocused(false)}
-						onContentSizeChange={(event) => {
-							if (!latestText.current) {
-								setFieldHeight(COMPOSER_FIELD_HEIGHT);
-								return;
-							}
-							// Native contentSize already includes the TextInput's vertical
-							// padding. Treat it as the field's full height; converting it to
-							// lines counted the padding as an extra line on the first render.
-							const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
-							setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
-						}}
-						placeholder={stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder}
+						placeholder={placeholder}
 						placeholderTextColor={t.textFaint}
 						{...textSelectionColors(t)}
-						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
+						// No height of its own: a multiline field grows with its text
+						// between the rule's min and max and then scrolls. Setting the
+						// height from the content-size event lagged a line behind, so
+						// each new line first scrolled the field and cut off its top line.
+						style={[styles.input, (listening || transcribing) && styles.hiddenField]}
 						multiline
 						maxLength={40_000}
 					/>
@@ -679,6 +692,16 @@ export function ChatComposer({
 					</View>
 					{deliveryNote}
 					{steerAction}
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel="Open full-screen editor"
+						disabled={stopped || submitting || listening || transcribing}
+						android_ripple={iconFeedback.android_ripple}
+						onPress={openEditor}
+						style={({ pressed }) => [styles.expandAction, pressed && iconFeedback.pressed, (listening || transcribing) && styles.inactive]}
+					>
+						<AppSymbol name="expandEditor" size={iconSize.sm} color={t.textSecondary} />
+					</Pressable>
 				</Animated.View>
 				{/* The corner controls, pinned to the pill's bottom corners in both
 				    shapes. The round button changes face in place, as the new-task
@@ -795,6 +818,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	deliveryNote: { flexShrink: 1, minWidth: 0, height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 	deliveryNoteText: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	expandAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },
+	// Out of the layout but still mounted, with its draft and its place.
+	hiddenField: { display: "none" },
 	steerDisc: { width: CHIP_HEIGHT, height: CHIP_HEIGHT, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, backgroundColor: t.accentTint },
 	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault, borderRadius: radius.lg, borderCurve: "continuous" },
 	queueRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },

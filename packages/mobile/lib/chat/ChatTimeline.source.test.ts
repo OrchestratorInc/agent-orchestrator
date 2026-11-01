@@ -268,3 +268,22 @@ describe("message edit list identity", () => {
 	});
 });
 
+
+describe("following the newest message", () => {
+	it("opens on the newest rows instead of drawing the oldest and jumping to an undrawn end", () => {
+		expect(source).toContain("openedAt.current ??= openingRow(groups.length, OPENING_ROWS);");
+		expect(source).toContain("initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}");
+		expect(source).toContain("if (index === initialScrollIndex && followsTail.current) {");
+	});
+
+	it("stops following on the person's own drag and resumes only at rest at the end", () => {
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}");
+		expect(source).toContain("onScrollEndDrag={settle}");
+		expect(source).toContain("onMomentumScrollEnd={settle}");
+		expect(source).toContain("if (tail && !dragging.current) followsTail.current = true;");
+		// A scroll event alone never turns the follow off: rows drawn above change
+		// the content's size mid-drag without the person having left the end.
+		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));");
+	});
+});

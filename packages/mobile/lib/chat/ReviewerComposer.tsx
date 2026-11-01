@@ -11,12 +11,13 @@ import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import { iconSize, stateOpacity, touchTarget } from "../tokens";
+import { DictationField } from "../voice/DictationField";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass } from "./composer-glass";
-import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
+import { COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
@@ -50,9 +51,9 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState("");
-	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	const keyboard = useReanimatedKeyboardAnimation();
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
+	const listening = voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing";
 	useEffect(() => {
 		if (!completedRetry) return;
 		if (text.trim() === completedRetry.draftText) { setText(""); clearAttachments(); }
@@ -110,7 +111,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		setSubmitting(true); setError(""); dismissAttachmentNotice();
 		try {
 			const id = await onSend(text.trim(), attachments.flatMap((item) => item.kind === "image" ? [item.image] : []), attachments.flatMap((item) => item.kind === "resource" ? [item.resource] : []));
-			setText(""); forgetComposerAttachments(sentKey, sent); setFieldHeight(COMPOSER_FIELD_HEIGHT);
+			setText(""); forgetComposerAttachments(sentKey, sent);
 			await onAcknowledgeSend(id);
 			haptics.success();
 		} catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send this reply."); }
@@ -126,33 +127,29 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	}));
 	const sendDisabled = stopped || submitting || (!text.trim() && !attachments.length);
 	return <Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
-		{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><AppSymbol name="mic" size={iconSize.xs} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
 		{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice }))} />)}</ScrollView> : null}
 		{error || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{error || attachmentNotice || voice.error}</Text> : null}
 		<View style={[styles.composer, stopped && inactive]}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
 			<View style={styles.composerRow}>
 				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
+				{/* While the mic is open the dictation takes the field's place, as in ChatComposer. */}
+				{listening ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={dictation} /> : null}
 				<TextInput
 					onLayout={pasteLayout}
 					accessibilityLabel="Reply to reviewer"
 					value={text}
 					onChangeText={setText}
-					onContentSizeChange={(event) => {
-						// Native contentSize already includes the field's vertical padding,
-						// as in ChatComposer.
-						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
-						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
-					}}
 					placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"}
 					placeholderTextColor={t.textFaint}
 					{...textSelectionColors(t)}
 					multiline
 					maxLength={40_000}
 					editable={!stopped && !submitting}
-					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
+					// Grows with its text between the rule's min and max, as ChatComposer's does.
+					style={[styles.input, listening && hiddenField]}
 				/>
-				<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
+				<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} onToggleLatched={voice.toggleLatched} />
 				{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" android_ripple={stopFeedback.android_ripple} onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && stopFeedback.pressed]}><AppSymbol name="stop" size={iconSize.xs} color={t.textPrimary} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} android_ripple={sendFeedback.android_ripple} onPress={() => void submit()} style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, sendDisabled && inactive]}>{submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} />}</Pressable>}
 			</View>
 		</View>
@@ -163,3 +160,6 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 const makeStyles = composerStyleRules;
 /** The pill, or a control in it, that cannot act right now. */
 const inactive = { opacity: stateOpacity.disabled };
+/** Out of the layout while dictating, but still mounted with its draft. */
+const hiddenField = { display: "none" } as const;
+const dictation = { minHeight: COMPOSER_FIELD_HEIGHT };

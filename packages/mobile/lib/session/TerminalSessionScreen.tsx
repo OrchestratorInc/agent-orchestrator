@@ -3,7 +3,7 @@ import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-rout
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Alert, Keyboard, LayoutAnimation, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
+import { ApiError, killSession, killSessionReviewer, sendMessage } from "../api";
 import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
@@ -37,9 +37,11 @@ import {
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrollTopReport } from "./terminalViewport";
 import { ScrollTopButton } from "./ScrollTopButton";
+import { sessionHeaderButtons } from "./sessionHeaderButtons";
+import { useSessionPreview } from "./useSessionPreview";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
-import { toolbarIcon, type ToolbarSymbol } from "../toolbarIcon";
+import { toolbarIcon } from "../toolbarIcon";
 import { Spinner } from "../Spinner";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -57,9 +59,6 @@ const FONT_SIZE = 12;
 
 /** A terminal with nothing running behind it: power, switched off. */
 const TERMINATED_GLYPH: PlatformSymbol = { ios: "power", android: "power_settings_new" };
-
-/** The preview globe once there is something to open: filled, a shape change and not only a colour. */
-const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };
 
 // Injected into the xterm WebView after load. xterm has its own touch handlers
 // that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
@@ -636,8 +635,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
-	// Poll generated previews so the globe can advertise the optional App preview tab.
-	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
 	const known =
@@ -702,14 +699,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			known.activity === "blocked"),
 	);
 	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
-	// What counts as a live preview: any file the daemon surfaces (an .html build, or
-	// a generated doc like plan.md / a report) EXCEPT a repo's README, which the
-	// detector's markdown fallback always matches on a fresh checkout. Filtering the
-	// README out keeps the globe's green dot meaningful — it means "there's something
-	// the agent produced to view", not just "this repo has a README".
-	const previewBase = (preview?.entry ?? "").split("/").pop() ?? "";
-	const isReadme = /^readme\.(md|markdown)$/i.test(previewBase);
-	const hasPreview = !!preview && !isReadme;
+	// Polled so the globe can advertise the optional App preview tab.
+	const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);
 
 	// Neither platform shrinks the layout for the keyboard: iOS never has, and on
 	// Android edge-to-edge (edgeToEdgeEnabled) defeats windowSoftInputMode=adjustResize
@@ -868,31 +859,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		setViewGone(false);
 	}, [scheme, style]);
 
-	// Poll the daemon's on-demand preview detector while the terminal is open, just
-	// to keep `preview` current for the globe button. We never auto-open the overlay
-	// (see the note by the state above): the detector's markdown fallback matches a
-	// repo README, so auto-popping would surface a blank/unbuilt page.
-	useEffect(() => {
-		if (shellOnly) return;
-		if (!activeConfig || !isConfigured(activeConfig)) return;
-		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout> | null = null;
-		const tick = async () => {
-			try {
-				const p = await getPreview(activeConfig, id);
-				if (cancelled) return;
-				setPreview(p ? { entry: p.entry, url: p.url } : null);
-			} catch {
-				/* transient - keep polling */
-			}
-			if (!cancelled) timer = setTimeout(tick, 5000);
-		};
-		tick();
-		return () => {
-			cancelled = true;
-			if (timer) clearTimeout(timer);
-		};
-	}, [activeConfig, id, shellOnly]);
 
 	// The WebView reports the phone's NATURAL fit (proposeDimensions, measure-only).
 	// We forward it to the daemon as this client's requested size — used only when
@@ -1315,48 +1281,18 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		);
 		return (
 			<Stack.Toolbar placement="right">
-				{/* A spinner rather than a dimmed glyph: the recheck only runs while
-				    the glyph is already faint, so fading it further reads as broken.
-				    `starting` shows it too — that POST is disabled-but-silent for up
-				    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
-				    recheck spinner exists to remove. */}
-				{shellOnly ? null : chatSwitchBusy ? (
-					<Stack.Toolbar.View hidesSharedBackground>
-						<View style={styles.headerSpinner}>
-							<Spinner color={t.accent} accessibilityLabel="Checking whether Chat can open" />
-						</View>
-					</Stack.Toolbar.View>
-				) : (
-					<Stack.Toolbar.Button
-						icon={toolbarIcon("chat")}
-						accessibilityLabel="Open Chat interface"
-						disabled={interfaceTransitionActive}
-						// Faint until the daemon says Chat can resume this session. It stays
-						// tappable: the tap asks again and explains what is missing.
-						tintColor={chatSwitchReady ? undefined : t.textFaint}
-						onPress={() => void headerActions.current.requestInterfaceSwitch()}
-					/>
-				)}
-				{shellOnly ? null : (
-					<Stack.Toolbar.Button
-						// iOS draws a bar-button badge only from iOS 26, and an empty one is
-						// a blank capsule there, so on iOS the globe itself changes: it
-						// fills in, and turns green as well.
-						icon={toolbarIcon(hasPreview && ios ? PREVIEW_READY_GLYPH : "globe")}
-						accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
-						tintColor={hasPreview && ios ? t.green : undefined}
-						onPress={() => headerActions.current.toggleBrowser()}
-					>
-						{hasPreview && !ios ? <Stack.Toolbar.Badge style={{ backgroundColor: t.green }} /> : null}
-					</Stack.Toolbar.Button>
-				)}
-				{shellOnly ? null : (
-					<Stack.Toolbar.Button
-						icon={toolbarIcon("fileSearch")}
-						accessibilityLabel="Session files and changes"
-						onPress={() => headerActions.current.openFiles()}
-					/>
-				)}
+				{shellOnly ? null : sessionHeaderButtons({
+					switchTo: "chat",
+					switchReady: chatSwitchReady,
+					switchBusy: chatSwitchBusy,
+					switchBusyLabel: "Checking whether Chat can open",
+					switchDisabled: interfaceTransitionActive,
+					previewReady: hasPreview,
+					onSwitch: () => void headerActions.current.requestInterfaceSwitch(),
+					onPreview: () => headerActions.current.toggleBrowser(),
+					onFiles: () => headerActions.current.openFiles(),
+					t,
+				})}
 				{menuItems.length ? (
 					<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions" title={grid && ios && !dead ? `Grid ${grid}` : undefined}>
 						{/* The bar button's own title, which UIKit shows in the Large
@@ -1368,7 +1304,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				) : null}
 			</Stack.Toolbar>
 		);
-	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, styles, t, unpaired]);
+	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, t, unpaired]);
 
 	const webViewOptions = useMemo(
 		() => ({
@@ -1541,27 +1477,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			{/* The input dock. One container, one bottom inset, fixed slots — every
 			    control sits in the same place in every state the screen can reach. */}
 			<View style={[styles.dock, { paddingBottom: bottomPad }]} onLayout={(e) => setDockHeight(Math.round(e.nativeEvent.layout.height))}>
-				{/* Live dictation readout. Deliberately not inside the field: the
-				    partial transcript changes on every syllable, and rewriting the
-				    input under the user's caret is hostile. */}
-				{(voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing") && (
-					<View style={[styles.voiceStrip, voice.state === "starting" && styles.voiceStripWarmup]}>
-						<AppSymbol name="mic" size={iconSize.sm} color={voice.state === "starting" ? t.textTertiary : t.accent} />
-						<Text style={styles.voiceText} numberOfLines={2}>
-							{voice.partial ||
-								(voice.state === "starting"
-									? // The mic is not capturing yet. Saying "Listening" here would
-										// invite speech that gets dropped during warm-up.
-										"Keep holding…"
-									: voice.state === "transcribing"
-										? "Transcribing…"
-										: voice.mode === "latched"
-											? "Recording hands-free — tap the mic to finish"
-											: "Speak now — release to insert")}
-						</Text>
-					</View>
-				)}
-
 				<KeyRow onKey={sendKey} />
 
 				<Composer
@@ -1629,7 +1544,6 @@ const makeStyles = (t: Theme) =>
 		backgroundColor: t.bgBase,
 	},
 	// The size of the button it stands in for, so the items beside it hold still.
-	headerSpinner: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	interfaceOverlay: {
 		...StyleSheet.absoluteFill,
 		alignItems: "center",
@@ -1653,22 +1567,4 @@ const makeStyles = (t: Theme) =>
 	interfaceAction: { marginTop: space.xxs, alignSelf: "stretch" },
 	interfaceError: { ...type.footnote, color: t.red, textAlign: "center" },
 	deadOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
-	// Accent-blue like the rest of the chrome. Red is reserved for the mic button
-	// alone: one small saturated element reads as "recording", a whole red panel
-	// reads as an error. It sits at the top of the dock, so it divides itself from
-	// the keys below rather than redrawing the dock's own top border.
-	voiceStrip: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.sm,
-		paddingHorizontal: space.md,
-		paddingVertical: space.xs,
-		backgroundColor: t.accentTint,
-		borderBottomWidth: rowDividerWidth,
-		borderBottomColor: t.accent,
-	},
-	// Muted while the mic warms up, so "ready to speak" is a visible state change
-	// and not just a wording difference.
-	voiceStripWarmup: { backgroundColor: t.bgElevated, borderBottomColor: t.borderDefault },
-	voiceText: { flex: 1, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

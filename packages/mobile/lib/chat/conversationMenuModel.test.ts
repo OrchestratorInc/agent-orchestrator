@@ -15,14 +15,12 @@ const idle: ConversationMenuState = {
 	compacting: false,
 	mcpReloading: false,
 	turnInFlight: false,
-	interfaceSupported: true,
-	interfaceSwitching: false,
 };
 
 const item = (state: ConversationMenuState, action: string) =>
 	conversationMenuGroups(state).flatMap((group) => group.items).find((entry) => entry.action === action);
 
-describe("conversation overflow menu", () => {
+describe("conversation actions page", () => {
 	it("groups every supported session action by user intent", () => {
 		const sections = conversationMenuSections({
 			canRename: true,
@@ -33,10 +31,11 @@ describe("conversation overflow menu", () => {
 			hasUsage: true,
 		});
 
+		// Terminal UI, the preview and the files are the header's buttons, not rows here.
 		expect(sections).toEqual([
-			{ title: "Workspace", actions: ["files", "shell", "preview", "pull_requests"] },
+			{ title: "Workspace", actions: ["shell", "pull_requests"] },
 			{ title: "Conversation", actions: ["map", "refresh", "usage", "rename", "pin", "compact"] },
-			{ title: "Agent", actions: ["terminal_ui", "reload_mcp"] },
+			{ title: "Agent", actions: ["reload_mcp"] },
 			// Last, and alone: the only entry here that destroys something.
 			{ title: "Session", actions: ["delete"] },
 		]);
@@ -53,19 +52,16 @@ describe("conversation overflow menu", () => {
 		});
 
 		expect(sections[1]?.actions).toEqual(["map", "refresh"]);
-		expect(sections[2]?.actions).toEqual(["terminal_ui"]);
-		// An orchestrator has no delete here, so the section goes rather than
-		// rendering an empty group.
-		expect(sections.some((section) => section.title === "Session")).toBe(false);
+		// A section with nothing left in it goes rather than rendering an empty
+		// group: no MCP reload, and an orchestrator has no archive here.
+		expect(sections.map((section) => section.title)).toEqual(["Workspace", "Conversation"]);
 	});
 
-	it("labels each action and gives it an SF Symbol", () => {
+	it("labels each action and gives it a glyph on each platform", () => {
 		const groups = conversationMenuGroups(idle);
 		expect(groups.map((group) => group.title)).toEqual(["Workspace", "Conversation", "Agent", "Session"]);
 		expect(groups.flatMap((group) => group.items.map((entry) => entry.label))).toEqual([
-			"Review changes",
 			"Open worktree shell",
-			"Open preview",
 			"PR Review",
 			"Conversation history",
 			"Refresh conversation",
@@ -73,11 +69,10 @@ describe("conversation overflow menu", () => {
 			"Rename conversation",
 			"Pin worker",
 			"Compact history",
-			"Open Terminal UI",
 			"Reload MCP servers",
 			"Archive session",
 		]);
-		for (const group of groups) for (const entry of group.items) expect(entry.icon).toBeTruthy();
+		for (const group of groups) for (const entry of group.items) expect(entry.icon).toEqual({ ios: expect.any(String), android: expect.any(String) });
 	});
 
 	it("marks Archive destructive and explains it", () => {
@@ -86,12 +81,11 @@ describe("conversation overflow menu", () => {
 	});
 
 	it("says an action is running and holds it until it finishes", () => {
-		const busy = { ...idle, openingShell: true, refreshing: true, compacting: true, mcpReloading: true, interfaceSwitching: true };
+		const busy = { ...idle, openingShell: true, refreshing: true, compacting: true, mcpReloading: true };
 		expect(item(busy, "shell")).toMatchObject({ label: "Opening shell…", disabled: true });
 		expect(item(busy, "refresh")).toMatchObject({ label: "Refreshing conversation…", disabled: true });
 		expect(item(busy, "compact")).toMatchObject({ label: "Compacting history…", disabled: true });
 		expect(item(busy, "reload_mcp")).toMatchObject({ label: "Reloading MCP servers…", disabled: true });
-		expect(item(busy, "terminal_ui")).toMatchObject({ label: "Switching interface…", disabled: true });
 	});
 
 	it("holds compaction and MCP reloads while a turn runs", () => {
@@ -101,16 +95,8 @@ describe("conversation overflow menu", () => {
 		expect(item(running, "refresh")?.disabled).toBe(false);
 	});
 
-	// Android menus have no subtitle, so the item stays choosable and the screen
-	// explains on tap.
-	it("keeps Terminal UI choosable when the agent cannot hand off, with the reason", () => {
-		const unsupported = item({ ...idle, interfaceSupported: false, interfaceReason: "Codex cannot resume here" }, "terminal_ui");
-		expect(unsupported).toMatchObject({ disabled: false, subtitle: "Codex cannot resume here" });
-		expect(item({ ...idle, interfaceSupported: false }, "terminal_ui")?.subtitle).toBe("This agent does not support a compatible handoff");
-	});
-
 	it("offers Unpin for a pinned worker", () => {
-		expect(item({ ...idle, pinned: true }, "pin")).toMatchObject({ label: "Unpin worker", icon: "pin.slash" });
+		expect(item({ ...idle, pinned: true }, "pin")).toMatchObject({ label: "Unpin worker", icon: { ios: "pin.slash", android: "keep_off" } });
 	});
 });
 

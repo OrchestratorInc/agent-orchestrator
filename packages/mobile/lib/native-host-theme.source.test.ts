@@ -36,8 +36,10 @@ describe("native hosts take the platform's own theme", () => {
 		for (const part of [toggleRow, form]) expect(part).not.toContain("tint(");
 	});
 
-	it("tints the iOS settings menus like the values in the rows around them", () => {
-		expect(source("lib/SettingsForm.tsx")).toMatch(/modifiers=\{\[pickerStyle\("menu"\), tint\(t\.textSecondary\)/);
+	// The value and its up-down chevrons in the app's tint, the pop-up button
+	// iOS Settings draws, so a menu row reads as a dropdown.
+	it("tints the iOS settings menus as pop-up buttons in the app's tint", () => {
+		expect(source("lib/SettingsForm.tsx")).toContain('[pickerStyle("menu"), tint(t.accent), ...rowModifiers(t, disabled)]');
 	});
 
 	it("gives native text fields the caret colour of the app's React Native fields", () => {

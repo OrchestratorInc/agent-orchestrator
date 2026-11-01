@@ -1,46 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("expo-router", () => ({ useNavigationContainerRef: vi.fn(), useRouter: vi.fn() }));
-vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 
 import { isPresentedRoute, presentedRouteDepth } from "./pageNavigation";
 
 describe("opening pages outside sheets", () => {
 	it("recognises every sheet and modal the root stack presents", () => {
-		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "settings", "spawn", "pair"]) expect(isPresentedRoute(name, "ios")).toBe(true);
-		expect(isPresentedRoute("settings/environments", "ios")).toBe(false);
-		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]"]) expect(isPresentedRoute(name, "ios")).toBe(false);
+		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "pair"]) expect(isPresentedRoute(name)).toBe(true);
+		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "settings/environments"]) expect(isPresentedRoute(name)).toBe(false);
 	});
 
-	// Android pushes Settings as a page with its own top app bar, so a page
-	// opened from it is pushed on top instead of dismissing Settings first.
-	it("treats Settings, Notifications and Pull Requests as presented on iOS only", () => {
-		for (const name of ["settings", "notifications", "prs"]) {
-			expect(isPresentedRoute(name, "ios")).toBe(true);
-			expect(isPresentedRoute(name, "android")).toBe(false);
-		}
-		for (const name of ["sheets/review-actions", "spawn", "pair"]) expect(isPresentedRoute(name, "android")).toBe(true);
+	// Settings, Notifications, Pull Requests and New task are pages pushed over
+	// the board on both platforms, so a page opened from one is pushed on top
+	// instead of dismissing it first.
+	it("treats Settings, Notifications, Pull Requests and New task as pages", () => {
+		for (const name of ["settings", "notifications", "prs", "spawn"]) expect(isPresentedRoute(name)).toBe(false);
+		expect(presentedRouteDepth(["(tabs)", "settings", "notifications", "review/[sessionId]"])).toBe(0);
 	});
 
-	// The rendered-page viewer is a modal on both platforms, so a review opened
-	// from a push tap while it is up replaces it rather than landing inside it.
+	// The rendered-page viewer is a modal, so a review opened from a push tap
+	// while it is up replaces it rather than landing inside it.
 	it("dismisses the rendered-page viewer before pushing", () => {
-		for (const os of ["ios", "android"]) {
-			expect(isPresentedRoute("render", os)).toBe(true);
-			expect(presentedRouteDepth(["(tabs)", "session/[id]", "render"], os)).toBe(1);
-		}
-	});
-
-	it("reads the running platform by default", () => {
-		expect(isPresentedRoute("settings")).toBe(true);
-		expect(presentedRouteDepth(["(tabs)", "settings", "notifications"])).toBe(2);
+		expect(isPresentedRoute("render")).toBe(true);
+		expect(presentedRouteDepth(["(tabs)", "session/[id]", "render"])).toBe(1);
 	});
 
 	it("dismisses the first presented route and everything pushed into it", () => {
-		expect(presentedRouteDepth(["(tabs)", "review/[sessionId]"], "ios")).toBe(0);
-		expect(presentedRouteDepth(["(tabs)", "review/[sessionId]", "sheets/review-actions"], "ios")).toBe(1);
-		// A page already pushed into a sheet goes with it.
-		expect(presentedRouteDepth(["(tabs)", "settings", "notifications", "review/[sessionId]"], "ios")).toBe(3);
-		expect(presentedRouteDepth(["(tabs)", "settings", "notifications", "review/[sessionId]"], "android")).toBe(0);
+		expect(presentedRouteDepth(["(tabs)", "review/[sessionId]"])).toBe(0);
+		expect(presentedRouteDepth(["(tabs)", "review/[sessionId]", "sheets/review-actions"])).toBe(1);
+		// A page already pushed into a modal goes with it.
+		expect(presentedRouteDepth(["(tabs)", "render", "review/[sessionId]"])).toBe(2);
 	});
 });

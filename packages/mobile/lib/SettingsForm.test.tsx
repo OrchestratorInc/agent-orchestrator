@@ -20,16 +20,16 @@ vi.mock("@expo/ui", async () => {
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return Object.fromEntries(["Button", "HStack", "Image", "Label", "LabeledContent", "Picker", "ProgressView", "Spacer", "Text", "Toggle"].map((name) => [name, host(name)]));
+	return Object.fromEntries(["Button", "HStack", "Image", "Label", "LabeledContent", "Picker", "ProgressView", "Spacer", "Text", "Toggle", "VStack"].map((name) => [name, host(name)]));
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonStyle", "disabled", "font", "foregroundStyle", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "disabled", "font", "foregroundStyle", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
-import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsToggleRow, SettingsValueRow } from "./SettingsForm";
+import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm";
 
 let renderers: ReactTestRenderer[] = [];
 
@@ -179,17 +179,43 @@ describe("the iOS settings form", () => {
 		expect(toggle.findByType("Label" as never).props.title).toBe("Notifications");
 	});
 
-	it("picks from a menu with its value in the secondary ink, on every appearance", () => {
+	// The value and its up-down chevrons in the tint: the pop-up button that
+	// says the row is a dropdown, not a plain value. iOS keeps the menu even
+	// where Android lays the choice out as segments.
+	it("picks from a menu drawn as a pop-up button in the tint, on every appearance", () => {
 		const onValueChange = vi.fn();
 		const options = [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }] as const;
 		const picker = render(<SettingsPickerRow icon="appearance" label="Appearance" options={options} selectedValue="dark" onValueChange={onValueChange} appearance="segmented" />).findByType("Picker" as never);
 
 		expect(picker.props.selection).toBe("dark");
 		expect(has(picker, "pickerStyle", "menu")).toBe(true);
-		expect(has(picker, "tint", "#secondary")).toBe(true);
+		expect(has(picker, "tint", "#accent")).toBe(true);
 		expect(picker.findAllByType("Text" as never).map((text) => [text.props.children, (text.props.modifiers as Modifier[])[0].args[0]])).toEqual([["Light", "light"], ["Dark", "dark"]]);
 		picker.props.onSelectionChange("light");
 		expect(onValueChange).toHaveBeenCalledWith("light");
+	});
+
+	it("draws a status row's status quietly and its action as a bordered button that greys out", () => {
+		const onAction = vi.fn();
+		const root = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Connected" tone="good" actionLabel="Test" onAction={onAction} actionTestID="test-dev" />);
+		const [dot] = root.findAllByType("Image" as never).filter((image) => image.props.systemName === "circle.fill");
+		// The colour is only in the dot; the words stay in the secondary ink.
+		expect(dot.props.color).toBe("#green");
+		const status = root.findAllByType("Text" as never).find((text) => text.props.children === "Connected")!;
+		expect(has(status, "foregroundStyle", "#secondary")).toBe(true);
+		const button = root.findByType("Button" as never);
+		expect(button.props.testID).toBe("test-dev");
+		expect(has(button, "buttonStyle", "bordered")).toBe(true);
+		expect(has(button, "disabled", false)).toBe(true);
+		button.props.onPress();
+		expect(onAction).toHaveBeenCalledOnce();
+
+		const held = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Offline" actionLabel="Test" actionDisabled onAction={vi.fn()} />);
+		expect(has(held.findByType("Button" as never), "disabled", true)).toBe(true);
+		// Nothing to say in colour: a quiet grey dot.
+		expect(held.findAllByType("Image" as never).find((image) => image.props.systemName === "circle.fill")!.props.color).toBe("#tertiary");
+		const testing = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Testing…" actionLabel="Test" actionLoading onAction={vi.fn()} />);
+		expect(testing.findByType("Button" as never).findAllByType("ProgressView" as never)).toHaveLength(1);
 	});
 
 	it("lists a choice section as an inline picker, each option with its accessory", () => {

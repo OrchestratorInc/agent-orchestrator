@@ -1,12 +1,14 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useNavigation, type NativeStackNavigationProp } from "expo-router";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Keyboard, Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 import Animated, { interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "./AppSymbol";
 import { ChatAttachmentMenu } from "./chat/ChatAttachmentMenu";
 import { ComposerGlass } from "./chat/composer-glass";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./chat/composerStyles";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./chat/composerStyles";
 import { usePressFeedback } from "./pressFeedback";
 import type { SpawnComposerVoice } from "./spawn-composer-controls.types";
+import { DictationField } from "./voice/DictationField";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { textSelectionColors } from "./textSelection";
@@ -46,7 +48,22 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, h
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const [focused, setFocused] = useState(false);
-	const [contentHeight, setContentHeight] = useState(COMPOSER_FIELD_HEIGHT);
+	const field = useRef<TextInput>(null);
+	const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+	// A new task is for typing into, so the page opens with the keyboard up and
+	// the composer open onto who runs the task, as a new chat does. iOS focuses
+	// the field with the page. Android's focus lands mid-transition there and is
+	// lost, so it waits for the push to finish, once: coming back from a sheet
+	// opened over the page must not raise the keyboard again.
+	useEffect(() => {
+		if (Platform.OS !== "android") return;
+		let focusedOnce = false;
+		return navigation.addListener("transitionEnd", (event) => {
+			if (focusedOnce || event.data.closing) return;
+			focusedOnce = true;
+			field.current?.focus();
+		});
+	}, [navigation]);
 	const listening = voice.state === "recording" || voice.state === "starting";
 	const transcribing = voice.state === "transcribing";
 	const promptEmpty = !prompt.trim();
@@ -107,23 +124,25 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, h
 		<View style={styles.composer}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
 			<Animated.View style={[styles.composerRow, fieldInsets]}>
+				{/* While the mic is open the dictation takes the field's place, as
+				    in the chat's composer; the field waits hidden with the prompt. */}
+				{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
 				<TextInput
+					ref={field}
 					accessibilityLabel="Task prompt"
 					value={prompt}
 					onChangeText={onChangePrompt}
 					onFocus={() => setFocused(true)}
 					onBlur={() => setFocused(false)}
-					onContentSizeChange={(event) => {
-						// Native contentSize already includes the field's vertical padding.
-						setContentHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height))));
-					}}
 					placeholder={placeholder}
 					placeholderTextColor={t.textFaint}
 					{...textSelectionColors(t)}
-					style={[styles.input, { height: prompt ? contentHeight : COMPOSER_FIELD_HEIGHT }]}
+					// Grows on its own between the style's min and max height, as the
+					// chat's field does: a height set from the content-size event lagged
+					// a line behind and scrolled the top line out of view.
+					style={[styles.input, (listening || transcribing) && styles.hiddenField]}
 					multiline
-					// A new task is for typing into: on iOS the keyboard opens with
-					// the page. Android's lands mid-transition there, so it waits for a tap.
+					// Android focuses once the push has finished (see above).
 					autoFocus={Platform.OS === "ios"}
 				/>
 			</Animated.View>
@@ -145,6 +164,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	corner: { position: "absolute", bottom: space.xs, height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 	cornerLeading: { left: space.xs },
 	cornerTrailing: { right: space.xs },
+	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },
+	// Out of the layout while dictating, but still mounted with the prompt.
+	hiddenField: { display: "none" },
 	controlsRow: { width: "100%", flexDirection: "row", alignItems: "center", gap: space.xxs, overflow: "hidden" },
 	settingsSlot: { flex: 1, minWidth: 0, minHeight: touchTarget, alignItems: "stretch", justifyContent: "center", overflow: "hidden" },
 	inactive: { opacity: stateOpacity.disabled },

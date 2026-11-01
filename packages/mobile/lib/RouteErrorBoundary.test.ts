@@ -20,6 +20,7 @@ const screenRoutes = [
 	"prs/index.tsx",
 	"(tabs)/compose.tsx",
 	"artifact/[sessionId].tsx",
+	"conversation-actions.tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
 	"files/[sessionId]/folder.tsx",
@@ -44,6 +45,7 @@ const screenRoutes = [
 
 const sheetRoutes = [
 	"sheets/agent.tsx",
+	"sheets/composer-editor.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/connect.tsx",
 	"sheets/conversation-map.tsx",

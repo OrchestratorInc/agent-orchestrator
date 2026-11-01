@@ -19,7 +19,6 @@ export const settingsIcons = {
 	environments: symbols.server,
 	account: symbols.account,
 	signOut: symbols.signOut,
-	layoutGrid: { ios: "grid", android: "grid_on" },
 	appearance: { ios: "circle.lefthalf.filled", android: "contrast" },
 	theme: symbols.palette,
 	notifications: symbols.notifications,
@@ -35,6 +34,11 @@ export type SettingsTone = "default" | "good" | "bad";
 
 export function settingsToneColor(t: Theme, tone: SettingsTone | undefined): string {
 	return tone === "good" ? t.green : tone === "bad" ? t.red : t.textSecondary;
+}
+
+/** A status row's dot: the tone's colour, or a quiet grey when there is nothing to say. */
+export function settingsStatusDotColor(t: Theme, tone: SettingsTone | undefined): string {
+	return tone === "good" || tone === "bad" ? settingsToneColor(t, tone) : t.textTertiary;
 }
 
 export type SettingsFormProps = { children?: ReactNode; testID?: string };
@@ -78,6 +82,25 @@ export type SettingsButtonRowProps = RowBase & {
 	/** Shows the platform's spinner and holds the row until it clears. */
 	loading?: boolean;
 	onPress(): void;
+};
+
+/**
+ * A row with a live status under its name and a small button of its own at
+ * its end, such as a paired machine and its Test. The status is quiet: the
+ * words in the secondary ink behind a dot in the tone's colour, so a healthy
+ * row never shouts. The button is drawn as one (bordered on iOS, outlined on
+ * Android) and greys out when it can't run.
+ */
+export type SettingsStatusRowProps = RowBase & {
+	status: string;
+	tone?: SettingsTone;
+	actionLabel: string;
+	/** Greys the button out: the action can't run now. */
+	actionDisabled?: boolean;
+	/** Shows the platform's spinner in the button while the action runs. */
+	actionLoading?: boolean;
+	onAction(): void;
+	actionTestID?: string;
 };
 
 export type SettingsToggleRowProps = RowBase & {

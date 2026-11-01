@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
-import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { backOr } from "../../lib/backNavigation";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import type { Theme } from "../../lib/theme";
 import { PRCard } from "../../lib/PRCard";
 import { PRFilterControl } from "../../lib/pr-filter-control";
@@ -9,6 +8,7 @@ import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { collectPRs, prFilterCounts, prInFilter, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { Spinner } from "../../lib/Spinner";
+import { StackRootBack } from "../../lib/StackRootBack";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
 import { UnpairedState } from "../../lib/UnpairedState";
@@ -20,7 +20,6 @@ import { useToast } from "../../lib/useToast";
 import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
-import { toolbarIcon } from "../../lib/toolbarIcon";
 import type { HostedSession } from "../../lib/hostedRows";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
@@ -32,7 +31,6 @@ type PRsParams = { hostId?: string; projectId?: string };
 export default function PRsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
@@ -96,18 +94,10 @@ export default function PRsScreen() {
 		setRefreshing(false);
 	};
 
-	// iOS presents Pull Requests as a sheet, which closes from its bar as
-	// Notifications and Settings do. Android's page has the system back.
-	const headerItems = Platform.OS === "ios" ? (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close pull requests" onPress={() => backOr(router)} />
-		</Stack.Toolbar>
-	) : null;
-
 	if (!configured) {
 		return (
 			<View style={styles.screen} collapsable={false}>
-				{headerItems}
+				<StackRootBack />
 				<TabPageScroll>
 					<UnpairedState />
 				</TabPageScroll>
@@ -131,7 +121,7 @@ export default function PRsScreen() {
 		// a direct child of the sheet, which react-native-screens then resizes
 		// wrongly and the page shows blank under its bar.
 		<View style={styles.screen} collapsable={false}>
-			{headerItems}
+			<StackRootBack />
 			{/* The only scroll view the page has, the first load included: swapping
 			    a stand-in for it while the sheet came up left iOS 26's floating bar
 			    over the sheet taking every touch. */}

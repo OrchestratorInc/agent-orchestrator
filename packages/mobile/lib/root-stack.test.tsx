@@ -33,7 +33,6 @@ vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
-vi.mock("./layoutGrid", () => ({ LayoutGrid: () => null }));
 
 import RootLayout, { unstable_settings } from "../app/_layout";
 
@@ -100,7 +99,7 @@ describe("root stack", () => {
 		const renderer = await renderRoot("ios");
 		try {
 			const sheets = renderer.root.findAll((node) => (node.type as unknown) === "StackScreen" && node.props.options?.presentation === "formSheet");
-			expect(sheets.length).toBeGreaterThan(10);
+			expect(sheets.length).toBeGreaterThanOrEqual(9);
 			for (const sheet of sheets) {
 				expect(sheet.props.options.sheetCornerRadius).toBeUndefined();
 				expect(sheet.props.options.sheetAllowedDetents).toBeDefined();
@@ -168,15 +167,15 @@ describe("root stack", () => {
 			}
 			// Titled before the page renames itself to the project.
 			expect(renderer.root.findByProps({ name: "project/[id]" }).props.options.title).toBe("Project");
-			// Notifications is a sheet on iOS and a page on Android, either way
-			// headed by its own stack's bar (app/notifications/_layout).
-			const notifications = renderer.root.findByProps({ name: "notifications" }).props.options;
-			expect(notifications).toMatchObject({ title: "Notifications", headerShown: false });
-			expect(notifications.presentation).toBe(platform === "ios" ? "formSheet" : "card");
-			// Pull Requests is presented the same way, headed by app/prs/_layout.
-			const prs = renderer.root.findByProps({ name: "prs" }).props.options;
-			expect(prs).toMatchObject({ title: "Pull Requests", headerShown: false });
-			expect(prs.presentation).toBe(platform === "ios" ? "formSheet" : "card");
+			// Settings, Notifications and Pull Requests are pages pushed over the
+			// board on both platforms, each headed by its own stack's bar
+			// (app/settings/_layout, app/notifications/_layout, app/prs/_layout),
+			// and they go back with the stack's own transition like every page.
+			for (const [name, title] of [["settings", "Settings"], ["notifications", "Notifications"], ["prs", "Pull Requests"]]) {
+				const options = renderer.root.findByProps({ name }).props.options;
+				expect(options).toMatchObject({ title, headerShown: false });
+				for (const key of ["presentation", "animation", "gestureEnabled", "sheetAllowedDetents", "sheetGrabberVisible"]) expect(options).not.toHaveProperty(key);
+			}
 		} finally {
 			act(() => renderer.unmount());
 		}

@@ -25,7 +25,17 @@ describe("reviewer attachment composer", () => {
 		expect(source).toContain("const makeStyles = composerStyleRules;");
 		expect(source).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(source).toContain("<MicKey");
-		expect(source).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
+		expect(source).toContain("style={[styles.input, listening && hiddenField]}");
+		expect(source).not.toContain("onContentSizeChange");
+	});
+
+	// Dictation takes the field's place, as in the session composer; the banner
+	// over the pill flashed "Keep holding…" on every tap.
+	it("dictates into the pill, on a tap", () => {
+		expect(source).toContain("{listening ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={dictation} /> : null}");
+		expect(source).toContain("onToggleLatched={voice.toggleLatched} />");
+		expect(source).not.toContain("onPressIn");
+		expect(source).not.toContain("Keep holding");
 	});
 
 	// The field is read-only while the reviewer is stopped, so dictating into it

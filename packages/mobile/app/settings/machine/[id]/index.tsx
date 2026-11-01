@@ -38,12 +38,13 @@ export default function MachineDetailScreen() {
 	}, [id]);
 	useFocusEffect(useCallback(() => { void reload(); }, [reload]));
 
-	// A forget can't be called back, so the Settings sheet stays until it lands.
+	// A forget can't be called back, so the page stays until it lands: no swipe
+	// back from it, nor from Settings around it.
 	useEffect(() => {
 		if (!forgetting) return;
-		const settings = navigation.getParent();
-		settings?.setOptions({ gestureEnabled: false });
-		return () => settings?.setOptions({ gestureEnabled: true });
+		const held = [navigation, navigation.getParent()];
+		for (const screen of held) screen?.setOptions({ gestureEnabled: false });
+		return () => { for (const screen of held) screen?.setOptions({ gestureEnabled: true }); };
 	}, [forgetting, navigation]);
 
 	const edit = useCallback(() => {

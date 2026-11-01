@@ -91,3 +91,27 @@ it("drops a latched start that is still warming up when activated again", async 
 	expect(voice.current.state).toBe("idle");
 	expect(started).toHaveLength(1);
 });
+
+// The waveform reads the level through a subscription, so the composer holding
+// the hook does not redraw several times a second.
+it("streams the input level only while capturing, and drops to silence when it ends", async () => {
+	const { provider, started } = fakeProvider();
+	const voice = mount(provider);
+	const heard: number[] = [];
+	const unsubscribe = voice.current.subscribeLevel((level) => heard.push(level));
+
+	await act(async () => voice.current.toggleLatched());
+	// Still warming up: nothing is capturing, so nothing is drawn.
+	act(() => started[0].callbacks.onLevel?.(0.4));
+	expect(heard).toEqual([]);
+	act(() => started[0].callbacks.onReady());
+	act(() => started[0].callbacks.onLevel?.(0.6));
+	act(() => started[0].callbacks.onFinal("done"));
+	expect(heard).toEqual([0.6, 0]);
+
+	unsubscribe();
+	await act(async () => voice.current.toggleLatched());
+	act(() => started[1].callbacks.onReady());
+	act(() => started[1].callbacks.onLevel?.(0.9));
+	expect(heard).toEqual([0.6, 0]);
+});

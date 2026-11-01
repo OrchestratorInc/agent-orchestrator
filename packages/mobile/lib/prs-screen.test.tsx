@@ -151,14 +151,14 @@ it("retains the default PR scroll buffer", () => {
 	expect(list.props.initialNumToRender).toBeUndefined();
 });
 
-// The sheet's bar is clear on iOS 26 and the page is laid out under it, so the
-// PR list is the page's first view (after the bar's items, which draw no view
-// of their own), and what sat above it now heads the list.
+// The bar is clear on iOS 26 and the page is laid out under it, so the PR
+// list is the page's first view, and what sat above it now heads the list.
 it("makes the PR list the page's first view, inset under the header", () => {
 	fixture.hostStates = fixture.hostStates.slice(0, 1);
 	act(() => { renderer = create(<PRsScreen />); });
 	const screen = renderer!.root.findAllByType("View" as never)[0];
-	expect((screen.children[0] as { props: { placement?: string } }).props.placement).toBe("right");
+	// iOS's back item draws no view of its own, so the list still comes first.
+	expect((screen.children[0] as { type: { name?: string } }).type.name).toBe("StackRootBack");
 	const first = screen.children[1] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
 	expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
 	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "PRFilterControl", "StaleBanner"]);
@@ -217,13 +217,14 @@ it("confirms a copied pull-request link without redrawing the cards", () => {
 	expect(fixture.cardRenders).toEqual([]);
 });
 
-// A sheet over the board on iOS: it closes from its bar, and the board's
+// A page pushed over the board: the back chevron leaves it (iOS draws none
+// for the first page of a stack, so the page adds it), and the board's
 // Settings and alerts stay the board's.
-it("closes the sheet from its bar instead of carrying the board's items", () => {
+it("leaves by the back button instead of carrying the board's items", () => {
 	fixture.router.back.mockClear();
 	act(() => { renderer = create(<PRsScreen />); });
 	const buttons = renderer!.root.findAllByType("StackToolbarButton" as never);
-	expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(["Close pull requests"]);
+	expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(["Back"]);
 	act(() => buttons[0].props.onPress());
 	expect(fixture.router.back).toHaveBeenCalledTimes(1);
 });

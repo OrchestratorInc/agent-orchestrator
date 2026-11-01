@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
 	dismiss: vi.fn(),
+	platform: "ios",
+	listeners: new Map<string, (event: { data: { closing: boolean } }) => void>(),
 }));
 
 vi.mock("react-native", () => ({
-	Platform: { OS: "ios" },
+	Platform: { get OS() { return fixtures.platform; } },
 	ActivityIndicator: "ActivityIndicator", Keyboard: { dismiss: fixtures.dismiss }, Pressable: "Pressable", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
 }));
@@ -15,11 +17,20 @@ vi.mock("react-native-reanimated", () => ({
 	default: { View: "AnimatedView" },
 	interpolate: () => 0, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: (value: unknown) => value, withTiming: (value: unknown) => value,
 }));
+vi.mock("expo-router", () => ({
+	useNavigation: () => ({
+		addListener: (name: string, listener: (event: { data: { closing: boolean } }) => void) => {
+			fixtures.listeners.set(name, listener);
+			return () => fixtures.listeners.delete(name);
+		},
+	}),
+}));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => unknown) => make(fixtures.theme) }));
 vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: {} }) }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./chat/ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("./voice/DictationField", () => ({ DictationField: "DictationField" }));
 vi.mock("./chat/composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 
 import { SpawnComposer, type SpawnComposerProps } from "./spawn-composer";
@@ -34,6 +45,8 @@ beforeEach(() => {
 		error(...args);
 	});
 	fixtures.dismiss.mockClear();
+	fixtures.platform = "ios";
+	fixtures.listeners.clear();
 });
 
 afterEach(async () => {
@@ -51,7 +64,7 @@ const baseProps = (overrides: Partial<SpawnComposerProps> = {}): SpawnComposerPr
 	hasAttachments: false,
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
-	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() },
+	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
 	onSpawn: vi.fn(),
 	busy: false,
 	disabled: false,
@@ -119,13 +132,40 @@ describe("SpawnComposer", () => {
 		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
 		expect(props.onSpawn).not.toHaveBeenCalled();
 
-		props = baseProps({ voice: { ...baseProps().voice, state: "recording", mode: "latched" } });
+		props = baseProps({ voice: { ...baseProps().voice, state: "recording", partial: "add a test" } });
 		button = primary(await render(props));
 		expect(button.props.accessibilityLabel).toBe("Stop dictating");
+		// The dictation takes the field's place while the mic is open.
+		expect(renderer!.root.findByType("DictationField" as never).props).toMatchObject({ state: "recording", partial: "add a test" });
 		expect(glyph(button)).toBe("stop");
 		expect(disc(button).props.style).toContainEqual({ backgroundColor: "#red" });
 
 		button = primary(await render(baseProps({ prompt: "", voice: { ...baseProps().voice, state: "unavailable" } })));
 		expect(button.props.testID).toBe("spawn-submit");
+	});
+
+	// iOS focuses with the page; Android's focus is lost mid-transition, so it
+	// focuses once the push ends, and not again on coming back from a sheet.
+	it("opens onto the keyboard on Android once the push has finished, and only once", async () => {
+		fixtures.platform = "android";
+		const focus = vi.fn();
+		await act(async () => {
+			renderer = create(<SpawnComposer {...baseProps({ prompt: "" })} />, {
+				createNodeMock: (element) => (element.type === "TextInput" ? { focus } : null),
+			});
+		});
+		const field = renderer!.root.findByType("TextInput" as never);
+		expect(field.props.autoFocus).toBe(false);
+		const transitionEnd = fixtures.listeners.get("transitionEnd")!;
+		transitionEnd({ data: { closing: true } });
+		expect(focus).not.toHaveBeenCalled();
+		transitionEnd({ data: { closing: false } });
+		transitionEnd({ data: { closing: false } });
+		expect(focus).toHaveBeenCalledOnce();
+	});
+
+	it("leaves iOS to focus with the page", async () => {
+		await render(baseProps());
+		expect(fixtures.listeners.has("transitionEnd")).toBe(false);
 	});
 });

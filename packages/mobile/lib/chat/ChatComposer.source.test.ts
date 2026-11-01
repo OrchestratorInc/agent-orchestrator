@@ -47,18 +47,17 @@ describe("chat composer pill", () => {
 		// Open or closed, one pill with one corner: it grows rather than becoming a card.
 		expect(composer).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(composer).not.toContain("<ComposerGlass height=");
-		// The field grows from the native content size while glass fills the pill,
-		// avoiding a separately measured glass height that could lag behind it.
-		expect(composer).toContain("onContentSizeChange={(event) => {");
-		expect(composer).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
+		// The field grows by itself while glass fills the pill: no measured height
+		// on either. One set from the content-size event lagged a line behind, so
+		// each new line first scrolled the field and cut off its top line.
+		expect(composer).not.toContain("onContentSizeChange");
+		expect(composer).not.toContain("fieldHeight");
+		expect(composer).toContain("style={[styles.input, (listening || transcribing) && styles.hiddenField]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
 		expect(styleRule("composerRow")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
 		expect(styleRule("composerRow")).toContain('alignItems: "flex-end"');
 		expect(styleRule("input")).toContain("minHeight: COMPOSER_FIELD_HEIGHT");
 		expect(styleRule("input")).toContain("maxHeight: COMPOSER_FIELD_MAX_HEIGHT");
-		expect(composer).toContain("const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT)");
-		expect(composer).toContain("const contentHeight = Math.ceil(event.nativeEvent.contentSize.height)");
-		expect(composer).toContain("setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)))");
 		// `false`: the material must not take the touch. The field is inside this
 		// pill, and an interactive material only passes taps that land on its own
 		// content — typing would stop working.
@@ -66,12 +65,12 @@ describe("chat composer pill", () => {
 		expect(source("./composer-glass.ios.tsx")).toContain("frame({ maxWidth: 2000, maxHeight: 2000 })");
 	});
 
-	it("returns an emptied multiline draft to the one-line height", () => {
-		// A controlled TextInput can retain its last native content size after its
-		// value is cleared; the empty placeholder must not inherit that height.
-		expect(composer).toMatch(/setText\(""\);\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
-		expect(composer).toMatch(/if \(!latestText.current\) \{\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
-		expect(composer).toContain("height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT");
+	// Narrow margins, as the system's message fields keep: every point of
+	// gutter is taken from the line being written.
+	it("keeps the pill's side padding narrow", () => {
+		expect(styleRule("dock")).toContain("paddingHorizontal: space.sm");
+		expect(styleRule("input")).toContain("paddingHorizontal: 0");
+		expect(composer).toContain("const OPEN_FIELD_INSET = space.xs;");
 	});
 
 	it("does not clear a newer draft when an earlier send completes", () => {
@@ -82,7 +81,6 @@ describe("chat composer pill", () => {
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
 		expect(composer).toContain("onChangeText={(value) => { latestText.current = value; setText(value); }}");
-		expect(composer).toContain("if (!latestText.current) {");
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
@@ -216,7 +214,7 @@ describe("collapsed and expanded composer", () => {
 		expect(composer).toContain("<View style={[styles.corner, styles.cornerTrailing]}>");
 		expect(styleRule("corner")).toContain('position: "absolute", bottom: space.xs');
 		expect(composer).toContain("openness.value = reduceMotion ? withTiming(expanded ? 1 : 0, { duration: 0 }) : withSpring(expanded ? 1 : 0, COMPOSER_SPRING);");
-		expect(composer).toContain("paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm])");
+		expect(composer).toContain("paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET])");
 		// The round button changes face in place, with no transition of its own.
 		expect(composer).not.toContain("ZoomIn");
 	});
@@ -227,6 +225,26 @@ describe("collapsed and expanded composer", () => {
 		expect(composer).toContain('const primary = listening ? "stopDictation" : transcribing ? "transcribing" : primaryAction === "stop" ? "stopTurn" : nothingToSend && canDictate ? "dictate" : "send";');
 		expect(composer).toContain('onPress={() => { if (primary === "dictate") Keyboard.dismiss(); voice.toggleLatched(); }}');
 		expect(styleRule("dictating")).toContain("backgroundColor: t.red");
+	});
+
+	// The mic's tap opens dictation in the field's own place; the banner over
+	// the pill came up as "Keep holding…" and changed a moment later.
+	it("dictates in the field's place, with no banner over the pill", () => {
+		expect(composer).toContain("{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}");
+		expect(styleRule("hiddenField")).toContain('display: "none"');
+		expect(composer).not.toContain("Keep holding");
+		expect(composer).not.toContain("styles.voice");
+	});
+
+	// The draft opens full screen from the card's controls, and the editor
+	// writes back to it, so it is kept whichever way the editor closes.
+	it("opens the draft in a full-screen editor", () => {
+		expect(composer).toContain('accessibilityLabel="Open full-screen editor"');
+		expect(composer).toContain('<AppSymbol name="expandEditor" size={iconSize.sm} color={t.textSecondary} />');
+		expect(composer).toContain('kind: "composer-editor",');
+		expect(composer).toContain("onChange: (value) => { latestText.current = value; setText(value); },");
+		expect(composer).toContain('onSend: () => void submitRef.current("send"),');
+		expect(styleRule("expandAction")).toContain("width: touchTarget, height: touchTarget");
 	});
 
 	it("floats over the conversation, which fades out behind it", () => {

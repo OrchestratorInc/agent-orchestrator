@@ -63,7 +63,7 @@ function render(element: React.ReactElement): ReactTestInstance {
 describe("EnvironmentPicker on iOS", () => {
 	it("is a bordered SwiftUI menu button", () => {
 		const menu = render(<EnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findByType("SwiftMenu" as never);
-		expect(menu.props.label).toBe("Switch environment");
+		expect(menu.props.label).toBe("Switch machine");
 		expect(menu.props.modifiers).toContainEqual({ buttonStyle: "bordered" });
 	});
 
@@ -94,7 +94,7 @@ describe("EnvironmentPicker on Android", () => {
 		const menu = root.findByType("DropdownMenu" as never);
 		expect(menu.props.expanded).toBe(false);
 		const button = root.findByType("OutlinedButton" as never);
-		expect(button.findByType("ComposeText" as never).props.children).toBe("Switch environment");
+		expect(button.findByType("ComposeText" as never).props.children).toBe("Switch machine");
 		act(() => button.props.onClick());
 		expect(root.findByType("DropdownMenu" as never).props.expanded).toBe(true);
 		act(() => root.findByType("DropdownMenu" as never).props.onDismissRequest());

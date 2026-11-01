@@ -28,6 +28,10 @@ vi.mock("../voice/MicKey", async () => {
 	const React = await import("react");
 	return { MicKey: (props: object) => React.createElement("MicKey", props) };
 });
+vi.mock("../voice/DictationField", async () => {
+	const React = await import("react");
+	return { DictationField: (props: object) => React.createElement("DictationField", props) };
+});
 vi.mock("./RouteToggle", async () => {
 	const React = await import("react");
 	return { RouteToggle: (props: object) => React.createElement("RouteToggle", props) };
@@ -55,7 +59,7 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-const voice = { state: "idle" as const, mode: "push" as const, pressIn: vi.fn(), pressOut: vi.fn(), toggleLatched: vi.fn() };
+const voice = { state: "idle" as const, partial: "", toggleLatched: vi.fn(), subscribeLevel: vi.fn(() => () => {}) };
 
 async function render(props: Partial<Parameters<typeof Composer>[0]> = {}) {
 	const all = {
@@ -136,9 +140,20 @@ describe("the terminal composer", () => {
 		expect(renderer!.root.findByType("MicKey" as never).props).toMatchObject({ variant: "plain", size: 44 });
 	});
 
-	// A screen reader latches dictation in one step instead of a synthesized double tap.
-	it("hands the mic the one-step latch", async () => {
+	// Tap to start, tap to finish.
+	it("hands the mic the one-step toggle", async () => {
 		await render();
 		expect(renderer!.root.findByType("MicKey" as never).props.onToggleLatched).toBe(voice.toggleLatched);
+	});
+
+	// The dictation takes the field's place in the pill, instead of a strip
+	// over the terminal that flashed "Keep holding…" on every press.
+	it("shows dictation in the field's place while the mic is open", async () => {
+		await render();
+		expect(renderer!.root.findAllByType("DictationField" as never)).toHaveLength(0);
+		await render({ voice: { ...voice, state: "recording", partial: "run the tests" } });
+		expect(renderer!.root.findByType("DictationField" as never).props).toMatchObject({ state: "recording", partial: "run the tests", subscribeLevel: voice.subscribeLevel });
+		const field = renderer!.root.findByProps({ accessibilityLabel: "Message the agent" });
+		expect(field.props.style).toContainEqual({ display: "none" });
 	});
 });

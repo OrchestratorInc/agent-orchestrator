@@ -1,13 +1,16 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityAddTraits,
 	accessibilityHidden,
 	background,
+	buttonBorderShape,
 	buttonStyle,
+	controlSize,
 	disabled as disabledModifier,
 	font,
 	foregroundStyle,
+	imageScale,
 	labelsHidden,
 	lineLimit,
 	listRowBackground,
@@ -20,6 +23,7 @@ import {
 import { StyleSheet } from "react-native";
 import {
 	settingsIcons,
+	settingsStatusDotColor,
 	settingsToneColor,
 	type SettingsButtonRowProps,
 	type SettingsChoiceSectionProps,
@@ -28,6 +32,7 @@ import {
 	type SettingsLinkRowProps,
 	type SettingsPickerRowProps,
 	type SettingsSectionProps,
+	type SettingsStatusRowProps,
 	type SettingsToggleRowProps,
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
@@ -178,6 +183,42 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 	);
 }
 
+/**
+ * A row with its status under the name and a small bordered capsule at its
+ * end. The capsule is a button of its own style, so the Form doesn't turn the
+ * whole row into one tap target; disabled, the system greys it out.
+ */
+export function SettingsStatusRow({ icon, label, status, tone, actionLabel, actionDisabled = false, actionLoading = false, onAction, testID, actionTestID }: SettingsStatusRowProps) {
+	const t = useTheme();
+	return (
+		<HStack spacing={space.md} testID={testID} modifiers={rowModifiers(t)}>
+			<RowIcon icon={icon} />
+			<VStack alignment="leading" spacing={space.hair}>
+				<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{label}</Text>
+				<HStack spacing={space.xs}>
+					<Image systemName="circle.fill" color={settingsStatusDotColor(t, tone)} modifiers={[font({ textStyle: "caption2" }), imageScale("small"), accessibilityHidden(true)]} />
+					<Text modifiers={[appFont("subheadline"), foregroundStyle(t.textSecondary), lineLimit(1)]}>{status}</Text>
+				</HStack>
+			</VStack>
+			<Spacer />
+			<Button
+				onPress={onAction}
+				testID={actionTestID}
+				modifiers={[
+					buttonStyle("bordered"),
+					buttonBorderShape("capsule"),
+					controlSize("small"),
+					tint(t.accent),
+					appFont("footnote", { weight: "600" }),
+					disabledModifier(actionDisabled || actionLoading),
+				]}
+			>
+				{actionLoading ? <ProgressView modifiers={[controlSize("mini")]} /> : <Text>{actionLabel}</Text>}
+			</Button>
+		</HStack>
+	);
+}
+
 /** The system switch keeps the system's on colour; the app's accent is hue-less. */
 export function SettingsToggleRow({ icon, label, value, disabled = false, onValueChange, testID }: SettingsToggleRowProps) {
 	const t = useTheme();
@@ -189,9 +230,9 @@ export function SettingsToggleRow({ icon, label, value, disabled = false, onValu
 }
 
 /**
- * A menu picker row. It draws its value in the tint, system blue on its own;
- * secondary ink is how a grouped list shows a row's value, and how the rows
- * around it show theirs.
+ * A menu picker row. It draws its value and the up-down chevrons in the tint,
+ * the pop-up button iOS Settings shows, so the row reads as a dropdown rather
+ * than a plain value; the app's tint stands in for system blue.
  */
 export function SettingsPickerRow<T extends string>({ icon, label, options, selectedValue, onValueChange, disabled = false, testID }: SettingsPickerRowProps<T>) {
 	const t = useTheme();
@@ -201,7 +242,7 @@ export function SettingsPickerRow<T extends string>({ icon, label, options, sele
 			selection={selectedValue}
 			onSelectionChange={(next) => onValueChange(String(next) as T)}
 			testID={testID}
-			modifiers={[pickerStyle("menu"), tint(t.textSecondary), ...rowModifiers(t, disabled)]}
+			modifiers={[pickerStyle("menu"), tint(t.accent), ...rowModifiers(t, disabled)]}
 		>
 			{options.map((option) => (
 				<Text key={option.value} modifiers={[tag(option.value)]}>{option.label}</Text>

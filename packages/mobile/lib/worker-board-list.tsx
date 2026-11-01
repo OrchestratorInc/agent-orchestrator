@@ -109,6 +109,7 @@ export function WorkerBoardList({
 	ListEmptyComponent,
 	initialArchiveOpen = false,
 	showProject = true,
+	showMachine = true,
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
 	onScroll,
@@ -133,6 +134,11 @@ export function WorkerBoardList({
 	initialArchiveOpen?: boolean;
 	/** Off on a project's own page, where every row would repeat its name; the agent shows instead. */
 	showProject?: boolean;
+	/**
+	 * Off when every row is on one machine, which the page names once at its
+	 * top instead: the same name on every row only crowded the details.
+	 */
+	showMachine?: boolean;
 	/** The list's scroll, for what floats over it (the Android FAB's fold). */
 	onScroll?: ScrollViewProps["onScroll"];
 	/**
@@ -462,12 +468,12 @@ export function WorkerBoardList({
 		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			restoring={restoringKey === item.key} restoreDisabled={restoringKey !== undefined}
-			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} />;
+			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} showMachine={showMachine} />;
 		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
-			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} />;
-	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} showMachine={showMachine} />;
+	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
 		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
 
 	return (
@@ -505,6 +511,7 @@ export function WorkerBoardList({
 
 type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
+	showMachine: boolean;
 	actions: {
 		renameStart(id: string | undefined): void;
 		rename(id: string, title: string, hostId?: string): Promise<void>;
@@ -515,10 +522,10 @@ type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
 };
 
 // Bind once per changed session, not once per whole-board context publication.
-const BoundWorkerRow = memo(function BoundWorkerRow({ actions, ...props }: BoundWorkerRowProps) {
+const BoundWorkerRow = memo(function BoundWorkerRow({ actions, showMachine, ...props }: BoundWorkerRowProps) {
 	const session = props.session;
 	const rowKey = hostedSessionKey(session);
-	const machine = useMemo(() => sessionMachineIdentity(session), [session]);
+	const machine = useMemo(() => showMachine ? sessionMachineIdentity(session) : undefined, [session, showMachine]);
 	const handlers = useMemo(() => ({
 		onRenameStart: () => actions.renameStart(rowKey),
 		onRenameCancel: () => actions.renameStart(undefined),

@@ -144,7 +144,13 @@ function splitAtTables(blocks: MarkdownBlock[]): Array<Array<Exclude<MarkdownBlo
 }
 
 function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
-	return inline(value, styles).some((node) => isValidElement(node) && node.type === MarkdownLink);
+	return containsLink(inline(value, styles));
+}
+
+/** Whether any of these nodes is a link, including one nested in emphasis. */
+function containsLink(nodes: ReactNode[]): boolean {
+	return nodes.some((node) => isValidElement<{ children?: ReactNode }>(node)
+		&& (node.type === MarkdownLink || (Array.isArray(node.props.children) && containsLink(node.props.children))));
 }
 
 function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Array<Extract<MarkdownBlock, { kind: "paragraph" | "heading" }>>; selectionColor: string; styles: ReturnType<typeof makeStyles> }) {
@@ -181,7 +187,7 @@ function SelectableInlineText({ value, selectionColor, style, styles, codeStyle 
 	const content = inline(value, styles, true, codeStyle);
 	// The native UITextView flattens inline children into one accessibility node.
 	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
-	const hasLink = content.some((node) => isValidElement(node) && node.type === MarkdownLink);
+	const hasLink = containsLink(content);
 	return <Text selectable uiTextView={Platform.OS !== "ios" || !hasLink} selectionColor={selectionColor} style={style}>{content}</Text>;
 }
 
@@ -298,7 +304,8 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
 	// Web links, and AO's own `ao://` links; a bare session link stops before prose punctuation.
-	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
+	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
+	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -313,11 +320,12 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 		} else if (match[5]) {
 			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
 		} else if (match[6] || match[7]) {
-			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{match[6] ?? match[7]}</Text>);
+			// Emphasis holds inline Markdown of its own: a link inside bold is still a link.
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle)}</Text>);
 		} else if (match[8]) {
-			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{match[8]}</Text>);
+			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle)}</Text>);
 		} else {
-			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{match[9] ?? match[10]}</Text>);
+			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle)}</Text>);
 		}
 		at = match.index + match[0].length;
 	}

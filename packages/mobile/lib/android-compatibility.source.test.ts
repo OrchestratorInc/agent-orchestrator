@@ -152,17 +152,17 @@ describe("Android native compatibility boundaries", () => {
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);
 		const rootLayout = source("../app/_layout.tsx");
-		expect(rootLayout).toMatch(/name="settings"\s*options=\{\{\s*presentation: Platform\.OS === "ios" \? "formSheet" : "card",/);
+		// A page on both platforms: no presentation of its own.
+		expect(rootLayout).toContain('<Stack.Screen name="settings" options={{ headerShown: false, title: "Settings", contentStyle: { backgroundColor: t.bgBase } }} />');
 	});
 
-	// Material's overflow menu from the top app bar, as iOS gets UIKit's pull-down:
-	// the root needs a bundled drawable on Android, and the sections are inline
-	// submenus, which Compose draws as dividers.
-	it("opens conversation actions as the top app bar's overflow menu", () => {
-		const menu = source("./chat/conversationActionsMenu.tsx");
-		expect(menu).toContain('<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Conversation actions">');
-		expect(menu).toContain("<Stack.Toolbar.Menu key={group.title} inline>");
-		expect(menu).toContain('icon={Platform.OS === "ios" ? item.icon : undefined}');
+	// The conversation's actions are a page of Material list rows, each led by
+	// a bundled drawable, opened from the top app bar's "⋯".
+	it("opens conversation actions as a Material grouped list page", () => {
+		const page = source("./chat/ConversationActionsPage.android.tsx");
+		expect(page).toContain("<GroupedSection key={group.title} title={group.title}>");
+		expect(page).toContain("source={materialDrawable(item.icon.android)}");
+		expect(source("./chat/ChatSessionScreen.tsx")).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
 		expect(source("./toolbarIcon.android.ts")).toContain('more_vert: require("../assets/icons/more_vert.xml")');
 	});
 });

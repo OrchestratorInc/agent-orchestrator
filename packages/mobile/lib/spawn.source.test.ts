@@ -68,9 +68,12 @@ describe("spawn composer", () => {
 		expect(spawn).toContain('Task prompt is too long. Keep it to 16 KiB or fewer');
 	});
 
-	it("shows live dictation feedback with the composer's messages", () => {
-		const messages = spawn.slice(spawn.indexOf("style={styles.messages}"), spawn.indexOf("<SpawnComposerControls"));
-		expect(messages).toContain("{voiceFeedback}");
+	// Live dictation is drawn in the composer's field (see SpawnComposer); the
+	// banner above it flashed "Keep holding…" on every tap.
+	it("shows live dictation in the composer rather than a banner", () => {
+		expect(spawn).not.toContain("voiceFeedback");
+		expect(spawn).not.toContain("Keep holding");
+		expect(spawn).toContain("partial: voice.partial, subscribeLevel: voice.subscribeLevel");
 		expect(spawn).toContain("|| listening\n");
 	});
 

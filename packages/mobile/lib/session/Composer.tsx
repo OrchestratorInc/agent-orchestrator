@@ -2,8 +2,9 @@ import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
 import { COMPOSER_RADIUS } from "../chat/composerStyles";
+import { DictationField } from "../voice/DictationField";
 import { MicKey } from "../voice/MicKey";
-import type { VoiceMode, VoiceState } from "../voice/types";
+import type { VoiceState } from "../voice/types";
 import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
@@ -39,7 +40,7 @@ export function Composer({
 	sending: boolean;
 	target: SendTarget;
 	onTargetChange: (target: SendTarget) => void;
-	voice: { state: VoiceState; mode: VoiceMode; pressIn(): void; pressOut(): void; toggleLatched(): void };
+	voice: { state: VoiceState; partial: string; toggleLatched(): void; subscribeLevel(listener: (level: number) => void): () => void };
 	keyboardVisible: boolean;
 	onDismissKeyboard: () => void;
 	/** Plain worktree shells have no agent route; hide the misleading toggle. */
@@ -52,6 +53,7 @@ export function Composer({
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const canSend = !!value.trim() && !sending;
 	const toTerminal = target === "terminal";
+	const dictating = voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing";
 
 	return (
 		<View style={styles.bar}>
@@ -67,8 +69,11 @@ export function Composer({
 							}}
 						/>
 					) : null}
+					{/* While the mic is open the dictation takes the field's place, as in
+					    the chat's composer, rather than a strip over the terminal. */}
+					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
 					<TextInput
-						style={styles.input}
+						style={[styles.input, dictating && styles.hiddenField]}
 						accessibilityLabel={toTerminal ? "Text for the terminal" : "Message the agent"}
 						value={value}
 						onChangeText={onChangeText}
@@ -93,7 +98,7 @@ export function Composer({
 							<AppSymbol name="keyboardDismiss" size={iconSize.lg} color={t.textSecondary} />
 						</Pressable>
 					) : null}
-					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
+					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} onToggleLatched={voice.toggleLatched} />
 					{/* No haptic of its own: the screen confirms the send, or its failure,
 					    once it knows which happened. */}
 					<Pressable
@@ -158,5 +163,8 @@ const makeStyles = (t: Theme) =>
 			justifyContent: "center",
 		},
 		send: { backgroundColor: t.accent },
+		dictation: { minHeight: touchTarget, paddingHorizontal: space.xs },
+		// Out of the layout while dictating, but still mounted with its draft.
+		hiddenField: { display: "none" },
 		disabled: { opacity: stateOpacity.disabled },
 	});

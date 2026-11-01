@@ -111,6 +111,9 @@ export const symbols = {
 	photo: { ios: "photo", android: "photo" },
 	send: { ios: "arrow.up", android: "arrow_upward" },
 	keyboardDismiss: { ios: "keyboard.chevron.compact.down", android: "keyboard_hide" },
+	/** Opens the draft in a full-screen editor, and collapses it back. */
+	expandEditor: { ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" },
+	collapseEditor: { ios: "arrow.down.right.and.arrow.up.left", android: "close_fullscreen" },
 
 	// Settings rows
 	account: { ios: "person.crop.circle", android: "account_circle" },

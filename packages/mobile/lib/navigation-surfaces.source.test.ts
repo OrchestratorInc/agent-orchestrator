@@ -55,8 +55,8 @@ describe("navigation surfaces", () => {
 			expect(text).not.toContain("HeaderIconButton");
 			expect(text).not.toContain("insets.top");
 			expect(text).toContain('contentInsetAdjustmentBehavior="automatic"');
-			// Pull Requests is a sheet over the board, so it closes from its bar
-			// rather than carrying the board's own items.
+			// Pull Requests is a page of its own, with the bar's back button
+			// rather than the board's own items.
 			if (page.endsWith("prs/index.tsx")) expect(text).not.toContain("BoardHeaderItems");
 			else expect(text).toContain("<BoardHeaderItems unread={");
 		}
@@ -65,7 +65,11 @@ describe("navigation surfaces", () => {
 		expect(items).toContain("icon={SETTINGS_ICON} hidesSharedBackground");
 		expect(items).toContain("icon={NOTIFICATIONS_ICON}");
 		expect(items).toContain('const PULL_REQUESTS_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;');
-		expect(items).toContain('<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.push("/prs")} />');
+		expect(items).toContain('<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.navigate("/prs")} />');
+		// Settings, Pull Requests and Notifications all open the same way.
+		expect(items).toContain('accessibilityLabel="Settings" onPress={() => router.navigate("/settings")} />');
+		expect(items).toContain('onPress={() => router.navigate("/notifications")}');
+		expect(items).not.toContain("router.push(");
 		expect(items).toContain("<Stack.Toolbar.Badge>");
 	});
 

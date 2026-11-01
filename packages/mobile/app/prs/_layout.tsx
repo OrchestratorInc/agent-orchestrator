@@ -3,12 +3,12 @@ import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../../lib/stackScreenOp
 import { useTheme } from "../../lib/ThemeProvider";
 
 /**
- * Pull Requests' own stack, holding just its page. On iOS the root stack
- * presents it as a sheet, as it does Notifications, which draws no header of
- * its own, so the page's title and its close item come from this stack's bar.
+ * Pull Requests' own stack, holding just its page. The root stack pushes it
+ * with no header of its own, as it does Notifications, so the page's title and
+ * its back button come from this stack's bar.
  *
- * The bar is Settings' sheet bar: an inline title, and on iOS 26 a clear bar
- * the list scrolls under. A large title in a sheet left the page blank under it.
+ * The bar is Settings' bar: an inline title, and on iOS 26 a clear bar the
+ * list scrolls under.
  */
 export default function PRsLayout() {
 	const t = useTheme();

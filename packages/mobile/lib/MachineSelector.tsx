@@ -1,7 +1,7 @@
 import type { DesktopStatusTone } from "./desktopStatus";
 import { haptics } from "./haptics";
 import type { Host as PairedHost } from "./hosts";
-import { SettingsPickerRow, SettingsValueRow, type SettingsOption, type SettingsTone } from "./SettingsForm";
+import { SettingsPickerRow, SettingsStatusRow, SettingsValueRow, type SettingsOption, type SettingsTone } from "./SettingsForm";
 
 /**
  * Which paired machine is the default, as the platform's picker row: a menu
@@ -45,30 +45,47 @@ export function MachineSelector({
 	);
 }
 
+/** A connection state's tone, as a settings row draws it. */
+export function machineStatusTone(tone: DesktopStatusTone): SettingsTone {
+	return tone === "ok" ? "good" : tone === "error" ? "bad" : "default";
+}
+
 /**
- * How the connection to the default machine is doing. The words carry the
- * state; the green or red only backs them up.
+ * One paired machine's connection, said once: its name, how the link is doing
+ * (or what the last test found) and its own Test button. The words carry the
+ * state; the dot beside them only backs it up.
  */
-export function MachineStatusRow({
-	hosts,
-	statusLabel,
-	statusTone,
-	switchingHostId,
+export function MachineConnectionRow({
+	hostId,
+	name,
+	status,
+	switching,
+	testing,
+	disabled,
+	onTest,
 }: {
-	hosts: PairedHost[];
-	statusLabel: string;
-	statusTone: DesktopStatusTone;
-	switchingHostId: string | null;
+	hostId: string;
+	name: string;
+	status: { label: string; tone: SettingsTone };
+	/** This machine is on its way to becoming the default. */
+	switching: boolean;
+	testing: boolean;
+	/** The test can't run now: the phone is offline, or the default is changing. */
+	disabled: boolean;
+	onTest(): void;
 }) {
-	const switchingTo = switchingHostId === null ? undefined : hosts.find((host) => host.id === switchingHostId);
-	const tone: SettingsTone = statusTone === "ok" ? "good" : statusTone === "error" ? "bad" : "default";
 	return (
-		<SettingsValueRow
-			icon="status"
-			label="Status"
-			value={switchingTo ? `Switching to ${switchingTo.name}…` : statusLabel}
-			tone={switchingTo ? "default" : tone}
-			testID="machine-selector-status"
+		<SettingsStatusRow
+			icon="defaultMachine"
+			label={name}
+			status={switching ? "Making default…" : testing ? "Testing…" : status.label}
+			tone={switching || testing ? "default" : status.tone}
+			actionLabel="Test"
+			actionDisabled={disabled}
+			actionLoading={testing}
+			onAction={onTest}
+			testID={`machine-connection-${hostId || "current"}`}
+			actionTestID={`machine-connection-test-${hostId || "current"}`}
 		/>
 	);
 }

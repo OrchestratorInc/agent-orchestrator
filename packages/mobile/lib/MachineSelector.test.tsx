@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { haptics } = vi.hoisted(() => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 
 vi.mock("./haptics", () => ({ haptics }));
-vi.mock("./SettingsForm", () => ({ SettingsPickerRow: "SettingsPickerRow", SettingsValueRow: "SettingsValueRow" }));
+vi.mock("./SettingsForm", () => ({ SettingsPickerRow: "SettingsPickerRow", SettingsValueRow: "SettingsValueRow", SettingsStatusRow: "SettingsStatusRow" }));
 
-import { MachineSelector, MachineStatusRow } from "./MachineSelector";
+import { MachineConnectionRow, MachineSelector, machineStatusTone } from "./MachineSelector";
 
 const hosts = [
 	{ id: "prod", name: "Prod" },
@@ -92,18 +92,36 @@ describe("MachineSelector", () => {
 	});
 });
 
-describe("MachineStatusRow", () => {
-	it.each([
-		["ok", "Connected", "good"],
-		["error", "Unreachable", "bad"],
-		["neutral", "Connecting…", "default"],
-	] as const)("names a %s connection in words, with the matching tone", (statusTone, statusLabel, tone) => {
-		const row = render(<MachineStatusRow hosts={hosts} statusLabel={statusLabel} statusTone={statusTone} switchingHostId={null} />).root.findByType("SettingsValueRow" as never);
-		expect(row.props).toMatchObject({ icon: "status", label: "Status", value: statusLabel, tone });
+describe("machineStatusTone", () => {
+	it.each([["ok", "good"], ["error", "bad"], ["neutral", "default"]] as const)("draws a %s connection in the %s tone", (status, tone) => {
+		expect(machineStatusTone(status)).toBe(tone);
+	});
+});
+
+describe("MachineConnectionRow", () => {
+	function row(overrides: Partial<React.ComponentProps<typeof MachineConnectionRow>> = {}) {
+		return render(
+			<MachineConnectionRow hostId="dev" name="Dev" status={{ label: "Connected", tone: "good" }} switching={false} testing={false} disabled={false} onTest={vi.fn()} {...overrides} />,
+		).root.findByType("SettingsStatusRow" as never);
+	}
+
+	it("names the machine and its connection once, with its own Test", () => {
+		const onTest = vi.fn();
+		const status = row({ onTest });
+		expect(status.props).toMatchObject({ label: "Dev", status: "Connected", tone: "good", actionLabel: "Test", actionDisabled: false, actionLoading: false });
+		status.props.onAction();
+		expect(onTest).toHaveBeenCalledOnce();
 	});
 
-	it("says which machine it is switching to", () => {
-		const row = render(<MachineStatusRow hosts={hosts} statusLabel="Connected" statusTone="ok" switchingHostId="prod" />).root.findByType("SettingsValueRow" as never);
-		expect(row.props).toMatchObject({ value: "Switching to Prod…", tone: "default" });
+	it("says it is testing, with the spinner in the button", () => {
+		expect(row({ testing: true }).props).toMatchObject({ status: "Testing…", tone: "default", actionLoading: true });
+	});
+
+	it("says it is becoming the default while the switch runs", () => {
+		expect(row({ switching: true }).props).toMatchObject({ status: "Making default…", tone: "default" });
+	});
+
+	it("greys the button out when the test can't run", () => {
+		expect(row({ disabled: true }).props.actionDisabled).toBe(true);
 	});
 });

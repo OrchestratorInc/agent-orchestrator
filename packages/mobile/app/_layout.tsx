@@ -17,7 +17,6 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
-import { LayoutGrid } from "../lib/layoutGrid";
 import { stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { appFonts } from "../lib/appFonts";
@@ -147,9 +146,6 @@ export default function RootLayout() {
 					</ThemeProvider>
 				</SafeAreaProvider>
 			</KeyboardProvider>
-			{/* Dev-only measurement overlay, mounted as a sibling of the whole app so it
-			    resolves against the full screen rather than a provider's box. */}
-			<LayoutGrid />
 		</GestureHandlerRootView>
 	);
 }
@@ -202,36 +198,30 @@ function Shell() {
 					name="(tabs)"
 					options={({ route }) => ({ headerShown: false, title: boardTitle(getFocusedRouteNameFromRoute(route)) })}
 				/>
-				{/* Settings holds a stack of its own, whose pages draw the native
-				    headers. On iOS it is a full-height sheet that swipes away like any
-				    other; a machine's edit page holds it still while it has unsaved
-				    changes, and a save or forget in flight holds it too.
-				    On Android it is a full-screen page with a top app bar and the
-				    system back: a bottom sheet holding a stack of pages is not a
-				    Material pattern. */}
-				<Stack.Screen
-					name="settings"
-					options={{
-						presentation: Platform.OS === "ios" ? "formSheet" : "card",
-						headerShown: false,
-						title: "Settings",
-						...(Platform.OS === "ios" ? {
-							sheetAllowedDetents: [1],
-							sheetGrabberVisible: true,
-							sheetCornerRadius,
-						} : null),
-						contentStyle: { backgroundColor: t.bgBase },
-					}}
-				/>
+				{/* Settings, Notifications and Pull Requests each hold a stack of
+				    their own, whose pages draw the native headers. On both platforms
+				    they are pages pushed over the board with the stack's own
+				    transition, and go back the way every other page does: the back
+				    button, the edge swipe on iOS, the system back on Android. As
+				    sheets on iOS they slid up and swiped down, unlike every page
+				    opened from them. A machine's edit page holds back while it has
+				    unsaved changes, and a save or forget in flight holds it too. */}
+				<Stack.Screen name="settings" options={{ headerShown: false, title: "Settings", contentStyle: { backgroundColor: t.bgBase } }} />
 				<Stack.Screen name="session/[id]" options={{ title: "Session" }} />
 				<Stack.Screen name="review/[sessionId]" options={{ title: "Review" }} />
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer" }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
+				{/* The conversation's "⋯", a page pushed over the chat with the
+				    stack's own push; the page titles the bar with the conversation. */}
+				<Stack.Screen name="conversation-actions" options={{ title: "Actions" }} />
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
 				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />
+				{/* The chat composer's draft, full screen. Modal, so iOS swipes it
+				    away; the page puts collapse and Send in the bar. */}
+				<Stack.Screen name="sheets/composer-editor" options={{ presentation: "modal", title: "Message" }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
 				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />
@@ -239,43 +229,13 @@ function Shell() {
 				    not begun: its settings sit above the composer at the bottom, and
 				    starting the task replaces it with that conversation. */}
 				<Stack.Screen name="spawn" options={{ title: "New task" }} />
-				{/* Notifications holds a stack of its own, whose page draws the
-				    header. On iOS it is a full-height sheet over the board, like
-				    Settings; on Android a full-screen page with the system back. */}
-				<Stack.Screen
-					name="notifications"
-					options={{
-						presentation: Platform.OS === "ios" ? "formSheet" : "card",
-						headerShown: false,
-						title: "Notifications",
-						...(Platform.OS === "ios" ? {
-							sheetAllowedDetents: [1],
-							sheetGrabberVisible: true,
-							sheetCornerRadius,
-						} : null),
-						contentStyle: { backgroundColor: t.bgBase },
-					}}
-				/>
+				{/* A page pushed over the board, like Settings. */}
+				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications", contentStyle: { backgroundColor: t.bgBase } }} />
 				{/* The page renames itself to the project once it loads. */}
 				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
-				{/* Pull Requests opens from the board's header and holds a stack of
-				    its own, whose page draws the header. On iOS it is a full-height
-				    sheet over the board, like Notifications; on Android a full-screen
-				    page with the system back. */}
-				<Stack.Screen
-					name="prs"
-					options={{
-						presentation: Platform.OS === "ios" ? "formSheet" : "card",
-						headerShown: false,
-						title: "Pull Requests",
-						...(Platform.OS === "ios" ? {
-							sheetAllowedDetents: [1],
-							sheetGrabberVisible: true,
-							sheetCornerRadius,
-						} : null),
-						contentStyle: { backgroundColor: t.bgBase },
-					}}
-				/>
+				{/* Pull Requests opens from the board's header on iOS (a tab on
+				    Android), a page pushed over the board like Settings. */}
+				<Stack.Screen name="prs" options={{ headerShown: false, title: "Pull Requests", contentStyle: { backgroundColor: t.bgBase } }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
 				{/* iOS bars the modal natively, with its close item; Android keeps a
 				    full-screen page with Material's close button in the body. Fixed

@@ -1,4 +1,5 @@
 import {
+	Box,
 	CircularProgressIndicator,
 	Column,
 	DropdownMenu,
@@ -7,7 +8,9 @@ import {
 	Icon,
 	LazyColumn,
 	ListItem,
+	OutlinedButton,
 	RadioButton,
+	Row as ComposeRow,
 	SegmentedButton,
 	SingleChoiceSegmentedButtonRow,
 	Switch,
@@ -34,6 +37,7 @@ import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
 	settingsIcons,
+	settingsStatusDotColor,
 	settingsToneColor,
 	type SettingsButtonRowProps,
 	type SettingsChoiceSectionProps,
@@ -42,6 +46,7 @@ import {
 	type SettingsLinkRowProps,
 	type SettingsPickerRowProps,
 	type SettingsSectionProps,
+	type SettingsStatusRowProps,
 	type SettingsToggleRowProps,
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
@@ -273,6 +278,38 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 }
 
 /**
+ * The status under the name behind a dot in its tone, and the row's own
+ * action as Material's outlined button at its end. The row itself takes no
+ * press: only the button acts, and Compose greys it out when it can't.
+ */
+export function SettingsStatusRow({ icon, label, status, tone, actionLabel, actionDisabled = false, actionLoading = false, onAction, testID, actionTestID }: SettingsStatusRowProps) {
+	const t = useTheme();
+	return (
+		<Row
+			icon={icon}
+			label={label}
+			supporting={
+				<ComposeRow horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center">
+					<Box modifiers={[size(space.sm, space.sm), clip(Shapes.Circle), background(settingsStatusDotColor(t, tone))]} />
+					<Supporting color={t.textSecondary}>{status}</Supporting>
+				</ComposeRow>
+			}
+			trailing={
+				<OutlinedButton
+					onClick={onAction}
+					enabled={!actionDisabled && !actionLoading}
+					colors={{ contentColor: t.accent, disabledContentColor: t.textTertiary }}
+					modifiers={actionTestID ? [testIDModifier(actionTestID)] : undefined}
+				>
+					{actionLoading ? <RowSpinner /> : <Text style={{ typography: "labelLarge", fontFamily: typeface.medium }}>{actionLabel}</Text>}
+				</OutlinedButton>
+			}
+			testID={testID}
+		/>
+	);
+}
+
+/**
  * The whole row toggles, as Material asks of a list switch, and TalkBack reads
  * it as one switch. The switch keeps Material You's colours.
  */
@@ -293,7 +330,11 @@ export function SettingsPickerRow<T extends string>(props: SettingsPickerRowProp
 	return props.appearance === "segmented" ? <SegmentedPickerRow {...props} /> : <MenuPickerRow {...props} />;
 }
 
-/** The row opens a dropdown of the choices under itself, the chosen one checked. */
+/**
+ * The row opens a dropdown of the choices under itself, the chosen one
+ * checked. The current choice sits at the row's end in an outlined button
+ * with the dropdown arrow, so the row reads as a dropdown, not a value.
+ */
 function MenuPickerRow<T extends string>({ icon, label, options, selectedValue, onValueChange, disabled = false, testID }: SettingsPickerRowProps<T>) {
 	const t = useTheme();
 	const [expanded, setExpanded] = useState(false);
@@ -304,8 +345,17 @@ function MenuPickerRow<T extends string>({ icon, label, options, selectedValue, 
 				<Row
 					icon={icon}
 					label={label}
-					supporting={selected ? <Supporting color={t.textSecondary}>{selected.label}</Supporting> : undefined}
-					trailing={<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textSecondary} />}
+					trailing={
+						<OutlinedButton
+							onClick={() => setExpanded(true)}
+							enabled={!disabled}
+							colors={{ contentColor: t.textPrimary, disabledContentColor: t.textTertiary }}
+							contentPadding={{ start: space.lg, end: space.sm }}
+						>
+							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: typeface.medium }}>{selected?.label ?? ""}</Text>
+							<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textSecondary} />
+						</OutlinedButton>
+					}
 					press={clickable(() => setExpanded(true))}
 					disabled={disabled}
 					testID={testID}

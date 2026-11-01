@@ -14,6 +14,7 @@ const fixtures = vi.hoisted(() => ({
 	push: vi.fn(),
 	dismissTo: vi.fn(),
 	setSheetOptions: vi.fn(),
+	setPageOptions: vi.fn(),
 	focused: { current: true },
 	copy: vi.fn(async () => true),
 	platform: { OS: "android", Version: 34 },
@@ -26,7 +27,7 @@ vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const router = { push: fixtures.push, dismissTo: fixtures.dismissTo };
-	const navigation = { getParent: () => ({ setOptions: fixtures.setSheetOptions }), isFocused: () => fixtures.focused.current };
+	const navigation = { setOptions: fixtures.setPageOptions, getParent: () => ({ setOptions: fixtures.setSheetOptions }), isFocused: () => fixtures.focused.current };
 	return {
 		Stack: {
 			Screen: host("StackScreen"),
@@ -100,7 +101,7 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
+	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
 	fixtures.focused.current = true;
 	fixtures.platform.Version = 34;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
@@ -212,7 +213,7 @@ describe("a machine's page on iOS", () => {
 
 	// A forget can't be called back. Returning to the list after Settings had
 	// closed under it would put Settings in the board's place.
-	it("holds the Settings sheet while a forget runs, and returns only while still on top", async () => {
+	it("holds the page and Settings while a forget runs, and returns only while still on top", async () => {
 		let finish!: () => void;
 		fixtures.forget.mockReturnValue(new Promise((resolve) => {
 			finish = () => resolve({ remaining: [b], nextDefault: b, wasDefault: false, notice: "Studio Mac forgotten." });
@@ -222,9 +223,11 @@ describe("a machine's page on iOS", () => {
 		const buttons = fixtures.alert.mock.calls.at(-1)![2];
 		await act(async () => { buttons.find((button: { text: string }) => button.text === "Forget").onPress(); });
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
+		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
 		fixtures.focused.current = false;
 		await act(async () => finish());
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
 		expect(fixtures.dismissTo).not.toHaveBeenCalled();
 		expect(takeEnvironmentNotice()).toBe("Studio Mac forgotten.");
 	});

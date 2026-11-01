@@ -47,6 +47,9 @@ export type BoardHeaderItemsProps = {
  * Pull requests and notifications come from a paired machine, so a board with
  * none shows Settings alone; pairing starts from there.
  *
+ * Each opens the same way: navigated to, so a second tap during the push
+ * doesn't stack a second copy, as a page pushed over the board.
+ *
  * Memoised on what it shows: the tabs re-render on every poll, and each new
  * toolbar element would register the header's options again.
  */
@@ -60,9 +63,9 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 		<Stack.Toolbar placement="right">
 			{!ios ? filter : null}
 			{/* Android has Settings and Pull Requests as tabs. */}
-			{ios ? <Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.push("/settings")} /> : null}
+			{ios ? <Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.navigate("/settings")} /> : null}
 			{ios && notifications ? (
-				<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.push("/prs")} />
+				<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.navigate("/prs")} />
 			) : null}
 			{notifications ? (
 				<Stack.Toolbar.Button

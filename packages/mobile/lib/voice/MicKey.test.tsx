@@ -36,7 +36,7 @@ beforeEach(() => { fixtures.platform.OS = "ios"; fixtures.reduceMotion = false; 
 afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
 
 function render(props: Partial<Props> = {}) {
-	const all: Props = { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn(), ...props };
+	const all: Props = { state: "idle", onToggleLatched: vi.fn(), ...props };
 	act(() => { renderer = create(createElement(MicKey, all)); });
 	return { props: all, key: renderer!.root.findByType("Pressable" as never) };
 }
@@ -57,22 +57,27 @@ it("breathes while recording, and holds still under Reduce Motion", () => {
 	expect(renderer!.root.findAllByType("AnimatedView" as never)).toHaveLength(0);
 });
 
-// A screen reader cannot hold the key, so its activation latches hands-free
-// dictation instead of tapping it.
-it("latches dictation from a screen reader's activation", () => {
+// Tap to start, tap to finish: a press shorter than the warm-up used to
+// capture nothing, which read as a broken mic.
+it("starts and finishes dictation on a tap, and names what the tap will do", () => {
 	const onToggleLatched = vi.fn();
-	const { props, key } = render({ onToggleLatched });
-	expect(key.props.accessibilityActions).toEqual([{ name: "activate", label: "Dictate hands-free" }]);
-	act(() => key.props.onAccessibilityAction({ nativeEvent: { actionName: "activate" } }));
-	act(() => key.props.onAccessibilityTap());
-	expect(onToggleLatched).toHaveBeenCalledTimes(2);
-	expect(props.onPressIn).not.toHaveBeenCalled();
+	const { key } = render({ onToggleLatched });
+	expect(key.props.accessibilityLabel).toBe("Dictate");
+	expect(key.props.onPressIn).toBeUndefined();
+	expect(key.props.onPressOut).toBeUndefined();
+	act(() => key.props.onPress());
+	expect(onToggleLatched).toHaveBeenCalledOnce();
+	act(() => renderer!.unmount());
+	renderer = undefined;
+	const live = render({ state: "starting", onToggleLatched });
+	expect(live.key.props.accessibilityLabel).toBe("Stop dictating");
+	expect(live.key.props.disabled).toBe(false);
 });
 
-it("offers no activation while it cannot dictate", () => {
+it("cannot be tapped while it cannot dictate", () => {
 	const { key } = render({ state: "unavailable" });
-	expect(key.props.accessibilityActions).toBeUndefined();
-	expect(key.props.onAccessibilityTap).toBeUndefined();
+	expect(key.props.disabled).toBe(true);
+	expect(key.props.accessibilityLabel).toBe("Dictation unavailable on this device");
 });
 
 it("ripples on Android instead of fading", () => {

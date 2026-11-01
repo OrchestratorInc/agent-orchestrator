@@ -13,6 +13,7 @@ const fixtures = vi.hoisted(() => ({
 	alert: vi.fn(),
 	back: vi.fn(),
 	setSheetOptions: vi.fn(),
+	setPageOptions: vi.fn(),
 	dispatch: vi.fn(),
 	announce: vi.fn(),
 	preventRemove: { prevent: false, callback: undefined as undefined | ((event: { data: { action: unknown } }) => void) },
@@ -25,7 +26,7 @@ vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const router = { back: fixtures.back, canGoBack: () => true, replace: vi.fn() };
-	const navigation = { getParent: () => ({ setOptions: fixtures.setSheetOptions }), dispatch: fixtures.dispatch };
+	const navigation = { setOptions: fixtures.setPageOptions, getParent: () => ({ setOptions: fixtures.setSheetOptions }), dispatch: fixtures.dispatch };
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useLocalSearchParams: () => ({ id: "a" }),
@@ -93,7 +94,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.platform.OS = "ios";
-	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
+	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
 	fixtures.activeHost.mockResolvedValue(a);
 	fixtures.save.mockResolvedValue({ routeChanged: false });
@@ -208,18 +209,20 @@ describe("editing a machine", () => {
 });
 
 describe("leaving with unsaved changes", () => {
-	// A swipe on the Settings sheet or a back would throw the edits away, so
-	// the page holds the sheet and asks first, only while there is something
-	// to lose.
-	it("holds the Settings sheet only while there are unsaved changes", async () => {
+	// A swipe back or a back would throw the edits away, so the page holds
+	// itself and Settings around it and asks first, only while there is
+	// something to lose.
+	it("holds the page and Settings only while there are unsaved changes", async () => {
 		await open();
 		expect(fixtures.setSheetOptions).not.toHaveBeenCalled();
 		expect(fixtures.preventRemove.prevent).toBe(false);
 		await type("environment-name-a", "Travel Mac");
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
+		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
 		expect(fixtures.preventRemove.prevent).toBe(true);
 		await type("environment-name-a", "Studio Mac");
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
 		expect(fixtures.preventRemove.prevent).toBe(false);
 	});
 
@@ -236,12 +239,13 @@ describe("leaving with unsaved changes", () => {
 		expect(fixtures.dispatch).toHaveBeenCalledWith(action);
 	});
 
-	it("lets the sheet swipe away again when the page closes mid-edit", async () => {
+	it("lets Settings swipe back again when the page closes mid-edit", async () => {
 		await open();
 		await type("environment-name-a", "Travel Mac");
 		await act(async () => renderer?.unmount());
 		renderer = undefined;
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
 	});
 });
 

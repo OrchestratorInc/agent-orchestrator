@@ -41,7 +41,7 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 				<DropdownMenu.Trigger>
 					<OutlinedButton onClick={() => setOpen(true)} colors={{ contentColor: t.accent }} modifiers={[testID("environment-picker")]}>
 						<Icon source={materialDrawable("devices")} size={BUTTON_ICON_SIZE} tint={t.accent} modifiers={[padding(0, 0, space.sm, 0)]} />
-						<Text style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>Switch environment</Text>
+						<Text style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>Switch machine</Text>
 					</OutlinedButton>
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Items>

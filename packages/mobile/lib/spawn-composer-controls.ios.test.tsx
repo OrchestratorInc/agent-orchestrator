@@ -104,7 +104,7 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	onSelectModel: vi.fn(),
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
-	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() },
+	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
 	onSpawn: vi.fn(),
 	busy: false,
 	disabled: false,

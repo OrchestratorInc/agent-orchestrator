@@ -5,7 +5,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
-	theme: { bgBase: "#base", bgElevated: "#elevated", textPrimary: "#primary", textSecondary: "#secondary", accent: "#accent", accentTint: "#accentTint", borderDefault: "#border", red: "#red", green: "#green" },
+	theme: { bgBase: "#base", bgElevated: "#elevated", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary", accent: "#accent", accentTint: "#accentTint", borderDefault: "#border", red: "#red", green: "#green" },
 }));
 
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles } }));
@@ -17,6 +17,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const slots = (name: string, names: string[]) => Object.assign(host(name), Object.fromEntries(names.map((slot) => [slot, host(`${name}.${slot}`)])));
 	return {
+		Box: host("Box"),
 		CircularProgressIndicator: host("CircularProgressIndicator"),
 		Column: host("Column"),
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: ({ children }: { children?: React.ReactNode }) => children, Items: host("DropdownMenu.Items") }),
@@ -25,7 +26,9 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		Icon: host("Icon"),
 		LazyColumn: host("LazyColumn"),
 		ListItem: slots("ListItem", ["HeadlineContent", "SupportingContent", "LeadingContent", "TrailingContent"]),
+		OutlinedButton: host("OutlinedButton"),
 		RadioButton: host("RadioButton"),
+		Row: host("Row"),
 		SegmentedButton: slots("SegmentedButton", ["Label"]),
 		SingleChoiceSegmentedButtonRow: host("SingleChoiceSegmentedButtonRow"),
 		Switch: host("Switch"),
@@ -36,11 +39,11 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return {
 		...Object.fromEntries(["alpha", "background", "clickable", "clip", "fillMaxSize", "fillMaxWidth", "padding", "selectable", "selectableGroup", "size", "testID", "toggleable"].map((name) => [name, modifier(name)])),
-		Shapes: { RoundedCorner: (radii: unknown) => ({ roundedCorner: radii }) },
+		Shapes: { RoundedCorner: (radii: unknown) => ({ roundedCorner: radii }), Circle: { circle: true } },
 	};
 });
 
-import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsToggleRow, SettingsValueRow } from "./SettingsForm.android";
+import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm.android";
 import { settingsIcons } from "./SettingsForm.types";
 import { materialDrawableNames } from "./toolbarIcon.types";
 
@@ -171,8 +174,16 @@ describe("the Android settings form", () => {
 		const item = root.findByType("ListItem" as never);
 
 		expect(menu().props.expanded).toBe(false);
-		expect(text(slot(item, "SupportingContent"))).toEqual(["Dev"]);
+		// The choice sits at the row's end in an outlined button with the
+		// dropdown arrow, so the row reads as a dropdown.
+		const dropdown = slot(item, "TrailingContent").findByType("OutlinedButton" as never);
+		expect(text(dropdown)).toEqual(["Dev"]);
+		expect(dropdown.findByType("Icon" as never).props.source).toBe("drawable:arrow_drop_down");
+		expect(slot(item, "SupportingContent")).toBeUndefined();
 		act(() => (find(item, "clickable")!.args[0] as () => void)());
+		expect(menu().props.expanded).toBe(true);
+		act(() => menu().props.onDismissRequest());
+		act(() => dropdown.props.onClick());
 		expect(menu().props.expanded).toBe(true);
 
 		const items = root.findAllByType("DropdownMenuItem" as never);
@@ -181,6 +192,29 @@ describe("the Android settings form", () => {
 		act(() => items[0].props.onClick());
 		expect(onValueChange).toHaveBeenCalledWith("prod");
 		expect(menu().props.expanded).toBe(false);
+	});
+
+	it("draws a status row's status quietly and its action as an outlined button that greys out", () => {
+		const onAction = vi.fn();
+		const item = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Connected" tone="good" actionLabel="Test" onAction={onAction} />).findByType("ListItem" as never);
+		const supporting = slot(item, "SupportingContent");
+		// The colour is only in the dot; the words stay in the secondary ink.
+		expect(find(supporting.findByType("Box" as never), "background")!.args[0]).toBe("#green");
+		expect(supporting.findByType("Text" as never).props.color).toBe("#secondary");
+		// The row takes no press of its own: only the button acts.
+		expect(find(item, "clickable")).toBeUndefined();
+		const button = slot(item, "TrailingContent").findByType("OutlinedButton" as never);
+		expect(button.props.enabled).toBe(true);
+		expect(text(button)).toEqual(["Test"]);
+		button.props.onClick();
+		expect(onAction).toHaveBeenCalledOnce();
+
+		const held = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Offline" actionLabel="Test" actionDisabled onAction={vi.fn()} />);
+		expect(held.findByType("OutlinedButton" as never).props.enabled).toBe(false);
+		expect(find(held.findByType("Box" as never), "background")!.args[0]).toBe("#tertiary");
+		const testing = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Testing…" actionLabel="Test" actionLoading onAction={vi.fn()} />);
+		expect(testing.findByType("OutlinedButton" as never).props.enabled).toBe(false);
+		expect(testing.findByType("OutlinedButton" as never).findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
 	});
 
 	it("lays a segmented picker out as Material's single-choice segmented buttons", () => {

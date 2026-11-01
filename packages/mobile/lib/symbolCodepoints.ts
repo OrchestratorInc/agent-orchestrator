@@ -71,6 +71,8 @@ const codepoints: Record<RegistryAndroidSymbol, number> = {
 	difference: 0xeb7d,
 	mic: 0xe029,
 	mic_off: 0xe02b,
+	open_in_full: 0xf1ce,
+	close_fullscreen: 0xf1cf,
 	attach_file: 0xe226,
 	photo: 0xe410,
 	arrow_upward: 0xe5d8,
