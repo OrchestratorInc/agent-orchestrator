@@ -282,6 +282,8 @@ describe("ArtifactsView", () => {
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
 		const dialog = screen.getByRole("dialog", { name });
+		// A cloud session's file is shared as a local one is.
+		expect(within(dialog).getByRole("button", { name: `Share: ${name}` })).toBeInTheDocument();
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		} else {

@@ -451,8 +451,14 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
-						{/* Beside the viewer's Edit button: a local artifact's public link. */}
-						{!hostId && !session.cloud && !editingFile ? (
+						{/* Beside the viewer's Edit button: the artifact's public link. A
+						    guest of a shared project does not publish its files. */}
+						{editingFile || session.cloud?.shared ? null : session.cloud ? (
+							<ShareArtifactButton
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
+								name={selected.name}
+							/>
+						) : !hostId ? (
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
 								name={selected.name}

@@ -1,8 +1,9 @@
 /**
  * cloudShare IPC: the only way to publish a share link. Agents, the ao CLI,
  * MCP and the daemon have no route to it; only the app's own window's main
- * frame can ask, when the person presses Publish in its share popover. See
- * shared/cloud-share.ts for what is and is not confirmed.
+ * frame can ask, when the person presses Publish in its share popover. A
+ * local file is uploaded from here; a cloud session's file is copied by the
+ * control plane. See shared/cloud-share.ts for what is and is not confirmed.
  */
 
 import { promises as fs } from "node:fs";
@@ -14,14 +15,17 @@ import {
 	type CloudShareInspection,
 	type CloudShareLinks,
 	type CloudSharePublishResult,
+	type CloudSessionShareFile,
 } from "../shared/cloud-share";
 import {
 	CloudShareError,
 	type CloudShareApi,
+	inspectCloudSessionArtifact,
 	listShareLinks,
 	resolveShareFile,
 	shareLinksAvailable,
 	scanShareFile,
+	shareCloudSessionArtifact,
 	type ShareSnapshot,
 	snapshotShareFile,
 	unpublishShareLink,
@@ -47,14 +51,29 @@ function isVideo(name: string): boolean {
 
 function shareFileArgument(value: unknown): CloudShareFile {
 	if (typeof value !== "object" || value === null) throw new CloudShareError("invalid_request", "Not a file to share.");
-	const { baseUrl, sessionId, path: filePath, projectId, shareId, fingerprint } = value as Record<string, unknown>;
-	// The project names the document: an empty one would make a second
-	// document, and link, for a file already published.
-	if (typeof baseUrl !== "string" || typeof sessionId !== "string" || typeof filePath !== "string" || typeof projectId !== "string" || projectId === "" ||
+	const { source, baseUrl, sessionId, path: filePath, projectId, orgId, shareId, fingerprint } = value as Record<string, unknown>;
+	if (typeof baseUrl !== "string" || typeof sessionId !== "string" || typeof filePath !== "string" ||
 		(shareId !== undefined && typeof shareId !== "string") || (fingerprint !== undefined && typeof fingerprint !== "string")) {
 		throw new CloudShareError("invalid_request", "Not a file to share.");
 	}
+	if (source === "cloud") {
+		if (typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a file to share.");
+		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", shareId, fingerprint } satisfies CloudSessionShareFile;
+	}
+	// A local file's project names the document: an empty one would make a
+	// second document, and link, for a file already published.
+	if (source !== undefined && source !== "local") throw new CloudShareError("invalid_request", "Not a file to share.");
+	if (typeof projectId !== "string" || projectId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
 	return { baseUrl, sessionId, path: filePath, projectId, shareId, fingerprint };
+}
+
+function isCloudFile(file: CloudShareFile): file is CloudSessionShareFile {
+	return file.source === "cloud" && typeof file.orgId === "string";
+}
+
+/** The record key of a cloud session's file: apart from every local session's. */
+function cloudRecordKey(baseUrl: string, file: CloudSessionShareFile): string {
+	return shareRecordKey(baseUrl, `cloud:${file.orgId}/${file.sessionId}`, file.path);
 }
 
 function baseUrlArgument(value: unknown): string {
@@ -98,9 +117,45 @@ function refusal(error: unknown): CloudSharePublishResult {
 export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	const inFlight = new Map<number, AbortController>();
 
+	// A cloud session's file is named by its committed version: the
+	// fingerprint is its SHA-256, and the control plane refuses to share
+	// another version.
+	const inspectCloudFile = async (file: CloudSessionShareFile): Promise<CloudShareInspection> => {
+		const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
+		const shareId = await deps.records.get(cloudRecordKey(file.baseUrl, file));
+		return {
+			name: found.name,
+			size: found.size,
+			secretFindings: found.secretFindings,
+			unsupported: isVideo(found.name),
+			fingerprint: found.sha256,
+			...(shareId ? { shareId } : {}),
+		};
+	};
+
+	const publishCloudFile = async (file: CloudSessionShareFile, signal: AbortSignal): Promise<CloudSharePublishResult> => {
+		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+		if (!(await deps.getToken())) return { status: "signed_out" };
+		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file) };
+		try {
+			// The control plane copies the file inside its bucket: there is
+			// nothing to upload. Cancel stops waiting for it; sharing the file
+			// again later reuses the file's link either way.
+			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint }, signal);
+			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id);
+			return { status: "published", share: result.share, replaced: result.replaced };
+		} catch (error) {
+			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
+				return { status: "changed", inspection: await inspectCloudFile(file) };
+			}
+			throw error;
+		}
+	};
+
 	deps.ipcMain.handle("cloudShare:inspect", async (event, value: unknown): Promise<CloudShareInspection> => {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
+		if (isCloudFile(file)) return inspectCloudFile(file);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 		const shareId = await deps.records.get(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath));
 		const { secretFindings, fingerprint } = await scanShareFile(resolved);
@@ -141,6 +196,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		// is refused rather than racing this one.
 		const controller = new AbortController();
 		inFlight.set(sender.id, controller);
+		if (isCloudFile(file)) {
+			try {
+				return await publishCloudFile(file, controller.signal);
+			} catch (error) {
+				if (controller.signal.aborted) return { status: "cancelled" };
+				return refusal(error);
+			} finally {
+				inFlight.delete(sender.id);
+			}
+		}
 		let snapshot: ShareSnapshot | undefined;
 		try {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);

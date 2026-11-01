@@ -1,7 +1,8 @@
 // Types the cloudShare IPC carries between the renderer and the main process.
-// Publishing a local artifact as a public share link runs only in the main
-// process: it reads the file (inside the session's artifacts folder only),
-// holds the sign-in token, and uploads the file straight to storage. The
+// Publishing an artifact as a public share link runs only in the main
+// process, which holds the sign-in token. A local file is read inside the
+// session's artifacts folder only and uploaded straight to storage; a cloud
+// session's file is copied by the control plane inside its bucket. The
 // renderer names a file and shows progress; it never sees the file's bytes or
 // the token.
 //
@@ -14,19 +15,35 @@
 // popover showed: publish carries the inspection's fingerprint and refuses a
 // file that changed since.
 
-/** One file in a local session's artifacts folder. */
+/**
+ * A file to share: one in a local session's artifacts folder, or, with
+ * source "cloud", one committed file of a cloud session.
+ */
 export interface CloudShareFile {
 	/** The cloud control plane's base URL (settings.cloudControlPlaneUrl). */
 	baseUrl: string;
+	source?: "local" | "cloud";
+	/** A cloud session's organization. */
+	orgId?: string;
 	sessionId: string;
-	/** The file's path in the session's artifacts folder, slash-separated. */
+	/** The file's path in the session's artifacts, slash-separated. */
 	path: string;
-	/** The session's project; with the session and folder, it names the document a link serves. */
+	/**
+	 * A local session's project; with the session and folder, it names the
+	 * document a link serves. A cloud session's file is named by its
+	 * organization, session and path instead.
+	 */
 	projectId: string;
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
 	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */
 	fingerprint?: string;
+}
+
+/** One committed file of a cloud session. */
+export interface CloudSessionShareFile extends CloudShareFile {
+	source: "cloud";
+	orgId: string;
 }
 
 /** A public share link, as the control plane lists it. */

@@ -331,6 +331,81 @@ export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, sh
 	await callApi<void>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}`);
 }
 
+/** One committed file of a cloud session, named by its organization, session and path. */
+export interface CloudSessionArtifactRef {
+	orgId: string;
+	sessionId: string;
+	path: string;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function sessionApiPath(ref: CloudSessionArtifactRef): string {
+	if (!UUID_PATTERN.test(ref.orgId) || !UUID_PATTERN.test(ref.sessionId)) {
+		throw new CloudShareError("invalid_file", "Not a cloud session's artifact.");
+	}
+	return `/orgs/${ref.orgId}/sessions/${ref.sessionId}`;
+}
+
+/**
+ * Finds a cloud session's file and looks for credentials in its start, read
+ * through the session's short-lived file access prefix. The file never leaves
+ * the control plane's bucket to be shared; this read is only the check.
+ */
+export async function inspectCloudSessionArtifact(
+	api: CloudShareApi,
+	baseUrl: string,
+	ref: CloudSessionArtifactRef,
+): Promise<{ name: string; size: number; sha256: string; secretFindings: string[] }> {
+	const sessionPath = sessionApiPath(ref);
+	const { artifacts } = await callApi<{ artifacts: Array<{ path: string; name: string; size: number; sha256: string }> }>(api, baseUrl, "GET", `${sessionPath}/artifacts`);
+	const artifact = artifacts.find((candidate) => candidate.path === ref.path);
+	if (!artifact) throw new CloudShareError("file_missing", "The file is no longer available.");
+	const name = artifact.path.split("/").pop() || artifact.name;
+	const scanner = new SecretScanner(name);
+	const access = await callApi<{ filesPrefix: string }>(api, baseUrl, "POST", `${sessionPath}/artifacts/access`);
+	if (!access.filesPrefix.startsWith(`${API_PREFIX}/artifact-files/`)) throw new CloudShareError("invalid_response", "The control plane gave no file access.");
+	const base = parseCloudBaseUrl(baseUrl);
+	const fileUrl = base.origin + base.pathname.replace(/\/+$/, "") + access.filesPrefix + artifact.path.split("/").map(encodeURIComponent).join("/");
+	const controller = new AbortController();
+	const response = await api.fetch(fileUrl, { method: "GET", headers: { Range: `bytes=0-${MAX_SCANNED_BYTES - 1}` }, signal: controller.signal });
+	// An empty file has no range to read: 416.
+	if (!response.ok && response.status !== 416) {
+		throw new CloudShareError(`http_${response.status}`, `Reading the file failed (${response.status}).`, response.status);
+	}
+	if (response.ok && response.body) {
+		const reader = response.body.getReader();
+		let read = 0;
+		try {
+			while (read < MAX_SCANNED_BYTES) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				scanner.push(value);
+				read += value.byteLength;
+			}
+		} finally {
+			controller.abort();
+		}
+	}
+	return { name, size: artifact.size, sha256: artifact.sha256, secretFindings: scanner.list() };
+}
+
+/**
+ * Publishes a cloud session's file as a share link. The control plane copies
+ * the file's committed version to the link inside its bucket, so nothing is
+ * uploaded from here. It refuses (artifact_share_source_changed) when the
+ * committed version is no longer sha256, the one the person was shown.
+ */
+export function shareCloudSessionArtifact(
+	api: CloudShareApi,
+	baseUrl: string,
+	ref: CloudSessionArtifactRef & { sha256: string; shareId?: string },
+	signal?: AbortSignal,
+): Promise<{ share: CloudShareLink; replaced: boolean }> {
+	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
+		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+}
+
 export interface ShareUploadInput {
 	baseUrl: string;
 	snapshot: ShareSnapshot;
