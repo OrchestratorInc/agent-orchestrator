@@ -129,6 +129,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/side-chats/launch/retire", c.retireSideLaunch)
 	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
+	r.Get("/sessions/{sessionId}/conversation/activities/{activityId}", c.activity)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
 	r.Post("/sessions/{sessionId}/conversation/prompt-suggestion", c.promptSuggestion)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
@@ -912,6 +913,11 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	activityDetail := r.URL.Query().Get("activityDetail")
+	if activityDetail != "" && activityDetail != "full" && activityDetail != "preview" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_ACTIVITY_DETAIL_INVALID", "activityDetail must be full or preview", nil)
+		return
+	}
 	var snapshot chatsvc.Snapshot
 	if paged, ok := c.Svc.(pagedConversationService); ok {
 		snapshot, err = paged.SnapshotPage(r.Context(), session, before, limit)
@@ -923,11 +929,36 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	response := conversationSnapshotResponse(snapshot)
+	if activityDetail == "preview" {
+		for i := range response.Activities {
+			previewActivity(&response.Activities[i])
+		}
+	}
 	// Excerpt verification is owned by AO, independently of provider capabilities.
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
 	response.SupportsFileReferences = true
 	envelope.WriteJSON(w, http.StatusOK, response)
+}
+
+type activityConversationService interface {
+	Activity(ctx context.Context, session domain.SessionID, activityID string) (domain.ConversationActivity, error)
+}
+
+// activity returns one activity with its full detail: the body a preview page
+// left out.
+func (c *ConversationsController) activity(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(activityConversationService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/sessions/{sessionId}/conversation/activities/{activityId}")
+		return
+	}
+	activity, err := svc.Activity(r.Context(), sessionID(r), chi.URLParam(r, "activityId"))
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, conversationActivityResponse(activity))
 }
 
 func optionalPositiveInt64(raw string) (int64, error) {
@@ -1246,6 +1277,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
 
+	case errors.Is(err, domain.ErrNoConversationActivity):
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
+			"CHAT_ACTIVITY_NOT_FOUND", "that activity is not in this session's conversation", nil)
+
 	case errors.Is(err, domain.ErrClientMessageConflict):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
@@ -1428,22 +1463,26 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 	}
 
 	for _, activity := range s.Activities {
-		out.Activities = append(out.Activities, ConversationActivityResponse{
-			Kind:           "activity",
-			ID:             activity.ID,
-			TurnID:         activity.TurnID,
-			Sequence:       activity.Sequence,
-			Revision:       activity.Revision,
-			ActivityKind:   string(activity.Kind),
-			Status:         string(activity.Status),
-			Summary:        activity.Summary,
-			Detail:         activityDetailPayload(activity),
-			RequestID:      activity.RequestID,
-			ProviderItemID: activity.ProviderItemID,
-			CreatedAt:      activity.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		out.Activities = append(out.Activities, conversationActivityResponse(activity))
 	}
 	return out
+}
+
+func conversationActivityResponse(activity domain.ConversationActivity) ConversationActivityResponse {
+	return ConversationActivityResponse{
+		Kind:           "activity",
+		ID:             activity.ID,
+		TurnID:         activity.TurnID,
+		Sequence:       activity.Sequence,
+		Revision:       activity.Revision,
+		ActivityKind:   string(activity.Kind),
+		Status:         string(activity.Status),
+		Summary:        activity.Summary,
+		Detail:         activityDetailPayload(activity),
+		RequestID:      activity.RequestID,
+		ProviderItemID: activity.ProviderItemID,
+		CreatedAt:      activity.CreatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 func usageLimitPayload(limit *domain.ConversationUsageLimit) *ConversationUsageLimitResponse {

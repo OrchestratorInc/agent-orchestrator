@@ -2154,6 +2154,32 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	}, nil
 }
 
+// activityStore reads one activity's full row. It is optional so store fakes that
+// never serve it need not implement it.
+type activityStore interface {
+	ConversationActivity(ctx context.Context, conversationID, activityID string) (domain.ConversationActivity, error)
+}
+
+// Activity reads one activity of a session's conversation with its full detail,
+// for a client that received only its preview in a snapshot page.
+func (s *Service) Activity(ctx context.Context, id domain.SessionID, activityID string) (domain.ConversationActivity, error) {
+	store, ok := s.store.(activityStore)
+	if !ok {
+		return domain.ConversationActivity{}, errors.New("conversation activity store is unavailable")
+	}
+	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return domain.ConversationActivity{}, err
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return domain.ConversationActivity{}, domain.ErrNoConversationActivity
+	}
+	if err != nil {
+		return domain.ConversationActivity{}, fmt.Errorf("conversation for %s: %w", id, err)
+	}
+	return store.ConversationActivity(ctx, conversation.ID, activityID)
+}
+
 // SnapshotPageForReview returns a paginated snapshot of a reviewer-owned chat.
 func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (Snapshot, error) {
 	if s.pageReader == nil {

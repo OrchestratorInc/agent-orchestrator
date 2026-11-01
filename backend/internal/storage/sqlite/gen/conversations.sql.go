@@ -2421,6 +2421,42 @@ func (q *Queries) SelectConversationActivitiesPage(ctx context.Context, arg Sele
 	return items, nil
 }
 
+const selectConversationActivityByID = `-- name: SelectConversationActivityByID :one
+SELECT id, conversation_id, turn_id, sequence, revision, kind, status, summary, detail_json, request_id, provider_item_id, created_at, updated_at, command_output, command_output_truncated, streamed_text, streamed_text_truncated, branch_id FROM conversation_activities
+WHERE conversation_id = ? AND id = ?
+`
+
+type SelectConversationActivityByIDParams struct {
+	ConversationID string
+	ID             string
+}
+
+func (q *Queries) SelectConversationActivityByID(ctx context.Context, arg SelectConversationActivityByIDParams) (ConversationActivity, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationActivityByID, arg.ConversationID, arg.ID)
+	var i ConversationActivity
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Kind,
+		&i.Status,
+		&i.Summary,
+		&i.DetailJson,
+		&i.RequestID,
+		&i.ProviderItemID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CommandOutput,
+		&i.CommandOutputTruncated,
+		&i.StreamedText,
+		&i.StreamedTextTruncated,
+		&i.BranchID,
+	)
+	return i, err
+}
+
 const selectConversationActivityByProviderItem = `-- name: SelectConversationActivityByProviderItem :one
 SELECT id, conversation_id, turn_id, sequence, revision, kind, status, summary, detail_json, request_id, provider_item_id, created_at, updated_at, command_output, command_output_truncated, streamed_text, streamed_text_truncated, branch_id FROM conversation_activities
 WHERE conversation_id = ? AND provider_item_id = ?

@@ -132,6 +132,7 @@ import {
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
+import { ChatActivitySource } from "./FullActivity";
 import {
 	FromAgent,
 	isTaskTitleUpdate,
@@ -828,6 +829,10 @@ function ChatWorkspaceContent({
 	const remoteCreateMux = useMemo(
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
+	);
+	const activitySource = useMemo(
+		() => ({ sessionId: snapshot.sessionId, hostId: activeRemoteHostId }),
+		[snapshot.sessionId, activeRemoteHostId],
 	);
 	const turn = activeTurn(snapshot);
 	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
@@ -1880,6 +1885,7 @@ function ChatWorkspaceContent({
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
+							<ChatActivitySource.Provider value={activitySource}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -1916,6 +1922,7 @@ function ChatWorkspaceContent({
 									openingStartedAt={openingStartedAt}
 									arriving={arrivingInChat}
 								/>
+							</ChatActivitySource.Provider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
