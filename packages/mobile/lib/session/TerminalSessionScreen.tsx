@@ -701,6 +701,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
 	// Polled so the globe can advertise the optional App preview tab.
 	const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);
+	// The terminal's artifacts, in its "⋯" once the agent has written something.
+	const artifactCount = !shellOnly && known && "artifacts" in known ? known.artifacts?.length ?? 0 : 0;
+	const openArtifacts = useCallback(() => {
+		router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId, title: params.title, hostId: params.hostId } });
+	}, [params.hostId, params.title, router, sessionId]);
 
 	// Neither platform shrinks the layout for the keyboard: iOS never has, and on
 	// Android edge-to-edge (edgeToEdgeEnabled) defeats windowSoftInputMode=adjustResize
@@ -1232,8 +1237,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// returns a new object every render, so `requestInterfaceSwitch` is new every
 	// render too, and a new toolbar element registers the header's options again:
 	// keyed on it, the header would rebuild on every keystroke.
-	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth });
-	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth };
+	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles, openArtifacts, confirmKill, zoom, fitWidth });
+	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles, openArtifacts, confirmKill, zoom, fitWidth };
 	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
 	// A machine picked but never paired: no terminal, and no notice row to say
 	// why an archive failed, so the menu stays out (see the early return below).
@@ -1267,6 +1272,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<Stack.Toolbar.MenuAction key="smaller" icon={ios ? "textformat.size.smaller" : undefined} onPress={() => headerActions.current.zoom(-1)}>Smaller</Stack.Toolbar.MenuAction>,
 				<Stack.Toolbar.MenuAction key="larger" icon={ios ? "textformat.size.larger" : undefined} onPress={() => headerActions.current.zoom(1)}>Larger</Stack.Toolbar.MenuAction>,
 				<Stack.Toolbar.MenuAction key="fit" icon={ios ? "arrow.left.and.right" : undefined} onPress={() => headerActions.current.fitWidth()}>Fit width</Stack.Toolbar.MenuAction>,
+			]);
+		}
+		if (artifactCount > 0) {
+			groups.push([
+				<Stack.Toolbar.MenuAction key="artifacts" icon={ios ? "doc.text" : undefined} onPress={() => headerActions.current.openArtifacts()}>
+					{`Artifacts (${artifactCount})`}
+				</Stack.Toolbar.MenuAction>,
 			]);
 		}
 		if (canClose) {
@@ -1304,7 +1316,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				) : null}
 			</Stack.Toolbar>
 		);
-	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, t, unpaired]);
+	}, [artifactCount, chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, t, unpaired]);
 
 	const webViewOptions = useMemo(
 		() => ({

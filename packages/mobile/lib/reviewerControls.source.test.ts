@@ -171,7 +171,7 @@ describe("reviewer control integration", () => {
 	// A page pushed while a sheet is presented opens inside that sheet, so every
 	// way into review detail and the reviewer goes through useOpenPage.
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
-		expect(source("./PRCard.tsx")).toContain("openPage({\n\t\t\t\t\tpathname: \"/review/[sessionId]\"");
+		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, hostId))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
 		expect(source("../app/notifications/index.tsx")).toContain('action.kind === "review") openPage(');
@@ -187,7 +187,7 @@ describe("reviewer control integration", () => {
 	it("draws the review page with native buttons and system symbols", () => {
 		expect(detail).not.toContain("@expo/vector-icons");
 		expect(detail).not.toContain("RowPill");
-		expect(detail).toContain('<ReviewActionButton label="Open" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone="filled"');
+		expect(detail).toContain('<ReviewActionButton label="Open" accessibilityLabel="Open reviewer" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone={worker ? "outlined" : "filled"}');
 		expect(detail).toContain('tone={primaryAction === "cancel" ? "destructive" : primaryAction === "start" ? "filled" : "outlined"}');
 		expect(detail).toContain("{...refreshControlColors(t)}");
 		// Nothing under the 13pt footnote step, and dividers that draw on Android.

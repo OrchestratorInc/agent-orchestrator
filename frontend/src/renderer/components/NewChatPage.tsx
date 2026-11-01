@@ -320,12 +320,25 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
 	pendingRef.current = pending;
-	const notice = pending ? null : task.fallbackAction ? (
+	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
+		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
+			<span>{task.error}</span>
+			{task.errorAction ? <div className="flex items-center gap-2">
+				{task.errorAction.input ? <input
+					aria-label={task.errorAction.input.label}
+					value={task.errorAction.input.value}
+					onChange={(event) => task.errorAction?.input?.onChange(event.target.value)}
+					className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
+				/> : null}
+				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
+			</div> : null}
+		</div>
+	) : task.status ? (
+		<p role="status" className="px-1 text-xs text-foreground">{task.status}</p>
+	) : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
 			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
 		</div>
-	) : fallbackFailed && task.error ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
 	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (

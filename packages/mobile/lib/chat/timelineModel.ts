@@ -3,6 +3,7 @@ import type {
 	ConversationItem,
 	ConversationMessage,
 	ConversationSnapshot,
+	ConversationPlan,
 	ConversationTurn,
 } from "./types";
 import { stagedAttachmentParts } from "./messageAttachments";
@@ -13,6 +14,8 @@ export type ConversationGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	turn?: ConversationTurn;
+	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
+	plan?: ConversationPlan;
 };
 
 export type ConversationMarker = {
@@ -100,7 +103,31 @@ export function groupConversationByTurn(
 			groups.push(group);
 		}
 	}
-	return groups.sort((left, right) => left.anchor - right.anchor);
+	groups.sort((left, right) => left.anchor - right.anchor);
+	attachCurrentPlans(groups);
+	return groups;
+}
+
+/**
+ * Gives each turn group the plan it should show, as the desktop does. A list the
+ * agent keeps across turns (Claude's task list) reaches every later turn as a copy
+ * of the same list. Only the latest copy is current, so only that turn shows it;
+ * the earlier copies would otherwise stack down the history.
+ */
+function attachCurrentPlans(groups: ConversationGroup[]): void {
+	let currentSpanningTurn: string | undefined;
+	for (let index = groups.length - 1; index >= 0; index--) {
+		if (groups[index].turn?.plan?.spansTurns) {
+			currentSpanningTurn = groups[index].turnId;
+			break;
+		}
+	}
+	for (const group of groups) {
+		const plan = group.turn?.plan;
+		if (!plan?.steps.length) continue;
+		if (plan.spansTurns && group.turnId !== currentSpanningTurn) continue;
+		group.plan = plan;
+	}
 }
 
 export type TurnItemPartition = {

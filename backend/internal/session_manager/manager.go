@@ -965,7 +965,7 @@ func New(d Deps) *Manager {
 		m.lookPath = exec.LookPath
 	}
 	if m.executable == nil {
-		m.executable = os.Executable
+		m.executable = agentlaunch.Executable
 	}
 	if m.newLaunchID == nil {
 		m.newLaunchID = uuid.NewString
@@ -1713,6 +1713,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
+	if selected != nil && selected.RequiresVersion != "" {
+		// Launching would only fail on the first turn with the provider's
+		// claude_code_version_too_old rejection; say so before spawning. This runs
+		// for any listed model, not only when the model is validated: a model the
+		// catalog does not list (a gateway alias) has no known requirement.
+		return ports.AgentConfig{}, fmt.Errorf("%w: model %q: %s", ErrUnsupportedModel, modelID, selected.UnavailableReason)
+	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
 		// A family alias ("opus") carries no capabilities of its own; the CLI
 		// resolves it to the family's newest model, which the picker shows.
@@ -1987,14 +1994,15 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			baseBranch = ""
 		}
 		workspaceCfg := ports.WorkspaceConfig{
-			ProjectID:     cfg.ProjectID,
-			SessionID:     id,
-			Kind:          cfg.Kind,
-			SessionPrefix: sessionPrefix(project),
-			Branch:        branch,
-			FreshBranch:   cfg.TaskPreparation != "",
-			BaseBranch:    baseBranch,
-			BaseRef:       baseRefs[filepath.Clean(project.Path)],
+			ProjectID:        cfg.ProjectID,
+			SessionID:        id,
+			Kind:             cfg.Kind,
+			SessionPrefix:    sessionPrefix(project),
+			Branch:           branch,
+			FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+			RequireNewBranch: cfg.RequireNewBranch,
+			BaseBranch:       baseBranch,
+			BaseRef:          baseRefs[filepath.Clean(project.Path)],
 		}
 		ws, err := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
@@ -2039,17 +2047,18 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		})
 	}
 	info, err := workspaceProject.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
-		ProjectID:     cfg.ProjectID,
-		SessionID:     id,
-		Kind:          cfg.Kind,
-		SessionPrefix: sessionPrefix(project),
-		Branch:        branch,
-		FreshBranch:   cfg.TaskPreparation != "",
-		RootRepoPath:  project.Path,
-		BaseBranch:    project.Config.WorktreeBaseBranch(),
-		BaseRef:       baseRefs[filepath.Clean(project.Path)],
-		Repos:         childRepos,
-		Assets:        assets,
+		ProjectID:        cfg.ProjectID,
+		SessionID:        id,
+		Kind:             cfg.Kind,
+		SessionPrefix:    sessionPrefix(project),
+		Branch:           branch,
+		FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+		RequireNewBranch: cfg.RequireNewBranch,
+		RootRepoPath:     project.Path,
+		BaseBranch:       project.Config.WorktreeBaseBranch(),
+		BaseRef:          baseRefs[filepath.Clean(project.Path)],
+		Repos:            childRepos,
+		Assets:           assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
@@ -5953,7 +5962,16 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 
 	switch kind {
 	case domain.KindOrchestrator:
-		cfg.OrchestratorRules = project.Config.OrchestratorRules
+		rules, err := buildProjectRules(projectRulesConfig{
+			ProjectPath:    project.Path,
+			Rules:          project.Config.OrchestratorRules,
+			RulesFile:      project.Config.OrchestratorRulesFile,
+			RulesFileField: "orchestratorRulesFile",
+		})
+		if err != nil {
+			return "", err
+		}
+		cfg.OrchestratorRules = rules
 	case domain.KindWorker:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
@@ -5966,8 +5984,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		}
 		rules, err := buildProjectRules(projectRulesConfig{
 			ProjectPath:    project.Path,
-			AgentRules:     project.Config.AgentRules,
-			AgentRulesFile: project.Config.AgentRulesFile,
+			Rules:          project.Config.AgentRules,
+			RulesFile:      project.Config.AgentRulesFile,
+			RulesFileField: "agentRulesFile",
 		})
 		if err != nil {
 			return "", err
@@ -6180,8 +6199,9 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 // artifactOutputPrompt is added for a session spawned with the artifact output
 // kind.
 const artifactOutputPrompt = "## Artifact Output\n\n" +
-	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
-	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
+	"The initial deliverable for this session is an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not commit the artifact deliverable to the git workspace. Do not push or open a PR/MR unless a later direct human instruction or authorized orchestrator scope update explicitly authorizes one in this same session. " +
+	"If the artifact request is unclear, ask the user what it should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)
@@ -6306,6 +6326,14 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, m.dataDir)
+	if err != nil {
+		m.logger.Warn("login shells in the session may run another ao: their startup files can reorder the pinned PATH",
+			"session", id, "error", err)
+	}
+	for key, value := range loginEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 	return env, accountErr
 }
 
@@ -7024,15 +7052,25 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	var cmd []string
+	var ok bool
+	var err error
+	nativeID := meta.AgentSessionID
+	if resolver, supported := agent.(ports.AgentNativeRestoreCommand); supported {
+		cmd, nativeID, ok, err = resolver.GetRestoreCommandWithSessionID(ctx, cfg)
+	} else {
+		cmd, ok, err = agent.GetRestoreCommand(ctx, cfg)
+	}
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
+	ref.Metadata[ports.MetadataKeyAgentSessionID] = nativeID
 	// The id is real but the provider never persisted a conversation under it —
 	// a session torn down before its first turn, or one whose switch away failed
 	// after the source stopped. Resuming that id fails with "No conversation
 	// found" every time, so the id alone must not gate restore.
-	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, meta.AgentSessionID, env)
+	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, nativeID, env)
 	if ok && !conversationLost {
 		return cmd, ports.PromptDeliveryInCommand, RestoreModeNative, nil
 	}

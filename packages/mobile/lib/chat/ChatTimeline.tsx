@@ -28,10 +28,12 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { LatticeLoader } from "./LatticeLoader";
+import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { RenderFrame } from "./RenderFrame";
-import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
+import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
@@ -68,6 +70,7 @@ import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
@@ -437,7 +440,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
@@ -548,6 +551,10 @@ const TimelineItem = memo(function TimelineItem({
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
 	if (render) return <RenderFrame render={render} />;
+	// An HTML page the agent reported with ao report --artifact, in the same frame.
+	const artifact = item.activityKind === "system" ? readArtifactRef(item.detail) : undefined;
+	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
+	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
@@ -818,19 +825,21 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
+	// A plan activity is hidden when its turn carries a turn-level plan, so this row
+	// shows a plan whose turn has none: one AO could not match to a turn, such as a
+	// plan from before the controller started. With steps it is the same checklist,
+	// so it gets the same panel, drawn as the desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
+	// <step>", which repeats the header's count and current step. Not `live`
+	// either: the row is "running" while any step is unfinished, not while the
+	// turn runs, so an interrupted turn's plan would stay busy for good.
+	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />;
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			onPress={() => setOpen((value) => !value)}
 			android_ripple={feedback.android_ripple}
 			style={({ pressed }) => [styles.planHeader, pressed && feedback.pressed]}
-			><Feather name="list" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} accessible accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}><PlanStepGlyph status={step.status} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
-}
-
-/** A plan step's state as a glyph, so it never rests on colour alone. */
-function PlanStepGlyph({ status }: { status: string }) {
-	const t = useTheme();
-	return <Feather name={status === "completed" ? "check-circle" : status === "in_progress" ? "disc" : "circle"} size={iconSize.sm} color={status === "completed" ? t.green : status === "in_progress" ? t.orange : t.textFaint} />;
+			><Feather name="list" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}><Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text></View> : null}</View>;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
@@ -893,9 +902,10 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 }
 
 /**
- * The turn's status row, which sits between the prompt and the work: a ticking
- * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
- * there is folded work the settled row is the toggle that reveals it.
+ * The turn's status row, which sits between the prompt and the work: the lattice
+ * and a ticking "12s" while the turn runs (no "Working", like the desktop: the
+ * lattice is the liveness), then "Worked for 20s" once it settles. When there is
+ * folded work the settled row is the toggle that reveals it.
  */
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
@@ -919,8 +929,11 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ? `Working · ${workingDuration}` : "Working";
-	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+					: workingDuration ?? "";
+	const text = <Text
+		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
+		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
+	>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
 	// its place when the turn settles instead of the whole row remounting. The row
 	// is a touch target tall, as is the startup checklist header it replaces.
@@ -932,55 +945,23 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		android_ripple={feedback.android_ripple}
 		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
-		{running ? <StatusSpinner><Spinner size={iconSize.xs} color={t.textTertiary} /></StatusSpinner> : null}
+		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
+		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
 		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?: ConversationPlan; onRollback?(turnId: string): Promise<number> }) {
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
+			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
-		</View>
-	);
-}
-
-function TurnPlan({ turn }: { turn: ConversationTurn }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const feedback = usePressFeedback("row");
-	const [open, setOpen] = useState(turn.state === "running");
-	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
-	return (
-		<View style={styles.planCard}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityState={{ expanded: open }}
-				onPress={() => setOpen((value) => !value)}
-				android_ripple={feedback.android_ripple}
-				style={({ pressed }) => [styles.planHeader, pressed && feedback.pressed]}
-				>
-				<Feather name="list" size={iconSize.xs} color={t.textTertiary} />
-				<Text style={styles.planTitle}>Plan</Text>
-				{turn.state === "running" ? <Text style={styles.planLive}>Still changing</Text> : null}
-				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
-				<FoldChevron open={open} color={t.textTertiary} />
-			</Pressable>
-			{open ? <View style={styles.planBody}>
-				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessible accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
-					<PlanStepGlyph status={step.status} />
-					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
-					<Text style={styles.planStepState}>{sentenceCase(step.status.replace("_", " "))}</Text>
-				</View>)}
-			</View> : null}
 		</View>
 	);
 }
@@ -1338,6 +1319,8 @@ const makeStyles = (t: Theme) => {
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.
 		statusRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
+		// Even-width digits, so the ticking timer doesn't shift as it counts.
+		turnTimer: { fontVariant: ["tabular-nums"] },
 		turnState: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		turnError: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
 		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
@@ -1350,12 +1333,7 @@ const makeStyles = (t: Theme) => {
 		changedReviewText: { fontFamily: "DMSans_500Medium", fontSize: type.footnote.fontSize, color: t.textPrimary },
 		planTitle: { fontFamily: "DMSans_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		planLive: { fontFamily: "DMSans_600SemiBold", color: t.orange, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
 		planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
-		planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-		planStepText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		planStepState: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
-		planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 		fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
 		fileRowTap: { minHeight: touchTarget },

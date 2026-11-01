@@ -45,6 +45,7 @@ import { sheetCornerRadius } from "../lib/tokens";
 const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-usage", detents: "fitToContents" },
+	{ name: "sheets/artifact-history", detents: [0.6, 0.95] },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
 ];
@@ -210,11 +211,13 @@ function Shell() {
 				    unsaved changes, and a save or forget in flight holds it too. */}
 				<Stack.Screen name="settings" options={{ headerShown: false, title: "Settings", contentStyle: { backgroundColor: t.bgBase } }} />
 				<Stack.Screen name="session/[id]" options={{ title: "Session" }} />
-				<Stack.Screen name="review/[sessionId]" options={{ title: "Review" }} />
+				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request" }} />
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer" }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
+				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts" }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
+				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version" }} />
 				{/* The conversation's "⋯". On iOS a page pushed over the chat with the
 				    stack's own push, titled with the conversation; on Android a bottom
 				    sheet, pinned to one detent so any decisive swipe down closes it

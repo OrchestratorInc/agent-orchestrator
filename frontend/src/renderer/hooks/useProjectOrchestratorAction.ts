@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useMutationState, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
@@ -19,6 +19,13 @@ import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useConnectedHosts } from "./useHostConnection";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import type { CloudCpSession } from "../lib/cloud-cp";
+
+function isCachedFreestyleSession(queryClient: QueryClient, sessionId: string): boolean {
+	return queryClient.getQueriesData<CloudCpSession[]>({ queryKey: cloudSessionsQueryKey })
+		.some(([, sessions]) => sessions?.some((session) => session.id === sessionId && session.sandboxProvider === FREESTYLE_PROVIDER));
+}
 
 export function useProjectOrchestratorAction({
 	projectId,
@@ -104,7 +111,11 @@ export function useProjectOrchestratorAction({
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
 			if (!earlyResume && activeRoute.current === routeKey) {
-				void navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				const opening = navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
+				// A Freestyle orchestrator starts in place: the open stays pending
+				// until its route has rendered, so the board's starting view hands
+				// straight over to the session instead of showing the board between.
+				if (project?.kind === CLOUD_PROJECT_KIND && isCachedFreestyleSession(queryClient, openedSessionId)) await opening;
 			}
 		},
 		onError: (cause) => {

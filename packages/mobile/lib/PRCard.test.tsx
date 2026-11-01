@@ -7,6 +7,7 @@ import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
 const fixture = vi.hoisted(() => ({
 	platform: { OS: "ios" as "ios" | "android" },
 	openPage: vi.fn(),
+	push: vi.fn(),
 	openGitHub: vi.fn(),
 	copy: vi.fn(),
 	haptics: { tap: vi.fn(), success: vi.fn() },
@@ -43,6 +44,7 @@ vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: fixture.haptics }));
 vi.mock("./openGitHub", () => ({ openGitHub: fixture.openGitHub }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => fixture.openPage }));
+vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixture.push }) }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
@@ -62,7 +64,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.platform.OS = "ios";
-	for (const fn of [fixture.openPage, fixture.openGitHub, fixture.copy, fixture.show, fixture.haptics.tap, fixture.haptics.success]) fn.mockClear();
+	for (const fn of [fixture.openPage, fixture.push, fixture.openGitHub, fixture.copy, fixture.show, fixture.haptics.tap, fixture.haptics.success]) fn.mockClear();
 });
 afterEach(() => {
 	act(() => renderer?.unmount());
@@ -99,15 +101,22 @@ describe("PRCard", () => {
 		expect(renderer!.root.findAllByType("Pressable" as never)).toHaveLength(1);
 	});
 
-	it("offers Open in GitHub and Copy link from a long-press menu", () => {
+	it("offers Open worker, Open in GitHub and Copy link from a long-press menu", () => {
 		render();
 		const menu = renderer!.root.findByType("MenuView" as never);
 		expect(menu.props.shouldOpenOnLongPress).toBe(true);
 		expect(menu.props.actions.map((action: { id: string; title: string }) => [action.id, action.title])).toEqual([
+			["openWorker", "Open worker"],
 			["openInGitHub", "Open in GitHub"],
 			["copyLink", "Copy link"],
 		]);
-		expect(menu.props.actions.map((action: { image: unknown }) => action.image)).toEqual(["arrow.up.right.square", "doc.on.doc"]);
+		expect(menu.props.actions.map((action: { image: unknown }) => action.image)).toEqual(["bubble.left", "arrow.up.right.square", "doc.on.doc"]);
+	});
+
+	it("opens the worker's chat from the menu", () => {
+		render();
+		act(() => renderer!.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "openWorker" } }));
+		expect(fixture.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "worker-1", projectId: "app", hostId: "mac" } });
 	});
 
 	it("opens the summary's GitHub page from the menu", () => {
@@ -130,6 +139,7 @@ describe("PRCard", () => {
 		const onLinkCopied = vi.fn();
 		render({ onLinkCopied });
 		expect(row().props.accessibilityActions).toEqual([
+			{ name: "openWorker", label: "Open worker" },
 			{ name: "openInGitHub", label: "Open in GitHub" },
 			{ name: "copyLink", label: "Copy link" },
 		]);
@@ -143,6 +153,7 @@ describe("PRCard", () => {
 	// the shared registry provides under the same Material Symbol iOS's entry names.
 	it("draws each Android menu glyph from the shared drawable registry", () => {
 		const android = readFileSync(fileURLToPath(new URL("./pr-card-menu-icons.android.ts", import.meta.url)), "utf8");
+		expect(android).toContain(`openWorker: materialDrawable("${symbols.chat.android}")`);
 		expect(android).toContain(`openInGitHub: materialDrawable("${symbols.openExternal.android}")`);
 		expect(android).toContain(`copyLink: materialDrawable("${symbols.copy.android}")`);
 		expect(android).not.toContain("require(");

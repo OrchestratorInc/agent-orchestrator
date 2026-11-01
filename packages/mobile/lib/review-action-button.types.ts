@@ -9,6 +9,8 @@ export type ReviewActionButtonTone = "filled" | "outlined" | "destructive";
 
 export type ReviewActionButtonProps = {
 	label: string;
+	/** What a screen reader says when several buttons read the same, such as two Opens. */
+	accessibilityLabel?: string;
 	/** The SF Symbol iOS draws and the bundled Material Symbol Android draws. */
 	icon: { ios: IOSSymbol; android: MaterialDrawableName };
 	tone: ReviewActionButtonTone;

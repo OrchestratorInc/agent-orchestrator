@@ -36,6 +36,17 @@ import Globe from "lucide-react-native/icons/globe";
 import KeyRound from "lucide-react-native/icons/key-round";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
+import ListChecks from "lucide-react-native/icons/list-checks";
+import Code from "lucide-react-native/icons/code";
+import Eye from "lucide-react-native/icons/eye";
+import ExternalLink from "lucide-react-native/icons/external-link";
+import Image from "lucide-react-native/icons/image";
+import Layers from "lucide-react-native/icons/layers";
+import MessageSquare from "lucide-react-native/icons/message-square";
+import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
+import Play from "lucide-react-native/icons/play";
+import RotateCcw from "lucide-react-native/icons/rotate-ccw";
+import Trash from "lucide-react-native/icons/trash";
 import MessageCircle from "lucide-react-native/icons/message-circle";
 import CircleMinus from "lucide-react-native/icons/circle-minus";
 import Monitor from "lucide-react-native/icons/monitor";
@@ -80,44 +91,54 @@ export const glyphs = {
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
 	"arrow-up-from-line": ArrowUpFromLine,
-	"clipboard-check": ClipboardCheck,
 	"check": Check,
 	"check-circle": CircleCheck,
 	"circle": Circle,
+	"clipboard-check": ClipboardCheck,
 	"clock": Clock,
+	"code": Code,
 	"copy": Copy,
 	"corner-down-right": CornerDownRight,
 	"delete": Delete,
 	"disc": Disc,
 	"download-cloud": CloudDownload,
 	"edit-3": PenLine,
+	"external-link": ExternalLink,
+	"eye": Eye,
 	"file": File,
-	"file-text": FileText,
 	"file-diff": FileDiff,
+	"file-text": FileText,
 	"folder": Folder,
 	"git-branch": GitBranch,
-	"git-merge": GitMerge,
 	"git-commit": GitCommitHorizontal,
+	"git-merge": GitMerge,
 	"git-pull-request": GitPullRequest,
 	"git-pull-request-draft": GitPullRequestDraft,
-	"mouse-pointer": MousePointer2,
 	"globe": Globe,
+	"image": Image,
 	"key": KeyRound,
+	"layers": Layers,
 	"link": Link,
 	"list": List,
+	"list-checks": ListChecks,
 	"list-tree": ListTree,
 	"message-circle": MessageCircle,
+	"message-square": MessageSquare,
+	"message-square-plus": MessageSquarePlus,
 	"minus-circle": CircleMinus,
 	"monitor": Monitor,
 	"monitor-cog": MonitorCog,
 	"monitor-off": MonitorOff,
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
+	"mouse-pointer": MousePointer2,
 	"pin": Pin,
+	"play": Play,
 	"plus": Plus,
 	"power": Power,
 	"radio": Radio,
 	"refresh-cw": RefreshCw,
+	"rotate-ccw": RotateCcw,
 	"route-off": RouteOff,
 	"search": Search,
 	"send": Send,
@@ -128,8 +149,9 @@ export const glyphs = {
 	"shuffle": Shuffle,
 	"smartphone": Smartphone,
 	"terminal": Terminal,
-	"tool": Wrench,
 	"timer": Timer,
+	"tool": Wrench,
+	"trash-2": Trash,
 	"unplug": Unplug,
 	"wifi-off": WifiOff,
 	"x": X,

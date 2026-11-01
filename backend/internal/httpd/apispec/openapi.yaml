@@ -13714,8 +13714,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -15663,11 +15667,14 @@ components:
       properties:
         hostId:
           type: string
+        hostKey:
+          type: string
         token:
           type: string
       required:
       - hostId
       - token
+      - hostKey
       type: object
     ControllersRequestRereviewRequest:
       properties:
@@ -16367,6 +16374,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        authoredByUser:
+          type: boolean
         clientMessageId:
           type: string
         content:
@@ -16763,6 +16772,10 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failureCode:
+          enum:
+          - provider_key_missing
+          type: string
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -17098,6 +17111,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        branch:
+          maxLength: 255
+          type: string
         brief:
           maxLength: 16384
           type: string
@@ -17721,8 +17737,12 @@ components:
           type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
-            to the last ~4000 bytes.
+            to the last ~4000 bytes. Published while the command runs.
           type: string
+        progress:
+          $ref: '#/components/schemas/InstallProgress'
+          description: While installing, the phase and percentage the installer's
+            output reports. Absent in every other status.
         startedAt:
           format: date-time
           type:
@@ -17803,6 +17823,27 @@ components:
       required:
       - target
       - status
+      type: object
+    InstallProgress:
+      properties:
+        detail:
+          description: The installer's latest output line.
+          type: string
+        percent:
+          description: Progress through the current phase, present only when the installer's
+            output states sizes or counts.
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        phase:
+          description: Installer phase the output names. Absent until a line names
+            one.
+          enum:
+          - downloading
+          - installing
+          type: string
       type: object
     InvokeCueRequest:
       properties:
@@ -18368,6 +18409,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinked:
+          type: boolean
         browserRemoteAccess:
           type: boolean
         enabled:
@@ -18400,6 +18443,7 @@ components:
           type: string
       required:
       - enabled
+      - accountLinked
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel
@@ -18416,8 +18460,12 @@ components:
       type: object
     MobileTunnelStatus:
       properties:
+        fixed:
+          type: boolean
         hostname:
           type: string
+        installing:
+          type: boolean
         lastError:
           type: string
         location:
@@ -18430,8 +18478,10 @@ components:
           type: boolean
       required:
       - supported
+      - installing
       - running
       - ready
+      - fixed
       - hostname
       - location
       - lastError
@@ -18728,6 +18778,8 @@ components:
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorRules:
+          type: string
+        orchestratorRulesFile:
           type: string
         postCreate:
           items:

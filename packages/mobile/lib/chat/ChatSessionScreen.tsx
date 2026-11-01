@@ -461,6 +461,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuContextPercent = contextReadout(menuSnapshot?.usage)?.percent;
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
 	const menuCompacting = conversation.pendingActions.includes("compact");
+	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
 	// Android's bar keeps only the "⋯"; iOS's leads with the switch, preview and files.
 	const sessionToolsInMenu = Platform.OS === "android";
 	const previewReady = useSessionPreview(config, session.id);
@@ -469,6 +470,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuSwitchBusy = interfaceSwitchBusy || interfaceTransitionActive;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
+		artifactCount: menuArtifactCount,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
 		canPin: !isOrchestrator,
 		canDelete: !isOrchestrator,
@@ -478,7 +480,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuCanCompact, menuCompacting, menuContextPercent, menuPinned, menuReady, openingShell, previewReady, turnActive]);
+	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCompacting, menuContextPercent, menuPinned, menuReady, openingShell, previewReady, turnActive]);
 	// The actions page follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -497,6 +499,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuActions: Record<ConversationMenuAction, () => void> = {
 		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
 		shell: () => void openShell(),
+		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
 		pull_requests: () => {
 			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 				? reviewRouteForSession(session, currentHostId)

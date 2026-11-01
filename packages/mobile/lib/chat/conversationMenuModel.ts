@@ -4,11 +4,11 @@ import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
 
 /**
  * What the conversation's actions page offers, and nothing more: the
- * worktree's terminal and the preview, pinning the worker and reviewing its
+ * worktree's terminal, the preview and the artifacts, pinning the worker and reviewing its
  * PR, compacting the history (its context use drawn as a ring), and archiving
  * the session.
  */
-export type ConversationMenuAction = "shell" | "preview" | "pin" | "pull_requests" | "compact" | "delete";
+export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "delete";
 
 export type ConversationMenuSection = {
 	// Archive acts on the session, not the conversation, so it sits in a section
@@ -20,7 +20,7 @@ export type ConversationMenuSection = {
 
 export function conversationMenuSections({ canPin, canCompact, canDelete }: { canPin: boolean; canCompact: boolean; canDelete: boolean }): ConversationMenuSection[] {
 	return [
-		{ title: "Open", actions: ["shell", "preview"] },
+		{ title: "Open", actions: ["shell", "preview", "artifacts"] },
 		{ title: "Worker", actions: [...(canPin ? ["pin" as const] : []), "pull_requests"] },
 		// A section only when it has something in it: no page shows an empty group.
 		...(canCompact ? [{ title: "Context" as const, actions: ["compact" as const] }] : []),
@@ -35,6 +35,8 @@ export type ConversationMenuState = {
 	canDelete: boolean;
 	/** Something the agent produced is ready to preview. */
 	previewReady?: boolean;
+	/** Files in the session's artifact directory, when known. */
+	artifactCount?: number;
 	pinned: boolean;
 	openingShell: boolean;
 	compacting: boolean;
@@ -75,6 +77,7 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 	switch (action) {
 		case "shell": return { action, label: state.openingShell ? "Opening terminal…" : "Terminal", disabled: state.openingShell, icon: { ios: "terminal", android: "terminal" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
+		case "artifacts": return { action, label: "Artifacts", subtitle: state.artifactCount ? `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}` : undefined, icon: { ios: "doc.text", android: "description" } };
 		case "pin": return { action, label: state.pinned ? "Unpin" : "Pin", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };
 		case "pull_requests": return { action, label: "PR Review", icon: { ios: "arrow.triangle.pull", android: "rate_review" } };
 		case "compact": return {

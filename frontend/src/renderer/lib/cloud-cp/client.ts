@@ -463,6 +463,8 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	/** The models a new task for this agent runs with in this organization. 409 MODEL_CATALOG_UNAVAILABLE: none for this agent. */
+	listUserAgentModels(orgId: string, agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
@@ -1003,6 +1005,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
+		listUserAgentModels: (orgId, agent, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/providers/${seg(agent)}/models`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),

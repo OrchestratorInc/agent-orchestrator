@@ -247,7 +247,8 @@ export function SelectionComposer({
 	error?: string;
 	initialText?: string;
 	onAction: (action: ComposerAction, text: string) => void;
-	onCopy: () => void;
+	/** Copies what the comment is about; without it there is no copy button. */
+	onCopy?: () => void;
 	onClose: () => void;
 	/**
 	 * How far its top stands above the bottom of the screen, the keyboard's lift
@@ -282,9 +283,11 @@ export function SelectionComposer({
 				<View style={styles.composerMeta}>
 					<AppSymbol name="chat" size={iconSize.sm} color={t.textTertiary} />
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.composerLabel}>{label}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" onPress={() => { haptics.success(); onCopy(); }} android_ripple={iconFeedback.android_ripple} style={({ pressed }) => [styles.composerIcon, pressed && iconFeedback.pressed]}>
-						<AppSymbol name="copy" size={iconSize.md} color={t.textSecondary} />
-					</Pressable>
+					{onCopy ? (
+						<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" onPress={() => { haptics.success(); onCopy(); }} android_ripple={iconFeedback.android_ripple} style={({ pressed }) => [styles.composerIcon, pressed && iconFeedback.pressed]}>
+							<AppSymbol name="copy" size={iconSize.md} color={t.textSecondary} />
+						</Pressable>
+					) : null}
 					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" onPress={onClose} android_ripple={iconFeedback.android_ripple} style={({ pressed }) => [styles.composerIcon, pressed && iconFeedback.pressed]}>
 						<AppSymbol name="close" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>

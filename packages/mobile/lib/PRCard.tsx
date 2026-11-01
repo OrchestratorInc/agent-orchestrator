@@ -1,5 +1,6 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
 import * as Clipboard from "expo-clipboard";
+import { useRouter } from "expo-router";
 import { memo, useRef } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
@@ -21,13 +22,15 @@ import {
 	toneColor,
 	type PRLifecycle,
 } from "./prView";
+import { reviewRouteForPR, workerRouteForSession } from "./reviewView";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { useMenuRowWidth } from "./useMenuRowWidth";
 import { iconSize, space, type } from "./tokens";
 
-type PRCardAction = "openInGitHub" | "copyLink";
+type PRCardAction = "openWorker" | "openInGitHub" | "copyLink";
 
 const ACTION_TITLES: Record<PRCardAction, string> = {
+	openWorker: "Open worker",
 	openInGitHub: "Open in GitHub",
 	copyLink: "Copy link",
 };
@@ -36,7 +39,7 @@ const ACTION_TITLES: Record<PRCardAction, string> = {
  * A pull-request row with the same hierarchy as WorkerListRow: an eyebrow, the
  * title, then metadata, none of it smaller than footnote.
  *
- * A tap opens the review. Everything else about the pull request is in the
+ * A tap opens the review; the long press reaches the worker too. Everything else about the pull request is in the
  * row's long-press menu — a SwiftUI context menu on iOS, a Material dropdown on
  * Android — and in its accessibility actions, so a screen reader reaches the
  * same choices from the one row.
@@ -62,6 +65,7 @@ export const PRCard = memo(function PRCard({
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const openPage = useOpenPage();
+	const router = useRouter();
 	const menu = useRef<MenuComponentRef>(null);
 	const menuWidth = useMenuRowWidth();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
@@ -83,6 +87,7 @@ export const PRCard = memo(function PRCard({
 	const link = summary?.htmlUrl || summary?.url || pr.url;
 
 	const run = (action: string) => {
+		if (action === "openWorker") router.push(workerRouteForSession(session, hostId));
 		if (action === "openInGitHub") void openGitHub(link);
 		if (action === "copyLink") {
 			void Clipboard.setStringAsync(link);
@@ -90,7 +95,7 @@ export const PRCard = memo(function PRCard({
 			onLinkCopied?.();
 		}
 	};
-	const actions = link ? (["openInGitHub", "copyLink"] as const) : [];
+	const actions: readonly PRCardAction[] = link ? ["openWorker", "openInGitHub", "copyLink"] : ["openWorker"];
 	const menuActions: MenuAction[] = actions.map((id) => ({ id, title: ACTION_TITLES[id], image: prCardMenuIcons[id], imageColor: t.textSecondary }));
 
 	const row = (
@@ -101,14 +106,11 @@ export const PRCard = memo(function PRCard({
 			onAccessibilityAction={(event: AccessibilityActionEvent) => run(event.nativeEvent.actionName)}
 			android_ripple={feedback.android_ripple}
 			onPress={() => {
-				openPage({
-					pathname: "/review/[sessionId]",
-					params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId },
-				});
+				openPage(reviewRouteForPR(session.id, pr, hostId));
 			}}
 			// The row claims the touch, so on Android its long press opens the
 			// menu itself; iOS's context menu takes the gesture natively.
-			onLongPress={Platform.OS === "android" && actions.length ? () => menu.current?.show() : undefined}
+			onLongPress={Platform.OS === "android" ? () => menu.current?.show() : undefined}
 			style={({ pressed }) => [styles.row, menuWidth.style, pressed && feedback.pressed]}
 		>
 			<View style={styles.eyebrow}>
@@ -126,7 +128,6 @@ export const PRCard = memo(function PRCard({
 		</Pressable>
 	);
 
-	if (!actions.length) return row;
 	return (
 		<View onLayout={menuWidth.onLayout}>
 			<MenuView

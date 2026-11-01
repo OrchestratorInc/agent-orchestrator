@@ -14,10 +14,10 @@ const base: ConversationMenuState = {
 const layout = (state: ConversationMenuState) => conversationMenuGroups(state).map((group) => [group.title, group.items.map((item) => item.label)]);
 
 describe("conversationMenuGroups", () => {
-	// Only these six, each in its group, on both platforms.
-	it("offers Terminal, Preview, Pin, PR Review, Compact and Archive in four groups", () => {
+	// Only these seven, each in its group, on both platforms.
+	it("offers Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive in four groups", () => {
 		expect(layout(base)).toEqual([
-			["Open", ["Terminal", "Preview"]],
+			["Open", ["Terminal", "Preview", "Artifacts"]],
 			["Worker", ["Pin", "PR Review"]],
 			["Context", ["Compact"]],
 			["Session", ["Archive"]],
@@ -26,7 +26,7 @@ describe("conversationMenuGroups", () => {
 
 	it("drops what the session cannot do, and never shows an empty group", () => {
 		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false })).toEqual([
-			["Open", ["Terminal", "Preview"]],
+			["Open", ["Terminal", "Preview", "Artifacts"]],
 			["Worker", ["PR Review"]],
 		]);
 	});
@@ -46,6 +46,11 @@ describe("conversationMenuGroups", () => {
 		expect(groups[1].items[0].label).toBe("Unpin");
 		expect(groups[2].items[0]).toMatchObject({ label: "Compacting…", disabled: true });
 		expect(conversationMenuGroups({ ...base, turnInFlight: true })[2].items[0].disabled).toBe(true);
+	});
+
+	it("counts the artifacts under their label once there are any", () => {
+		expect(conversationMenuGroups({ ...base, artifactCount: 3 })[0].items[2]).toMatchObject({ action: "artifacts", subtitle: "3 files" });
+		expect(conversationMenuGroups({ ...base, artifactCount: 0 })[0].items[2].subtitle).toBeUndefined();
 	});
 
 	it("draws Archive in red with its hint", () => {

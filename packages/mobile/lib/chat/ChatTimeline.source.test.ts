@@ -5,7 +5,7 @@ const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf
 const fieldSource = readFileSync(new URL("./ElicitationInputField.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
 	source.indexOf("function TurnStatusRow"),
-	source.indexOf("function TurnPlan"),
+	source.indexOf("function ChangedFiles"),
 );
 
 describe("chat turn summary styling", () => {
@@ -21,11 +21,16 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 
-	// A turning Lucide loader only imitated a progress indicator; the system's
-	// own is what each platform reads as working.
-	it("shows the system activity indicator while a turn runs", () => {
-		expect(turnSummarySource).toContain("{running ? <StatusSpinner><Spinner size={iconSize.xs} color={t.textTertiary} /></StatusSpinner> : null}");
-		expect(turnSummarySource).not.toContain('name="loader"');
+	it("draws the desktop's lattice as the working indicator", () => {
+		expect(turnSummarySource).toContain("<LatticeLoader color={t.textTertiary} />");
+		expect(turnSummarySource).not.toContain('<Feather name="loader"');
+		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+	});
+
+	it("shows only the ticking timer while running, like the desktop, and still says Working to screen readers", () => {
+		expect(turnSummarySource).toContain(': workingDuration ?? "";');
+		expect(turnSummarySource).not.toContain("`Working · ${workingDuration}`");
+		expect(turnSummarySource).toContain("`Working for ${workingDuration}`");
 	});
 });
 
@@ -170,7 +175,7 @@ describe("disclosure rows", () => {
 
 	it("draw the system's disclosure chevron", () => {
 		expect(source).not.toMatch(/<Feather name=\{[^}]*chevron/);
-		expect(source.match(/<FoldChevron open=/g)?.length).toBeGreaterThanOrEqual(12);
+		expect(source.match(/<FoldChevron open=/g)?.length).toBeGreaterThanOrEqual(11);
 	});
 });
 
@@ -178,7 +183,7 @@ describe("letter case", () => {
 	// Neither HIG nor Material sets labels in tracked capitals; they read as shouting.
 	it("labels in sentence case", () => {
 		for (const label of ["STEERED", "AGENT TYPED", "SUBAGENT", "HISTORY COMPACTED", "STILL CHANGING", "GROWING", "PROGRESS", "FULL"]) expect(source).not.toContain(label);
-		for (const label of [">Steered<", ">Agent typed<", "Subagent · {count}", "History compacted{", ">Still changing<", ">Growing<", ">Progress<"]) expect(source).toContain(label);
+		for (const label of [">Steered<", ">Agent typed<", "Subagent · {count}", "History compacted{", ">Growing<", ">Progress<"]) expect(source).toContain(label);
 		expect(source).not.toContain("{label.toUpperCase()}");
 		expect(source).not.toContain('textTransform: "uppercase"');
 		expect(source).not.toContain("letterSpacing");
@@ -204,7 +209,7 @@ describe("timeline rows", () => {
 
 	it("are touch targets that press the platform's way", () => {
 		for (const row of ["activityRow", "runSummary", "subagentHeader", "planHeader", "fileRowTap", "originMore"]) expect(styles).toMatch(new RegExp(`\\n\\t+${row}: \\{[^}]*minHeight: touchTarget`));
-		expect(source.match(/usePressFeedback\("row"\)/g)?.length).toBeGreaterThanOrEqual(11);
+		expect(source.match(/usePressFeedback\("row"\)/g)?.length).toBeGreaterThanOrEqual(10);
 		expect(source).not.toContain("press.opacity");
 		expect(styles).toMatch(/\n\t+statusRow: \{ minHeight: touchTarget,/);
 		expect(source).not.toContain("STATUS_ROW_HEIGHT");
@@ -285,5 +290,16 @@ describe("following the newest message", () => {
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));");
+	});
+});
+
+describe("plan activity row", () => {
+	const planActivity = source.slice(source.indexOf("function PlanActivity"), source.indexOf("function ActivityRun"));
+
+	it("draws the plan as the desktop does, without the summary as a title or a live state", () => {
+		// The summary repeats the count and current step ("Plan 3/7: <step>"), and the
+		// row's status is "running" while any step is unfinished, not while the turn runs.
+		expect(planActivity).toContain("<TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />");
+		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
 	});
 });

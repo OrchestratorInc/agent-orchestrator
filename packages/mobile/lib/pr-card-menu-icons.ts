@@ -9,6 +9,7 @@ export type { PRCardMenuIcons } from "./pr-card-menu-icons.types";
  * since an Android menu item draws only an image source.
  */
 export const prCardMenuIcons: PRCardMenuIcons = {
+	openWorker: symbols.chat.ios,
 	openInGitHub: symbols.openExternal.ios,
 	copyLink: symbols.copy.ios,
 };

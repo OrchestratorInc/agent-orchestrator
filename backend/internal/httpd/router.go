@@ -3,6 +3,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -43,6 +44,7 @@ type ControlDeps struct {
 //	rendererOrigin → exact renderer-origin boundary for Codex account management
 //	                 and computer use
 //	cors          → CORS allowlist for the Electron renderer / dev origins
+//	surface       → tag the request desktop/mobile/cli for product telemetry
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
 // REST routes, never long-lived terminal streams or health probes.
@@ -61,6 +63,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(rendererOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
+	r.Use(requestSurfaceMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
 	// JSON envelopes for unmatched routes / methods — chi's defaults are
@@ -73,6 +76,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountUsageFlush(r, deps.UsageFlush)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
@@ -81,6 +85,22 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	api.Register(r)
 
 	return r
+}
+
+func mountUsageFlush(r chi.Router, flush func(context.Context)) {
+	if flush == nil {
+		return
+	}
+	r.Post("/internal/telemetry/usage-flush", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{
+				"status": "forbidden", "service": daemonmeta.ServiceName,
+			})
+			return
+		}
+		flush(req.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func previewOriginMiddleware(sessions *controllers.SessionsController) func(http.Handler) http.Handler {

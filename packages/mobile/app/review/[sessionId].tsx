@@ -3,7 +3,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { cancelSessionReview, getSession, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../lib/connectionError";
 import { AppSymbol } from "../../lib/AppSymbol";
@@ -19,7 +19,7 @@ import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { ReviewActionButton } from "../../lib/review-action-button";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -47,9 +47,25 @@ function ReviewDetailContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
-	const { config, sessions, currentHostId } = useApp();
+	const { config, sessions, currentHostId, restore } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
+	const listedWorker = sessions.find((session) => session.id === sessionId);
+	// The board poll holds live workers only on a daemon that pages its archive,
+	// so an archived worker is read from its machine. The listed copy wins, so the
+	// row flips to Open once a restore refreshes the host. The read is fresh each
+	// time the worker leaves the poll, not readSession's cached answer: a worker
+	// first read while live and later archived would otherwise keep its old status.
+	const [readWorker, setReadWorker] = useState<DashboardSession | null>();
+	const listed = Boolean(listedWorker);
+	useEffect(() => {
+		if (listed) { setReadWorker(undefined); return; }
+		if (!hostMatches || !config || !sessionId) return;
+		let current = true;
+		void getSession(config, sessionId).then((read) => read, () => null).then((read) => { if (current) setReadWorker(read); });
+		return () => { current = false; };
+	}, [config, hostMatches, listed, sessionId]);
+	const worker = listedWorker ?? readWorker ?? undefined;
+	const autoReviewEnabled = worker?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
 	const [sentRuns, setSentRuns] = useState<ReadonlySet<string>>(new Set());
@@ -57,6 +73,8 @@ function ReviewDetailContent() {
 	// the merge call returns. Show the merge at once and poll until it agrees.
 	const [mergedURL, setMergedURL] = useState<string>();
 	const [error, setError] = useState("");
+	// Kept apart from `error`: a quiet poll clears that, and it renders far below the row.
+	const [workerError, setWorkerError] = useState("");
 	const [reviewNotice, setReviewNotice] = useState("");
 	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
@@ -94,7 +112,7 @@ function ReviewDetailContent() {
 		return () => clearTimeout(timer);
 	}, [autoReviewFailureId, dismissedAutoFailureId]);
 	useLayoutEffect(() => navigation.setOptions({
-		title: review?.title || "Review",
+		title: review?.title || "Pull request",
 		headerTitleStyle: { color: t.textPrimary, fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
 	// Memoized: each new element re-registers the header's items, and the page
@@ -149,6 +167,24 @@ function ReviewDetailContent() {
 			await load();
 		} catch (value) {
 			setError(userFacingError(value, "Could not restore the reviewer."));
+		} finally {
+			setMutation(undefined);
+		}
+	};
+	const openWorker = () => {
+		if (!worker) return;
+		const state = navigation.getState();
+		if (state && previousRouteIsWorker(state.routes, state.index, worker.id) && router.canGoBack()) router.back();
+		else openPage(workerRouteForSession(worker, routeHostId ?? currentHostId ?? undefined));
+	};
+	const restoreWorker = async () => {
+		if (!worker || mutation) return;
+		setMutation("restoreWorker");
+		setWorkerError("");
+		try {
+			await restore(worker.id, routeHostId ?? currentHostId ?? undefined);
+		} catch (value) {
+			setWorkerError(userFacingError(value, "Could not restore the worker."));
 		} finally {
 			setMutation(undefined);
 		}
@@ -256,10 +292,17 @@ function ReviewDetailContent() {
 				</View>
 			</View>
 
+			{worker ? <>
+				<ListSectionHeader label="Worker" />
+				<WorkerRow worker={worker} restoring={mutation === "restoreWorker"} disabled={Boolean(mutation)} onOpen={openWorker} onRestore={() => void restoreWorker()} />
+				{workerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{workerError}</Text> : null}
+			</> : null}
+
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its button and menu are laid over the row
 			    rather than inside its Pressable (as on the project page's orchestrator
-			    row), so a tap on "⋯" never also opens the reviewer. */}
+			    row), so a tap on "⋯" never also opens the reviewer. Its Open is outlined
+			    when a Worker row is shown, so the worker's filled Open stays the main way out. */}
 			<View>
 			<Pressable accessibilityRole={controls.open ? "button" : undefined} accessibilityLabel={controls.open ? `Open reviewer ${controls.open}` : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} android_ripple={rowFeedback.android_ripple} style={({ pressed }) => [styles.row, { paddingRight: trailingWidth === undefined ? OVERLAY_RESERVE : trailingWidth + OVERLAY_INSET + space.md }, pressed && rowFeedback.pressed]}>
 				<View style={styles.main}>
@@ -278,8 +321,8 @@ function ReviewDetailContent() {
 				<View style={styles.overlaySlot} pointerEvents="box-none">
 				<View style={styles.trailing} onLayout={(event) => setTrailingWidth(event.nativeEvent.layout.width)}>
 					{controls.open
-						? <ReviewActionButton label="Open" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone="filled" disabled={Boolean(mutation)} onPress={openReviewer} />
-						: controls.restore ? <ReviewActionButton label="Restore" icon={symbols.refresh} tone="outlined" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
+						? <ReviewActionButton label="Open" accessibilityLabel="Open reviewer" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone={worker ? "outlined" : "filled"} disabled={Boolean(mutation)} onPress={openReviewer} />
+						: controls.restore ? <ReviewActionButton label="Restore" accessibilityLabel="Restore reviewer" icon={symbols.refresh} tone="outlined" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
 					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
 				</View>
 				</View>
@@ -325,6 +368,48 @@ function ReviewDetailContent() {
 	);
 }
 
+/**
+ * The worker that owns this pull request, so the PR page leads back to its chat
+ * the way the chat leads to the PR page. Built like the reviewer row below it.
+ */
+function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker: DashboardSession; restoring: boolean; disabled: boolean; onOpen: () => void; onRestore: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const rowFeedback = usePressFeedback("row");
+	// The row keeps clear of the button laid over its end.
+	const [trailingWidth, setTrailingWidth] = useState<number>();
+	const title = sessionTitle(worker);
+	const terminated = worker.isTerminated === true || worker.status === "terminated";
+	const visual = statusVisual(t, worker.status);
+	// The daemon's phrase ("Fixing CI failures") when it says more than the status.
+	const phrase = worker.displayStatus?.trim();
+	const detail = phrase && phrase.toLowerCase() !== visual.label.toLowerCase() ? ` · ${phrase}` : "";
+	return <View>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Open worker ${title}. ${visual.label}.`} disabled={disabled} onPress={onOpen} android_ripple={rowFeedback.android_ripple} style={({ pressed }) => [styles.row, { paddingRight: trailingWidth === undefined ? WORKER_RESERVE : trailingWidth + OVERLAY_INSET + space.md }, pressed && rowFeedback.pressed]}>
+			<View style={styles.main}>
+				<View style={styles.eyebrow}>
+					{worker.harness ? <AgentLogo harness={worker.harness} size={iconSize.sm} /> : <AppSymbol name="account" size={iconSize.sm} />}
+					<Text style={styles.eyebrowText} numberOfLines={1}>{worker.harness ? reviewerName(worker.harness) : "Worker"}</Text>
+				</View>
+				<Text style={styles.title} numberOfLines={1}>{title}</Text>
+				<View style={styles.statusLine}>
+					<Dot color={visual.color} size={6} breathing={visual.breathing} />
+					<Text style={[styles.statusStrong, { color: visual.color }]}>{visual.label}</Text>
+					<Text style={styles.statusDetail} numberOfLines={1}>{detail}</Text>
+				</View>
+			</View>
+		</Pressable>
+		{/* Laid over the row, like the reviewer's, so the button is its own target. */}
+		<View style={styles.overlaySlot} pointerEvents="box-none">
+			<View onLayout={(event) => setTrailingWidth(event.nativeEvent.layout.width)}>
+				{terminated
+					? <ReviewActionButton label="Restore" accessibilityLabel="Restore worker" icon={symbols.refresh} tone="outlined" busy={restoring} disabled={disabled} onPress={onRestore} />
+					: <ReviewActionButton label="Open" accessibilityLabel="Open worker" icon={symbols.chat} tone="filled" disabled={disabled} onPress={onOpen} />}
+			</View>
+		</View>
+	</View>;
+}
+
 function RunRow({ run, sent, sending, disabled, onSend }: { run: ReviewRun; sent: boolean; sending: boolean; disabled: boolean; onSend: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -357,6 +442,8 @@ const PLAY = { ios: "play.fill", android: "play_arrow" } as const;
 // them until their width is known.
 const OVERLAY_INSET = space.lg - space.xxs;
 const OVERLAY_RESERVE = 150;
+// The worker row has its button only, no menu.
+const WORKER_RESERVE = 110;
 
 function reviewerName(harness: string): string {
 	if (!harness) return "Not selected";

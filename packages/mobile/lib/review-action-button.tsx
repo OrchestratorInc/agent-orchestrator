@@ -1,5 +1,5 @@
 import { CircularProgressIndicator, FilledTonalButton, Host, Icon, OutlinedButton, Spacer, Text } from "@expo/ui/jetpack-compose";
-import { size, width } from "@expo/ui/jetpack-compose/modifiers";
+import { semantics, size, width } from "@expo/ui/jetpack-compose/modifiers";
 import type { ReviewActionButtonProps } from "./review-action-button.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -14,7 +14,7 @@ const ICON_PADDING = { start: space.lg, end: space.xxl, top: space.sm, bottom: s
  * for the rest, outlined in red for one that stops something. Compose draws
  * the ripple, the 48dp touch target and the disabled state.
  */
-export function ReviewActionButton({ label, icon, tone, busy = false, disabled = false, onPress }: ReviewActionButtonProps) {
+export function ReviewActionButton({ label, accessibilityLabel, icon, tone, busy = false, disabled = false, onPress }: ReviewActionButtonProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const ink = tone === "filled" ? t.accent : tone === "destructive" ? t.red : t.textPrimary;
@@ -26,6 +26,7 @@ export function ReviewActionButton({ label, icon, tone, busy = false, disabled =
 				onClick={onPress}
 				colors={tone === "filled" ? { containerColor: t.accentTint, contentColor: ink } : { contentColor: ink }}
 				contentPadding={ICON_PADDING}
+				modifiers={accessibilityLabel ? [semantics({ contentDescription: accessibilityLabel })] : undefined}
 			>
 				{busy
 					? <CircularProgressIndicator color={ink} strokeWidth={2} modifiers={[size(BUTTON_ICON, BUTTON_ICON)]} />
