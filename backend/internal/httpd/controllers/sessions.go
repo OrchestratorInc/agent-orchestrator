@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -359,6 +360,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
 		return
 	}
+	if tok := unexpandedShellVar(in.Prompt); tok != "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_UNEXPANDED_VARIABLE", fmt.Sprintf("Prompt contains %s, which looks like a shell variable that was never expanded; expand it before spawning, or put it in a fenced code block", tok), nil)
+		return
+	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
 	// and the read model falls back to the session id). `ao spawn` makes it
 	// required CLI-side. When present, it is held to the same length cap here so
@@ -389,6 +394,34 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(r, sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
+}
+
+// unexpandedShellVarRe matches shell variable references that the caller's
+// shell should have expanded before the prompt reached the API: PowerShell
+// `$env:NAME`, and POSIX `${NAME}` / `$NAME` with an all-caps name, as
+// environment variables are by convention. Lower-case `$foo` (code samples) and
+// `$5` / `$1.50` (prices) do not match.
+var unexpandedShellVarRe = regexp.MustCompile(`(?i:\$env:[a-z_][a-z0-9_]*)\b|\$\{_*[A-Z][A-Z0-9_]*\}|\$_*[A-Z][A-Z0-9_]*\b`)
+
+// unexpandedShellVar returns the first unexpanded shell variable in prompt, or
+// "" when there is none. Lines inside fenced code blocks (``` or ~~~) are
+// skipped, so a prompt can still quote a script that uses variables.
+func unexpandedShellVar(prompt string) string {
+	inFence := false
+	for _, line := range strings.Split(prompt, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if tok := unexpandedShellVarRe.FindString(line); tok != "" {
+			return tok
+		}
+	}
+	return ""
 }
 
 // attachmentError carries a client-facing API error code + message for a

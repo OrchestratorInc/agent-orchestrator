@@ -4533,6 +4533,63 @@ func TestSessionsAPI_SpawnRejectsOverlongDisplayName(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "DISPLAY_NAME_TOO_LONG")
 }
 
+func TestSessionsAPI_SpawnRejectsUnexpandedShellVariable(t *testing.T) {
+	cases := []struct {
+		name   string
+		prompt string
+		token  string
+	}{
+		{"powershell env", `Read $env:BRIEF and do it`, "$env:BRIEF"},
+		{"braced", "Work from ${TASK_FILE}", "${TASK_FILE}"},
+		{"bare caps", "Follow $TASK_BRIEF exactly", "$TASK_BRIEF"},
+		{"after a code block", "```\necho $HOME\n```\nnow open $BRIEF_PATH", "$BRIEF_PATH"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			prompt, _ := json.Marshal(tc.prompt)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","harness":"codex","prompt":`+string(prompt)+`}`)
+			assertErrorCode(t, body, status, http.StatusBadRequest, "PROMPT_UNEXPANDED_VARIABLE")
+			if !strings.Contains(string(body), tc.token) {
+				t.Fatalf("error body does not name %q: %s", tc.token, body)
+			}
+			if svc.lastSpawn.Prompt != "" {
+				t.Fatalf("service spawned with prompt %q, want no spawn", svc.lastSpawn.Prompt)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SpawnAcceptsPromptsWithoutShellVariables(t *testing.T) {
+	cases := []struct {
+		name   string
+		prompt string
+	}{
+		{"plain text", "Fix the flaky login test"},
+		{"prices", "Cap the plan at $5 a month, or $1.50 a day"},
+		{"lone dollar", "Escape the $ sign in the template"},
+		{"lower-case code", "Rename $foo to $bar in the shell helper"},
+		{"pipeline variable", "Use $_ in the ForEach-Object block"},
+		{"fenced code block", "Run this:\n```sh\nexport OUT=${TASK_FILE}\necho $HOME $env:USERPROFILE\n```\nthen report back"},
+		{"tilde fence", "~~~\n$PATH\n~~~"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			prompt, _ := json.Marshal(tc.prompt)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","harness":"codex","prompt":`+string(prompt)+`}`)
+			if status != http.StatusCreated {
+				t.Fatalf("spawn = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.Prompt != tc.prompt {
+				t.Fatalf("spawn prompt = %q, want %q", svc.lastSpawn.Prompt, tc.prompt)
+			}
+		})
+	}
+}
+
 func TestSessionsAPI_RenameNotFound(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
 
