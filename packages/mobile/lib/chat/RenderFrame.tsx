@@ -261,7 +261,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		>
 			{({ pressed }) => (
 				<View style={[styles.expandChip, pressed && expandFeedback.pressed]}>
-					<AppSymbol name={{ ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" }} size={iconSize.sm} color={t.textSecondary} />
+					<AppSymbol name="expandPage" size={iconSize.sm} color={t.textSecondary} />
 				</View>
 			)}
 		</Pressable>

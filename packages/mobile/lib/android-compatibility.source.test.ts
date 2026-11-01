@@ -39,7 +39,7 @@ describe("Android native compatibility boundaries", () => {
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
 		expect(android).toContain('from "@expo/ui/jetpack-compose"');
-		expect(android).toContain("<DropdownMenu expanded={expanded} onDismissRequest={onDismiss}");
+		expect(android).toContain("<DropdownMenu expanded={expanded} properties={KEEP_KEYBOARD} onDismissRequest={onDismiss}");
 		expect(android).not.toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");

@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Divider, HStack, Image, Label, Menu, Section, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, Image, Label, Menu, RNHostView, Section, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	accessibilityLabel,
@@ -19,7 +19,10 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { hasLogo, logoKey } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
+import { EffortGaugeButton } from "./effort-gauge";
+import { EffortSliderOverlay } from "./effort-slider";
+import { useEffortSliderOpen } from "./useEffortSlider";
+import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice } from "./spawnModel";
@@ -71,6 +74,10 @@ export function SpawnComposerControls({
 }: SpawnComposerControlsProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	const effortSlider = useEffortSliderOpen(effortChoices, busy);
+	const [composerHeight, setComposerHeight] = useState(0);
+	// Typing is a tap outside the slider that the keyboard, not the app, hears.
+	useEffect(() => { effortSlider.close(); }, [prompt, effortSlider.close]);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
@@ -118,67 +125,78 @@ export function SpawnComposerControls({
 
 			{attachments}
 
-			<SpawnComposer
-				prompt={prompt}
-				onChangePrompt={onChangePrompt}
-				placeholder={placeholder}
-				hasAttachments={hasAttachments}
-				onChoosePhoto={onChoosePhoto}
-				onChooseFile={onChooseFile}
-				voice={voice}
-				onSpawn={onSpawn}
-				busy={busy}
-				disabled={disabled}
-				settings={
-					// The chat's controls row (see model-controls): who runs the task
-					// and its effort at the start beside attach, how freely at the
-					// end beside the round button; the space between gives way first.
-					<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
-						<HStack spacing={space.none}>
-							{/* The harness's mark and the model it runs (the harness's
-							    name only when the catalog names no default). Each agent in
-							    its menu opens one level down onto its models, so this is
-							    also where the task's agent is switched. */}
-							<Menu
-								label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
-								modifiers={useTriggerModifiers({ label: `${harnessLabel}, ${modelLabel}`, id: "spawn-harness", disabled: busy })}
-							>
-								{agents.map((agent) => (
-									<Menu
-										key={agent.id}
-										label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
-										modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
-									>
-										{/* The default first, named when the catalog says which it
-										    is; then the first few models; then the whole catalog. */}
-										{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
-											<Choice
-												key={model.id}
-												label={model.label}
-												selected={agent.id === harness && model.id === modelSelection}
-												onChoose={() => onSelectAgentModel(agent.id, model.id)}
-											/>
-										))}
-										{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
-											<Section>
-												<Button label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agent.id)} />
-											</Section>
-										) : null}
-									</Menu>
-								))}
-							</Menu>
-							{effortChoices.length ? <EffortMenu choices={effortChoices} onChoose={onSelectEffort} disabled={busy} id="spawn-effort" /> : null}
-							<Spacer minLength={0} />
-							<ApprovalMenu
-								choices={approvalModes.map((mode) => ({ value: mode.id, label: mode.label, symbol: approvalSymbol(mode.id, harness), selected: mode.id === approvalMode }))}
-								onChoose={onSelectApprovalMode}
-								disabled={busy}
-								id="spawn-approval"
-							/>
-						</HStack>
-					</Host>
-				}
-			/>
+			{/* The effort slider floats just above the composer, over the rows. */}
+			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
+
+			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
+				<SpawnComposer
+					prompt={prompt}
+					onChangePrompt={onChangePrompt}
+					placeholder={placeholder}
+					hasAttachments={hasAttachments}
+					onChoosePhoto={onChoosePhoto}
+					onChooseFile={onChooseFile}
+					voice={voice}
+					onSpawn={onSpawn}
+					busy={busy}
+					disabled={disabled}
+					settings={
+						// The chat's controls row (see model-controls): who runs the task
+						// and its effort at the start beside attach, how freely at the
+						// end beside the round button; the space between gives way first.
+						<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
+							<HStack spacing={space.none}>
+								{/* The harness's mark and the model it runs (the harness's
+								    name only when the catalog names no default). Each agent in
+								    its menu opens one level down onto its models, so this is
+								    also where the task's agent is switched. */}
+								<Menu
+									label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
+									modifiers={useTriggerModifiers({ label: `${harnessLabel}, ${modelLabel}`, id: "spawn-harness", disabled: busy })}
+								>
+									{agents.map((agent) => (
+										<Menu
+											key={agent.id}
+											label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
+											modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
+										>
+											{/* The default first, named when the catalog says which it
+											    is; then the first few models; then the whole catalog. */}
+											{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
+												<Choice
+													key={model.id}
+													label={model.label}
+													selected={agent.id === harness && model.id === modelSelection}
+													onChoose={() => onSelectAgentModel(agent.id, model.id)}
+												/>
+											))}
+											{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
+												<Section>
+													<Button label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agent.id)} />
+												</Section>
+											) : null}
+										</Menu>
+									))}
+								</Menu>
+								{/* The effort as a speedometer lit to the chosen level; a tap
+								    opens the effort slider above the composer. */}
+								{effortChoices.length ? (
+									<RNHostView matchContents>
+										<EffortGaugeButton choices={effortChoices} open={effortSlider.open} onPress={effortSlider.toggle} disabled={busy} testID="spawn-effort" />
+									</RNHostView>
+								) : null}
+								<Spacer minLength={0} />
+								<ApprovalMenu
+									choices={approvalModes.map((mode) => ({ value: mode.id, label: mode.label, symbol: approvalSymbol(mode.id, harness), selected: mode.id === approvalMode }))}
+									onChoose={onSelectApprovalMode}
+									disabled={busy}
+									id="spawn-approval"
+								/>
+							</HStack>
+						</Host>
+					}
+				/>
+			</View>
 		</View>
 	);
 }

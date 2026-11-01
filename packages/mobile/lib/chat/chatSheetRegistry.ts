@@ -12,21 +12,6 @@ export type ConversationUsageEntry = {
 	subscribeSnapshot(listener: (snapshot: ConversationSnapshot) => void): () => void;
 };
 
-/**
- * The composer's draft opened full screen. The editor writes every change back
- * through `onChange`, so the draft is the composer's whichever way the editor
- * closes; `onSend` asks the composer to send it once the editor has gone.
- */
-export type ComposerEditorEntry = {
-	kind: "composer-editor";
-	text: string;
-	placeholder: string;
-	/** "Send", or "Queue" while a turn runs. */
-	sendLabel: string;
-	onChange(text: string): void;
-	onSend(): void;
-};
-
 /** The conversation's actions page, kept current while it is up: a running action says so, and one that can run again comes back. */
 export type ConversationActionsEntry = {
 	kind: "conversation-actions";
@@ -41,8 +26,7 @@ export type ChatSheetEntry =
 	| { kind: "conversation-map"; markers: ConversationMarker[]; onSelect(sequence: number): void }
 	| ConversationActionsEntry
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
-	| ConversationUsageEntry
-	| ComposerEditorEntry;
+	| ConversationUsageEntry;
 
 const entries = new Map<string, ChatSheetEntry>();
 let sequence = 0;
@@ -63,8 +47,7 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 		"conversation-map": "/sheets/conversation-map",
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
-		"composer-editor": "/sheets/composer-editor",
-		// A pushed page, not a sheet; it shares the hand-off all the same.
+		// A pushed page on iOS and a sheet on Android; it shares the hand-off either way.
 		"conversation-actions": "/conversation-actions",
 	}[entry.kind];
 	return { pathname, params: { sheetKey } } as const;

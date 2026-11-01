@@ -17,7 +17,7 @@ export const materialDrawableNames = [
 	"add",
 	"add_comment",
 	"archive",
-	"arrow_back",
+	"arrow_back_ios_new",
 	"arrow_downward",
 	"arrow_drop_down",
 	"arrow_forward",

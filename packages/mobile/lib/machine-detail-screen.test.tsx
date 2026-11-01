@@ -7,12 +7,17 @@ const fixtures = vi.hoisted(() => ({
 	loadHosts: vi.fn<() => Promise<Host[]>>(async () => []),
 	activeHost: vi.fn<() => Promise<Host | null>>(async () => null),
 	switchHost: vi.fn(async () => {}),
-	reloadConfig: vi.fn(async () => {}),
+	reloadConfig: vi.fn(async (): Promise<unknown> => null),
 	reloadHostMetadata: vi.fn(async () => {}),
+	refresh: vi.fn(async () => {}),
+	refreshHost: vi.fn(async (_id: string) => {}),
+	configForHost: vi.fn((_id: string): unknown => null),
+	ping: vi.fn(async (_config: unknown) => {}),
+	phoneOffline: false,
 	forget: vi.fn(),
 	alert: vi.fn(),
 	push: vi.fn(),
-	dismissTo: vi.fn(),
+	back: vi.fn(),
 	setSheetOptions: vi.fn(),
 	setPageOptions: vi.fn(),
 	focused: { current: true },
@@ -26,7 +31,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	const router = { push: fixtures.push, dismissTo: fixtures.dismissTo };
+	const router = { push: fixtures.push, back: fixtures.back, canGoBack: () => true, replace: vi.fn() };
 	const navigation = { setOptions: fixtures.setPageOptions, getParent: () => ({ setOptions: fixtures.setSheetOptions }), isFocused: () => fixtures.focused.current };
 	return {
 		Stack: {
@@ -60,15 +65,20 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", async () => ({
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `${name}.xml` }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: fixtures.copy }));
 vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
+vi.mock("./api", () => ({ ApiError: class ApiError extends Error {}, pingServer: fixtures.ping }));
 vi.mock("./environmentActions", () => ({ forgetEnvironmentMachine: fixtures.forget }));
 vi.mock("./hosts", () => ({ activeHost: fixtures.activeHost, loadHosts: fixtures.loadHosts }));
 vi.mock("./store", () => ({
 	useApp: () => ({
 		hostStates: fixtures.hostStates,
-		configForHost: () => null,
+		config: null,
+		configForHost: fixtures.configForHost,
 		switchHost: fixtures.switchHost,
 		reloadConfig: fixtures.reloadConfig,
 		reloadHostMetadata: fixtures.reloadHostMetadata,
+		refresh: fixtures.refresh,
+		refreshHost: fixtures.refreshHost,
+		phoneOffline: fixtures.phoneOffline,
 	}),
 }));
 vi.mock("./haptics", () => ({ haptics: fixtures.haptics }));
@@ -101,13 +111,18 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
+	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.refresh, fixtures.refreshHost, fixtures.configForHost, fixtures.ping, fixtures.forget, fixtures.alert, fixtures.push, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
 	fixtures.focused.current = true;
+	fixtures.phoneOffline = false;
 	fixtures.platform.Version = 34;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
 	fixtures.activeHost.mockResolvedValue(b);
 	fixtures.switchHost.mockResolvedValue(undefined);
-	fixtures.reloadConfig.mockResolvedValue(undefined);
+	fixtures.reloadConfig.mockResolvedValue(null);
+	fixtures.refresh.mockResolvedValue(undefined);
+	fixtures.refreshHost.mockResolvedValue(undefined);
+	fixtures.configForHost.mockReturnValue(null);
+	fixtures.ping.mockResolvedValue(undefined);
 	fixtures.reloadHostMetadata.mockResolvedValue(undefined);
 	fixtures.hostStates = [{ hostId: "a", connection: "open", loading: false, config: onTailscale }];
 	takeEnvironmentNotice();
@@ -182,7 +197,7 @@ describe("a machine's page on iOS", () => {
 		fixtures.switchHost.mockRejectedValue(new Error("offline"));
 		await open();
 		await act(async () => byTestID("environment-make-default-a").props.onPress());
-		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again from Machines.");
+		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again.");
 		expect(byTestID("environment-make-default-a")).toBeTruthy();
 	});
 
@@ -192,7 +207,39 @@ describe("a machine's page on iOS", () => {
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/pair", params: { repairHostId: "a" } });
 	});
 
-	it("asks before forgetting, then returns to the list, which says what happened", async () => {
+	// Settings no longer tests from its rows: a machine is tested here, on its
+	// own route, and what the test found is said in the page's toast.
+	it("tests another machine on its own route, racing it first when none is verified", async () => {
+		const target = { host: "10.0.0.3", httpPort: "3011" };
+		fixtures.configForHost.mockReturnValueOnce(null).mockReturnValue(target);
+		await open();
+		const test = byTestID("environment-test-a");
+		expect(test.props.label).toBe("Test connection");
+		await act(async () => test.props.onPress());
+		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("a");
+		expect(fixtures.ping).toHaveBeenCalledWith(target);
+		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current).toMatchObject({ text: "Studio Mac is connected.", tone: "success" });
+	});
+
+	it("tests the default machine by racing its routes, and says why a test failed", async () => {
+		fixtures.activeHost.mockResolvedValue(a);
+		await open();
+		await act(async () => byTestID("environment-test-a").props.onPress());
+		expect(fixtures.reloadConfig).toHaveBeenCalledWith({ refreshEndpoints: false });
+		expect(fixtures.ping).not.toHaveBeenCalled();
+		const toast = renderer!.root.findByType("ToastHost" as never).props.toast.current;
+		expect(toast).toMatchObject({ tone: "warning", duration: "long" });
+		expect(toast.text).toMatch(/^Studio Mac: /);
+	});
+
+	it("greys out the test while the phone is offline", async () => {
+		fixtures.phoneOffline = true;
+		await open();
+		expect(modifiersOf(byTestID("environment-test-a"))).toContainEqual({ $type: "disabled", args: [true] });
+	});
+
+	it("asks before forgetting, then goes back to Settings, which says what happened", async () => {
 		fixtures.activeHost.mockResolvedValue(a);
 		fixtures.forget.mockResolvedValue({ remaining: [b], nextDefault: b, wasDefault: true, notice: "Studio Mac forgotten. Dev is now the default." });
 		await open();
@@ -207,7 +254,7 @@ describe("a machine's page on iOS", () => {
 		await act(async () => buttons.find((button: { text: string }) => button.text === "Forget").onPress());
 		expect(fixtures.forget).toHaveBeenCalledWith(a, "a");
 		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
-		expect(fixtures.dismissTo).toHaveBeenCalledWith("/settings/environments");
+		expect(fixtures.back).toHaveBeenCalledOnce();
 		expect(takeEnvironmentNotice()).toBe("Studio Mac forgotten. Dev is now the default.");
 	});
 
@@ -228,7 +275,7 @@ describe("a machine's page on iOS", () => {
 		await act(async () => finish());
 		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
 		expect(fixtures.setPageOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
-		expect(fixtures.dismissTo).not.toHaveBeenCalled();
+		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(takeEnvironmentNotice()).toBe("Studio Mac forgotten.");
 	});
 
@@ -239,7 +286,7 @@ describe("a machine's page on iOS", () => {
 		const buttons = fixtures.alert.mock.calls.at(-1)![2];
 		await act(async () => buttons.find((button: { text: string }) => button.text === "Forget").onPress());
 		expect(fixtures.alert).toHaveBeenLastCalledWith("Couldn't forget machine", "This machine's saved connection couldn't be removed. Try again.");
-		expect(fixtures.dismissTo).not.toHaveBeenCalled();
+		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(takeEnvironmentNotice()).toBeUndefined();
 	});
 
@@ -251,9 +298,9 @@ describe("a machine's page on iOS", () => {
 });
 
 describe("a machine's page on Android", () => {
-	async function render(props: { isDefault?: boolean; forgetting?: boolean } = {}) {
+	async function render(props: { isDefault?: boolean; forgetting?: boolean; testing?: boolean } = {}) {
 		const { MachineDetail } = await import("./MachineDetail.android");
-		const handlers = { onMakeDefault: vi.fn(), onReconnect: vi.fn(), onForget: vi.fn(), onEdit: vi.fn() };
+		const handlers = { onTest: vi.fn(), onMakeDefault: vi.fn(), onReconnect: vi.fn(), onForget: vi.fn(), onEdit: vi.fn(), notify: vi.fn() };
 		await act(async () => {
 			renderer = create(
 				<MachineDetail
@@ -263,6 +310,8 @@ describe("a machine's page on Android", () => {
 					status={{ kind: "offline", label: "Offline" }}
 					switching={false}
 					forgetting={props.forgetting ?? false}
+					testing={props.testing ?? false}
+					canTest
 					{...handlers}
 				/>,
 			);
@@ -296,7 +345,7 @@ describe("a machine's page on Android", () => {
 	// Compose text can't be selected, so a route row copies its address, on a
 	// tap or the long press a settings row answers.
 	it("copies a route's address from its row", async () => {
-		await render();
+		const handlers = await render();
 		const active = byTestID("environment-active-address-a");
 		const press = modifiersOf(active).find((m) => m.$type === "combinedClickable")!.args[0] as { onClick: () => void; onLongClick: () => void };
 		act(() => press.onClick());
@@ -306,15 +355,15 @@ describe("a machine's page on Android", () => {
 		act(() => (modifiersOf(other).find((m) => m.$type === "combinedClickable")!.args[0] as { onLongClick: () => void }).onLongClick());
 		expect(fixtures.copy).toHaveBeenLastCalledWith("192.168.1.24:3011");
 		// Android 13 and later confirm the copy themselves.
-		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current).toBeUndefined();
+		expect(handlers.notify).not.toHaveBeenCalled();
 	});
 
 	it("confirms a copy itself before Android 13", async () => {
 		fixtures.platform.Version = 32;
-		await render();
+		const handlers = await render();
 		const active = byTestID("environment-active-address-a");
 		act(() => (modifiersOf(active).find((m) => m.$type === "combinedClickable")!.args[0] as { onLongClick: () => void }).onLongClick());
-		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current.text).toBe("Address copied.");
+		expect(handlers.notify).toHaveBeenCalledWith("Address copied.");
 	});
 
 	it("draws Forget in the error colour and holds it while a forget runs", async () => {
@@ -329,6 +378,18 @@ describe("a machine's page on Android", () => {
 		const busy = byTestID("environment-forget-a");
 		expect(click(busy)).toBeUndefined();
 		expect(modifiersOf(busy)).toContainEqual({ $type: "alpha", args: [0.4] });
+	});
+
+	it("tests the connection from its row, held while a test runs", async () => {
+		const handlers = await render();
+		act(() => click(byTestID("environment-test-a"))!());
+		expect(handlers.onTest).toHaveBeenCalledOnce();
+		act(() => renderer!.unmount());
+		renderer = undefined;
+		await render({ testing: true });
+		const busy = byTestID("environment-test-a");
+		expect(click(busy)).toBeUndefined();
+		expect(busy.findAllByType("Text" as never).map((node) => node.props.children)).toContain("Testing…");
 	});
 
 	it("offers Make default only for another machine", async () => {

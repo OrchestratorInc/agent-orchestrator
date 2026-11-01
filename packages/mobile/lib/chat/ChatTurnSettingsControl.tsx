@@ -3,6 +3,7 @@ import { useRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { AgentLogo } from "../AgentLogo";
 import { AppSymbol } from "../AppSymbol";
+import { EffortGaugeButton } from "../effort-gauge";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
@@ -13,7 +14,6 @@ import { COMPOSER_DISC } from "./composerStyles";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
-const effortGlyph = { ios: "gauge.medium", android: "speed" } as const;
 /** The agent's mark in the capsule, at the size iOS's capsule draws it. */
 const HARNESS_MARK = 20;
 const approvalGlyph = { ios: "checkmark.shield", android: "verified_user" } as const;
@@ -21,12 +21,13 @@ const approvalGlyph = { ios: "checkmark.shield", android: "verified_user" } as c
 /**
  * The chat's controls row on Android, laid out as the new task's: the model in
  * a filled capsule led by its agent's mark, as iOS's is, the effort as a
- * speedometer beside it, and the approval
- * mode as its shield at the row's end. Each opens Compose's dropdown with its
- * choices ticked; the model's also holds any other setting the provider offers,
- * an on/off one as a checkable item and the rest one level down.
+ * speedometer beside it that opens the composer's slider, and the approval
+ * mode as its shield at the row's end. The model and the approval mode open
+ * Compose's dropdown with their choices ticked; the model's also holds any
+ * other setting the provider offers, an on/off one as a checkable item and
+ * the rest one level down.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort }: ChatTurnSettingsControlProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const rows = turnSettingsRows(snapshot, models, options);
@@ -76,17 +77,9 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					<AppSymbol name="chevronUpDown" size={iconSize.sm} color={t.textTertiary} />
 				</View>
 			</MenuTrigger>
-			{effortRow ? (
-				<MenuTrigger
-					actions={effortRow.choices.map((choice, index) => ({ id: `${index}`, title: choice.label, state: choice.selected ? "on" : "off" }))}
-					onAction={(event) => chooseIn(effortRow)(Number(event.nativeEvent.event))}
-					disabled={off}
-					accessibilityLabel={`Effort, ${effortRow.value}`}
-					testID="chat-effort"
-				>
-					<AppSymbol name={effortGlyph} size={iconSize.lg} color={t.textSecondary} />
-				</MenuTrigger>
-			) : null}
+			{/* The effort as a speedometer lit to the chosen level; a tap opens
+			    the slider over the composer. */}
+			{effort?.choices.length ? <EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" /> : null}
 			<View style={styles.spacer} />
 			{approvalRow ? (
 				<MenuTrigger

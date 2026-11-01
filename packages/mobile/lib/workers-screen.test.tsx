@@ -411,44 +411,22 @@ describe("Workers environment chips", () => {
 	});
 });
 
-describe("Workers machine heading", () => {
-	function heading() {
-		return renderer.root.findAllByProps({ testID: "worker-machine-heading" }).find((node) => typeof node.type === "string");
-	}
-
-	// Every row on one machine said its name on every row; the list says it once.
-	it("names a filtered machine once above its rows, which leave it off", () => {
+describe("Workers machine label", () => {
+	// No heading names the machine: one paired, or one chosen in the filter,
+	// and the rows leave its name off, since it would be the same on every row.
+	it("names no machine over the rows, which leave it off when all share one", () => {
 		fixtures.hostStates[1] = snapshot({ connection: "open", error: null, sessions: [session("worker-2")] });
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(heading()).toBeUndefined();
+		expect(renderer.root.findAllByProps({ testID: "worker-machine-heading" })).toHaveLength(0);
 		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(true);
 		choose(environmentMenu(), "Windows");
-		expect(heading()!.props.accessibilityLabel).toBe("Machine Windows");
+		expect(renderer.root.findAllByProps({ testID: "worker-machine-heading" })).toHaveLength(0);
 		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
-	});
 
-	it("names the only paired machine once", () => {
 		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(heading()!.props.accessibilityLabel).toBe("Machine Mac");
+		expect(renderer.root.findAllByProps({ testID: "worker-machine-heading" })).toHaveLength(0);
 		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
-	});
-
-	// Android's chips already name the chosen machine, and an empty board's
-	// own state names it too.
-	it("leaves the naming to the chips on Android and to an empty board's state", () => {
-		fixtures.platform = "android";
-		fixtures.hostStates[1] = snapshot({ connection: "open", error: null, sessions: [session("worker-2")] });
-		act(() => { renderer = create(<FleetScreen />); });
-		choose(environmentMenu(), "Windows");
-		expect(heading()).toBeUndefined();
-		expect(renderer.root.findByType(WorkerBoardList).props.showMachine).toBe(false);
-
-		fixtures.platform = "ios";
-		fixtures.hostStates[1] = snapshot({});
-		act(() => { renderer = create(<FleetScreen />); });
-		choose(environmentMenu(), "Windows");
-		expect(heading()).toBeUndefined();
 	});
 });
 

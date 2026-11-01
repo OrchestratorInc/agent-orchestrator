@@ -93,11 +93,11 @@ describe("the Android settings form", () => {
 	it("rounds a section's ends and squares the seams between its rows, skipping rows that are not there", () => {
 		const root = render(
 			<SettingsSection title="Machines" footer="Footer">
-				<SettingsValueRow icon="status" label="One" />
+				<SettingsValueRow icon="laptop" label="One" />
 				{null}
 				<>
-					<SettingsValueRow icon="status" label="Two" />
-					<SettingsValueRow icon="status" label="Three" />
+					<SettingsValueRow icon="laptop" label="Two" />
+					<SettingsValueRow icon="laptop" label="Three" />
 				</>
 			</SettingsSection>,
 		);
@@ -112,7 +112,7 @@ describe("the Android settings form", () => {
 	});
 
 	it("rounds a lone row all round", () => {
-		const item = render(<SettingsSection><SettingsValueRow icon="status" label="Only" /></SettingsSection>).findByType("ListItem" as never);
+		const item = render(<SettingsSection><SettingsValueRow icon="laptop" label="Only" /></SettingsSection>).findByType("ListItem" as never);
 		expect(find(item, "clip")?.args[0]).toEqual({ roundedCorner: 20 });
 	});
 
@@ -133,7 +133,7 @@ describe("the Android settings form", () => {
 	});
 
 	it("leaves a value row untappable, its value in its tone", () => {
-		const item = render(<SettingsValueRow icon="status" label="Status" value="Unreachable" tone="bad" />).findByType("ListItem" as never);
+		const item = render(<SettingsValueRow icon="laptop" label="This machine" value="Unreachable" tone="bad" />).findByType("ListItem" as never);
 		expect(find(item, "clickable")).toBeUndefined();
 		expect(slot(item, "SupportingContent").findByType("Text" as never).props.color).toBe("#red");
 	});
@@ -147,7 +147,7 @@ describe("the Android settings form", () => {
 	});
 
 	it("dims a held action and takes its press away, with Material's spinner while it works", () => {
-		const held = render(<SettingsButtonRow icon="testConnection" label="Test connection" disabled onPress={vi.fn()} />).findByType("ListItem" as never);
+		const held = render(<SettingsButtonRow icon="addMachine" label="Add a machine" disabled onPress={vi.fn()} />).findByType("ListItem" as never);
 		expect(find(held, "clickable")).toBeUndefined();
 		expect(find(held, "alpha")?.args).toEqual([0.4]);
 		const working = render(<SettingsButtonRow icon="update" label="Software update" loading onPress={vi.fn()} />).findByType("ListItem" as never);
@@ -169,7 +169,7 @@ describe("the Android settings form", () => {
 	it("opens a dropdown of the choices from a menu picker row, the chosen one checked", () => {
 		const onValueChange = vi.fn();
 		const options = [{ value: "prod", label: "Prod" }, { value: "dev", label: "Dev" }];
-		const root = render(<SettingsPickerRow icon="defaultMachine" label="Default machine" options={options} selectedValue="dev" onValueChange={onValueChange} testID="machine" />);
+		const root = render(<SettingsPickerRow icon="laptop" label="Default machine" options={options} selectedValue="dev" onValueChange={onValueChange} testID="machine" />);
 		const menu = () => root.findByType("DropdownMenu" as never);
 		const item = root.findByType("ListItem" as never);
 
@@ -194,27 +194,20 @@ describe("the Android settings form", () => {
 		expect(menu().props.expanded).toBe(false);
 	});
 
-	it("draws a status row's status quietly and its action as an outlined button that greys out", () => {
-		const onAction = vi.fn();
-		const item = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Connected" tone="good" actionLabel="Test" onAction={onAction} />).findByType("ListItem" as never);
+	it("makes a status row the tappable ListItem, its status quietly underneath and no chevron", () => {
+		const onPress = vi.fn();
+		const item = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connected" tone="good" onPress={onPress} />).findByType("ListItem" as never);
 		const supporting = slot(item, "SupportingContent");
 		// The colour is only in the dot; the words stay in the secondary ink.
 		expect(find(supporting.findByType("Box" as never), "background")!.args[0]).toBe("#green");
 		expect(supporting.findByType("Text" as never).props.color).toBe("#secondary");
-		// The row takes no press of its own: only the button acts.
-		expect(find(item, "clickable")).toBeUndefined();
-		const button = slot(item, "TrailingContent").findByType("OutlinedButton" as never);
-		expect(button.props.enabled).toBe(true);
-		expect(text(button)).toEqual(["Test"]);
-		button.props.onClick();
-		expect(onAction).toHaveBeenCalledOnce();
+		expect(slot(item, "LeadingContent").findByType("Icon" as never).props.source).toBe("drawable:laptop");
+		expect(slot(item, "TrailingContent")).toBeUndefined();
+		(find(item, "clickable")!.args[0] as () => void)();
+		expect(onPress).toHaveBeenCalledOnce();
 
-		const held = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Offline" actionLabel="Test" actionDisabled onAction={vi.fn()} />);
-		expect(held.findByType("OutlinedButton" as never).props.enabled).toBe(false);
-		expect(find(held.findByType("Box" as never), "background")!.args[0]).toBe("#tertiary");
-		const testing = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Testing…" actionLabel="Test" actionLoading onAction={vi.fn()} />);
-		expect(testing.findByType("OutlinedButton" as never).props.enabled).toBe(false);
-		expect(testing.findByType("OutlinedButton" as never).findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
+		const quiet = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connecting…" onPress={vi.fn()} />);
+		expect(find(quiet.findByType("Box" as never), "background")!.args[0]).toBe("#tertiary");
 	});
 
 	it("lays a segmented picker out as Material's single-choice segmented buttons", () => {

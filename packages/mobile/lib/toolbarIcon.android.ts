@@ -13,7 +13,7 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	add: require("../assets/icons/add.xml"),
 	add_comment: require("../assets/icons/add_comment.xml"),
 	archive: require("../assets/icons/archive.xml"),
-	arrow_back: require("../assets/icons/arrow_back.xml"),
+	arrow_back_ios_new: require("../assets/icons/arrow_back_ios_new.xml"),
 	arrow_downward: require("../assets/icons/arrow_downward.xml"),
 	arrow_drop_down: require("../assets/icons/arrow_drop_down.xml"),
 	arrow_forward: require("../assets/icons/arrow_forward.xml"),

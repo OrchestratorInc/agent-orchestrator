@@ -7,7 +7,7 @@ import { isPresentedRoute, presentedRouteDepth } from "./pageNavigation";
 describe("opening pages outside sheets", () => {
 	it("recognises every sheet and modal the root stack presents", () => {
 		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "pair"]) expect(isPresentedRoute(name)).toBe(true);
-		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "settings/environments"]) expect(isPresentedRoute(name)).toBe(false);
+		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "settings/machine/[id]/index"]) expect(isPresentedRoute(name)).toBe(false);
 	});
 
 	// Settings, Notifications, Pull Requests and New task are pages pushed over

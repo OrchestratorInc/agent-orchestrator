@@ -1,6 +1,7 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
+import { backOr } from "../../../../lib/backNavigation";
 import { forgetEnvironmentMachine } from "../../../../lib/environmentActions";
 import { postEnvironmentNotice } from "../../../../lib/environmentNotice";
 import { environmentStatus, FORGET_MACHINE_MESSAGE } from "../../../../lib/environmentView";
@@ -10,17 +11,25 @@ import { MachineDetail } from "../../../../lib/MachineDetail";
 import { Spinner } from "../../../../lib/Spinner";
 import { useApp } from "../../../../lib/store";
 import { useTheme } from "../../../../lib/ThemeProvider";
+import { ToastHost } from "../../../../lib/Toast";
 import { EmptyState } from "../../../../lib/ui";
+import { useMachineConnectionTest } from "../../../../lib/useMachineConnectionTest";
+import { useToast } from "../../../../lib/useToast";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../../lib/RouteErrorBoundary";
 
-/** One paired machine: its status and routes, and what can be done with it. */
+/**
+ * One paired machine: its status and routes, and everything done with it.
+ * Settings only lists the machines; each row opens this page.
+ */
 export default function MachineDetailScreen() {
 	const { id } = useLocalSearchParams<{ id: string }>();
 	const router = useRouter();
 	const navigation = useNavigation();
 	const t = useTheme();
-	const { hostStates, configForHost, switchHost, reloadConfig, reloadHostMetadata } = useApp();
+	const { hostStates, configForHost, switchHost, reloadConfig, reloadHostMetadata, phoneOffline } = useApp();
+	const toast = useToast();
+	const connectionTest = useMachineConnectionTest(toast.show);
 	const [host, setHost] = useState<Host | null | undefined>(undefined);
 	const [defaultHostId, setDefaultHostId] = useState<string | null>(null);
 	const [switching, setSwitching] = useState(false);
@@ -82,7 +91,7 @@ export default function MachineDetailScreen() {
 			setDefaultHostId(machine.id);
 		} catch {
 			haptics.error();
-			Alert.alert("Could not change default machine", "Try again from Machines.");
+			Alert.alert("Could not change default machine", "Try again.");
 		} finally {
 			setSwitching(false);
 		}
@@ -110,9 +119,9 @@ export default function MachineDetailScreen() {
 			// Left while it ran (Android's back still works): navigating now would
 			// act on whatever is on top. The notice waits for the list instead.
 			if (!navigation.isFocused()) return;
-			// Back to the list, which says what happened. A page opened by a link
-			// has no list under it, so the list takes its place instead.
-			router.dismissTo("/settings/environments");
+			// Back to Settings, which says what happened: the list under this page
+			// on iOS (a page opened by a link has it too), the tab on Android.
+			backOr(router, "/settings");
 		} catch (error) {
 			haptics.error();
 			Alert.alert("Couldn't forget machine", error instanceof Error ? error.message : "Try again.");
@@ -131,11 +140,16 @@ export default function MachineDetailScreen() {
 				status={environmentStatus(snapshot)}
 				switching={switching}
 				forgetting={forgetting}
+				testing={connectionTest.testing}
+				canTest={!phoneOffline}
+				onTest={() => void connectionTest.test({ hostId: machine.id, name: machine.name, isDefault })}
 				onMakeDefault={() => void makeDefault()}
 				onReconnect={() => router.push({ pathname: "/pair", params: { repairHostId: machine.id } })}
 				onForget={requestForget}
 				onEdit={edit}
+				notify={toast.show}
 			/>
+			<ToastHost toast={toast} />
 		</View>
 	);
 }

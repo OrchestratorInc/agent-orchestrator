@@ -14,10 +14,8 @@ import {
 } from "./environmentView";
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { ToastHost } from "./Toast";
 import { space } from "./tokens";
 import { materialDrawable } from "./toolbarIcon.android";
-import { useToast } from "./useToast";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 
@@ -25,10 +23,9 @@ export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type Machine
 // routes, the actions that change how the phone reaches it, and Forget at the
 // foot. Edit is a top app bar action. A route row copies its address on a tap
 // or a long press, as a settings row showing a value does.
-export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, onMakeDefault, onReconnect, onForget, onEdit }: MachineDetailProps) {
+export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, testing, canTest, onTest, onMakeDefault, onReconnect, onForget, onEdit, notify }: MachineDetailProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const toast = useToast();
 	const [showOtherRoutes, setShowOtherRoutes] = useState(false);
 	const endpoints = environmentEndpointRows(host, activeConfig);
 	const primary = primaryEnvironmentEndpoint(endpoints);
@@ -43,7 +40,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 	function copyAddress(authority: string) {
 		void Clipboard.setStringAsync(authority);
 		// Android 13 and later confirm a copy themselves, and read it out.
-		if (Number(Platform.Version) < 33) toast.show("Address copied.");
+		if (Number(Platform.Version) < 33) notify("Address copied.");
 	}
 
 	return (
@@ -92,6 +89,12 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 						)) : null}
 					</GroupedSection>
 					<GroupedSection footer={RECONNECT_NOTE}>
+						<GroupedRow
+							headline={testing ? "Testing…" : "Test connection"}
+							onPress={onTest}
+							disabled={testing || busy || !canTest}
+							testID={`environment-test-${host.id}`}
+						/>
 						{isDefault ? null : (
 							<GroupedRow
 								headline={switching ? "Making default…" : "Make default"}
@@ -113,7 +116,6 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 					</GroupedSection>
 				</LazyColumn>
 			</Host>
-			<ToastHost toast={toast} />
 		</>
 	);
 }

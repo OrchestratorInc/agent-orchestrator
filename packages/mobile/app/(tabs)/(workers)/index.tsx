@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
@@ -24,7 +24,6 @@ import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
-import { WorkerMachineHeading } from "../../../lib/worker-machine-heading";
 import {
 	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
@@ -114,11 +113,9 @@ export default function FleetScreen() {
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
 	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
 	// The one machine every row is on: the one the board is filtered to, or the
-	// only one paired. The list names it once at its head and the rows leave it
-	// off. Android's chip row already names a chosen machine, so it needs no
-	// heading of its own there.
+	// only one paired. The rows leave its name off, since it would say the same
+	// on every row; the filter names a chosen machine.
 	const boardMachine = selectedHost ?? (hostStates.length === 1 ? hostStates[0] : undefined);
-	const chipsNameMachine = Platform.OS === "android" && showsEnvironmentFilter(environments);
 	const selectEnvironment = useCallback((environmentId: string) => {
 		// Resolve both selectors in one React event. Letting the project reset in the
 		// effect below creates an intermediate empty board and a second remount.
@@ -186,10 +183,6 @@ export default function FleetScreen() {
 					selectedEnvironmentId={workerEnvironmentId}
 					onSelectEnvironment={selectEnvironment}
 				/>
-			) : null}
-			{/* Only over rows: an empty board's own state already names the machine. */}
-			{boardMachine && !chipsNameMachine && projectSessions.length > 0 ? (
-				<WorkerMachineHeading name={boardMachine.name} appearance={boardMachine.appearance} />
 			) : null}
 		</>
 	);

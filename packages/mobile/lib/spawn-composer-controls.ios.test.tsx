@@ -10,11 +10,25 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: () => undefined }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select, tap: fixtures.tap } }));
+vi.mock("./effort-gauge", async () => {
+	const React = await import("react");
+	return { EffortGaugeButton: (props: object) => React.createElement("EffortGaugeButton", props) };
+});
+vi.mock("./effort-slider", async () => {
+	const React = await import("react");
+	return { EffortSliderOverlay: (props: object) => React.createElement("EffortSlider", props) };
+});
 vi.mock("expo-asset", () => ({ Asset: { fromModule: vi.fn() } }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Platform: { OS: "ios", Version: "26.0" }, StyleSheet: { create: (styles: object) => styles }, View: host("View") };
+	return {
+		BackHandler: { addEventListener: () => ({ remove: () => {} }) },
+		Keyboard: { addListener: () => ({ remove: () => {} }) },
+		Platform: { OS: "ios", Version: "26.0" },
+		StyleSheet: { create: (styles: object) => styles },
+		View: host("View"),
+	};
 });
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
@@ -27,7 +41,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Button: host("Button"), Divider: host("Divider"), Group: host("Group"), HStack: host("HStack"), Image: host("Image"), Label: host("Label"), Menu: host("Menu"),
+		Button: host("Button"), Divider: host("Divider"), Group: host("Group"), HStack: host("HStack"), Image: host("Image"), Label: host("Label"), Menu: host("Menu"), RNHostView: host("RNHostView"),
 		ProgressView: host("ProgressView"), Section: host("Section"), Spacer: host("Spacer"), Text: host("Text"), Toggle: host("Toggle"), VStack: host("VStack"),
 	};
 });
@@ -48,6 +62,7 @@ vi.mock("./spawn-composer", async () => {
 	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
 });
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
+import { rootTouchStart } from "./touchOutside";
 import { COMPOSER_DISC } from "./chat/composerStyles";
 import { touchTarget } from "./tokens";
 
@@ -119,6 +134,7 @@ async function render(props: Props) {
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
 const modifiers = (node: ReactTestInstance) => (node.props.modifiers ?? []) as Modifier[];
 const modifier = (node: ReactTestInstance, name: string) => modifiers(node).find((entry) => entry.modifier === name);
+const gaugeOf = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "EffortGaugeButton" && node.props.testID === "spawn-effort")[0];
 const identified = (root: ReactTestInstance, id: string) =>
 	root.findAll((node) => hostType(node) !== "" && modifiers(node).some((entry) => entry.modifier === "accessibilityIdentifier" && entry.args[0] === id))[0];
 // A Menu's `label` is a prop, not a child, so its element is read unrendered.
@@ -232,25 +248,28 @@ describe("iOS spawn selectors", () => {
 		expect(props.onSelectApprovalMode).toHaveBeenCalledWith("auto");
 	});
 
-	// The chat's speedometer: its needle at the chosen level, the model's levels in its menu.
-	it("picks the effort from a speedometer beside the model", async () => {
+	// The speedometer opens the slider above the composer; the slider picks
+	// the level and stays up until a tap lands outside it.
+	it("opens the effort slider from a speedometer beside the model", async () => {
 		const props = baseProps();
 		const root = await render(props);
-		const menu = identified(root, "spawn-effort");
-		expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Effort, High"]);
-		let face: ReactTestRenderer | undefined;
-		await act(async () => { face = create(menu.props.label); });
-		expect(face!.root.findAll((node) => hostType(node) === "Image")[0].props.systemName).toBe("gauge.high");
-		await act(async () => face!.unmount());
-		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Low", false], ["High", true]]);
-		await act(async () => choices(menu)[0].props.onIsOnChange(true));
+		const gauge = gaugeOf(root);
+		expect(root.findAll((node) => hostType(node) === "RNHostView").some((host) => host.findAll((node) => node === gauge).length > 0)).toBe(true);
+		expect(gauge.props.choices).toEqual(props.effortChoices);
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+		await act(async () => gauge.props.onPress());
+		const slider = root.findAll((node) => hostType(node) === "EffortSlider")[0];
+		expect(gaugeOf(root).props.open).toBe(true);
+		await act(async () => slider.props.onChoose("low"));
 		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
-		expect(fixtures.select).toHaveBeenCalledOnce();
+		// A tap anywhere outside it closes it.
+		await act(async () => rootTouchStart());
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
 	});
 
 	it("draws no speedometer for a model that takes no effort", async () => {
 		const root = await render(baseProps({ effortChoices: [] }));
-		expect(identified(root, "spawn-effort")).toBeUndefined();
+		expect(gaugeOf(root)).toBeUndefined();
 	});
 
 	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {

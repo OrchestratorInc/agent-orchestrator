@@ -15,7 +15,7 @@ import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -180,8 +180,17 @@ export default function SpawnScreen() {
 	// The model the task will run, picked or the catalog's default, for its
 	// effort levels.
 	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
-	const effortChoices = useMemo(() => spawnEffortChoices(runningModel, effort), [effort, runningModel]);
-	const chosenEffort = effortChoices.some((choice) => choice.selected && choice.value === effort) ? effort : undefined;
+	// A Claude family alias ("opus", Claude Code's default) takes its newest
+	// model's levels. With nothing picked and no default named, the levels are
+	// a stand-in's, which picking one pins.
+	const aliasModel = harness === "claude-code" && runningModel && !runningModel.efforts?.length ? claudeAliasModel(currentModels, runningModel.id) : undefined;
+	const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));
+	const effortChoices = useMemo(() => spawnEffortChoices(effortModel, effort), [effort, effortModel]);
+	// A level picked here is sent; so is the fallback shown for a model that
+	// names no default, so the task runs at the level the speedometer shows.
+	// The model's own default is left to the model.
+	const shownEffort = effortChoices.find((choice) => choice.selected)?.value;
+	const chosenEffort = shownEffort && (shownEffort === effort || shownEffort !== effortModel?.defaultEffort) ? shownEffort : undefined;
 	// Each agent's menu list, built once per change rather than per keystroke:
 	// some catalogs run to thousands of models.
 	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
@@ -341,6 +350,13 @@ export default function SpawnScreen() {
 		if (nextModel !== model) setEffort(undefined);
 		setModel(nextModel);
 		setModelTouched(true);
+	};
+	const selectEffort = (nextEffort: string) => {
+		if (!runningModel && effortModel) {
+			setModel(effortModel.id);
+			setModelTouched(true);
+		}
+		setEffort(nextEffort);
 	};
 	// The agent menu picks an agent and one of its models together.
 	const selectAgentModel = (nextHarness: string, nextModel: string) => {
@@ -528,7 +544,7 @@ export default function SpawnScreen() {
 					approvalMode={approvalMode}
 					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
 					effortChoices={effortChoices}
-					onSelectEffort={setEffort}
+					onSelectEffort={selectEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}

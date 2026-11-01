@@ -61,9 +61,6 @@ describe("the iOS settings form", () => {
 		expect(ios).toContain("<Toggle ");
 		expect(ios).toContain('pickerStyle("menu")');
 		expect(ios).toContain('pickerStyle("inline")');
-		// A status row's action is a real bordered button, which the system greys out.
-		expect(ios).toContain('buttonStyle("bordered")');
-		expect(ios).toContain("disabledModifier(actionDisabled || actionLoading)");
 		expect(ios).toContain('role={destructive ? "destructive" : undefined}');
 	});
 });
@@ -76,10 +73,8 @@ describe("the Android settings form", () => {
 		expect(android).toContain('toggleable(value, () => onValueChange(!value), { role: "switch" })');
 		expect(android).toContain('"radioButton"');
 		expect(android).toContain("<SingleChoiceSegmentedButtonRow");
-		// A status row's action, and a menu picker's current choice, are
-		// Material's outlined button; the action greys out when it can't run.
+		// A menu picker's current choice is Material's outlined button.
 		expect(android).toContain("<OutlinedButton");
-		expect(android).toContain("enabled={!actionDisabled && !actionLoading}");
 	});
 
 	it("takes its sizes from the tokens and its text from the Material type scale", () => {

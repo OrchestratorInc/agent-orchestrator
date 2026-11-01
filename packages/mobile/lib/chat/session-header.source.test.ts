@@ -26,9 +26,11 @@ describe("session header controls", () => {
 
 	// The same buttons, in the same order, with the same glyphs, as the
 	// terminal's header: the switch to the other interface, the preview, the
-	// files, then "⋯".
+	// files, then "⋯". Android's bar keeps only the "⋯" and moves the three
+	// into the top of its sheet.
 	it("leads with the terminal's buttons, built by the same function", () => {
-		expect(session).toContain("{sessionHeaderButtons({");
+		expect(session).toContain("{sessionToolsInMenu ? null : sessionHeaderButtons({");
+		expect(session).toContain('const sessionToolsInMenu = Platform.OS === "android";');
 		expect(session).toContain('switchTo: "terminal",');
 		expect(source("../session/TerminalSessionScreen.tsx")).toContain('switchTo: "chat",');
 		const order = ['key="switch"', 'key="preview"', 'key="files"'].map((key) => buttons.lastIndexOf(key));
@@ -40,12 +42,14 @@ describe("session header controls", () => {
 		expect(session).toContain("const previewReady = useSessionPreview(config, session.id);");
 	});
 
-	it("opens the conversation actions as a pushed page, not a menu or a sheet", () => {
+	it("opens the conversation actions as a pushed page on iOS and a bottom sheet on Android, never a menu", () => {
 		expect(session).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
 		expect(session).toContain('kind: "conversation-actions"');
 		expect(session).not.toContain("Stack.Toolbar.Menu");
 		expect(source("./chatSheetRegistry.ts")).toContain('"conversation-actions": "/conversation-actions",');
-		expect(source("../../app/_layout.tsx")).toContain('<Stack.Screen name="conversation-actions" options={{ title: "Actions" }} />');
+		const layout = source("../../app/_layout.tsx");
+		expect(layout).toMatch(/name="conversation-actions"\s*options=\{Platform\.OS === "android" \? \{\s*presentation: "formSheet",/);
+		expect(layout).toContain('} : { title: "Actions" }}');
 		// Back to the chat first, then the action, with no wait for an animation.
 		expect(route).toMatch(/backOr\(router\);\s*actions\.onSelect\(action\);/);
 		expect(session).not.toMatch(/setTimeout\([^)]*220/);
@@ -58,9 +62,6 @@ describe("session header controls", () => {
 		expect(session).toContain("const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);");
 		expect(session).toContain("const headerItems = useMemo(() => menuReady ? (");
 		expect(route).toContain("useEffect(() => actions?.subscribeGroups(setGroups), [actions]);");
-		// The conversation refreshes itself after every streamed event; only a
-		// refresh asked for from the page shows in it.
-		expect(session).toContain("const menuRefreshing = manualRefreshing;");
 	});
 
 	// The PR lives in the composer's chips, not the header.

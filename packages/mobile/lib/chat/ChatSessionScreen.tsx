@@ -17,6 +17,7 @@ import {
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
 import type { Theme } from "../theme";
+import { Frost, FROST_TAIL, frostStops } from "../frost";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
@@ -26,15 +27,14 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useChatKeyboard } from "./useChatKeyboard";
-import { ConversationRenamePrompt, type ConversationRenameRequest } from "./ConversationRenamePrompt";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
-import { conversationMarkers } from "./timelineModel";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
@@ -90,7 +90,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
@@ -126,9 +126,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
-	const [manualRefreshing, setManualRefreshing] = useState(false);
-	const [renameRequest, setRenameRequest] = useState<ConversationRenameRequest>();
-	const closeRename = useCallback(() => setRenameRequest(undefined), []);
 	const [resuming, setResuming] = useState(false);
 	const [resumeError, setResumeError] = useState<string | undefined>();
 	// Banners closed this visit, by what they report. See conversationBanners.
@@ -136,7 +133,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
 	const headerOverlap = useGlassHeaderOverlap();
 	// On iOS 26 the banners float under the header, over the list's top, and the
 	// list starts below them.
@@ -273,14 +270,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
-	// iOS 26: the conversation scrolls up under the system's glass bar, which
-	// blurs it beneath the title, as Settings and the board do. The edge effect
-	// is the system's own: setting `scrollEdgeEffects` from here turned it off.
-	// The route also holds terminal sessions, so the stack's own bar comes back
-	// when this screen goes.
+	// The conversation scrolls up under a clear bar. iOS 26's is the system's
+	// glass, which blurs it beneath the title, as Settings and the board do; the
+	// edge effect is the system's own: setting `scrollEdgeEffects` from here
+	// turned it off. Android's bar frosts it out with the page's colour (see
+	// `frost`), as the board tabs' bars do. The route also holds terminal
+	// sessions, so the stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
-		if (!SYSTEM_GLASS_HEADER) return;
-		navigation.setOptions({ headerTransparent: true, headerStyle: undefined });
+		if (!CLEAR_HEADER) return;
+		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
 		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
 	}, [navigation, t]);
 
@@ -458,32 +456,29 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const isOrchestrator = "projectName" in session;
 	const menuReady = Boolean(menuSnapshot);
 	// The daemon refuses to rename the project orchestrator.
-	const menuCanRename = !isOrchestrator && Boolean(menuSnapshot && can(menuSnapshot, "rename"));
 	const menuCanCompact = Boolean(menuSnapshot && can(menuSnapshot, "compaction")) && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
-	const menuCanReloadMcp = Boolean(menuSnapshot && can(menuSnapshot, "mcp_reload")) && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
-	const menuHasUsage = Boolean(menuSnapshot?.usage || menuSnapshot?.rateLimits);
+	// The ring on Compact: how much of the context window the conversation fills.
+	const menuContextPercent = contextReadout(menuSnapshot?.usage)?.percent;
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
-	// Only a refresh asked for from the menu: the conversation also refreshes
-	// itself after every streamed event, and a menu that followed those would be
-	// rebuilt, and closed under the finger, all through a running turn.
-	const menuRefreshing = manualRefreshing;
 	const menuCompacting = conversation.pendingActions.includes("compact");
-	const menuMcpReloading = conversation.pendingActions.includes("mcp");
+	// Android's bar keeps only the "⋯"; iOS's leads with the switch, preview and files.
+	const sessionToolsInMenu = Platform.OS === "android";
+	const previewReady = useSessionPreview(config, session.id);
+	const interfaceSwitchReady = Boolean(interfaceSwitch.status?.supported);
+	const interfaceSwitchBusy = interfaceSwitch.starting;
+	const menuSwitchBusy = interfaceSwitchBusy || interfaceTransitionActive;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
-		canRename: menuCanRename,
+		previewReady,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
 		canPin: !isOrchestrator,
 		canDelete: !isOrchestrator,
 		canCompact: menuCanCompact,
-		canReloadMcp: menuCanReloadMcp,
-		hasUsage: menuHasUsage,
 		pinned: menuPinned,
 		openingShell,
-		refreshing: menuRefreshing,
 		compacting: menuCompacting,
-		mcpReloading: menuMcpReloading,
 		turnInFlight: turnActive,
-	}) : undefined, [isOrchestrator, menuCanCompact, menuCanRename, menuCanReloadMcp, menuCompacting, menuHasUsage, menuMcpReloading, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
+		contextPercent: menuContextPercent,
+	}) : undefined, [isOrchestrator, menuCanCompact, menuCompacting, menuContextPercent, menuPinned, menuReady, openingShell, previewReady, turnActive]);
 	// The actions page follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -500,6 +495,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Each menu item's work, read when it is chosen, so the menu does not have to
 	// change whenever a callback does.
 	const menuActions: Record<ConversationMenuAction, () => void> = {
+		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
 		shell: () => void openShell(),
 		pull_requests: () => {
 			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
@@ -510,26 +506,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			// returns here.
 			else openPage("/prs");
 		},
-		map: () => {
-			const snapshot = latestSnapshot.current;
-			if (snapshot) void presentSheet({ kind: "conversation-map", markers: conversationMarkers(snapshot), onSelect: setJumpToSequence });
-		},
-		refresh: () => {
-			setManualRefreshing(true);
-			void conversation.refresh().finally(() => setManualRefreshing(false));
-		},
-		usage: openUsage,
-		rename: () => setRenameRequest((current) => ({
-			id: (current?.id ?? 0) + 1,
-			initialTitle: sessionName,
-			onRename: (next) => renameWorker(session.id, next),
-		})),
 		pin: () => {
 			if ("projectName" in session) return;
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
-		reload_mcp: () => void conversation.reloadMcp().catch(() => {}),
 		delete: () => {
 			haptics.warning();
 			Alert.alert(
@@ -553,22 +534,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// page. A folded PR card comes back from the strip it leaves in the composer,
 	// not from here. Each button's work is read when it is pressed, so the header
 	// is registered again only when what it shows changes.
-	const previewReady = useSessionPreview(config, session.id);
 	const headerPress = useRef({ requestInterfaceSwitch, openPreview: () => {}, openFiles: filesNavigation.openChanges });
 	headerPress.current = {
 		requestInterfaceSwitch,
 		openPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
 		openFiles: filesNavigation.openChanges,
 	};
-	const interfaceSwitchReady = Boolean(interfaceSwitch.status?.supported);
-	const interfaceSwitchBusy = interfaceSwitch.starting;
 	const openActions = useCallback(() => {
 		const groups = latestMenuGroups.current;
 		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
 	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
 	const headerItems = useMemo(() => menuReady ? (
 		<Stack.Toolbar placement="right">
-			{sessionHeaderButtons({
+			{sessionToolsInMenu ? null : sessionHeaderButtons({
 				switchTo: "terminal",
 				switchReady: interfaceSwitchReady,
 				switchBusy: interfaceSwitchBusy,
@@ -582,7 +560,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			})}
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
-	) : null, [interfaceSwitchBusy, interfaceSwitchReady, interfaceTransitionActive, menuReady, openActions, previewReady, t]);
+	) : null, [interfaceSwitchBusy, interfaceSwitchReady, interfaceTransitionActive, menuReady, openActions, previewReady, sessionToolsInMenu, t]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -731,8 +709,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
 			{headerItems}
-			<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />
-			{SYSTEM_GLASS_HEADER ? null : banners}
+			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
@@ -758,7 +735,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			{SYSTEM_GLASS_HEADER ? (
+			{/* Android's frost behind the clear bar: solid under the title, then
+			    dissolving into the page, so the conversation frosts out as it
+			    passes under it rather than meeting a hard edge. */}
+			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
+				<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
+			) : null}
+			{CLEAR_HEADER ? (
 				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
 					{banners}
 				</View>
@@ -846,10 +829,16 @@ function Failure({ children }: { children: ReactNode }) {
 	return <View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>;
 }
 
-/** How much of the screen iOS 26's clear header covers; nothing elsewhere. */
+/**
+ * The conversation runs on under a clear bar: iOS 26's glass, and on Android
+ * the bar the frost lies behind. Older iOS keeps the stack's solid bar.
+ */
+const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";
+
+/** How much of the screen the clear header covers; nothing under a solid one. */
 function useGlassHeaderOverlap(): number {
 	const headerHeight = useHeaderHeight();
-	return SYSTEM_GLASS_HEADER ? headerHeight : 0;
+	return CLEAR_HEADER ? headerHeight : 0;
 }
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
@@ -874,6 +863,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// banners rather than showing between them.
 	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
 	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
+	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.
 	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },
 });

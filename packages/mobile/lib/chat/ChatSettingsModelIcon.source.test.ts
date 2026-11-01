@@ -5,12 +5,12 @@ const shared = readFileSync(new URL("../model-controls.ios.tsx", import.meta.url
 const android = readFileSync(new URL("./ChatTurnSettingsControl.tsx", import.meta.url), "utf8");
 const menuIcons = readFileSync(new URL("./chatMenuIcons.types.ts", import.meta.url), "utf8");
 
-// The effort is a speedometer on both platforms: SF Symbols' gauge, its needle
-// at the chosen level, on iOS, and Material's speed symbol on Android.
+// The effort is the custom speedometer on both platforms, lit to the chosen
+// level; the menu icon names it in any other list.
 describe("effort setting icon", () => {
 	it("draws the effort as a speedometer", () => {
-		expect(shared).toContain("label={<SymbolFace name={effortGaugeSymbol(choices)} />}");
-		expect(android).toContain('const effortGlyph = { ios: "gauge.medium", android: "speed" } as const;');
+		expect(shared).not.toContain("EffortMenu");
+		expect(android).toContain('<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />');
 		expect(menuIcons).toContain('effort: { ios: "gauge.medium", android: "speed" }');
 	});
 });

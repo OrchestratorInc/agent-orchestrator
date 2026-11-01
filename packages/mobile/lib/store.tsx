@@ -68,6 +68,7 @@ import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummar
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
+import { emulatedHostSnapshots, useEmulatedMachines } from "./emulatedMachines";
 import type { ApprovalMode } from "./spawnApproval";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
@@ -999,6 +1000,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			? hostStates.find((host) => host.hostId === selectedHostId) ?? null
 			: null;
 	}, [hostStates, selectedHostId]);
+	// A dev build's fake machines join only the fleet the UI reads: nothing
+	// polls, refreshes, spawns on or streams from them.
+	const emulatingMachines = useEmulatedMachines();
+	const shownHostStates = useMemo(
+		() => emulatingMachines ? [...hostStates, ...emulatedHostSnapshots()] : hostStates,
+		[emulatingMachines, hostStates],
+	);
 	const [sessionRows] = useState(() => createHostedRowsCache<DashboardSession>());
 	const [projectRows] = useState(() => createHostedRowsCache<ProjectInfo>());
 	const [orchestratorRows] = useState(() => createHostedRowsCache<OrchestratorLink>());
@@ -1152,7 +1160,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			configured: !!config && isConfigured(config),
 			currentHostId: selectedHostId ?? undefined,
 			selectedHostName,
-			hostStates,
+			hostStates: shownHostStates,
 			allSessions,
 			allProjects,
 			allOrchestrators,
@@ -1200,7 +1208,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			config,
 			selectedHostId,
 			selectedHostName,
-			hostStates,
+			shownHostStates,
 			allSessions,
 			allProjects,
 			allOrchestrators,

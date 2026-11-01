@@ -4,22 +4,23 @@ import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
-import { ApiError, pingServer } from "../../lib/api";
 import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
 import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
+import { classifyConnectionFailure } from "../../lib/connectionError";
 import { describeDesktopStatus } from "../../lib/desktopStatus";
 import { discordFeatureRequestURL } from "../../lib/discord";
-import { environmentStatus, environmentSummary } from "../../lib/environmentView";
+import { isEmulatedHost, setEmulatedMachines, useEmulatedMachines } from "../../lib/emulatedMachines";
+import { takeEnvironmentNotice } from "../../lib/environmentNotice";
+import { environmentStatus } from "../../lib/environmentView";
 import { haptics } from "../../lib/haptics";
 import { activeHost, loadHosts, type Host as PairedHost } from "../../lib/hosts";
 import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
-import { MachineConnectionRow, MachineSelector, machineStatusTone } from "../../lib/MachineSelector";
+import { MachineRow, machineStatusTone } from "../../lib/MachineRow";
 import { canRepairWithQr } from "../../lib/machineRecovery";
 import { openGitHub } from "../../lib/openGitHub";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
@@ -64,18 +65,15 @@ const APPEARANCE_OPTIONS: readonly SettingsOption<ThemePreference>[] = (["light"
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function SettingsScreen() {
+	const notificationsRow = useNotificationsRow();
+	const emulatingMachines = useEmulatedMachines();
 	const t = useTheme();
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, hostStates, phoneOffline, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, hostStates, reloadConfig } = useApp();
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
-	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
 	const toast = useToast();
-	const connectionTests = useConnectionTests(selectedHostId, toast.show);
-	// SwiftUI's menu picker keeps showing a pick until its selection prop
-	// changes, which a failed switch never does; a new key remounts it on the
-	// machine that is still the default.
-	const [machinePickerKey, setMachinePickerKey] = useState(0);
+	const { show: showToast } = toast;
 	const [loaded, setLoaded] = useState(false);
 	const [account, setAccount] = useState<Account | null>(null);
 	const [accountBusy, setAccountBusy] = useState(false);
@@ -100,19 +98,12 @@ export default function SettingsScreen() {
 		return () => { current = false; };
 	}, []));
 
-	async function selectHost(id: string) {
-		if (id === selectedHostId || switchingHostId !== null) return;
-		setSwitchingHostId(id);
-		try {
-			await switchHost(id);
-			setSelectedHostId(id);
-		} catch {
-			setMachinePickerKey((key) => key + 1);
-			Alert.alert("Could not change default machine", "Try again from Settings.");
-		} finally {
-			setSwitchingHostId(null);
-		}
-	}
+	// A machine forgotten on its own page leaves word of it for the list it
+	// returns to.
+	useFocusEffect(useCallback(() => {
+		const notice = takeEnvironmentNotice();
+		if (notice) showToast(notice);
+	}, [showToast]));
 
 	function signIn() {
 		setAccountBusy(true);
@@ -148,7 +139,9 @@ export default function SettingsScreen() {
 
 	const paired = pairedHosts.length > 0 || configured || selectedHostName !== null;
 	const selectedHost = pairedHosts.find((host) => host.id === selectedHostId);
-	const selectedConfigReady = !!config && isConfigured(config) && (!selectedHost || config.hostId === selectedHost.id);
+	// A dev build's fake machines, listed after the real ones; see lib/emulatedMachines.
+	const emulatedHosts = hostStates.filter((host) => isEmulatedHost(host.hostId));
+	const machineCount = pairedHosts.length + emulatedHosts.length;
 	// Only a poll that actually failed is a failure. Before the first tick lands
 	// errorStatus is null too, which on its own would read as unreachable.
 	const classified = error ? classifyConnectionFailure(errorStatus ?? undefined) : null;
@@ -157,16 +150,10 @@ export default function SettingsScreen() {
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
 	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });
-	// Every paired machine, each with its connection and its own Test. A phone
-	// paired before machines were saved has only the selected config, which
-	// stands in as the one row.
-	const connectionRows = pairedHosts.length > 0
-		? pairedHosts.map((host) => ({ hostId: host.id, name: host.name }))
-		: paired ? [{ hostId: "", name: selectedHostName ?? "This machine" }] : [];
 	function connectionStatus(hostId: string): { label: string; tone: SettingsTone } {
 		// The default machine's status is the board poll's, which can say why it
 		// fails; the others' is their own poll's.
-		if (!hostId || hostId === selectedHostId) return { label: machineStatus.label, tone: machineStatusTone(machineStatus.tone) };
+		if (hostId === selectedHostId) return { label: machineStatus.label, tone: machineStatusTone(machineStatus.tone) };
 		const status = environmentStatus(hostStates.find((snapshot) => snapshot.hostId === hostId));
 		return { label: status.label, tone: status.kind === "connected" ? "good" : status.kind === "offline" ? "bad" : "default" };
 	}
@@ -174,47 +161,52 @@ export default function SettingsScreen() {
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]} collapsable={false}>
 			<StackRootBack />
 			<SettingsForm testID="settings-form">
+				{/* Each machine once, as the row that opens its page: testing it,
+				    making it the default, reconnecting, editing and forgetting are
+				    all there. */}
 				<SettingsSection title="Machines">
-					<MachineSelector
-						key={machinePickerKey}
-						hosts={pairedHosts}
-						selectedHostId={selectedHostId}
-						selectedHostName={selectedHostName}
-						switchingHostId={switchingHostId}
-						onSelect={(id) => { void selectHost(id); }}
-					/>
-					{connectionRows.map(({ hostId, name }) => (
-						<MachineConnectionRow
-							key={hostId || "current"}
-							hostId={hostId}
-							name={name}
-							status={connectionStatus(hostId)}
-							switching={switchingHostId === hostId}
-							testing={connectionTests.testing.has(hostId)}
-							disabled={phoneOffline || switchingHostId !== null}
-							onTest={() => { void connectionTests.test(hostId, name); }}
+					{pairedHosts.map((host) => (
+						<MachineRow
+							key={host.id}
+							host={host}
+							status={connectionStatus(host.id)}
+							isDefault={machineCount > 1 && host.id === selectedHostId}
+							onPress={() => router.push({ pathname: "/settings/machine/[id]", params: { id: host.id } })}
 						/>
 					))}
+					{/* Nothing behind them to open: a fake has no page. */}
+					{emulatedHosts.map((host) => (
+						<MachineRow
+							key={host.hostId}
+							host={{ id: host.hostId, name: host.name, appearance: host.appearance }}
+							status={connectionStatus(host.hostId)}
+							isDefault={false}
+							onPress={() => showToast(`${host.name} is a fake machine for this development build.`)}
+						/>
+					))}
+					{/* A phone paired before machines were saved has only the selected
+					    config, which stands in as the one row, with no page to open. */}
+					{pairedHosts.length === 0 && paired ? (
+						<SettingsValueRow
+							icon="laptop"
+							label={selectedHostName ?? "This machine"}
+							value={machineStatus.label}
+							tone={machineStatusTone(machineStatus.tone)}
+							testID="settings-machine-current"
+						/>
+					) : null}
+					{/* The fix for a default machine whose saved address or password
+					    stopped working, named when another machine could be meant. */}
 					{selectedHost && canRepairWithQr(failure) ? (
 						<SettingsButtonRow
 							icon="scan"
 							label="Scan new code"
+							value={pairedHosts.length > 1 ? selectedHost.name : undefined}
 							onPress={() => router.push({ pathname: "/pair", params: { repairHostId: selectedHost.id } })}
 							testID="settings-scan-new-code"
 						/>
 					) : null}
 					<SettingsButtonRow icon="addMachine" label="Add a machine" onPress={() => router.navigate("/pair")} testID="settings-add-machine" />
-					{selectedHost && !selectedConfigReady ? (
-						<SettingsButtonRow icon="retry" label="Retry selected machine" onPress={() => { void reloadConfig(); }} testID="settings-retry-machine" />
-					) : null}
-					{/* The list of every paired machine, each opening its own page. */}
-					<SettingsLinkRow
-						icon="environments"
-						label="Paired machines"
-						value={environmentSummary(pairedHosts.length, selectedHost?.name ?? selectedHostName)}
-						onPress={() => router.push("/settings/environments")}
-						testID="settings-environments"
-					/>
 				</SettingsSection>
 
 				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
@@ -231,7 +223,7 @@ export default function SettingsScreen() {
 				<SettingsSection title="Preferences">
 					<AppearanceRow />
 					<ColorThemeRow />
-					<NotificationsRow />
+					{notificationsRow}
 				</SettingsSection>
 
 				<SettingsSection title="Updates">
@@ -242,6 +234,22 @@ export default function SettingsScreen() {
 					<ReportProblemRow toast={toast.show} />
 					<FeatureRequestRow />
 				</SettingsSection>
+
+				{/* Last, and never in a release build. */}
+				{__DEV__ ? (
+					<SettingsSection title="Developer" footer="Development builds only. Adds fake machines to the machine chips and the Machines list above, to check how the app looks with many machines. Nothing is paired, saved or sent anywhere.">
+						<SettingsToggleRow
+							icon="emulateMachines"
+							label="Emulate more machines"
+							value={emulatingMachines}
+							onValueChange={(next) => {
+								haptics.select();
+								setEmulatedMachines(next);
+							}}
+							testID="settings-emulate-machines"
+						/>
+					</SettingsSection>
+				) : null}
 			</SettingsForm>
 			<ToastHost toast={toast} />
 		</View>
@@ -262,68 +270,6 @@ function confirmSignOut(signOut: () => void) {
 		],
 		{ cancelable: true },
 	);
-}
-
-/**
- * Tests a machine's connection on demand, each machine on its own. The row's
- * status line stays the live one; what the test found is said in a toast, so
- * the state is never shown twice.
- */
-function useConnectionTests(selectedHostId: string | null, notify: ToastController["show"]) {
-	const { config, configForHost, reloadConfig, refresh, refreshHost } = useApp();
-	const [testing, setTesting] = useState<ReadonlySet<string>>(() => new Set());
-
-	async function test(hostId: string, name: string) {
-		const isDefault = !hostId || hostId === selectedHostId;
-		setTesting((current) => new Set(current).add(hostId));
-		let target = isDefault ? config : configForHost(hostId);
-		let rejected = false;
-		try {
-			if (isDefault) {
-				// Race every known path first, like the app itself does, rather than
-				// pinging only the last address that happened to win. Without the
-				// endpoint refresh: it is authenticated, so with a stale password it
-				// and the ping would spend two failed attempts per tap towards the
-				// lockout.
-				target = await reloadConfig({ refreshEndpoints: false });
-			} else if (!target) {
-				// No verified route to this machine yet: its own runner races its
-				// routes first, as its poll would.
-				await refreshHost(hostId);
-				target = configForHost(hostId);
-			}
-			if (!target) throw new Error("No verified connection to this machine");
-			await pingServer(target);
-			haptics.success();
-			notify(`${name} is connected.`, { tone: "success" });
-		} catch (error) {
-			haptics.error();
-			const status = error instanceof ApiError ? error.status : undefined;
-			const failure = classifyConnectionFailure(status);
-			rejected = failure === "auth" || failure === "rate-limited";
-			const { title } = describeConnectionFailure(failure, {
-				host: target?.host ?? "",
-				port: target?.httpPort ?? "",
-				platform: Platform.OS,
-			});
-			notify(`${name}: ${title}`, { tone: "warning", duration: "long" });
-		} finally {
-			// Poll now so the row's status lands on the same answer instead of
-			// waiting out the poll interval — unless the desktop rejected the
-			// password: another request would spend a second failed attempt
-			// towards its lockout, and the poll already reports a rejection on its
-			// own. Not awaited: against a dead address it is another full request
-			// timeout.
-			if (!rejected) void (isDefault ? refresh() : refreshHost(hostId));
-			setTesting((current) => {
-				const next = new Set(current);
-				next.delete(hostId);
-				return next;
-			});
-		}
-	}
-
-	return { testing, test };
 }
 
 /**
@@ -363,7 +309,13 @@ function ColorThemeRow() {
 	);
 }
 
-function NotificationsRow() {
+/**
+ * The Notifications row, or nothing when it would not show. The screen places
+ * the result rather than a component that may draw nothing, so the section
+ * counts only rows that are there: one that rendered empty still took a place,
+ * and the row above it lost its rounded bottom corners.
+ */
+function useNotificationsRow(): ReactElement | null {
 	const { config, connection } = useApp();
 	const [snapshot, setSnapshot] = useState<{ config: ServerConfig | null; status: PushStatus } | null>(null);
 	const status = snapshot?.config === config ? snapshot.status : null;

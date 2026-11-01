@@ -8,17 +8,16 @@ function read(relativePath: string): string {
 }
 
 describe("Settings environment navigation", () => {
-	it("pushes the machines list inside Settings' own stack", () => {
-		const rootLayout = read("../app/_layout.tsx");
+	// Settings is the list of machines; there is no second list page.
+	it("lists the machines in Settings itself, with no list page of their own", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 		const settings = read("../app/settings/index.tsx");
 
 		expect(settingsLayout).not.toBe("");
-		expect(rootLayout).not.toMatch(/name="environments"/);
-		expect(settingsLayout).toContain('<Stack.Screen name="environments" options={{ title: "Machines" }} />');
-		expect(settings).toContain('label="Paired machines"');
-		expect(settings).toContain('router.push("/settings/environments")');
-		expect(settings).not.toContain('label="All machines"');
+		expect(settingsLayout).not.toContain('name="environments"');
+		expect(read("../app/settings/environments.tsx")).toBe("");
+		expect(settings).not.toContain('label="Paired machines"');
+		expect(settings).not.toContain("/settings/environments");
 	});
 
 	// A cold link to /settings/theme lands with the Settings list beneath it,
@@ -50,7 +49,7 @@ describe("Settings environment navigation", () => {
 	// No page draws a bar of its own: no fixed-height header row, no absolutely
 	// positioned back button, no title text standing in for the bar's.
 	it("draws no header rows of its own", () => {
-		for (const page of ["../app/settings/index.tsx", "../app/settings/theme.tsx", "../app/settings/environments.tsx"]) {
+		for (const page of ["../app/settings/index.tsx", "../app/settings/theme.tsx", "../app/settings/machine/[id]/index.tsx"]) {
 			const text = read(page);
 			expect(text).not.toBe("");
 			expect(text).not.toContain("NativeHeaderButton");
@@ -62,23 +61,21 @@ describe("Settings environment navigation", () => {
 
 	// Settings is a pushed page on both platforms, so it leaves by the bar's
 	// back button, never a close item of its own.
-	it("leaves Settings by the back button and adds machines from Environments' bar", () => {
+	it("leaves Settings by the back button", () => {
 		const settings = read("../app/settings/index.tsx");
-		const environments = read("../app/settings/environments.tsx");
 
 		expect(settings).not.toContain("Close settings");
 		expect(settings).not.toContain("Stack.Toolbar");
-		expect(environments).toContain('<Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Add machine" onPress={() => router.push("/pair")} />');
 	});
 
-	// Machines are a native list whose rows open each machine's page, pushed
-	// inside Settings' stack with its editor above it.
+	// Each machine's row in Settings opens its page, pushed inside Settings'
+	// stack with its editor above it.
 	it("pushes a machine's page and its editor inside Settings' own stack", () => {
-		const environments = read("../app/settings/environments.tsx");
+		const settings = read("../app/settings/index.tsx");
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
-		expect(environments).toContain("<EnvironmentMachineList");
-		expect(environments).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id } });');
+		expect(settings).toContain("<MachineRow");
+		expect(settings).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id: host.id } })');
 		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />');
 		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />');
 	});

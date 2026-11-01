@@ -102,9 +102,19 @@ describe("spawn effort", () => {
 	// level belongs to the model it was picked for.
 	it("sends only an effort the user picked, and forgets it when the model changes", () => {
 		expect(spawn).toContain("effort: chosenEffort,");
-		expect(spawn).toContain("const effortChoices = useMemo(() => spawnEffortChoices(runningModel, effort), [effort, runningModel]);");
+		expect(spawn).toContain("const effortChoices = useMemo(() => spawnEffortChoices(effortModel, effort), [effort, effortModel]);");
 		expect(spawn).toContain("const clearModelOverride = () => { setModel(\"\"); setModelTouched(false); setEffort(undefined); };");
 		expect(spawn).toContain("if (nextModel !== model) setEffort(undefined);");
+	});
+
+	// Claude Code's catalog names no default, so the default model would hide
+	// effort; a stand-in offers its levels, and picking one pins it so the
+	// server can check the level against a named model.
+	it("offers effort on the default model and pins the stand-in when a level is picked", () => {
+		expect(spawn).toContain("const aliasModel = harness === \"claude-code\" && runningModel && !runningModel.efforts?.length ? claudeAliasModel(currentModels, runningModel.id) : undefined;");
+		expect(spawn).toContain("const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));");
+		expect(spawn).toContain("if (!runningModel && effortModel) {");
+		expect(spawn).toContain("onSelectEffort={selectEffort}");
 	});
 });
 

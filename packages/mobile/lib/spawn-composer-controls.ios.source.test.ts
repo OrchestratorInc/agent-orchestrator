@@ -28,11 +28,13 @@ describe("iOS spawn menu layout", () => {
 	it("fills the chat composer's controls row with the agent, its effort, then the approval mode", () => {
 		const settings = source.indexOf("settings={");
 		expect(source).toContain("<SpawnComposer");
-		expect(source).toContain('import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";');
+		expect(source).toContain('import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";');
+		expect(source).toContain('import { EffortGaugeButton } from "./effort-gauge";');
+		expect(source).toContain('import { EffortSliderOverlay } from "./effort-slider";');
 		expect(source.indexOf('accessibilityIdentifier("spawn-project")')).toBeLessThan(settings);
 		expect(source.indexOf('id: "spawn-harness"')).toBeGreaterThan(settings);
-		expect(source.indexOf('id="spawn-effort"')).toBeGreaterThan(source.indexOf('id: "spawn-harness"'));
-		expect(source.indexOf('id="spawn-approval"')).toBeGreaterThan(source.indexOf('id="spawn-effort"'));
+		expect(source.indexOf('testID="spawn-effort"')).toBeGreaterThan(source.indexOf('id: "spawn-harness"'));
+		expect(source.indexOf('id="spawn-approval"')).toBeGreaterThan(source.indexOf('testID="spawn-effort"'));
 		expect(source).toContain('settingsHost: { alignSelf: "stretch", height: touchTarget }');
 	});
 

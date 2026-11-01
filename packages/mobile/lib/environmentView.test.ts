@@ -38,21 +38,8 @@ describe("environment overview presentation", () => {
 		]);
 	});
 
-	it("summarizes the fleet around the default machine", async () => {
-		const view = await import("./environmentView").catch(() => null);
-		expect(view).not.toBeNull();
-		if (!view) return;
-
-		expect(view.environmentSummary(0)).toBe("No machines");
-		expect(view.environmentSummary(1, "Studio Mac")).toBe("Studio Mac · 1 machine");
-		expect(view.environmentSummary(3, "Studio Mac")).toBe("Studio Mac · 3 machines");
-	});
-
-	it("summarizes a machine's route from the connection it is on, then the first saved one", async () => {
+	it("picks a machine's route from the connection it is on, then the first saved one", async () => {
 		const view = await import("./environmentView");
-		expect(view.environmentRouteSummary(host, activeConfig)).toBe("Tailscale · studio.tail123.ts.net");
-		expect(view.environmentRouteSummary(host)).toBe("LAN · 192.168.1.24");
-		expect(view.environmentRouteSummary({ ...host, endpoints: [] })).toBe("macOS");
 		expect(view.primaryEnvironmentEndpoint(view.environmentEndpointRows(host, activeConfig))?.label).toBe("Tailscale");
 		expect(view.endpointDisplayAddress("https://studio.tail123.ts.net:3011")).toEqual({ host: "studio.tail123.ts.net", authority: "studio.tail123.ts.net:3011" });
 		expect(view.endpointDisplayAddress("not a url:22/")).toEqual({ host: "not a url", authority: "not a url:22" });

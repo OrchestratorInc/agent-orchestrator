@@ -21,7 +21,7 @@ export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type Machine
 // iOS: a machine's page as a SwiftUI Form: its status and routes, the actions
 // that change how the phone reaches it, and Forget at the foot. Edit is the
 // bar's trailing item.
-export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, onMakeDefault, onReconnect, onForget, onEdit }: MachineDetailProps) {
+export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, testing, canTest, onTest, onMakeDefault, onReconnect, onForget, onEdit }: MachineDetailProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const [showOtherRoutes, setShowOtherRoutes] = useState(false);
@@ -77,6 +77,13 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 						) : null}
 					</Section>
 					<Section footer={<FormFooter>{RECONNECT_NOTE}</FormFooter>} modifiers={sectionModifiers(t)}>
+						<Button
+							label={testing ? "Testing…" : "Test connection"}
+							systemImage="bolt.horizontal.circle"
+							onPress={onTest}
+							testID={`environment-test-${host.id}`}
+							modifiers={[disabled(testing || busy || !canTest)]}
+						/>
 						{isDefault ? null : (
 							<Button
 								label={switching ? "Making default…" : "Make default"}

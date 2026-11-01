@@ -119,12 +119,12 @@ describe("the iOS settings form", () => {
 	});
 
 	it("leads every row with its SF Symbol in the secondary ink, scaled with the text", () => {
-		const root = render(<SettingsValueRow icon="status" label="Status" value="Connected" tone="good" />);
+		const root = render(<SettingsValueRow icon="laptop" label="This machine" value="Connected" tone="good" />);
 		const content = root.findByType("LabeledContent" as never);
 		const label = render(content.props.label).findByType("Label" as never);
-		expect(label.props.title).toBe("Status");
+		expect(label.props.title).toBe("This machine");
 		const icon = render(label.props.icon).findByType("Image" as never);
-		expect(icon.props).toMatchObject({ systemName: "dot.radiowaves.left.and.right", color: "#secondary" });
+		expect(icon.props).toMatchObject({ systemName: "laptopcomputer", color: "#secondary" });
 		expect(has(icon, "font", { textStyle: "body" })).toBe(true);
 	});
 
@@ -133,7 +133,7 @@ describe("the iOS settings form", () => {
 		["bad", "#red"],
 		["default", "#secondary"],
 	] as const)("shows a %s value in its tone", (tone, color) => {
-		const root = render(<SettingsValueRow icon="status" label="Status" value="Value" tone={tone} />);
+		const root = render(<SettingsValueRow icon="laptop" label="This machine" value="Value" tone={tone} />);
 		const value = root.findByType("LabeledContent" as never).findByType("Text" as never);
 		expect(value.props.children).toBe("Value");
 		expect(has(value, "foregroundStyle", color)).toBe(true);
@@ -147,7 +147,7 @@ describe("the iOS settings form", () => {
 
 	it("runs an action from a tinted button row", () => {
 		const onPress = vi.fn();
-		const button = render(<SettingsButtonRow icon="testConnection" label="Test connection" value="Connected" tone="good" onPress={onPress} />).findByType("Button" as never);
+		const button = render(<SettingsButtonRow icon="scan" label="Scan new code" value="Dev" onPress={onPress} />).findByType("Button" as never);
 		expect(button.props.role).toBeUndefined();
 		expect(button.props.onPress).toBe(onPress);
 		expect(has(button, "tint", "#accent")).toBe(true);
@@ -163,7 +163,7 @@ describe("the iOS settings form", () => {
 	});
 
 	it("holds a button row while it is disabled or working", () => {
-		const disabled = render(<SettingsButtonRow icon="testConnection" label="Test connection" disabled onPress={vi.fn()} />).findByType("Button" as never);
+		const disabled = render(<SettingsButtonRow icon="addMachine" label="Add a machine" disabled onPress={vi.fn()} />).findByType("Button" as never);
 		expect(has(disabled, "disabled", true)).toBe(true);
 		const working = render(<SettingsButtonRow icon="update" label="Software update" loading onPress={vi.fn()} />);
 		expect(has(working.findByType("Button" as never), "disabled", true)).toBe(true);
@@ -195,27 +195,24 @@ describe("the iOS settings form", () => {
 		expect(onValueChange).toHaveBeenCalledWith("light");
 	});
 
-	it("draws a status row's status quietly and its action as a bordered button that greys out", () => {
-		const onAction = vi.fn();
-		const root = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Connected" tone="good" actionLabel="Test" onAction={onAction} actionTestID="test-dev" />);
-		const [dot] = root.findAllByType("Image" as never).filter((image) => image.props.systemName === "circle.fill");
+	it("draws a status row as a list button with its status quietly under the name and the disclosure chevron", () => {
+		const onPress = vi.fn();
+		const item = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connected" tone="good" onPress={onPress} testID="machine-dev" />).findByType("ListItem" as never);
+		expect(item.props).toMatchObject({ onPress, testID: "machine-dev" });
+		expect(has(item, "buttonStyle", "automatic")).toBe(true);
+		expect(item.props.leading.props.icon).toBe("laptop");
+		const supporting = render(item.props.supportingText);
+		const dot = supporting.findByType("Image" as never);
 		// The colour is only in the dot; the words stay in the secondary ink.
-		expect(dot.props.color).toBe("#green");
-		const status = root.findAllByType("Text" as never).find((text) => text.props.children === "Connected")!;
+		expect(dot.props).toMatchObject({ systemName: "circle.fill", color: "#green" });
+		const status = supporting.findByType("Text" as never);
+		expect(status.props.children).toBe("Connected");
 		expect(has(status, "foregroundStyle", "#secondary")).toBe(true);
-		const button = root.findByType("Button" as never);
-		expect(button.props.testID).toBe("test-dev");
-		expect(has(button, "buttonStyle", "bordered")).toBe(true);
-		expect(has(button, "disabled", false)).toBe(true);
-		button.props.onPress();
-		expect(onAction).toHaveBeenCalledOnce();
+		expect(render(item.props.trailing).findByType("Image" as never).props.systemName).toBe("chevron.forward");
 
-		const held = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Offline" actionLabel="Test" actionDisabled onAction={vi.fn()} />);
-		expect(has(held.findByType("Button" as never), "disabled", true)).toBe(true);
 		// Nothing to say in colour: a quiet grey dot.
-		expect(held.findAllByType("Image" as never).find((image) => image.props.systemName === "circle.fill")!.props.color).toBe("#tertiary");
-		const testing = render(<SettingsStatusRow icon="defaultMachine" label="Dev" status="Testing…" actionLabel="Test" actionLoading onAction={vi.fn()} />);
-		expect(testing.findByType("Button" as never).findAllByType("ProgressView" as never)).toHaveLength(1);
+		const quiet = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connecting…" onPress={vi.fn()} />).findByType("ListItem" as never);
+		expect(render(quiet.props.supportingText).findByType("Image" as never).props.color).toBe("#tertiary");
 	});
 
 	it("lists a choice section as an inline picker, each option with its accessory", () => {

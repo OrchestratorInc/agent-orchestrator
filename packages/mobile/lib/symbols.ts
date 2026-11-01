@@ -37,7 +37,7 @@ export const symbols = {
 	// An overflow inside a row or card, where a vertical glyph reads as a grip.
 	moreHorizontal: { ios: "ellipsis", android: "more_horiz" },
 	close: { ios: "xmark", android: "close" },
-	back: { ios: "chevron.backward", android: "arrow_back" },
+	back: { ios: "chevron.backward", android: "arrow_back_ios_new" },
 	search: { ios: "magnifyingglass", android: "search" },
 	filter: { ios: "line.3.horizontal.decrease.circle", android: "filter_list" },
 
@@ -111,9 +111,8 @@ export const symbols = {
 	photo: { ios: "photo", android: "photo" },
 	send: { ios: "arrow.up", android: "arrow_upward" },
 	keyboardDismiss: { ios: "keyboard.chevron.compact.down", android: "keyboard_hide" },
-	/** Opens the draft in a full-screen editor, and collapses it back. */
-	expandEditor: { ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" },
-	collapseEditor: { ios: "arrow.down.right.and.arrow.up.left", android: "close_fullscreen" },
+	/** Opens an agent's page from its preview in the conversation. */
+	expandPage: { ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" },
 
 	// Settings rows
 	account: { ios: "person.crop.circle", android: "account_circle" },

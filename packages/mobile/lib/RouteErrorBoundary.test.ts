@@ -24,7 +24,6 @@ const screenRoutes = [
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
 	"files/[sessionId]/folder.tsx",
-	"settings/environments.tsx",
 	"settings/machine/[id]/index.tsx",
 	"settings/machine/[id]/edit.tsx",
 	"browser/[id].tsx",
@@ -45,7 +44,6 @@ const screenRoutes = [
 
 const sheetRoutes = [
 	"sheets/agent.tsx",
-	"sheets/composer-editor.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/connect.tsx",
 	"sheets/conversation-map.tsx",

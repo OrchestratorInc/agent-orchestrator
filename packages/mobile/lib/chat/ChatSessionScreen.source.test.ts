@@ -55,17 +55,11 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
 	});
 
-	it("renames the session, not the conversation", () => {
-		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
-		expect(screenSource).not.toContain("conversation.rename(next)");
-		// The system's text prompt (iOS) or Material dialog (Android), not a sheet.
-		expect(screenSource).toContain("<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />");
-		expect(screenSource).not.toContain('kind: "conversation-rename"');
-	});
-
-	it("does not offer rename on the project orchestrator", () => {
-		expect(screenSource).toContain('const menuCanRename = !isOrchestrator && Boolean(menuSnapshot && can(menuSnapshot, "rename"));');
-		expect(screenSource).toContain("canRename: menuCanRename,");
+	// The actions page holds only Terminal, Preview, Pin, PR Review, Compact and Archive.
+	it("offers no rename, history, refresh, usage or MCP reload from the actions page", () => {
+		expect(screenSource).not.toContain("<ConversationRenamePrompt");
+		expect(screenSource).not.toContain('kind: "conversation-map"');
+		expect(screenSource).toContain("contextPercent: menuContextPercent,");
 	});
 
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
@@ -131,11 +125,21 @@ describe("stopped agents", () => {
 // it beneath the title, rather than stopping at a painted one.
 describe("header", () => {
 	it("lays the conversation out under iOS 26's clear bar", () => {
-		expect(screenSource).toContain("navigation.setOptions({ headerTransparent: true, headerStyle: undefined });");
+		expect(screenSource).toContain('navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });');
 		expect(screenSource).not.toContain("scrollEdgeEffects:");
 		expect(screenSource).toContain("headerStyle: stackScreenOptions(t).headerStyle");
 		expect(screenSource).toContain("underHeader={headerOverlap}");
 		expect(screenSource).toContain("topInset={bannersHeight}");
+	});
+
+	// Android's bar is clear too, and the conversation frosts out under it as
+	// the board tabs' rows do.
+	it("frosts the conversation out under Android's clear bar", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";');
+		expect(screenSource).toContain("{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (");
+		expect(screenSource).toContain("<Frost from=\"top\" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />");
+		// The frost lies under the floating banners, which keep the page's colour.
+		expect(screenSource.indexOf("<Frost from=")).toBeLessThan(screenSource.indexOf("styles.floatingBanners, { top: headerOverlap }"));
 	});
 });
 

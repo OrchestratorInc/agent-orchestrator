@@ -10,13 +10,17 @@ import type { MaterialDrawableName } from "./toolbarIcon.types";
  * holds every Material name to one the registry bundles.
  */
 export const settingsIcons = {
-	defaultMachine: symbols.desktop,
-	status: { ios: "dot.radiowaves.left.and.right", android: "sensors" },
-	testConnection: { ios: "bolt.horizontal.circle", android: "network_check" },
+	// A paired machine's row draws the shape chosen for it, by the names in
+	// machineSymbolNames.
+	server: symbols.server,
+	cloud: symbols.cloud,
+	terminal: symbols.terminal,
+	desktop: symbols.desktop,
+	laptop: symbols.laptop,
+	miniPc: symbols.miniPc,
+	workstation: symbols.workstation,
 	scan: symbols.qrScanner,
 	addMachine: symbols.add,
-	retry: symbols.refresh,
-	environments: symbols.server,
 	account: symbols.account,
 	signOut: symbols.signOut,
 	appearance: { ios: "circle.lefthalf.filled", android: "contrast" },
@@ -24,6 +28,7 @@ export const settingsIcons = {
 	notifications: symbols.notifications,
 	update: symbols.update,
 	report: { ios: "ladybug", android: "bug_report" },
+	emulateMachines: symbols.devices,
 	feature: { ios: "lightbulb", android: "lightbulb" },
 } as const satisfies Record<string, { ios: IOSSymbol; android: MaterialDrawableName }>;
 
@@ -85,22 +90,15 @@ export type SettingsButtonRowProps = RowBase & {
 };
 
 /**
- * A row with a live status under its name and a small button of its own at
- * its end, such as a paired machine and its Test. The status is quiet: the
- * words in the secondary ink behind a dot in the tone's colour, so a healthy
- * row never shouts. The button is drawn as one (bordered on iOS, outlined on
- * Android) and greys out when it can't run.
+ * A row that opens a page and says a live status under its name, such as a
+ * paired machine. The status is quiet: the words in the secondary ink behind
+ * a dot in the tone's colour, so a healthy row never shouts. iOS adds the
+ * disclosure chevron; Material lists don't.
  */
 export type SettingsStatusRowProps = RowBase & {
 	status: string;
 	tone?: SettingsTone;
-	actionLabel: string;
-	/** Greys the button out: the action can't run now. */
-	actionDisabled?: boolean;
-	/** Shows the platform's spinner in the button while the action runs. */
-	actionLoading?: boolean;
-	onAction(): void;
-	actionTestID?: string;
+	onPress(): void;
 };
 
 export type SettingsToggleRowProps = RowBase & {

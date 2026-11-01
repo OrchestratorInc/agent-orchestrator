@@ -1,12 +1,10 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
+import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import {
 	accessibilityAddTraits,
 	accessibilityHidden,
 	background,
-	buttonBorderShape,
 	buttonStyle,
-	controlSize,
 	disabled as disabledModifier,
 	font,
 	foregroundStyle,
@@ -126,10 +124,16 @@ function rowModifiers(t: { bgElevated: string }, disabled = false): ModifierConf
 }
 
 /**
- * A row that opens a page. The Form has no navigation stack of its own (the
- * app's stack pushes the page), so the row draws the disclosure chevron a
+ * The Form has no navigation stack of its own (the app's stack pushes the
+ * page), so a row that opens one draws the disclosure chevron a
  * NavigationLink would.
  */
+function Disclosure() {
+	const t = useTheme();
+	return <Image systemName="chevron.forward" color={t.textTertiary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), accessibilityHidden(true)]} />;
+}
+
+/** A row that opens a page. */
 export function SettingsLinkRow({ icon, label, value, onPress, testID }: SettingsLinkRowProps) {
 	const t = useTheme();
 	return (
@@ -142,7 +146,7 @@ export function SettingsLinkRow({ icon, label, value, onPress, testID }: Setting
 			trailing={
 				<HStack spacing={space.xs}>
 					{value ? <ValueText value={value} color={t.textSecondary} /> : null}
-					<Image systemName="chevron.forward" color={t.textTertiary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), accessibilityHidden(true)]} />
+					<Disclosure />
 				</HStack>
 			}
 		>
@@ -183,39 +187,25 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 	);
 }
 
-/**
- * A row with its status under the name and a small bordered capsule at its
- * end. The capsule is a button of its own style, so the Form doesn't turn the
- * whole row into one tap target; disabled, the system greys it out.
- */
-export function SettingsStatusRow({ icon, label, status, tone, actionLabel, actionDisabled = false, actionLoading = false, onAction, testID, actionTestID }: SettingsStatusRowProps) {
+/** A link row with its live status under the name, behind a dot in its tone. */
+export function SettingsStatusRow({ icon, label, status, tone, onPress, testID }: SettingsStatusRowProps) {
 	const t = useTheme();
 	return (
-		<HStack spacing={space.md} testID={testID} modifiers={rowModifiers(t)}>
-			<RowIcon icon={icon} />
-			<VStack alignment="leading" spacing={space.hair}>
-				<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{label}</Text>
+		<ListItem
+			onPress={onPress}
+			testID={testID}
+			modifiers={[buttonStyle("automatic"), ...rowModifiers(t)]}
+			leading={<RowIcon icon={icon} />}
+			supportingText={
 				<HStack spacing={space.xs}>
 					<Image systemName="circle.fill" color={settingsStatusDotColor(t, tone)} modifiers={[font({ textStyle: "caption2" }), imageScale("small"), accessibilityHidden(true)]} />
 					<Text modifiers={[appFont("subheadline"), foregroundStyle(t.textSecondary), lineLimit(1)]}>{status}</Text>
 				</HStack>
-			</VStack>
-			<Spacer />
-			<Button
-				onPress={onAction}
-				testID={actionTestID}
-				modifiers={[
-					buttonStyle("bordered"),
-					buttonBorderShape("capsule"),
-					controlSize("small"),
-					tint(t.accent),
-					appFont("footnote", { weight: "600" }),
-					disabledModifier(actionDisabled || actionLoading),
-				]}
-			>
-				{actionLoading ? <ProgressView modifiers={[controlSize("mini")]} /> : <Text>{actionLabel}</Text>}
-			</Button>
-		</HStack>
+			}
+			trailing={<Disclosure />}
+		>
+			<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{label}</Text>
+		</ListItem>
 	);
 }
 

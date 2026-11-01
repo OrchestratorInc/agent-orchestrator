@@ -13,10 +13,26 @@ vi.mock("./ThemeProvider", () => ({
 }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => (harness === "codex" || harness === "opencode" ? `logo:${harness}` : null) }));
+vi.mock("./effort-gauge", async () => {
+	const React = await import("react");
+	return { EffortGaugeButton: (props: object) => React.createElement("EffortGaugeButton", props) };
+});
+vi.mock("./effort-slider", async () => {
+	const React = await import("react");
+	return { EffortSliderOverlay: (props: object) => React.createElement("EffortSlider", props) };
+});
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
+const backHandlers = vi.hoisted(() => new Set<() => boolean>());
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
+		Keyboard: { addListener: () => ({ remove: () => {} }) },
+		BackHandler: {
+			addEventListener: (_event: string, handler: () => boolean) => {
+				backHandlers.add(handler);
+				return { remove: () => backHandlers.delete(handler) };
+			},
+		},
 		Platform: { OS: "android" },
 		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5 },
 		View: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("View", props, children),
@@ -41,6 +57,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		FilledIconButton: host("FilledIconButton"),
 		Icon: host("Icon"),
 		IconButton: host("IconButton"),
+		RNHostView: host("RNHostView"),
 		Row: host("Row"),
 		Spacer: host("Spacer"),
 		Text: host("ComposeText"),
@@ -70,6 +87,7 @@ vi.mock("./spawn-composer", async () => {
 	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
 });
 import { SpawnComposerControls } from "./spawn-composer-controls.android";
+import { rootTouchStart } from "./touchOutside";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -150,6 +168,7 @@ const item = (menu: ReactTestInstance, label: string) => items(menu).find((node)
 const isSelected = (node: ReactTestInstance) =>
 	node.findAll((child) => hostType(child) === "DropdownMenuItemTrailingIcon").some((slot) => slot.findByType("Icon" as never).props.contentDescription === "Selected");
 
+const gaugeOf = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "EffortGaugeButton" && node.props.testID === "spawn-effort")[0];
 const modifier = (node: ReactTestInstance, name: string) => (node.props.modifiers as { modifier: string; args: unknown[] }[] | undefined)?.find((entry) => entry.modifier === name);
 
 describe("Android spawn selectors", () => {
@@ -258,22 +277,50 @@ describe("Android spawn model", () => {
 	});
 
 	// The chat's speedometer, beside the model's capsule.
-	it("picks the effort from a speedometer beside the model", async () => {
+	// The speedometer opens the slider above the composer; the slider picks
+	// the level and stays up until a tap lands outside it.
+	it("opens the effort slider from a speedometer beside the model", async () => {
 		const props = baseProps();
 		const root = await render(props);
-		const effort = trigger(root, "spawn-effort");
-		expect(String(effort.type)).toBe("IconButton");
-		expect(effort.findByType("Icon" as never).props).toMatchObject({ source: "drawable:speed", contentDescription: "Effort, High" });
-		await act(async () => effort.props.onClick());
-		const menu = menuOf(trigger(root, "spawn-effort"));
-		expect(items(menu).map((node) => [text(node), isSelected(node)])).toEqual([["Low", false], ["High", true]]);
-		await act(async () => item(menu, "Low").props.onClick());
+		const gauge = gaugeOf(root);
+		expect(hostType(gauge)).toBe("EffortGaugeButton");
+		expect(root.findAll((node) => hostType(node) === "RNHostView").some((host) => host.findAll((node) => node === gauge).length > 0)).toBe(true);
+		expect(gauge.props.choices).toEqual(props.effortChoices);
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+		await act(async () => gauge.props.onPress());
+		const slider = root.findAll((node) => hostType(node) === "EffortSlider")[0];
+		expect(gaugeOf(root).props.open).toBe(true);
+		await act(async () => slider.props.onChoose("low"));
 		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
+		// A tap anywhere outside it closes it.
+		await act(async () => rootTouchStart());
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
+	});
+
+	// A focusable popup takes focus from the prompt, and Android puts the
+	// keyboard away; back, which such a menu no longer hears, closes it.
+	it("keeps the keyboard up while a menu is open, and closes the menu on back", async () => {
+		const root = await render(baseProps());
+		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.properties?.focusable === false)).toBe(true);
+		await act(async () => trigger(root, "spawn-approval").props.onClick());
+		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(true);
+		expect(backHandlers.size).toBe(1);
+		await act(async () => { [...backHandlers][0](); });
+		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
+		expect(backHandlers.size).toBe(0);
+	});
+
+	it("closes the effort slider on back", async () => {
+		const root = await render(baseProps());
+		await act(async () => gaugeOf(root).props.onPress());
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(1);
+		await act(async () => { [...backHandlers][0](); });
+		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
 	});
 
 	it("draws no speedometer for a model that takes no effort", async () => {
 		const root = await render(baseProps({ effortChoices: [] }));
-		expect(trigger(root, "spawn-effort")).toBeUndefined();
+		expect(gaugeOf(root)).toBeUndefined();
 	});
 
 	it("opens a catalog too long for its menu whole", async () => {

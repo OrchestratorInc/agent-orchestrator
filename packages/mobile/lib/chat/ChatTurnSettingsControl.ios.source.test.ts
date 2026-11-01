@@ -11,9 +11,10 @@ describe("iOS chat controls row", () => {
 	// The new task's row, from the same pieces: the model's capsule, the effort's
 	// speedometer and the approval mode's symbol.
 	it("draws the new task's model capsule, effort speedometer and approval symbol", () => {
-		expect(source).toContain('import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";');
+		expect(source).toContain('import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";');
+		expect(source).toContain('import { EffortGaugeButton } from "../effort-gauge";');
 		expect(source).toContain('label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}');
-		expect(source).toContain("<EffortMenu");
+		expect(source).toContain('<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />');
 		expect(source).toContain("<ApprovalMenu");
 		expect(source).toContain("symbol: approvalSymbol(choice.permissionMode, snapshot.harness)");
 		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');

@@ -1,6 +1,7 @@
 import type { NativeStackNavigationOptions } from "expo-router";
 import { Platform } from "react-native";
 import type { Theme } from "./theme";
+import { headerBackOptions } from "./headerBack";
 import { font } from "./tokens";
 
 /**
@@ -42,6 +43,8 @@ export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 			: { fontSize: 17, fontWeight: "800" },
 		headerShadowVisible: false,
 		headerBackButtonDisplayMode: "minimal",
+		// Android takes iOS's back chevron rather than Material's arrow.
+		...headerBackOptions(),
 		contentStyle: { backgroundColor: t.bgBase },
 	};
 }

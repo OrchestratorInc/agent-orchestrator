@@ -13,6 +13,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
+import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
@@ -132,7 +133,8 @@ export default function RootLayout() {
 	// Stack's own screenOptions below — hence the inner component: a hook cannot
 	// consume a provider its own component renders.
 	return (
-		<GestureHandlerRootView style={{ flex: 1 }}>
+		// Every touch ends at the root, so a floating control hears taps outside it.
+		<GestureHandlerRootView style={{ flex: 1 }} onTouchStart={rootTouchStart}>
 			{/* Sits above everything that positions itself against the keyboard. It
 			    reports the IME frame-by-frame, which the platform listeners cannot:
 			    Android only fires `keyboardDidShow` once the keyboard has finished
@@ -213,15 +215,26 @@ function Shell() {
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
-				{/* The conversation's "⋯", a page pushed over the chat with the
-				    stack's own push; the page titles the bar with the conversation. */}
-				<Stack.Screen name="conversation-actions" options={{ title: "Actions" }} />
+				{/* The conversation's "⋯". On iOS a page pushed over the chat with the
+				    stack's own push, titled with the conversation; on Android a bottom
+				    sheet, pinned to one detent so any decisive swipe down closes it
+				    (see SHEET_ROUTES). */}
+				<Stack.Screen
+					name="conversation-actions"
+					options={Platform.OS === "android" ? {
+						presentation: "formSheet",
+						sheetAllowedDetents: [0.75],
+						sheetInitialDetentIndex: 0,
+						sheetGrabberVisible: true,
+						sheetCornerRadius,
+						headerShown: false,
+						title: "Actions",
+						contentStyle: { backgroundColor: t.bgSurface },
+					} : { title: "Actions" }}
+				/>
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
 				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />
-				{/* The chat composer's draft, full screen. Modal, so iOS swipes it
-				    away; the page puts collapse and Send in the bar. */}
-				<Stack.Screen name="sheets/composer-editor" options={{ presentation: "modal", title: "Message" }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
 				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />

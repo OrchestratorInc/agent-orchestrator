@@ -1,11 +1,12 @@
 import { Host } from "@expo/ui";
-import { HStack, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { HStack, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
 import { approvalSymbol } from "../approvalSymbol";
-import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { EffortGaugeButton } from "../effort-gauge";
+import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import type { IOSSymbol } from "../symbols";
 import { useThemeState } from "../ThemeProvider";
@@ -20,12 +21,13 @@ const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopi
 
 /**
  * The chat's controls row, drawn as the new task's (see model-controls): the
- * model in a capsule, the effort as a speedometer beside it, and the approval
+ * model in a capsule, the effort as a speedometer beside it that opens the
+ * composer's slider, and the approval
  * mode as its symbol at the row's end. The capsule's menu lists the agent's
  * models as the new task's lists each agent's, then any other setting the
  * provider offers, such as Fast mode.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort }: ChatTurnSettingsControlProps) {
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
@@ -64,14 +66,12 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						</Section>
 					) : null}
 				</Menu>
-				{effortRow ? (
-					<EffortMenu
-						key={`effort-${generation}`}
-						choices={effortRow.choices.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected }))}
-						onChoose={(value) => choose(effortRow, value)}
-						disabled={off}
-						id="chat-effort"
-					/>
+				{/* The effort as a speedometer lit to the chosen level; a tap
+				    opens the slider over the composer. */}
+				{effort?.choices.length ? (
+					<RNHostView matchContents>
+						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />
+					</RNHostView>
 				) : null}
 				<Spacer minLength={0} />
 				{approvalRow ? (

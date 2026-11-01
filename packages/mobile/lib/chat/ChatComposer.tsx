@@ -34,6 +34,8 @@ import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import { EffortSliderOverlay } from "../effort-slider";
+import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { contextMeterModel } from "./contextMeter";
@@ -383,11 +385,6 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
-	// The full-screen editor sends after it has closed, by which time this
-	// composer has re-rendered with the draft it wrote back.
-	const submitRef = useRef(submit);
-	submitRef.current = submit;
-
 	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
 		setLocalError(undefined);
 		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
@@ -463,18 +460,12 @@ export function ChatComposer({
 		openingSuggestion.current = key;
 		void openPicker(suggestion.kind, suggestion);
 	}, [cursor, openPicker, pickerGate, text]);
+	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
+	const effort = useChatEffort(settingsProps);
+	// Typing is a tap outside the slider that the keyboard, not the app, hears.
+	const closeEffort = effort.close;
+	useEffect(() => { closeEffort(); }, [text, closeEffort]);
 	const placeholder = stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder;
-	const openEditor = () => {
-		Keyboard.dismiss();
-		router.push(chatSheetRoute({
-			kind: "composer-editor",
-			text: latestText.current,
-			placeholder,
-			sendLabel: active ? "Queue" : "Send",
-			onChange: (value) => { latestText.current = value; setText(value); },
-			onSend: () => void submitRef.current("send"),
-		}));
-	};
 	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
 	const sendBlocked = Boolean(disabled || stopped || pending || submitting || (draftKey && !draftLoaded));
 	const nothingToSend = !hasDraft && attachments.length === 0;
@@ -688,20 +679,10 @@ export function ChatComposer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} />
+						<ChatTurnSettingsControl {...settingsProps} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
 					</View>
 					{deliveryNote}
 					{steerAction}
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Open full-screen editor"
-						disabled={stopped || submitting || listening || transcribing}
-						android_ripple={iconFeedback.android_ripple}
-						onPress={openEditor}
-						style={({ pressed }) => [styles.expandAction, pressed && iconFeedback.pressed, (listening || transcribing) && styles.inactive]}
-					>
-						<AppSymbol name="expandEditor" size={iconSize.sm} color={t.textSecondary} />
-					</Pressable>
 				</Animated.View>
 				{/* The corner controls, pinned to the pill's bottom corners in both
 				    shapes. The round button changes face in place, as the new-task
@@ -710,6 +691,8 @@ export function ChatComposer({
 				<View style={[styles.corner, styles.cornerTrailing]}>
 					{roundButton}
 				</View>
+				{/* The effort slider floats just above the pill, over the conversation. */}
+				{effort.open ? <EffortSliderOverlay choices={effort.choices} onChoose={effort.choose} onRelease={effort.release} bottom="100%" /> : null}
 			</View>}
 		</Animated.View>
 	);
@@ -769,6 +752,8 @@ function ComposerChip({ accessibilityLabel, accessibilityHint, onPress, children
 	</Pressable>;
 }
 
+const NO_OPTIONS: ChatConfigOption[] = [];
+
 const makeStyles = (t: Theme) => StyleSheet.create({
 	...composerStyleRules(t),
 	// No fill: the conversation scrolls on behind the dock, under the chips' and
@@ -818,7 +803,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	deliveryNote: { flexShrink: 1, minWidth: 0, height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
 	deliveryNoteText: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
-	expandAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },
 	// Out of the layout but still mounted, with its draft and its place.
 	hiddenField: { display: "none" },

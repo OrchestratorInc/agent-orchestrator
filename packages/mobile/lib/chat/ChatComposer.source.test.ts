@@ -196,7 +196,7 @@ describe("collapsed and expanded composer", () => {
 		expect(composer).toContain("onFocus={() => setFocused(true)}");
 		expect(composer).toContain("onBlur={() => setFocused(false)}");
 		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>');
-		expect(composer).toContain("<ChatTurnSettingsControl snapshot={snapshot}");
+		expect(composer).toContain("<ChatTurnSettingsControl {...settingsProps} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />");
 	});
 
 	// Moving the field between two parents would remount it and drop the keyboard.
@@ -236,15 +236,10 @@ describe("collapsed and expanded composer", () => {
 		expect(composer).not.toContain("styles.voice");
 	});
 
-	// The draft opens full screen from the card's controls, and the editor
-	// writes back to it, so it is kept whichever way the editor closes.
-	it("opens the draft in a full-screen editor", () => {
-		expect(composer).toContain('accessibilityLabel="Open full-screen editor"');
-		expect(composer).toContain('<AppSymbol name="expandEditor" size={iconSize.sm} color={t.textSecondary} />');
-		expect(composer).toContain('kind: "composer-editor",');
-		expect(composer).toContain("onChange: (value) => { latestText.current = value; setText(value); },");
-		expect(composer).toContain('onSend: () => void submitRef.current("send"),');
-		expect(styleRule("expandAction")).toContain("width: touchTarget, height: touchTarget");
+	// The draft is written in the composer itself; there is no full-screen editor.
+	it("offers no full-screen editor", () => {
+		expect(composer).not.toContain("full-screen editor");
+		expect(composer).not.toContain("composer-editor");
 	});
 
 	it("floats over the conversation, which fades out behind it", () => {

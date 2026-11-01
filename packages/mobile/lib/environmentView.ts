@@ -45,12 +45,6 @@ export function endpointDisplayAddress(address: string): { host: string; authori
 	}
 }
 
-/** One line naming how a machine is reached, for its list row. */
-export function environmentRouteSummary(host: Host, activeConfig?: ServerConfig | null): string {
-	const primary = primaryEnvironmentEndpoint(environmentEndpointRows(host, activeConfig));
-	return primary ? `${primary.label} · ${endpointDisplayAddress(primary.address).host}` : environmentPlatformLabel(host.platform);
-}
-
 export type EnvironmentStatus = { kind: "connected" | "connecting" | "offline"; label: string };
 
 /** A machine's live connection, named in words so it never reads by colour alone. */
@@ -76,12 +70,6 @@ export const FORGET_MACHINE_MESSAGE = "Remove this machine's saved connection fr
  * revert. Its name and icon stay phone-local.
  */
 export const ACCOUNT_MANAGED_NOTE = "This machine's address and password come from your Orchestrator Cloud account and update automatically. To connect another way, use Reconnect to scan a new code.";
-
-export function environmentSummary(count: number, defaultName?: string | null): string {
-	if (count === 0) return "No machines";
-	const total = `${count} ${count === 1 ? "machine" : "machines"}`;
-	return defaultName ? `${defaultName} · ${total}` : total;
-}
 
 export function environmentPlatformLabel(platform: string): string {
 	const normalized = platform.toLowerCase();

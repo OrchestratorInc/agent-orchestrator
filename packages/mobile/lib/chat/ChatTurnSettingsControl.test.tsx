@@ -20,6 +20,7 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("../AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+vi.mock("../effort-gauge", () => ({ EffortGaugeButton: "EffortGaugeButton" }));
 vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("../haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: { color: "ripple" }, pressed: undefined }) }));
@@ -70,16 +71,21 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean } = {}) {
+const levels = [{ value: "low", label: "Low", selected: true }, { value: "high", label: "High", selected: false }];
+
+function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; open: boolean; onToggle(): void } | null } = {}) {
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
+		onToggleEffort: vi.fn(),
 	};
+	const effort = over.effort === null ? undefined : over.effort ?? { choices: levels, open: false, onToggle: handlers.onToggleEffort };
 	act(() => {
-		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} {...handlers} />);
+		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} />);
 	});
 	return handlers;
 }
+const gauge = () => renderer!.root.findAll((node) => node.type === ("EffortGaugeButton" as never) && node.props.testID === "chat-effort")[0];
 const trigger = (id: string) => renderer!.root.find((node) => node.type === ("Pressable" as never) && node.props.testID === id);
 const menu = (id: string) => renderer!.root.find((node) => node.type === ("MenuView" as never) && node.props.testID === `${id}-menu`);
 const titles = (id: string) => menu(id).props.actions.map((action: { title: string; state?: string }) => [action.title, action.state]);
@@ -99,16 +105,19 @@ describe("Android chat controls row", () => {
 		expect(fixtures.show).toHaveBeenCalledOnce();
 	});
 
-	it("offers the model's effort levels from the speedometer", () => {
-		render();
-		expect(trigger("chat-effort").props.accessibilityLabel).toBe("Effort, Low");
-		expect(titles("chat-effort")).toEqual([["Low", "on"], ["High", "off"]]);
-		expect(renderer!.root.findAll((node) => node.type === ("AppSymbol" as never)).map((node) => node.props.name)).toContainEqual({ ios: "gauge.medium", android: "speed" });
+	// The speedometer lit to the level, which opens the composer's slider.
+	it("draws the effort's speedometer, which opens the composer's slider", () => {
+		const { onToggleEffort } = render();
+		expect(gauge().props).toMatchObject({ choices: levels, open: false, disabled: false });
+		act(() => gauge().props.onPress());
+		expect(onToggleEffort).toHaveBeenCalledOnce();
 	});
 
 	it("draws no speedometer for a model that takes no effort", () => {
-		render({ snapshot: snapshot({ settings: { model: "haiku", approvalMode: "auto" } }) });
-		expect(renderer!.root.findAll((node) => node.type === ("Pressable" as never) && node.props.testID === "chat-effort")).toHaveLength(0);
+		render({ effort: null });
+		expect(gauge()).toBeUndefined();
+		render({ effort: { choices: [], open: false, onToggle: () => {} } });
+		expect(gauge()).toBeUndefined();
 	});
 
 	it("offers the approval modes from the shield", () => {
@@ -121,16 +130,15 @@ describe("Android chat controls row", () => {
 		const { onSettings, onOption } = render();
 		pick("chat-model", "model:1");
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
-		pick("chat-effort", "1");
-		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "high" });
 		pick("chat-model", "other:0:0");
 		expect(onOption).toHaveBeenCalledExactlyOnceWith("fast", { enabled: true });
-		expect(fixtures.select).toHaveBeenCalledTimes(3);
+		expect(fixtures.select).toHaveBeenCalledTimes(2);
 	});
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
-		for (const id of ["chat-model", "chat-effort", "chat-approval"]) {
+		expect(gauge().props.disabled).toBe(true);
+		for (const id of ["chat-model", "chat-approval"]) {
 			expect(trigger(id).props.disabled).toBe(true);
 			expect(trigger(id).props.accessibilityState).toEqual({ disabled: true });
 		}

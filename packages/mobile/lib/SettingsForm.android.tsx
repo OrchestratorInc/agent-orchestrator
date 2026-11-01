@@ -277,12 +277,8 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 	);
 }
 
-/**
- * The status under the name behind a dot in its tone, and the row's own
- * action as Material's outlined button at its end. The row itself takes no
- * press: only the button acts, and Compose greys it out when it can't.
- */
-export function SettingsStatusRow({ icon, label, status, tone, actionLabel, actionDisabled = false, actionLoading = false, onAction, testID, actionTestID }: SettingsStatusRowProps) {
+/** A link row with its live status under the name, behind a dot in its tone. */
+export function SettingsStatusRow({ icon, label, status, tone, onPress, testID }: SettingsStatusRowProps) {
 	const t = useTheme();
 	return (
 		<Row
@@ -294,16 +290,7 @@ export function SettingsStatusRow({ icon, label, status, tone, actionLabel, acti
 					<Supporting color={t.textSecondary}>{status}</Supporting>
 				</ComposeRow>
 			}
-			trailing={
-				<OutlinedButton
-					onClick={onAction}
-					enabled={!actionDisabled && !actionLoading}
-					colors={{ contentColor: t.accent, disabledContentColor: t.textTertiary }}
-					modifiers={actionTestID ? [testIDModifier(actionTestID)] : undefined}
-				>
-					{actionLoading ? <RowSpinner /> : <Text style={{ typography: "labelLarge", fontFamily: typeface.medium }}>{actionLabel}</Text>}
-				</OutlinedButton>
-			}
+			press={clickable(onPress)}
 			testID={testID}
 		/>
 	);

@@ -1,6 +1,6 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { Image, Text } from "@expo/ui/swift-ui";
-import { accessibilityAddTraits, accessibilityHidden, background, buttonStyle, disabled as disabledModifier, font, foregroundStyle, listRowBackground, scrollContentBackground } from "@expo/ui/swift-ui/modifiers";
+import { Gauge, Image, Text } from "@expo/ui/swift-ui";
+import { accessibilityAddTraits, accessibilityHidden, background, buttonStyle, disabled as disabledModifier, font, foregroundStyle, gaugeStyle, listRowBackground, scaleEffect, scrollContentBackground, tint } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet } from "react-native";
 import { appFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
@@ -11,8 +11,8 @@ export type { ConversationActionsPageProps } from "./ConversationActionsPage.typ
 
 /**
  * The conversation's actions as a page, on iOS a grouped SwiftUI Form like
- * Settings: each action a row with its glyph, the running ones saying so, and
- * Archive last and in red. A pull-down menu had grown too long to read at a
+ * Settings: each action a row with its glyph, the running ones saying so,
+ * Compact with its context use as a ring, and Archive last and in red. A pull-down menu had grown too long to read at a
  * glance; a page keeps every action one tap away with room for its hint.
  */
 export function ConversationActionsPage({ groups, onSelect }: ConversationActionsPageProps) {
@@ -45,6 +45,11 @@ function ActionRow({ item, onSelect }: { item: ConversationMenuItem; onSelect: C
 			modifiers={[buttonStyle("automatic"), listRowBackground(t.bgElevated), ...(item.disabled ? [disabledModifier(true)] : [])]}
 			leading={<Image systemName={item.icon.ios} color={item.destructive ? t.red : t.textSecondary} modifiers={[font({ textStyle: "body" }), accessibilityHidden(true)]} />}
 			supportingText={item.subtitle ? <Text modifiers={[appFont("footnote"), foregroundStyle(t.textSecondary)]}>{item.subtitle}</Text> : undefined}
+			trailing={item.meter === undefined ? undefined : (
+				// The system's capacity ring, the percentage inside it; the subtitle
+				// says the same for VoiceOver.
+				<Gauge value={item.meter} min={0} max={100} currentValueLabel={<Text>{`${item.meter}`}</Text>} modifiers={[gaugeStyle("circularCapacity"), tint(t.accent), scaleEffect(0.8), accessibilityHidden(true)]} />
+			)}
 		>
 			<Text modifiers={[foregroundStyle(ink)]}>{item.label}</Text>
 		</ListItem>

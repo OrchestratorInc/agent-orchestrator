@@ -14,19 +14,15 @@ const fixtures = vi.hoisted(() => ({
 	account: null as { email: string } | null,
 	signOut: vi.fn(async () => {}),
 	clearAccountHosts: vi.fn(async () => {}),
-	switchHost: vi.fn(async (_id: string) => {}),
 	reloadConfig: vi.fn(async (): Promise<unknown> => null),
-	refresh: vi.fn(async () => {}),
-	refreshHost: vi.fn(async (_id: string) => {}),
-	configForHost: vi.fn((_id: string): unknown => null),
-	ping: vi.fn(async (_config: unknown) => {}),
-	phoneOffline: false,
 	hostStates: [] as { hostId: string; connection: "closed" | "connecting" | "open"; loading: boolean }[],
 	platform: { OS: "android" },
 	hosts: [] as { id: string; name: string; endpoints: never[]; token: string; platform: string; lastConnected: number }[],
 	theme: new Proxy({}, { get: () => "#000000" }),
 	config: null as { host: string; httpPort: string } | null,
 	pushStatus: { supported: true, granted: false, canAskAgain: true, registered: false },
+	emulating: false,
+	setEmulated: vi.fn(),
 }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -55,13 +51,17 @@ vi.mock("./SettingsForm", () => ({
 	SettingsStatusRow: "SettingsStatusRow",
 }));
 vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
+vi.mock("./emulatedMachines", () => ({
+	isEmulatedHost: (id: string) => id.startsWith("emulated-"),
+	setEmulatedMachines: fixtures.setEmulated,
+	useEmulatedMachines: () => fixtures.emulating,
+}));
 vi.mock("./Spinner", () => ({ Spinner: "Spinner" }));
 vi.mock("expo-application", () => ({ nativeApplicationVersion: "1.0", nativeBuildVersion: "1" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("expo-device", () => ({ modelName: "Phone" }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: {} } }));
 vi.mock("expo-updates", () => ({ isEnabled: false, updateId: null, channel: null, runtimeVersion: "1", useUpdates: () => ({}) }));
-vi.mock("./api", () => ({ ApiError: class ApiError extends Error {}, pingServer: fixtures.ping }));
 vi.mock("./account", () => ({ loadAccount: async () => fixtures.account, signInToAccount: vi.fn(), signOutOfAccount: fixtures.signOut }));
 vi.mock("./accountHosts", () => ({ clearAccountHosts: fixtures.clearAccountHosts, syncAccountHosts: vi.fn() }));
 vi.mock("./config", () => ({ isConfigured: () => false }));
@@ -77,9 +77,7 @@ vi.mock("./push", () => ({
 vi.mock("./store", () => ({
 	useApp: () => ({
 		config: fixtures.config, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [],
-		hostStates: fixtures.hostStates, phoneOffline: fixtures.phoneOffline,
-		reloadConfig: fixtures.reloadConfig, refresh: fixtures.refresh, refreshHost: fixtures.refreshHost, configForHost: fixtures.configForHost,
-		switchHost: fixtures.switchHost,
+		hostStates: fixtures.hostStates, reloadConfig: fixtures.reloadConfig,
 	}),
 }));
 vi.mock("./ThemeProvider", () => ({
@@ -91,6 +89,7 @@ vi.mock("./backNavigation", () => ({ backOr: fixtures.back }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import SettingsScreen from "../app/settings/index";
+import { postEnvironmentNotice, takeEnvironmentNotice } from "./environmentNotice";
 
 const DEV = { id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 };
 const LAB = { ...DEV, id: "lab", name: "Lab", lastConnected: 2 };
@@ -100,18 +99,17 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("__DEV__", false);
 	for (const mock of [fixtures.navigate, fixtures.push, fixtures.back, fixtures.alert, fixtures.prompt, fixtures.openOrStartUpdate, fixtures.checkStore, fixtures.setPreference, fixtures.select, fixtures.signOut, fixtures.clearAccountHosts]) mock.mockClear();
-	fixtures.switchHost.mockReset();
-	for (const mock of [fixtures.reloadConfig, fixtures.refresh, fixtures.refreshHost, fixtures.configForHost, fixtures.ping]) mock.mockClear();
+	fixtures.reloadConfig.mockClear();
+	fixtures.setEmulated.mockClear();
+	fixtures.emulating = false;
 	fixtures.reloadConfig.mockImplementation(async () => null);
-	fixtures.configForHost.mockImplementation(() => null);
-	fixtures.ping.mockImplementation(async () => {});
-	fixtures.phoneOffline = false;
 	fixtures.hostStates = [];
 	fixtures.hosts = [DEV];
 	fixtures.account = null;
 	fixtures.config = null;
 	fixtures.pushStatus = { supported: true, granted: false, canAskAgain: true, registered: false };
 	fixtures.platform.OS = "android";
+	takeEnvironmentNotice();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -150,27 +148,54 @@ describe("Settings", () => {
 		expect(form.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Account", "Preferences", "Updates", "Support"]);
 	});
 
-	it("has no Developer section, even in a development build", async () => {
-		vi.stubGlobal("__DEV__", true);
+	it("has no Developer section in a release build", async () => {
 		const root = await renderSettings();
 		expect(root.findAll((node) => (node.type as unknown) === "SettingsSection" && node.props.title === "Developer")).toHaveLength(0);
 	});
 
-	// The fixture's default machine has no working config, so the repair rows show.
-	it("leads Machines with the default machine, then each machine's connection, then the machine actions", async () => {
+	// Last, and saying plainly that it is only in development builds.
+	it("ends a development build with the Emulate more machines switch", async () => {
+		vi.stubGlobal("__DEV__", true);
+		const root = await renderSettings();
+		const sections = root.findAllByType("SettingsSection" as never);
+		const developer = sections.at(-1)!;
+		expect(developer.props.title).toBe("Developer");
+		expect(developer.props.footer).toMatch(/^Development builds only\./);
+		const toggle = row(root, "Emulate more machines");
+		expect(toggle.type).toBe("SettingsToggleRow");
+		expect(toggle.props.value).toBe(false);
+		act(() => toggle.props.onValueChange(true));
+		expect(fixtures.setEmulated).toHaveBeenCalledWith(true);
+	});
+
+	// A fake has no page: its row says what it is instead of opening one.
+	it("lists the fake machines after the real ones, without a page to open", async () => {
+		vi.stubGlobal("__DEV__", true);
+		fixtures.emulating = true;
+		fixtures.hostStates = [{ hostId: "emulated-1", name: "Gaming PC", connection: "closed", loading: false, appearance: { symbol: "desktop" } } as never];
+		const root = await renderSettings();
+		expect(rowsOf(section(root, "Machines")).map((node) => node.props.label)).toEqual(["Dev", "Gaming PC", "Scan new code", "Add a machine"]);
+		// With a fake beside it, the real machine says it is the default.
+		expect(row(root, "Dev").props.status).toBe("Unreachable · Default");
+		const fake = row(root, "Gaming PC");
+		expect(fake.props).toMatchObject({ status: "Offline", icon: "desktop" });
+		act(() => fake.props.onPress());
+		expect(fixtures.push).not.toHaveBeenCalled();
+		expect(root.findByType("ToastHost" as never).props.toast.current.text).toMatch(/fake machine for this development build/);
+	});
+
+	// The fixture's default machine has no working config, so its repair row shows.
+	it("lists each machine once, then the machine actions", async () => {
 		const root = await renderSettings();
 		const machines = section(root, "Machines");
 		expect(rowsOf(machines).map((node) => [node.type, node.props.label])).toEqual([
-			["SettingsPickerRow", "Default machine"],
 			["SettingsStatusRow", "Dev"],
 			["SettingsButtonRow", "Scan new code"],
 			["SettingsButtonRow", "Add a machine"],
-			["SettingsButtonRow", "Retry selected machine"],
-			["SettingsLinkRow", "Paired machines"],
 		]);
-		// The status is said once, on the machine's own row, beside its Test.
-		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", tone: "bad", actionLabel: "Test", actionDisabled: false, actionLoading: false });
-		expect(row(root, "Scan new code").props.icon).toBe("scan");
+		// One machine is the default without saying so.
+		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", tone: "bad", icon: "laptop" });
+		expect(row(root, "Scan new code").props).toMatchObject({ icon: "scan", value: undefined });
 
 		act(() => row(root, "Add a machine").props.onPress());
 		expect(fixtures.navigate).toHaveBeenCalledWith("/pair");
@@ -178,44 +203,53 @@ describe("Settings", () => {
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/pair", params: { repairHostId: "dev" } });
 	});
 
-	it("switches the default machine from its picker", async () => {
-		fixtures.hosts = [DEV, LAB];
+	// Testing, making default, reconnecting, editing and forgetting are all on
+	// the machine's page.
+	it("opens a machine's page from its row", async () => {
 		const root = await renderSettings();
-		const picker = row(root, "Default machine");
-		expect(picker.props.selectedValue).toBe("dev");
-
-		await act(async () => { picker.props.onValueChange("lab"); });
-		expect(fixtures.switchHost).toHaveBeenCalledWith("lab");
-		expect(fixtures.alert).not.toHaveBeenCalled();
-		// The same picker, now on the new default.
-		expect(row(root, "Default machine")).toBe(picker);
-		expect(picker.props.selectedValue).toBe("lab");
+		act(() => row(root, "Dev").props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]", params: { id: "dev" } });
 	});
 
-	// SwiftUI's menu picker keeps the pick it showed until its selection changes,
-	// so a failed switch remounts it on the machine that is still the default.
-	it("puts the default machine picker back when a switch fails", async () => {
+	it("marks the default only beside another machine, and names it on its repair row", async () => {
 		fixtures.hosts = [DEV, LAB];
-		fixtures.switchHost.mockRejectedValueOnce(new Error("offline"));
+		fixtures.hostStates = [{ hostId: "lab", connection: "open", loading: false }];
 		const root = await renderSettings();
-		const picker = row(root, "Default machine");
-
-		await act(async () => { picker.props.onValueChange("lab"); });
-		expect(fixtures.switchHost).toHaveBeenCalledWith("lab");
-		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again from Settings.");
-		const remounted = row(root, "Default machine");
-		expect(remounted).not.toBe(picker);
-		expect(remounted.props).toMatchObject({ selectedValue: "dev", disabled: false });
+		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable · Default", tone: "bad" });
+		// Connected stays quiet: the words in grey, the colour only in the dot.
+		expect(row(root, "Lab").props).toMatchObject({ status: "Connected", tone: "good" });
+		expect(row(root, "Scan new code").props.value).toBe("Dev");
 	});
 
-	it("opens the machines list and Theme as pages from link rows", async () => {
+	it("says each machine once: no default picker, Test buttons or second list of machines", async () => {
+		fixtures.hosts = [DEV, LAB];
 		const root = await renderSettings();
-		const environments = row(root, "Paired machines");
-		expect(environments.type).toBe("SettingsLinkRow");
-		expect(environments.props.value).toBe("Dev · 1 machine");
-		act(() => environments.props.onPress());
-		expect(fixtures.push).toHaveBeenCalledWith("/settings/environments");
+		const labels = rowsOf(section(root, "Machines")).map((node) => node.props.label as string);
+		expect(labels.filter((label) => label === "Dev" || label === "Lab")).toEqual(["Dev", "Lab"]);
+		for (const label of ["Default machine", "Paired machines", "Retry selected machine"]) expect(labels).not.toContain(label);
+		expect(root.findAll((node) => node.props.actionLabel !== undefined)).toHaveLength(0);
+	});
 
+	// A phone paired before machines were saved has only the saved config.
+	it("stands the saved config in as the one machine when none are saved", async () => {
+		fixtures.hosts = [];
+		const root = await renderSettings();
+		expect(rowsOf(section(root, "Machines")).map((node) => [node.type, node.props.label])).toEqual([
+			["SettingsValueRow", "Dev"],
+			["SettingsButtonRow", "Add a machine"],
+		]);
+		expect(row(root, "Dev").props).toMatchObject({ value: "Unreachable", tone: "bad" });
+	});
+
+	// Its page goes back here when a machine is forgotten, and leaves word of it.
+	it("says what happened to a machine forgotten on its page", async () => {
+		postEnvironmentNotice("Lab forgotten. Dev is now the default.");
+		const root = await renderSettings();
+		expect(root.findByType("ToastHost" as never).props.toast.current).toMatchObject({ text: "Lab forgotten. Dev is now the default." });
+	});
+
+	it("opens Theme as a page from its link row", async () => {
+		const root = await renderSettings();
 		const theme = row(root, "Theme");
 		expect(theme.type).toBe("SettingsLinkRow");
 		expect(theme.props.value).toBe("Orchestrate");
@@ -231,54 +265,6 @@ describe("Settings", () => {
 		expect(appearance.props).toMatchObject({ selectedValue: "system", appearance: "segmented" });
 		act(() => appearance.props.onValueChange("dark"));
 		expect(fixtures.setPreference).toHaveBeenCalledWith("dark");
-	});
-
-	it("gives every paired machine its own connection row and Test", async () => {
-		fixtures.hosts = [DEV, LAB];
-		fixtures.hostStates = [{ hostId: "lab", connection: "open", loading: false }];
-		const root = await renderSettings();
-		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", tone: "bad" });
-		// Connected stays quiet: the words in grey, the colour only in the dot.
-		expect(row(root, "Lab").props).toMatchObject({ status: "Connected", tone: "good", actionLabel: "Test" });
-	});
-
-	it("tests the default machine by racing its routes, then says what it found in a toast", async () => {
-		const target = { host: "10.0.0.2", httpPort: "3011" };
-		fixtures.reloadConfig.mockImplementation(async () => target);
-		const root = await renderSettings();
-		await act(async () => { row(root, "Dev").props.onAction(); });
-		expect(fixtures.reloadConfig).toHaveBeenCalledWith({ refreshEndpoints: false });
-		expect(fixtures.ping).toHaveBeenCalledWith(target);
-		expect(fixtures.refresh).toHaveBeenCalledOnce();
-		expect(root.findByType("ToastHost" as never).props.toast.current).toMatchObject({ text: "Dev is connected.", tone: "success" });
-		// The row keeps the live status; the outcome isn't left on it.
-		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", actionLoading: false });
-	});
-
-	it("tests another machine on its own route, racing it first when none is verified", async () => {
-		fixtures.hosts = [DEV, LAB];
-		const target = { host: "10.0.0.3", httpPort: "3011" };
-		fixtures.configForHost.mockImplementationOnce(() => null).mockImplementation(() => target);
-		const root = await renderSettings();
-		await act(async () => { row(root, "Lab").props.onAction(); });
-		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
-		expect(fixtures.refreshHost).toHaveBeenCalledWith("lab");
-		expect(fixtures.ping).toHaveBeenCalledWith(target);
-		expect(root.findByType("ToastHost" as never).props.toast.current).toMatchObject({ text: "Lab is connected." });
-	});
-
-	it("says why a test failed in a longer toast", async () => {
-		const root = await renderSettings();
-		await act(async () => { row(root, "Dev").props.onAction(); });
-		expect(fixtures.ping).not.toHaveBeenCalled();
-		expect(root.findByType("ToastHost" as never).props.toast.current).toMatchObject({ tone: "warning", duration: "long" });
-		expect(root.findByType("ToastHost" as never).props.toast.current.text).toMatch(/^Dev: /);
-	});
-
-	it("greys out Test while the phone is offline", async () => {
-		fixtures.phoneOffline = true;
-		const root = await renderSettings();
-		expect(row(root, "Dev").props.actionDisabled).toBe(true);
 	});
 
 	it("confirms copied report details in a toast instead of on the row", async () => {
@@ -325,7 +311,7 @@ describe("Settings", () => {
 		expect(root.findAll((node) => (node.type as unknown) === "SettingsToggleRow" && node.props.label === "Notifications")).toHaveLength(0);
 	});
 
-	it("keeps removal and editing in Environments", async () => {
+	it("keeps removal and editing on each machine's page", async () => {
 		const root = await renderSettings();
 		const labels = root.findAll((node) => ROW_TYPES.includes(node.type as unknown as string)).map((node) => node.props.label as string);
 		for (const label of labels) expect(label).not.toMatch(/Forget|Disconnect|Edit|Rename/);
