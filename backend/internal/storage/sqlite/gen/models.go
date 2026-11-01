@@ -357,6 +357,7 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+	AuthoredByUser      int64
 }
 
 type ConversationMessagesFt struct {
@@ -813,6 +814,13 @@ type SessionInterfaceTransitionMessage struct {
 	AuthoredByUser  bool
 }
 
+type SessionTelemetry struct {
+	SessionID         string
+	CreatedBy         string
+	WaitingInputCount int64
+	EndClaimed        int64
+}
+
 type SessionTerminalTurn struct {
 	ID              int64
 	SessionID       string
@@ -890,6 +898,11 @@ type UsageMessageSummary struct {
 	PendingCount int64
 	FirstAt      sql.NullTime
 	LastAt       sql.NullTime
+	SteerCount   int64
+	SendCount    int64
+	DesktopCount int64
+	MobileCount  int64
+	CliCount     int64
 }
 
 type UsagePRMeasurement struct {
@@ -899,6 +912,8 @@ type UsagePRMeasurement struct {
 	HistoricalMerged   int64
 	AssociatedReported int64
 	MergedReported     int64
+	ClosedReported     int64
+	MergedVia          string
 }
 
 type UsageProjectIdentity struct {

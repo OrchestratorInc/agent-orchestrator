@@ -493,6 +493,21 @@ async function flushMicrotasks(turns = 16): Promise<void> {
   }
 }
 
+// GitHub's 504 on /releases/latest as electron-updater reports it: the
+// provider wraps the HttpError's stack, header block and HTML body inside
+// "Cannot parse releases feed" (#5755).
+function releasesFeedTimeout(): Error {
+  const feed = "https://github.com/AgentWrapper/agent-orchestrator/releases/latest";
+  const err = new Error(
+    `Cannot parse releases feed: Error: Unable to find latest version on GitHub (${feed}), please ensure a production release exists: HttpError: 504 Gateway Time-out\n` +
+      `"method: GET url: ${feed}\\n\\n<html><body>Gateway timeout</body></html>\\n"\n` +
+      'Headers: {\n  "set-cookie": "_gh_sess=abc123; path=/; secure; HttpOnly"\n}\n' +
+      "    at createHttpError (C:\\AO\\resources\\app.asar\\node_modules\\builder-util-runtime\\out\\httpExecutor.js:53:12),\n" +
+      "XML:\n<feed></feed>",
+  );
+  return Object.assign(err, { code: "ERR_UPDATER_INVALID_RELEASE_FEED" });
+}
+
 describe("startAutoUpdates", () => {
   // stateDir comes from the per-test beforeEach above.
 
@@ -1760,6 +1775,7 @@ describe("startAutoUpdates", () => {
       state: "error",
       message:
         "Couldn't check for updates — the update information was not found on the server.",
+      errorInfo: { kind: "not-found", phase: "check" },
       checkedAt: expect.any(Number),
     });
   });
@@ -1780,6 +1796,7 @@ describe("startAutoUpdates", () => {
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
       message: "Download failed — the update file was not found on the server.",
+      errorInfo: { kind: "not-found", phase: "download" },
     });
   });
 
@@ -1797,6 +1814,7 @@ describe("startAutoUpdates", () => {
       state: "error",
       message:
         "Couldn't check for updates — the update information was not found on the server.",
+      errorInfo: { kind: "not-found", phase: "check" },
     });
   });
 
@@ -1813,6 +1831,7 @@ describe("startAutoUpdates", () => {
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
       message: "Download failed — the update file was not found on the server.",
+      errorInfo: { kind: "not-found", phase: "download" },
     });
   });
 
@@ -1828,7 +1847,9 @@ describe("startAutoUpdates", () => {
     const checkedAt = module.getUpdateStatus().checkedAt;
     updaterEvents.get("error")?.(err);
     expect(module.getUpdateStatus().checkedAt).toBe(checkedAt);
-    expect(module.getUpdateStatus().checkError).toBe(err.message);
+    expect(module.getUpdateStatus().checkError).toBe(
+      "Couldn't check for updates — the update information was not found on the server.",
+    );
 
     expect(module.getUpdateStatus()).toEqual(
       expect.objectContaining({
@@ -1892,6 +1913,7 @@ describe("startAutoUpdates", () => {
   });
 
   it("still surfaces non-manifest 404 errors", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { module, updaterEvents } = await importAutoUpdater();
     const err = new Error(
       'HttpError: 404 "method: GET url: https://github.com/AgentWrapper/agent-orchestrator/releases/download/v0.10.1/some-file.png"',
@@ -1902,9 +1924,93 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
-      message: err.message,
+      message: "Couldn't check for updates — the update information was not found on the server.",
+      errorInfo: { kind: "not-found", phase: "check" },
       checkedAt: expect.any(Number),
     });
+  });
+
+  it("shows one sentence for a raw releases-feed failure and logs the original (#5755)", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater } = await importAutoUpdater();
+    const err = releasesFeedTimeout();
+    autoUpdater.checkForUpdates.mockRejectedValueOnce(err);
+
+    await module.checkForUpdatesNow(stateDir, { requestId: "manual-update" });
+
+    expect(module.getUpdateStatus()).toMatchObject({
+      state: "error",
+      message: "Couldn't check for updates — the update server timed out. Try again in a few minutes.",
+      requestId: "manual-update",
+    });
+    expect(JSON.stringify(module.getUpdateStatus())).not.toMatch(/set-cookie|app\.asar|<html/i);
+    expect(consoleError).toHaveBeenCalledWith("manual update check failed:", err);
+  });
+
+  it("logs a manual failure once when the updater also emits it", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    const err = releasesFeedTimeout();
+    autoUpdater.checkForUpdates.mockImplementationOnce(() => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("error")?.(err);
+      return Promise.reject(err);
+    });
+
+    await module.checkForUpdatesNow(stateDir);
+
+    expect(consoleError.mock.calls.filter((call) => call.includes(err))).toEqual([["manual update check failed:", err]]);
+  });
+
+  it("keeps a raw automatic-check failure out of checkError (#5755)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("error")?.(releasesFeedTimeout());
+      return Promise.resolve();
+    });
+
+    await module.startAutoUpdates(stateDir);
+
+    expect(module.getUpdateStatus().checkError).toBe(
+      "Couldn't check for updates — the update server timed out. Try again in a few minutes.",
+    );
+    expect(module.getUpdateStatus().checkErrorInfo).toEqual({ kind: "timeout", phase: "check" });
+  });
+
+  // The check-error notice has no netError guidance of its own, so a bare
+  // net:: string would reach Settings verbatim (#5755).
+  it("keeps a raw net:: string out of checkError (#5755)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("error")?.(new Error("net::ERR_INTERNET_DISCONNECTED"));
+      return Promise.resolve();
+    });
+
+    await module.startAutoUpdates(stateDir);
+
+    expect(module.getUpdateStatus().checkError).toBe("Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.");
+  });
+
+  it("shows one sentence when a manual download fails on the network (#5755)", async () => {
+    const restore = stubProcess("linux", "/usr/bin/node");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { module, autoUpdater } = await importAutoUpdater();
+      await module.checkForUpdatesNow(stateDir);
+      autoUpdater.downloadUpdate.mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await module.downloadUpdateNow("failed-download");
+
+      expect(module.getUpdateStatus()).toMatchObject({
+        state: "error",
+        requestId: "failed-download",
+        message: "Download failed — the update server couldn't be reached. Check your connection and try again.",
+      });
+    } finally { restore(); }
   });
 
   it("flags net errors on a rejected manual check", async () => {
@@ -1915,7 +2021,8 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
-      message: "net::ERR_FAILED",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
+      errorInfo: { kind: "unreachable", phase: "check" },
       netError: true,
     });
   });
@@ -1928,7 +2035,8 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
-      message: "net::ERR_FAILED",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
+      errorInfo: { kind: "unreachable", phase: "check" },
       netError: true,
       checkedAt: expect.any(Number),
     });
@@ -1946,7 +2054,8 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toMatchObject({
       state: "error",
-      message: "net::ERR_SSL_PROTOCOL_ERROR",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
+      errorInfo: { kind: "unreachable", phase: "check" },
       netError: true,
       requestId: "manual-update-1",
     });
@@ -3345,6 +3454,27 @@ describe("returnToHome", () => {
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it("names a failed return-home check as a failed return (#5755)", async () => {
+    const { module, autoUpdater } = await importAutoUpdater({
+      enabled: true,
+      channel: "latest",
+      nightlyAck: false,
+      feature: { pr: 7 },
+    });
+    autoUpdater.checkForUpdates.mockRejectedValueOnce(
+      Object.assign(new Error("503 Service Unavailable\nHeaders: {}"), { name: "HttpError", statusCode: 503 }),
+    );
+
+    await module.returnToHome(stateDir, "req-return");
+
+    expect(module.getUpdateStatus()).toMatchObject({
+      state: "error",
+      requestId: "req-return",
+      message: "Couldn't return to your update channel — the update server isn't available right now. Try again in a few minutes.",
+      errorInfo: { kind: "unavailable", phase: "return" },
+    });
+  });
+
   it("reports unsupported in dev (unpackaged) without touching settings", async () => {
     const { module, autoUpdater, updateUpdateSettings } =
       await importAutoUpdater(
@@ -3704,6 +3834,45 @@ describe("quitAndInstallUpdate", () => {
     } finally { restore(); }
   });
 
+  it("rewrites a raw native failure that ends a requested restart (#5755)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      const { module, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      module.setUpdateRestartFailureHandler(vi.fn());
+      await module.quitAndInstallUpdate();
+      nativeAutoUpdater.emit("error", new Error("The request timed out."));
+      const expected = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+      const progress = await startMacUpdateProgress.mock.results[0].value;
+      expect(progress.fail).toHaveBeenCalledWith(expected);
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: expected, errorInfo: { kind: "timeout", phase: "install" } });
+    } finally { restore(); }
+  });
+
+  it("rewrites a raw native failure that rejects the install while the progress helper is starting (#5755)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const expected = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+      const assertion = expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(expected);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+      nativeAutoUpdater.emit("error", new Error("The request timed out."));
+      await assertion;
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: expected, errorInfo: { kind: "timeout", phase: "install" } });
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
   it("requires a visible helper before quitting an already native-ready update", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
@@ -3741,6 +3910,52 @@ describe("quitAndInstallUpdate", () => {
       await module.quitAndInstallUpdate();
       expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
       expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally { restore(); }
+  });
+
+  it.each(["darwin", "win32", "linux"] as const)("rejects a remembered-build install with one sentence, not the feed dump, on %s (#5755)", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({ version: "2.1.0", stagedAt: Date.now(), channel: "latest" }));
+      const { module, autoUpdater } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      const err = releasesFeedTimeout();
+      autoUpdater.checkForUpdates.mockRejectedValue(err);
+
+      const rejection = await module.quitAndInstallUpdate().then(() => undefined, (error: unknown) => error);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toBe(
+        "Couldn't install the update — the update server timed out. Try again in a few minutes.",
+      );
+      expect(consoleError).toHaveBeenCalledWith("failed to prepare update for restart:", err);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
+  // The re-download runs as a check, but Settings must not call a failed
+  // restart a failed check while the dialog calls it a failed install.
+  it.each(["win32", "linux"] as const)("tells Settings a remembered-build restart failed as an install on %s (#5755)", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({ version: "2.1.0", stagedAt: Date.now(), channel: "latest" }));
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      const err = releasesFeedTimeout();
+      autoUpdater.checkForUpdates.mockImplementation(() => {
+        updaterEvents.get("error")?.(err);
+        return Promise.reject(err);
+      });
+
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow(
+        "Couldn't install the update — the update server timed out. Try again in a few minutes.",
+      );
+      expect(module.getUpdateStatus()).toMatchObject({
+        state: "error",
+        message: "Couldn't install the update — the update server timed out. Try again in a few minutes.",
+      });
     } finally { restore(); }
   });
 

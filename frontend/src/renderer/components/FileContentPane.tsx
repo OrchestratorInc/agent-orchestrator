@@ -353,8 +353,7 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	// A cloud PDF's bytes can't be read: the cloud bridge carries text bodies only.
-	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || (source.kind === "artifact" && !(source.cloud && fileMediaKind(path) === "pdf")) || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const markdownAvailable = canRenderMarkdown(path, detail);

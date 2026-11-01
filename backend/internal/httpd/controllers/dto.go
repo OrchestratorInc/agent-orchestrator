@@ -3232,8 +3232,11 @@ type ConversationMessageResponse struct {
 	Streaming bool `json:"streaming"`
 	// Continuation is the user's one-click "continue" after stopping a turn,
 	// shown as a marker instead of a message bubble.
-	Continuation bool   `json:"continuation,omitempty"`
-	CreatedAt    string `json:"createdAt"`
+	Continuation bool `json:"continuation,omitempty"`
+	// AuthoredByUser marks user-written content AO delivered as automation, such
+	// as Browser-panel annotations. Its queued turn can be steered or cancelled.
+	AuthoredByUser bool   `json:"authoredByUser,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.

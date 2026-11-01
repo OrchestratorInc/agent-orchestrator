@@ -1422,6 +1422,7 @@ func (s *Store) appendUserMessage(
 			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
 			Continuation:        boolInt(msg.Continuation),
+			AuthoredByUser:      boolInt(msg.AuthoredByUser),
 			SenderSessionID:     msg.SenderSessionID,
 			SenderProjectID:     msg.SenderProjectID,
 			SenderDisplayName:   msg.SenderDisplayName,
@@ -1432,9 +1433,7 @@ func (s *Store) appendUserMessage(
 		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
-			if err := q.IncrementUsageMessageSummary(ctx, gen.IncrementUsageMessageSummaryParams{
-				SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},
-			}); err != nil {
+			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
 				return fmt.Errorf("record usage message count: %w", err)
 			}
 		}
@@ -2630,7 +2629,8 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	}
 	return domain.QueuedTurn{
 		TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
-		Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
+		Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0,
+		DeliveryContentJSON: row.DeliveryContentJson,
 	}, nil
 }
 
@@ -4619,6 +4619,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		Continuation:        row.Continuation != 0,
+		AuthoredByUser:      row.AuthoredByUser != 0,
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,

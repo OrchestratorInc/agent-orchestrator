@@ -126,12 +126,12 @@ describe("side delivery draft ownership", () => {
 		);
 	});
 
-	it.each(["btw", "side"])("/%s opens a fresh side", async (command) => {
+	it("/btw opens a fresh side", async () => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
 		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });
 		await act(async () => {
-			await hook.result.current.send("side", `/${command} first`);
+			await hook.result.current.send("side", "/btw first");
 		});
 		const creates = post.mock.calls.filter(([path]) => path.endsWith("/side-chats"));
 		expect(creates).toHaveLength(1);
@@ -541,6 +541,7 @@ describe("side panel navigation and recovery", () => {
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([
 			new DOMRect(40, 150, 100, 20),
 		] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
 		fireEvent.mouseUp(log);
 		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));

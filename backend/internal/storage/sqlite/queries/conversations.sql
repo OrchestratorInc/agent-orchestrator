@@ -1149,6 +1149,7 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -1296,17 +1297,26 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
+    delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: IncrementUsageMessageSummary :exec
-INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
-SELECT sqlc.arg(session_id), 1, sqlc.arg(first_at), sqlc.arg(last_at) WHERE EXISTS (
+-- Adds one human message: a direct Chat message (pending_count), a steer, or
+-- a `/send`, plus at most one of the surface counters. Each counter is 0 or 1.
+INSERT INTO usage_message_summary (session_id, pending_count, steer_count, send_count,
+    desktop_count, mobile_count, cli_count, first_at, last_at)
+SELECT sqlc.arg(session_id), sqlc.arg(chat), sqlc.arg(steer), sqlc.arg(send),
+    sqlc.arg(desktop), sqlc.arg(mobile), sqlc.arg(cli), sqlc.arg(first_at), sqlc.arg(last_at) WHERE EXISTS (
     SELECT 1 FROM sessions WHERE id = sqlc.arg(session_id) AND project_id IS NOT NULL
 )
 ON CONFLICT(session_id) DO UPDATE SET
-    pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
+    pending_count = MIN(usage_message_summary.pending_count + excluded.pending_count, 1000000000),
+    steer_count = MIN(usage_message_summary.steer_count + excluded.steer_count, 1000000000),
+    send_count = MIN(usage_message_summary.send_count + excluded.send_count, 1000000000),
+    desktop_count = MIN(usage_message_summary.desktop_count + excluded.desktop_count, 1000000000),
+    mobile_count = MIN(usage_message_summary.mobile_count + excluded.mobile_count, 1000000000),
+    cli_count = MIN(usage_message_summary.cli_count + excluded.cli_count, 1000000000),
     first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
     last_at = excluded.last_at;
 
