@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 var ctx = context.Background()
@@ -137,6 +138,19 @@ func (f *fakeStore) UpdateSessionFromActivitySignal(_ context.Context, rec domai
 type activityRevisionConflictStore struct {
 	*fakeStore
 	conflictNext bool
+}
+
+type fakeSemanticDeliveryActivityStore struct {
+	*fakeStore
+}
+
+func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	_, _ string,
+) (bool, error) {
+	return f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
 }
 
 func (f *activityRevisionConflictStore) UpdateSessionFromActivitySignal(
@@ -756,6 +770,86 @@ func TestActivity_UserPromptStoresItsSignalTimestamp(t *testing.T) {
 	}
 }
 
+func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close sqlite store: %v", err)
+		}
+	})
+	now := time.Now().UTC()
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		Metadata:  domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	const deliveryID = "report-batch:mixedhuman1"
+	if registered, err := store.RegisterSemanticDelivery(ctx, rec.ID, "launch-1", deliveryID); err != nil || !registered {
+		t.Fatalf("register semantic delivery: registered=%v err=%v", registered, err)
+	}
+	manager := New(store, nil)
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "human text containing an internal report", Timestamp: now.Add(time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman, CoordinationID: deliveryID,
+	}); err != nil {
+		t.Fatalf("apply mixed human prompt: %v", err)
+	}
+	afterMixed, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load mixed prompt session: found=%v err=%v", found, err)
+	}
+	if afterMixed.Metadata.LatestUserPrompt != "human text containing an internal report" ||
+		afterMixed.Metadata.ConversationCheckpointState == domain.ConversationCheckpointCoordination {
+		t.Fatalf("mixed prompt was not retained as human checkpoint: %+v", afterMixed.Metadata)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("mixed human prompt receipt: accepted=%v err=%v", accepted, err)
+	}
+
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "a later human prompt replaced the checkpoint", Timestamp: now.Add(2 * time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman,
+	}); err != nil {
+		t.Fatalf("apply later human prompt: %v", err)
+	}
+	afterOverwrite, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load overwritten session: found=%v err=%v", found, err)
+	}
+	if afterOverwrite.Metadata.LatestUserPrompt != "a later human prompt replaced the checkpoint" {
+		t.Fatalf("latest user prompt = %q", afterOverwrite.Metadata.LatestUserPrompt)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("receipt lost after checkpoint overwrite: accepted=%v err=%v", accepted, err)
+	}
+}
+
+func TestActivity_CoordinationIDRequiresReceiptStore(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	store.sessions[rec.ID] = rec
+	err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		CoordinationID: "report-batch:missing-store",
+	})
+	if err == nil || !strings.Contains(err.Error(), "semantic delivery acceptance storage is unavailable") {
+		t.Fatalf("ApplyActivitySignal error = %v, want missing receipt storage", err)
+	}
+	if store.sessions[rec.ID].Revision != rec.Revision {
+		t.Fatalf("missing receipt store projected activity: revision %d -> %d", rec.Revision, store.sessions[rec.ID].Revision)
+	}
+}
+
 func TestActivity_ReorderedPromptPreservesLatestHumanCheckpoint(t *testing.T) {
 	promptAt := time.Unix(456, 0).UTC()
 	for _, tt := range []struct {
@@ -1328,6 +1422,7 @@ func TestActivity_MainPromptWithoutTextInvalidatesPriorConversationCheckpoint(t 
 
 func TestActivity_CoordinationPromptFollowedByPromptlessStopDoesNotAdvanceCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
+	m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
 	previousPromptAt := time.Unix(122, 0).UTC()
 	coordinationPromptAt := previousPromptAt.Add(time.Minute)
 	rec := working("mer-1")

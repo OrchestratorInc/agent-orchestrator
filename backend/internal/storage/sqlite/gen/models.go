@@ -663,6 +663,14 @@ type ReviewRun struct {
 	TriggerSource    domain.ReviewTriggerSource
 }
 
+type SemanticDelivery struct {
+	SessionID       string
+	RuntimeLaunchID string
+	DeliveryID      string
+	RegisteredAt    time.Time
+	AcceptedAt      interface{}
+}
+
 type Session struct {
 	ID                               domain.SessionID
 	ProjectID                        *domain.ProjectID

@@ -450,6 +450,23 @@ func TestSessionsAPI_ActivityThreadsConversationCheckpointOrigin(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ActivityPreservesCoordinationIDOnHumanPrompt(t *testing.T) {
+	rec := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, rec)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"active","event":"user-prompt-submit","latestUserPrompt":"human text around a report","conversationCheckpointOrigin":"human","coordinationId":"report-batch:abc123"}`)
+	if status != http.StatusOK {
+		t.Fatalf("activity = %d, want 200; body=%s", status, body)
+	}
+	if rec.gotSignal.ConversationCheckpointOrigin != domain.ConversationCheckpointOriginHuman {
+		t.Fatalf("checkpoint origin = %q, want human", rec.gotSignal.ConversationCheckpointOrigin)
+	}
+	if rec.gotSignal.CoordinationID != "report-batch:abc123" {
+		t.Fatalf("coordination id = %q", rec.gotSignal.CoordinationID)
+	}
+}
+
 func TestSessionsAPI_ActivityRejectsUnknownConversationCheckpointOrigin(t *testing.T) {
 	rec := &fakeActivityRecorder{}
 	srv := newActivityTestServer(t, rec)
