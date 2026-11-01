@@ -54,6 +54,47 @@ export function formatBytes(bytes: number): string {
 	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
+/** An error's message, without the wrapper Electron puts around one thrown across IPC. */
+function errorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, "");
+}
+
+/** Whether each control plane serves share links, as far as this run has found out. */
+const shareAvailability = new Map<string, boolean>();
+const shareAvailabilityChecks = new Map<string, Promise<boolean | null>>();
+
+/**
+ * Whether the control plane serves share links. Its share routes exist only
+ * while its share flag is on; until the main process has checked, and when
+ * they are off, Share is not offered. The answer is kept for this run.
+ */
+export function useShareAvailable(): boolean {
+	const { baseUrl } = useShareAccess();
+	const [available, setAvailable] = useState(() => shareAvailability.get(baseUrl) ?? false);
+	useEffect(() => {
+		if (!baseUrl) return setAvailable(false);
+		const known = shareAvailability.get(baseUrl);
+		if (known !== undefined) return setAvailable(known);
+		let cancelled = false;
+		let check = shareAvailabilityChecks.get(baseUrl);
+		if (!check) {
+			check = aoBridge.cloudShare.available(baseUrl).catch(() => null);
+			shareAvailabilityChecks.set(baseUrl, check);
+		}
+		void check.then((result) => {
+			// An unreachable control plane is asked again next time.
+			if (result === null) shareAvailabilityChecks.delete(baseUrl);
+			else shareAvailability.set(baseUrl, result);
+			if (!cancelled) setAvailable(result === true);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [baseUrl]);
+	return available;
+}
+
 /** The control plane URL and whether the person is signed in to share. */
 export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 	const { settings } = useSettings();
@@ -71,6 +112,7 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
+	const available = useShareAvailable();
 	const video = VIDEO_FILE.test(file.path);
 	const button = (
 		<Button
@@ -85,6 +127,8 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 			{t("artifacts.share.menu")}
 		</Button>
 	);
+	// Not offered where the control plane does not serve share links.
+	if (!available) return null;
 	if (video) {
 		return (
 			<Tooltip>
@@ -122,7 +166,6 @@ function SharePanel({
 	const [copied, setCopied] = useState(false);
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
-	const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 	// Shows how a publish ended. Its own refusal is shown as it came, not
 	// worked out again from the link list.
@@ -140,6 +183,8 @@ function SharePanel({
 				return setPhase({ kind: "unsupported" });
 			case "signed_out":
 				return setPhase({ kind: "signin" });
+			case "error":
+				return setPhase({ kind: "error", message: result.message });
 		}
 	};
 
@@ -174,7 +219,7 @@ function SharePanel({
 				setPhase({ kind: "publish", inspection, links });
 			})
 			.catch((error: unknown) => {
-				if (!cancelled) setPhase({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+				if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
 			});
 		return () => {
 			cancelled = true;
@@ -219,7 +264,7 @@ function SharePanel({
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
 			load();
 		} catch (error) {
-			setPhase({ kind: "published", share, error: t("artifacts.share.unpublishFailed", { message: error instanceof Error ? error.message : String(error) }) });
+			setPhase({ kind: "published", share, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
 		}
 	};
 

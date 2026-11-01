@@ -299,6 +299,26 @@ async function callApi<T>(api: CloudShareApi, baseUrl: string, method: string, a
 	return (await response.json()) as T;
 }
 
+/**
+ * Whether the control plane serves share links: the routes exist only while
+ * its share flag is on, so a 404 means it does not. It needs no sign-in: a
+ * signed-out request gets 401 from a control plane that serves them. Null
+ * when the control plane could not be reached.
+ */
+export async function shareLinksAvailable(api: CloudShareApi, baseUrl: string): Promise<boolean | null> {
+	const token = await api.getToken();
+	try {
+		const response = await api.fetch(apiUrl(baseUrl, "/me/artifact-shares"), {
+			method: "GET",
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		await response.body?.cancel().catch(() => undefined);
+		return response.status !== 404;
+	} catch {
+		return null;
+	}
+}
+
 export function listShareLinks(api: CloudShareApi, baseUrl: string): Promise<CloudShareLinks> {
 	return callApi<CloudShareLinks>(api, baseUrl, "GET", "/me/artifact-shares").then((links) => ({
 		...links,

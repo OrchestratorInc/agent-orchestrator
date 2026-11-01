@@ -8,6 +8,18 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+// Share is offered only where the control plane serves share links.
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+	return {
+		...actual,
+		useSettings: (...args: Parameters<typeof actual.useSettings>) => {
+			const result = actual.useSettings(...args);
+			return { ...result, settings: { ...result.settings, cloudControlPlaneUrl: "https://cp.test" } as NonNullable<typeof result.settings> };
+		},
+	};
+});
+
 const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],
 	agents: [] as Array<Record<string, unknown>>,
@@ -532,7 +544,7 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
-		expect(modal.getByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
+		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
 		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
