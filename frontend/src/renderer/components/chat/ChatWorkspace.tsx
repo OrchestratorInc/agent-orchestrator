@@ -170,7 +170,7 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
-import { UsageLimitNotice } from "./UsageLimitNotice";
+import { UsageLimitDock } from "./UsageLimitDock";
 import {
 	activeTurn,
 	activityPlan,
@@ -1944,8 +1944,13 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{limitedTurn?.usageLimit && retryControl ? (
-									<UsageLimitNotice
+									<UsageLimitDock
 										key={limitedTurn.id}
+										sessionId={snapshot.sessionId}
+										harness={snapshot.harness}
+										turnId={limitedTurn.id}
+										continueEnabled={!limitedTurn.usageLimit.accountChanged && !activeRemoteHostId && !session?.cloud}
+										retry={retryControl.retry}
 										usageLimit={limitedTurn.usageLimit}
 										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
 										onAutoResumeChange={retryControl.setAutoResume

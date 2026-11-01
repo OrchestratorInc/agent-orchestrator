@@ -5851,6 +5851,7 @@ export interface components {
             reasoningEffort?: string;
         };
         ConversationUsageLimitResponse: {
+            accountChanged?: boolean;
             autoResume: boolean;
             resetsAt?: null | string;
             resumeError?: string;
