@@ -45,7 +45,11 @@ export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLD
 		// update comes from ResizeObserver entry sizes, which carry no forced layout.
 		let width = gap.getBoundingClientRect().width;
 		let expandedWidth = container.getBoundingClientRect().width;
-		const publish = () => setSidebarChromeGeometry({ width, progress: collapseProgress(width, expandedWidth) });
+		// An open gap is narrower than the container by the panel overlap.
+		const publish = () => {
+			const overlap = parseFloat(getComputedStyle(gap).getPropertyValue("--size-sidebar-panel-overlap")) || 0;
+			setSidebarChromeGeometry({ width, progress: collapseProgress(width, expandedWidth - overlap) });
+		};
 		publish();
 		const observer = new ResizeObserver((entries) => {
 			for (const entry of entries) {

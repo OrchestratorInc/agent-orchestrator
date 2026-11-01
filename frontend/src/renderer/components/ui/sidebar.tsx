@@ -223,7 +223,7 @@ function Sidebar({
 				? variant === "floating" || variant === "inset"
 					? "calc(var(--sidebar-width-icon) + 1rem)"
 					: "var(--sidebar-width-icon)"
-				: "var(--ao-sidebar-w, var(--sidebar-width))";
+				: "calc(var(--ao-sidebar-w, var(--sidebar-width)) - var(--size-sidebar-panel-overlap, 0px))";
 
 	// Several React HTML event types conflict with Motion's overloaded versions.
 	// Cast once so callers can keep passing through plain div props.

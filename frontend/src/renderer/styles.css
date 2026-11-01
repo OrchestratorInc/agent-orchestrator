@@ -543,6 +543,12 @@ html[data-modal-handoff] .dialog-overlay,
 	transition: none;
 }
 
+/* The open sidebar covers that left inset, so its edge, footer divider and
+ * resize line sit on the panel border. Fullscreen drops the inset. */
+html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) {
+	--size-sidebar-panel-overlap: var(--size-center-panel-inset-mac);
+}
+
 /* Keep the center surface closed on all four edges, including macOS where the
  * native titlebar sits above the panel rather than replacing its border. */
 .center-panel-shell--mac > .center-panel-surface {
