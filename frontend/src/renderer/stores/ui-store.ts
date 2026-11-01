@@ -57,6 +57,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Turn Connect Mobile on as the page opens: the user asked to pair a phone. */
+			startPairing?: boolean;
 			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
 			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
@@ -242,7 +244,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -489,6 +491,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.startPairing && section === "mobile" ? { startPairing: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"

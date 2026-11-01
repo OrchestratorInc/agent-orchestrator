@@ -123,6 +123,34 @@ func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskUsesConfirmedBranchWithoutRenaming(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Path: newWorkspaceRepo(t)}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix login redirect", Branch: "ao/new-login-fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.spawnedCfg.Branch != "ao/new-login-fix" || cmd.spawnedCfg.NameFromPrompt || !cmd.spawnedCfg.RequireNewBranch {
+		t.Fatalf("spawn config branch = %q, name from prompt = %v, require new = %v", cmd.spawnedCfg.Branch, cmd.spawnedCfg.NameFromPrompt, cmd.spawnedCfg.RequireNewBranch)
+	}
+}
+
+func TestDelegateTaskRejectsExistingExplicitBranchBeforeSpawn(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "branch", "fix/login")
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Path: repo}
+	cmd := &fakeCommander{}
+	for _, preparation := range []domain.TaskPreparationToken{"", "prepared"} {
+		_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Branch: "fix/login", TaskPreparation: preparation})
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "BRANCH_ALREADY_EXISTS" || cmd.spawnCalls != 0 {
+			t.Fatalf("preparation %q: spawnCalls=%d, err=%v", preparation, cmd.spawnCalls, err)
+		}
+	}
+}
+
 func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}

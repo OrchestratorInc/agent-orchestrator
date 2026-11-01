@@ -175,3 +175,23 @@ func TestManagedTunnelStopWithdrawsTheEndpointBeforeReturning(t *testing.T) {
 		t.Fatal("still advertising immediately after Stop returned")
 	}
 }
+
+// A nudge sent before a new run starts tells it nothing: the run asks AO
+// Cloud first anyway, and a stale nudge would make it ask twice.
+func TestManagedTunnelStartDropsAnEarlierNudge(t *testing.T) {
+	m := NewManagedTunnel(ManagedTunnelDeps{Run: func(ctx context.Context, _ int, _ *TunnelRuntime) { <-ctx.Done() }})
+	defer m.Stop()
+	m.Nudge()
+	m.Start(4321)
+	if len(m.nudge) != 0 {
+		t.Fatal("a new run inherited an earlier nudge")
+	}
+	// A run replaced on a port change, still unwinding, takes no nudge meant
+	// for its replacement.
+	old := m.nudge
+	m.Start(4322)
+	m.Nudge()
+	if len(old) != 0 || len(m.nudge) != 1 {
+		t.Fatalf("the old run's channel holds %d, the new run's %d", len(old), len(m.nudge))
+	}
+}

@@ -10,6 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// mergePRRequest mirrors the daemon merge action request.
+type mergePRRequest struct {
+	PRURL           string `json:"prUrl"`
+	ExpectedHeadSHA string `json:"expectedHeadSha"`
+}
+
 type mergePRResponse struct {
 	OK       bool   `json:"ok"`
 	PRNumber int    `json:"prNumber"`
@@ -36,17 +42,27 @@ func newPRCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newPRMergeCommand(ctx *commandContext) *cobra.Command {
-	return &cobra.Command{
+	var prURL, expectedHeadSHA string
+	cmd := &cobra.Command{
 		Use:   "merge <pr-number>",
 		Short: "Merge a pull request",
-		Args:  usageArgs(cobra.ExactArgs(1)),
+		Long: "Merge a tracked pull request at the exact head you reviewed. Both --url and " +
+			"--expected-head-sha are required; the daemon rechecks merge readiness and rejects a changed head.",
+		Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prNumber, err := normalizePRNumber(args[0])
 			if err != nil {
 				return err
 			}
+			req := mergePRRequest{
+				PRURL:           strings.TrimSpace(prURL),
+				ExpectedHeadSHA: strings.TrimSpace(expectedHeadSHA),
+			}
+			if req.PRURL == "" || req.ExpectedHeadSHA == "" {
+				return usageError{errors.New("usage: --url and --expected-head-sha are required")}
+			}
 			var res mergePRResponse
-			if err := ctx.postJSON(cmd.Context(), "prs/"+url.PathEscape(prNumber)+"/merge", struct{}{}, &res); err != nil {
+			if err := ctx.postJSON(cmd.Context(), "prs/"+url.PathEscape(prNumber)+"/merge", req, &res); err != nil {
 				return err
 			}
 			if method := strings.TrimSpace(res.Method); method != "" {
@@ -57,6 +73,9 @@ func newPRMergeCommand(ctx *commandContext) *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&prURL, "url", "", "Full URL of the tracked pull request (required)")
+	cmd.Flags().StringVar(&expectedHeadSHA, "expected-head-sha", "", "Head commit SHA reviewed and approved for merge (required)")
+	return cmd
 }
 
 func newPRResolveCommentsCommand(ctx *commandContext) *cobra.Command {

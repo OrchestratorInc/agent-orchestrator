@@ -1442,7 +1442,7 @@ function AttachedTerminal({
 							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
-								<div className="text-terminal">{"Agent Orchestrator"}</div>
+								<div className="text-terminal">{"Orchestrator"}</div>
 								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
 							</div>
 						)}

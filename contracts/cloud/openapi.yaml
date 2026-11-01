@@ -3140,6 +3140,9 @@ paths:
         "401":
           description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
           $ref: "#/components/responses/Error"
+        "404":
+          description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses. A deployment that predates this route answers 404 without an error envelope."
+          $ref: "#/components/responses/Error"
         "409":
           description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
           $ref: "#/components/responses/Error"
@@ -3150,7 +3153,7 @@ paths:
           description: "`tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place."
           $ref: "#/components/responses/Error"
         "503":
-          description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses."
+          description: "`fixed_addresses_unavailable` from an older deployment that gives no fixed addresses; current ones answer 404, so a machine that keeps asking does not count as a server error."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"

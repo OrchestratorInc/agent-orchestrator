@@ -249,6 +249,7 @@ export function GeneralSettingsSection({
 		{ value: "fr", label: t("settings.language.fr") },
 		{ value: "de", label: t("settings.language.de") },
 		{ value: "pt-BR", label: t("settings.language.ptBR") },
+		{ value: "ru", label: t("settings.language.ru") },
 	] satisfies SettingsOption<AppLocale>[];
 
 	return (
@@ -444,7 +445,7 @@ function DiagnosticsRow() {
 
 /**
  * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ * off hides the inspector tab, /btw, and "Add to side chat".
  */
 function SideChatsRow() {
 	const { t } = useTranslation();

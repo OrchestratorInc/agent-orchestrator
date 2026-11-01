@@ -152,7 +152,8 @@ const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(h
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
-	if (![401, 403, 426, 502, 503].includes(status)) return;
+	// 530: Cloudflare answers for a fixed address whose machine is offline.
+	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 15_000) return;
@@ -413,6 +414,20 @@ export function useWorkspacePolling(enabled = true) {
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
+
+/**
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
+ */
+export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
+		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
+	]).then(() => undefined);
+}
 
 /**
  * Adds a session the desktop just created to the sessions list, when it runs

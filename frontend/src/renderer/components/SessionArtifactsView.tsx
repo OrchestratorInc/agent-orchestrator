@@ -92,7 +92,7 @@ const FULLSCREEN_FRAME_CLASS =
 	"fixed inset-0 z-overlay flex flex-col bg-background outline-none";
 // The window's macOS traffic lights sit over the overlay's header unless the
 // window itself is full screen.
-const FULLSCREEN_MAC_HEADER_CLASS = "pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:pl-1";
+const FULLSCREEN_MAC_HEADER_CLASS = "min-h-traffic-light-clearance pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:min-h-9 [html:has(.native-fullscreen)_&]:pl-1";
 const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
 
 /**
@@ -349,7 +349,7 @@ export function SessionArtifactsView({
 	const livePreviewPaths = useMemo(() => new Set(
 		artifacts.filter((artifact) =>
 			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
-			|| (!cloud && /\.pdf$/i.test(artifact.path) && artifact.rawUrl),
+			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [artifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
