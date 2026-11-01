@@ -30,7 +30,8 @@ function keyboardSelection() {
 	vi.spyOn(range, "getBoundingClientRect").mockImplementation(() => new DOMRect(80, top, 120, 20));
 	vi.spyOn(scope, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 400));
 	let selection: CodeSelection | null = { host, textRange: range, viewport: scope,
-		rows: [], range: { start: 1, end: 1 }, point: { x: 200, y: 90 }, dragging: false };
+		rows: [], range: { start: 1, end: 1 }, point: { x: 200, y: 90 }, dragging: false,
+		snapshot: { anchor: { column: host, row: host, rowIndex: 0, offset: 0, text: "", rowCount: 0 }, focus: { column: host, row: host, rowIndex: 0, offset: 0, text: "", rowCount: 0 } } };
 	const listeners = new Set<() => void>();
 	const store: CodeSelectionSource = { get: () => selection, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
 	const dismiss = vi.fn(() => { selection = null; for (const listener of listeners) listener(); });
