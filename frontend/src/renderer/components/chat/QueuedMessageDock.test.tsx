@@ -2,6 +2,9 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
+import { ChatWorkspace } from "./ChatWorkspace";
+import { chatFixture } from "../../lib/chat-fixture";
+import { renderChat } from "../../test/render-chat";
 
 const { dragEnds, dragStarts } = vi.hoisted(() => ({
 	dragEnds: new Map<string, (event: { active: { id: string }; over: { id: string } | null }) => void>(),
@@ -156,6 +159,55 @@ describe("QueuedMessageDock reorder", () => {
 
 		await waitFor(() => {
 			expect(onReorderQueuedTurns).toHaveBeenCalledWith(["queued-2", "queued-1"]);
+		});
+	});
+});
+
+describe("ChatWorkspace queue reorder", () => {
+	function queuedPrompt(turnId: string, sequence: number, origin: "human" | "automation", text: string) {
+		return {
+			kind: "message" as const,
+			id: `${turnId}-message`,
+			turnId,
+			sequence,
+			revision: 0,
+			role: "user" as const,
+			origin,
+			text,
+			streaming: false,
+			createdAt: `2026-08-11T10:0${sequence - 99}:00Z`,
+		};
+	}
+
+	it("keeps a queued automation turn in place when the user reorders their own prompts", async () => {
+		const onReorderQueuedTurns = vi.fn().mockResolvedValue(undefined);
+		renderChat(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					turns: [
+						...chatFixture.turns,
+						{ id: "queued-first", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" },
+						{ id: "queued-automation", state: "queued" as const, requestedAt: "2026-08-11T10:02:00Z" },
+						{ id: "queued-last", state: "queued" as const, requestedAt: "2026-08-11T10:03:00Z" },
+					],
+					items: [
+						...chatFixture.items,
+						queuedPrompt("queued-first", 100, "human", "first prompt"),
+						queuedPrompt("queued-automation", 101, "automation", "automation follow-up"),
+						queuedPrompt("queued-last", 102, "human", "last prompt"),
+					],
+				}}
+				onSteer={vi.fn()}
+				onReorderQueuedTurns={onReorderQueuedTurns}
+			/>,
+		);
+		expect(screen.queryByTestId("queued-message-queued-automation")).not.toBeInTheDocument();
+
+		simulateDrag("queued-last", "queued-first");
+
+		await waitFor(() => {
+			expect(onReorderQueuedTurns).toHaveBeenCalledWith(["queued-last", "queued-automation", "queued-first"]);
 		});
 	});
 });

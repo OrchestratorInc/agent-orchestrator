@@ -10,6 +10,10 @@ const h = vi.hoisted(() => ({
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
 	fallbackAction: undefined as string | undefined,
+	error: undefined as string | undefined,
+	status: undefined as string | undefined,
+	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
+	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 }));
 
@@ -31,10 +35,13 @@ vi.mock("./TaskComposer", () => ({
 		launchFallback: h.launchFallback,
 		fallbackAction: h.fallbackAction,
 		fallbackLabel: "Create as Terminal UI",
+		error: h.error,
+		status: h.status,
+		errorAction: h.errorAction,
 		submitMode: undefined,
 		isCloudProject: false,
 		canSubmit: true,
-		launchSnapshot: () => ({ agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined }),
+		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
 		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
@@ -61,7 +68,7 @@ function renderPage() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const page = (projectId: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={projectId} /></QueryClientProvider>;
 	const { rerender } = render(page("proj-1"));
-	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)) });
+	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)), refresh: () => rerender(page("proj-1")) });
 }
 
 beforeEach(() => {
@@ -70,11 +77,21 @@ beforeEach(() => {
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
+	h.error = undefined;
+	h.status = undefined;
+	h.errorAction = undefined;
+	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	window.localStorage.clear();
 });
 
 describe("NewChatPage", () => {
+	it("shows a confirmed branch choice as status before the next send", () => {
+		h.status = "Branch fix/login selected for your next task.";
+		renderPage();
+		expect(screen.getByRole("status").textContent).toContain("fix/login");
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
 	it("creates the session on first send and hands its brief to the session chat", async () => {
 		let resolve!: (sessionId: string) => void;
 		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
@@ -137,6 +154,69 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.localEchos).toBeUndefined();
 		expect(h.workspace?.draftSettings).toBeTruthy();
 		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("clears a typed model refusal so the next send uses the reviewed choice", async () => {
+		h.launch.mockRejectedValueOnce(Object.assign(new Error("Review the agent default and start again"), { name: "TaskCreateError", code: "UNSUPPORTED_MODEL" }))
+			.mockResolvedValueOnce("sess-2");
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ code: "TASK_CREATE_FAILED" });
+		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}")).toEqual({});
+		h.replay = { ...h.replay, model: "agent-default" };
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-2"); });
+		expect(h.launch).toHaveBeenNthCalledWith(2, "Fix the build", expect.objectContaining({
+			clientRequestId: "cid-2",
+			replay: expect.objectContaining({ model: "agent-default" }),
+		}));
+	});
+
+	it("shows the new branch input after a primary send conflict", async () => {
+		h.launch.mockRejectedValue(new Error("Branch is in use"));
+		const page = renderPage();
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined);
+		});
+		const chooseBranch = vi.fn();
+		h.error = "That branch is open in another worktree.";
+		h.errorAction = {
+			label: "Choose new branch",
+			onClick: chooseBranch,
+			input: {
+				label: "New branch name",
+				value: "",
+				onChange: (value) => {
+					if (h.errorAction?.input) h.errorAction.input.value = value;
+					page.refresh();
+				},
+			},
+		};
+		act(() => page.refresh());
+		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		const button = screen.getByRole("button", { name: "Choose new branch" });
+		expect(button).toBeDisabled();
+		fireEvent.change(screen.getByRole("textbox", { name: "New branch name" }), { target: { value: "fix/new-branch" } });
+		expect(button).toBeEnabled();
+		fireEvent.click(button);
+		expect(chooseBranch).toHaveBeenCalledOnce();
+	});
+
+	it("shows the install action after a primary send reports a missing agent", async () => {
+		h.launch.mockRejectedValue(new Error("Agent binary not found"));
+		const page = renderPage();
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined);
+		});
+		const openSettings = vi.fn();
+		h.error = "This agent is not installed.";
+		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		act(() => page.refresh());
+		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
 	});
 
 	it("leaves a lost response uncertain so the composer retries with the same request id", async () => {

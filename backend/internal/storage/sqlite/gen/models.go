@@ -357,6 +357,7 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+	AuthoredByUser      int64
 }
 
 type ConversationMessagesFt struct {
@@ -419,6 +420,7 @@ type ConversationTurn struct {
 	UsageLimitResumeError string
 	BatchedInput          int64
 	ProviderInputText     string
+	FailureCode           string
 }
 
 type Cue struct {

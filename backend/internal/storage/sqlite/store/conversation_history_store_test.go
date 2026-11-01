@@ -106,6 +106,31 @@ func turnIDs(turns []domain.ConversationTurn) []string {
 	return out
 }
 
+func TestConversationFailureCodeSurvivesSnapshotReload(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
+		domain.ConversationMessage{ID: "key-prompt", Text: "hello", Origin: domain.MessageOriginHuman},
+		"key-turn", histClock)
+	if err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "key-turn", "provider-key-turn", histClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurnWithFailureCode(ctx, conversation, "provider-key-turn", domain.TurnStateFailed,
+		"ACP internal detail", domain.ConversationFailureProviderKeyMissing, histClock); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].FailureCode != domain.ConversationFailureProviderKeyMissing || snapshot.Turns[0].ErrorMessage != "ACP internal detail" {
+		t.Fatalf("turns = %+v", snapshot.Turns)
+	}
+}
+
 func TestAppendUserMessageRejectsChangedPayloadForSameClientID(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()

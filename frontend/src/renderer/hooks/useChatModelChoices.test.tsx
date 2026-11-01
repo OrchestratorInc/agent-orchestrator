@@ -7,7 +7,15 @@ import type { ChatConfigOption, ChatModel } from "../types/conversation";
 vi.mock("./useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agentId: string) => ({
 		queryKey: ["agent-models", agentId],
-		queryFn: async () => ({ agentId, models: [{ id: "saved-model", label: "Saved Model", isDefault: true }] }),
+		queryFn: async () => agentId === "claude-code"
+			? {
+				agentId,
+				models: [
+					{ id: "claude-sonnet-5-5", label: "Sonnet 5.5", isDefault: true },
+					{ id: "claude-opus-5-5", label: "Opus 5.5", requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." },
+				],
+			}
+			: { agentId, models: [{ id: "saved-model", label: "Saved Model", isDefault: true }] },
 	}),
 }));
 
@@ -52,5 +60,34 @@ describe("useChatModelChoices", () => {
 		const { result } = renderHook(() => useChatModelChoices("opencode", [], options, undefined, undefined, false), { wrapper });
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(result.current.models).toEqual([]);
+	});
+
+	it("marks Claude models the installed CLI is too old for, but never an alias or a cloud chat's", async () => {
+		const options: ChatConfigOption[] = [{
+			id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-sonnet-5-5",
+			choices: [
+				{ value: "opus", name: "Opus" },
+				{ value: "claude-opus-5-5", name: "Opus 5.5" },
+				{ value: "claude-opus-5-5[1m]", name: "Opus 5.5 (1M context)" },
+				{ value: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+			],
+		}];
+		const reasons = (configOptions: ChatConfigOption[] | undefined) =>
+			Object.fromEntries((configOptions?.[0]?.choices ?? []).map((choice) => [choice.value, choice.unavailableReason]));
+
+		const local = renderHook(() => useChatModelChoices("claude-code", [], options, undefined), { wrapper });
+		await waitFor(() => expect(local.result.current.models.find((model) => model.id === "claude-opus-5-5")?.unavailableReason).toBeTruthy());
+		expect(local.result.current.models.find((model) => model.id === "claude-sonnet-5-5")?.unavailableReason).toBeUndefined();
+		expect(reasons(local.result.current.configOptions)).toEqual({
+			opus: undefined,
+			"claude-opus-5-5": "Requires Claude Code 2.1.280 or newer.",
+			"claude-opus-5-5[1m]": "Requires Claude Code 2.1.280 or newer.",
+			"claude-sonnet-5-5": undefined,
+		});
+
+		const cloud = renderHook(() => useChatModelChoices("claude-code", [], options, undefined, undefined, true, false), { wrapper });
+		await waitFor(() => expect(cloud.result.current.models.map((model) => model.id)).toContain("claude-opus-5-5"));
+		expect(cloud.result.current.models.every((model) => !model.unavailableReason)).toBe(true);
+		expect(Object.values(reasons(cloud.result.current.configOptions)).every((reason) => !reason)).toBe(true);
 	});
 });

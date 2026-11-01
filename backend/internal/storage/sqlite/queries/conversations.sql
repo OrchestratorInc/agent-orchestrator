@@ -724,7 +724,7 @@ WHERE id = ?;
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
 WHERE id = ?;
 
 -- A streamed assistant item may not receive item/completed when steering causes
@@ -1149,6 +1149,7 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -1296,9 +1297,9 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
+    delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: IncrementUsageMessageSummary :exec
 -- Adds one human message: a direct Chat message (pending_count), a steer, or
