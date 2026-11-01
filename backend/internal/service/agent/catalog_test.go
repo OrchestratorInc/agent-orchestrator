@@ -1801,6 +1801,14 @@ func TestModelsClassifiesMissingAiderAfterReadinessExpires(t *testing.T) {
 	}
 }
 
+func TestMissingAgentModelCatalogPreservesDiscoveryDiagnostic(t *testing.T) {
+	const diagnostic = "codex discovery: executable missing from managed install locations"
+	got := missingAgentModelCatalog(ports.AgentModelCatalog{WarningCode: ports.ModelCatalogWarningNotInstalled, Warning: diagnostic}, "Codex")
+	if got.Warning != diagnostic {
+		t.Fatalf("overlay warning = %q, want original discovery diagnostic", got.Warning)
+	}
+}
+
 func TestCachedModelsExposeMissingCLIWithoutDiscardingSavedChoices(t *testing.T) {
 	now := time.Now().UTC()
 	record := cachedModelRecord(t, "gemini", "", now, false)
@@ -1816,7 +1824,7 @@ func TestCachedModelsExposeMissingCLIWithoutDiscardingSavedChoices(t *testing.T)
 	if err != nil || got.WarningCode != ports.ModelCatalogWarningNotInstalled || !got.Stale || len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
 		t.Fatalf("cached missing-CLI catalog = %#v, %v", got, err)
 	}
-	if want := "Gemini: " + ports.ErrAgentBinaryNotFound.Error(); got.Warning != want {
+	if want := "Gemini: installation check did not find the CLI on this host."; got.Warning != want {
 		t.Fatalf("cached warning = %q, want manifest display name in %q", got.Warning, want)
 	}
 	agent.installed.Store(true)

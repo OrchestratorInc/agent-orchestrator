@@ -50,7 +50,7 @@ import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQue
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
-	modelCatalogAuthIssue,
+	modelCatalogIssue,
 	refreshAgentModels,
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
@@ -601,11 +601,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 				? localModelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
-	// A login problem behind the catalog warning gets a plain-language notice
+	// An installation or login problem gets a plain-language catalog notice
 	// with the fix in place. A cloud task never runs on this computer's login,
 	// so its composer never asks for it.
-	const modelNotInstalled = !isCloudProject && revalidationWarning === undefined && localCatalog?.warningCode === "not_installed";
-	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
+	const modelIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogIssue(localCatalog) : undefined;
+	const modelNotInstalled = modelIssue === "not_installed";
+	const modelAuthIssue = modelNotInstalled ? undefined : modelIssue;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models a picker offers, for Cloud
 	// tasks too: a switched-off model is left out of the Cloud catalog as well.
@@ -895,25 +896,27 @@ export function useTaskLaunch({ projectId, hostId }: {
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
-const modelIssue = modelNotInstalled ? "not_installed" : modelAuthIssue;
+	const startAgentInstall = useCallback(() => {
+		openGlobalSettings("harness", {
+			focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
+			harnessView: "local", preserveProject: true,
+		});
+	}, [hostId, openGlobalSettings, selectedAgent]);
 	// An expired login whose refresh token is still in date needs nothing from
 	// the user on this computer: its daemon lets the task start and the agent
 	// renews the token as it launches. A remote host may run an older daemon
 	// that still rejects the spawn for a stale catalog, so keep the notice there.
 	const loginRenewsItself = modelIssue === "expired" && !hostId;
-	const showModelNotice = Boolean(modelIssue) && !loginRenewsItself;
+	const noticeAction = modelIssue === "not_installed"
+		? { issue: modelIssue, onInstall: startAgentInstall }
+		: modelIssue && !loginRenewsItself ? { issue: modelIssue, onLogin: startAgentLogin } : undefined;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelIssue && showModelNotice ? (
+		: noticeAction ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelIssue}
+			{...noticeAction}
 			detail={modelWarningText}
-			onLogin={startAgentLogin}
-			onInstall={() => openGlobalSettings("harness", {
-				focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
-				harnessView: "local", preserveProject: true,
-			})}
 			onRetry={refreshSelectedModels}
 		/>
 	) : modelIssue ? undefined : modelWarningText;
