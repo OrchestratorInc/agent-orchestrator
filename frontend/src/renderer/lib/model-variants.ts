@@ -159,7 +159,7 @@ export function pickModelVariant(
 }
 
 const UPPERCASE_WORDS = new Set(["gpt", "glm", "ai", "api"]);
-const GROUP_NAMES: Record<string, string> = { openai: "OpenAI", xai: "xAI", deepseek: "DeepSeek", "z.ai": "Z.ai" };
+const GROUP_NAMES: Record<string, string> = { openai: "OpenAI", xai: "xAI", deepseek: "DeepSeek", "z.ai": "Z.ai", opencode: "OpenCode", zai: "Z.ai" };
 
 /** A readable name for a model listed only by id ("gpt-5.3-codex-spark" is "GPT-5.3 Codex Spark"); written-out labels are kept. */
 export function readableModelLabel(label: string): string {

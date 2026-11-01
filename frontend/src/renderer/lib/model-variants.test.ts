@@ -109,9 +109,11 @@ describe("providerQualifiedChoice", () => {
 
 	it.each(["opencode", "opencode-v2"])("keeps %s provider identities even when model names match", (harness) => {
 		for (const [provider, groupName] of [
-			["opencode", "Opencode"],
-			["opencode-go", "Opencode Go"],
-			["zai-coding-plan", "Zai Coding Plan"],
+			["opencode", "OpenCode"],
+			["opencode-go", "OpenCode Go"],
+			["opencode-zen", "OpenCode Zen"],
+			["zai-coding-plan", "Z.ai Coding Plan"],
+			["custom-provider", "Custom Provider"],
 		]) {
 			const choice = { value: `${provider}/deepseek-v4-flash`, name: "DeepSeek V4 Flash" };
 			expect(providerQualifiedChoice(choice, harness)).toEqual({ ...choice, group: provider, groupName });
