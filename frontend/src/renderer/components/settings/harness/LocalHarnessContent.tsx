@@ -444,7 +444,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
-		if (operation === "install") void captureRendererEvent("ao.setup.agent_install_clicked", { agent: agentId });
+		if (operation === "install") void captureRendererEvent("ao.agents.install_clicked", { agent: agentId });
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const fail = (message: string) => {

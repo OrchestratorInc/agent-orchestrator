@@ -150,7 +150,7 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 // emitInstallLifecycleEvents sends the install anchors once each.
 // ao.app.installed only fires on a brand-new install's first daemon start, so
 // it undercounts installs whose CLI ran first or that predate it.
-// ao.app.first_open fires once per install ID on any build and is the reliable
+// ao.install.created fires once per install ID on any build and is the reliable
 // "first seen" count. Each is reserved durably before it is queued, so a
 // restart cannot send it twice.
 func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, log *slog.Logger) {
@@ -182,7 +182,7 @@ func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentity
 	}
 	if marked {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.app.first_open",
+			Name:       "ao.install.created",
 			Source:     "daemon",
 			OccurredAt: time.Now().UTC(),
 			Level:      ports.TelemetryLevelInfo,

@@ -152,8 +152,8 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps setup signals and bounded inventory details", async () => {
-		expect(await sanitizeRendererProperties("ao.setup.agent_missing", { reason: "none_installed", path: "/private/bin" })).toEqual({ reason: "none_installed" });
-		expect(await sanitizeRendererProperties("ao.setup.agent_install_clicked", { agent: "codex", method: "/private/bin" })).toEqual({ agent: "codex" });
+		expect(await sanitizeRendererProperties("ao.agents.missing", { reason: "none_installed", path: "/private/bin" })).toEqual({ reason: "none_installed" });
+		expect(await sanitizeRendererProperties("ao.agents.install_clicked", { agent: "codex", method: "/private/bin" })).toEqual({ agent: "codex" });
 		expect(await sanitizeRendererProperties("ao.renderer.agents_available", { installed_count: 2, supported_count: 4, path: "/private/bin" })).toEqual({ installed_count: 2, supported_count: 4 });
 	});
 
@@ -360,6 +360,7 @@ describe("telemetry sanitizers", () => {
 			installSource: "brew-cask",
 			installedAt: "2026-10-20",
 			isCi: false,
+			isContainer: false,
 		});
 		expect(context).toMatchObject({
 			arch: "arm64",
@@ -367,13 +368,14 @@ describe("telemetry sanitizers", () => {
 			install_source: "brew-cask",
 			installed_at: "2026-10-20",
 			is_ci: false,
+			is_container: false,
 			release_channel: "stable",
 			client: "desktop",
 		});
 		expect(context).not.toHaveProperty("ci_signal");
-		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, ciSignal: "container" })).toMatchObject({
+		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, isContainer: true })).toMatchObject({
 			is_ci: true,
-			ci_signal: "container",
+			is_container: true,
 		});
 		// Without a context (older main process) nothing is invented.
 		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");

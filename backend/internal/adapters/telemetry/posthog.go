@@ -187,7 +187,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.app.installed": {
 		"launcher": {},
 	},
-	"ao.app.first_open": {
+	"ao.install.created": {
 		"launcher": {},
 	},
 	"ao.daemon.started": {
@@ -210,9 +210,9 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
-	"ao.onboarding.app_opened":      {},
-	"ao.onboarding.cli_detected":    {},
-	"ao.onboarding.next_day_return": {},
+	"ao.app.first_opened":      {},
+	"ao.cli.first_used":        {},
+	"ao.app.next_day_returned": {},
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},

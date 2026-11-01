@@ -187,7 +187,7 @@ test("readTelemetryInstallContext reads app-state.json and sends only enum and d
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-install-"));
 	tempDirs.push(dir);
 	const base = { stateDir: dir, arch: "arm64", osVersion: "15.1.2", env: {}, exists: () => false };
-	expect(await readTelemetryInstallContext(base)).toEqual({ arch: "arm64", osVersion: "15.1.2", installSource: "unknown", isCi: false });
+	expect(await readTelemetryInstallContext(base)).toEqual({ arch: "arm64", osVersion: "15.1.2", installSource: "unknown", isCi: false, isContainer: false });
 
 	await writeFile(
 		path.join(dir, "app-state.json"),
@@ -199,7 +199,7 @@ test("readTelemetryInstallContext reads app-state.json and sends only enum and d
 		installSource: "npm-bootstrap",
 		installedAt: "2026-10-20",
 		isCi: true,
-		ciSignal: "ci_env",
+		isContainer: false,
 	});
 
 	await writeFile(path.join(dir, "app-state.json"), JSON.stringify({ installSource: "/Users/me/Downloads" }));
@@ -210,7 +210,7 @@ test("readTelemetryInstallContext reads app-state.json and sends only enum and d
 test("buildTelemetryBootstrap carries the install context", async () => {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-bootstrap-install-"));
 	tempDirs.push(dir);
-	const install = { arch: "x64", installSource: "exe", isCi: false };
+	const install = { arch: "x64", installSource: "exe", isCi: false, isContainer: false };
 	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "win32", "/home/test", true, enabledPolicy, install);
 	expect(bootstrap?.install).toEqual(install);
 });

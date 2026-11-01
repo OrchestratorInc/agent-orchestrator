@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
-import { type CiSignal, detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
+import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
 
 /**
  * Segmentation the renderer cannot see for itself: CPU architecture, the real
@@ -17,7 +17,7 @@ export type TelemetryInstallContext = {
 	installSource: string;
 	installedAt?: string;
 	isCi: boolean;
-	ciSignal?: CiSignal;
+	isContainer: boolean;
 };
 
 export type TelemetryBootstrap = {
@@ -72,7 +72,7 @@ export async function readTelemetryInstallContext(input: {
 		installSource: normalizeInstallSource(typeof state.installSource === "string" ? state.installSource : undefined),
 		...(installedAt ? { installedAt } : {}),
 		isCi: ci.isCi,
-		...(ci.ciSignal ? { ciSignal: ci.ciSignal } : {}),
+		isContainer: ci.isContainer,
 	};
 }
 

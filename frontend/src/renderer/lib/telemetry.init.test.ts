@@ -243,9 +243,9 @@ describe("PostHog identity and opt-out", () => {
 		const first = await import("./telemetry");
 		await first.initTelemetry();
 		const names = posthogStub.capture.mock.calls.map(([name]) => name);
-		expect(names.filter((name) => name === "ao.onboarding.app_opened")).toHaveLength(1);
-		expect(names.filter((name) => name === "ao.onboarding.next_day_return")).toHaveLength(0);
-		expect(posthogStub.capture).toHaveBeenCalledWith("ao.onboarding.app_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
+		expect(names.filter((name) => name === "ao.app.first_opened")).toHaveLength(1);
+		expect(names.filter((name) => name === "ao.app.next_day_returned")).toHaveLength(0);
+		expect(posthogStub.capture).toHaveBeenCalledWith("ao.app.first_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
 		vi.resetModules();
 		posthogStub.capture.mockClear();
 		const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
@@ -253,13 +253,13 @@ describe("PostHog identity and opt-out", () => {
 		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, lifetimeSessions: 2 }));
 		const second = await import("./telemetry");
 		await second.initTelemetry();
-		expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.onboarding.next_day_return")).toHaveLength(1);
+		expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.next_day_returned")).toHaveLength(1);
 		vi.resetModules();
 		posthogStub.capture.mockClear();
 		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, lifetimeSessions: 2 }));
 		const third = await import("./telemetry");
 		await third.initTelemetry();
-		expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.onboarding.app_opened" || name === "ao.onboarding.next_day_return")).toBe(false);
+		expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened" || name === "ao.app.next_day_returned")).toBe(false);
 	});
 
 	it("stamps sign-in only after the renderer learns the account state", async () => {
