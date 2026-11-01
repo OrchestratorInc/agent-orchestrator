@@ -2246,14 +2246,7 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 	if account.AuthVerifiedAt != nil && !turn.CompletedAt.Time.After(*account.AuthVerifiedAt) && account.ReauthRequiredAt == nil {
 		return account, nil
 	}
-	if account.ReauthRequiredAt != nil && account.LastAuthFailureAt == nil {
-		account.LastAuthFailureAt = account.ReauthRequiredAt
-		account.LastAuthFailureReason = account.ReauthReason
-	}
-	account.AuthenticationState = "authenticated"
-	account.AuthVerifiedAt = &turn.CompletedAt.Time
-	account.ReauthRequiredAt = nil
-	account.ReauthReason = ""
+	markAuthenticated(account, turn.CompletedAt.Time)
 	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
 		return nil, err
 	}
@@ -2289,32 +2282,34 @@ func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationA
 func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	tx, err := s.writeDB.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
-	row, err := q.SelectConversationByID(ctx, conversationID)
-	if err != nil {
-		return false, err
-	}
-	account := conversationToDomain(row).Account
-	if account == nil || account.ReauthRequiredAt == nil || !account.ReauthRequiredAt.Before(at) {
-		return false, nil
-	}
-	if account.LastAuthFailureAt == nil {
+	cleared := false
+	err := s.inTx(ctx, "confirm conversation login", func(q *gen.Queries) error {
+		row, err := q.SelectConversationByID(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		account := conversationToDomain(row).Account
+		if account == nil || account.ReauthRequiredAt == nil || !account.ReauthRequiredAt.Before(at) {
+			return nil
+		}
+		markAuthenticated(account, at)
+		cleared = true
+		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now)
+	})
+	return cleared && err == nil, err
+}
+
+// markAuthenticated records provider success at verifiedAt. A demand it
+// answers is kept as the last failure.
+func markAuthenticated(account *domain.ConversationAccount, verifiedAt time.Time) {
+	if account.ReauthRequiredAt != nil && account.LastAuthFailureAt == nil {
 		account.LastAuthFailureAt = account.ReauthRequiredAt
 		account.LastAuthFailureReason = account.ReauthReason
 	}
 	account.AuthenticationState = "authenticated"
-	account.AuthVerifiedAt = &at
+	account.AuthVerifiedAt = &verifiedAt
 	account.ReauthRequiredAt = nil
 	account.ReauthReason = ""
-	if err := s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now); err != nil {
-		return false, err
-	}
-	return true, tx.Commit()
 }
 
 // RecordThreadState stores the provider's lifecycle view of the thread.
