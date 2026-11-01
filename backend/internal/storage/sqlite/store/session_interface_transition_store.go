@@ -36,13 +36,14 @@ func (s *Store) CreateSessionInterfaceTransition(
 		HistoryPolicy:        rec.HistoryPolicy,
 		Phase:                rec.Phase,
 		NativeConversationID: rec.NativeConversationID,
+		DegradedKind:         rec.DegradedKind,
 		CreatedAt:            rec.CreatedAt,
 		UpdatedAt:            rec.UpdatedAt,
 		SourceAccountID:      rec.SourceAccountID,
 		TargetAccountID:      rec.TargetAccountID,
 	})
 	if err == nil {
-		return interfaceTransitionToDomain(row), true, nil
+		return transitionRowToDomain(row), true, nil
 	}
 	if !isSQLiteUnique(err) {
 		return domain.SessionInterfaceTransition{}, false, fmt.Errorf("create interface transition for %s: %w", rec.SessionID, err)
@@ -51,7 +52,7 @@ func (s *Store) CreateSessionInterfaceTransition(
 	if lookupErr != nil {
 		return domain.SessionInterfaceTransition{}, false, fmt.Errorf("read winning interface transition for %s: %w", rec.SessionID, lookupErr)
 	}
-	return interfaceTransitionToDomain(existing), false, nil
+	return transitionRowToDomain(existing), false, nil
 }
 
 // CreateSessionInterfaceTransitionAfter claims a provider-history recovery
@@ -88,11 +89,12 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 			ID: rec.ID, SessionID: rec.SessionID, SourceMode: rec.SourceMode,
 			TargetMode: rec.TargetMode, Policy: rec.Policy, HistoryPolicy: rec.HistoryPolicy,
 			Phase: rec.Phase, NativeConversationID: rec.NativeConversationID,
-			CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			DegradedKind: rec.DegradedKind,
+			CreatedAt:    rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
 			SourceAccountID: rec.SourceAccountID, TargetAccountID: rec.TargetAccountID,
 		})
 		if insertErr == nil {
-			transition, created = interfaceTransitionToDomain(row), true
+			transition, created = transitionRowToDomain(row), true
 			return nil
 		}
 		if !isSQLiteUnique(insertErr) {
@@ -102,7 +104,7 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 		if activeErr != nil {
 			return fmt.Errorf("read winning interface transition for %s: %w", rec.SessionID, activeErr)
 		}
-		transition = interfaceTransitionToDomain(existing)
+		transition = transitionRowToDomain(existing)
 		return nil
 	})
 	return transition, created, predecessorMatched, err
@@ -120,7 +122,7 @@ func (s *Store) GetSessionInterfaceTransition(
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, false, fmt.Errorf("get interface transition %s: %w", id, err)
 	}
-	return interfaceTransitionToDomain(row), true, nil
+	return transitionRowToDomain(row), true, nil
 }
 
 // GetActiveSessionInterfaceTransition reads the active transition for a session.
@@ -135,7 +137,7 @@ func (s *Store) GetActiveSessionInterfaceTransition(
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, false, fmt.Errorf("get active interface transition for %s: %w", id, err)
 	}
-	return interfaceTransitionToDomain(row), true, nil
+	return transitionRowToDomain(row), true, nil
 }
 
 // GetLatestSessionInterfaceTransition reads the newest transition for a session.
@@ -150,7 +152,7 @@ func (s *Store) GetLatestSessionInterfaceTransition(
 	if err != nil {
 		return domain.SessionInterfaceTransition{}, false, fmt.Errorf("get latest interface transition for %s: %w", id, err)
 	}
-	return interfaceTransitionToDomain(row), true, nil
+	return transitionRowToDomain(row), true, nil
 }
 
 // ListActiveSessionInterfaceTransitions lists transitions that have not reached a terminal phase.
@@ -161,7 +163,7 @@ func (s *Store) ListActiveSessionInterfaceTransitions(ctx context.Context) ([]do
 	}
 	out := make([]domain.SessionInterfaceTransition, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, interfaceTransitionToDomain(row))
+		out = append(out, transitionRowToDomain(row))
 	}
 	return out, nil
 }
@@ -176,7 +178,7 @@ func (s *Store) ListDeliverableSessionInterfaceTransitions(ctx context.Context) 
 	}
 	out := make([]domain.SessionInterfaceTransition, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, interfaceTransitionToDomain(row))
+		out = append(out, transitionRowToDomain(row))
 	}
 	return out, nil
 }
@@ -238,7 +240,7 @@ func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 		return domain.SessionInterfaceTransition{}, false,
 			fmt.Errorf("acknowledge interface transition notice %s: %w", transitionID, err)
 	}
-	return interfaceTransitionToDomain(row), true, nil
+	return transitionRowToDomain(row), true, nil
 }
 
 // CommitSessionControllerEpoch is the atomic persistence primitive used only by
@@ -450,16 +452,69 @@ func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	return nil
 }
 
-func interfaceTransitionToDomain(row gen.SessionInterfaceTransition) domain.SessionInterfaceTransition {
+// transitionRowToDomain maps the projected columns of any transition query onto
+// the domain record. Every sqlc Row for this table carries the same fields.
+func transitionRowToDomain(row any) domain.SessionInterfaceTransition {
+	switch r := row.(type) {
+	case gen.InsertSessionInterfaceTransitionRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.GetSessionInterfaceTransitionRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.GetActiveSessionInterfaceTransitionRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.GetLatestSessionInterfaceTransitionRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.ListActiveSessionInterfaceTransitionsRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.ListDeliverableSessionInterfaceTransitionsRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	case gen.AcknowledgeSessionInterfaceTransitionNoticeRow:
+		return transitionDomain(r.ID, r.SessionID, r.SourceMode, r.TargetMode, r.Policy,
+			r.HistoryPolicy, r.Phase, r.NativeConversationID, r.DegradedKind,
+			r.ErrorCode, r.ErrorDetail, r.CreatedAt, r.UpdatedAt, r.CompletedAt,
+			r.NoticeAcknowledgedAt, r.SourceAccountID, r.TargetAccountID)
+	}
+	panic("unrecognized session interface transition row")
+}
+
+func transitionDomain(
+	id string, sessionID domain.SessionID,
+	sourceMode, targetMode domain.SessionMode,
+	policy domain.SessionInterfaceTransitionPolicy,
+	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
+	phase domain.SessionInterfaceTransitionPhase,
+	nativeConversationID, degradedKind, errorCode, errorDetail string,
+	createdAt, updatedAt time.Time, completedAt, noticeAcknowledgedAt sql.NullTime,
+	sourceAccountID, targetAccountID string,
+) domain.SessionInterfaceTransition {
 	return domain.SessionInterfaceTransition{
-		ID: row.ID, SessionID: row.SessionID,
-		SourceMode: row.SourceMode, TargetMode: row.TargetMode,
-		Policy: row.Policy, HistoryPolicy: row.HistoryPolicy, Phase: row.Phase,
-		NativeConversationID: row.NativeConversationID,
-		SourceAccountID:      row.SourceAccountID, TargetAccountID: row.TargetAccountID,
-		ErrorCode: row.ErrorCode, ErrorDetail: row.ErrorDetail,
-		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
-		CompletedAt:          nullTimeToTime(row.CompletedAt),
-		NoticeAcknowledgedAt: nullTimeToTime(row.NoticeAcknowledgedAt),
+		ID: id, SessionID: sessionID,
+		SourceMode: sourceMode, TargetMode: targetMode,
+		Policy: policy, HistoryPolicy: historyPolicy, Phase: phase,
+		NativeConversationID: nativeConversationID,
+		DegradedKind:         degradedKind,
+		SourceAccountID:      sourceAccountID, TargetAccountID: targetAccountID,
+		ErrorCode: errorCode, ErrorDetail: errorDetail,
+		CreatedAt: createdAt, UpdatedAt: updatedAt,
+		CompletedAt:          nullTimeToTime(completedAt),
+		NoticeAcknowledgedAt: nullTimeToTime(noticeAcknowledgedAt),
 	}
 }

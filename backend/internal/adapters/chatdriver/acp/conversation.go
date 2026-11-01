@@ -87,6 +87,8 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
+	harness              domain.AgentHarness
+	suppressSessionModes bool
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -148,8 +150,12 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
+	// promptErrorFailure: see Config.PromptErrorFailure.
+	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
 	historyUserChunkIsMessage bool
+	// historyReconciler: see Config.HistoryReconciler.
+	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually
@@ -564,7 +570,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				continue
 			}
 			modelOptionFound = true
-			resolved, ok := resolveLegacyModelChoice(option.Choices, model)
+			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
 			if !ok {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
@@ -870,6 +876,11 @@ func (c *conversation) finishPrompt(
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)
+			if c.promptErrorFailure != nil && !errors.Is(turnErr, ports.ErrChatAuthRequired) {
+				if failure := c.promptErrorFailure(err, answered); failure != nil {
+					turnErr = failure
+				}
+			}
 			if c.promptFailureCode != nil {
 				failureCode = c.promptFailureCode(err)
 			}

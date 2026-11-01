@@ -214,7 +214,11 @@ func (c *conversation) finishHistoryReplay() {
 
 	c.historyMu.Lock()
 	if c.history != nil {
-		c.historyEvents = append([]ports.ChatEvent(nil), c.history.events...)
+		events := append([]ports.ChatEvent(nil), c.history.events...)
+		if c.historyReconciler != nil {
+			events = c.historyReconciler(events)
+		}
+		c.historyEvents = events
 		c.historyErr = nil
 		c.historyLoaded = true
 	}

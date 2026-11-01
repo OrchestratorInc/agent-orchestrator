@@ -1,0 +1,290 @@
+package hermesacp
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
+	// The launch env resolves the persona's HERMES_HOME; keep the test off the
+	// machine's real Hermes configuration.
+	home := t.TempDir()
+	t.Setenv("HERMES_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"),
+		[]byte("agent:\n  system_prompt: Native persona text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		cfg  acpdriver.LaunchConfig
+		want []string
+		env  map[string]string
+	}{
+		{name: "defaults", want: []string{"acp"}},
+		{
+			name: "system prompt rides in the env overlay",
+			cfg:  acpdriver.LaunchConfig{SystemPrompt: "  Follow AO rules.  "},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Native persona text\n\nFollow AO rules."},
+		},
+		{
+			name: "without a native persona the variable carries AO's instructions alone",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.", Env: map[string]string{"HERMES_HOME": t.TempDir()},
+			},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules."},
+		},
+		{
+			// Hermes reads an explicit environment prompt ahead of its
+			// configuration, so the persona from config.yaml must not replace
+			// it when the launch inherits one.
+			name: "a session-env explicit prompt wins over the config persona",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.",
+				Env: map[string]string{
+					"HERMES_HOME":                    home,
+					"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use my team conventions",
+				},
+			},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use my team conventions\n\nFollow AO rules."},
+		},
+		{
+			// The hook-config path preserves the pre-AO prompt through the
+			// marker; the launch must keep composing from that original even
+			// when both the environment entry and the config carry a persona.
+			name: "the preserved original marker wins over env and config",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.",
+				Env: map[string]string{
+					"HERMES_HOME":                    home,
+					"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Inherited env prompt",
+					"AO_HERMES_ORIGINAL_EPHEMERAL":   "Marker persona text",
+				},
+			},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Marker persona text\n\nFollow AO rules."},
+		},
+		{
+			name: "model is session-owned, never a launch flag",
+			cfg:  acpdriver.LaunchConfig{Model: "anthropic/claude-sonnet"},
+			want: []string{"acp"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, env, err := configure(context.Background(), tt.cfg)
+			if err != nil {
+				t.Fatalf("configure: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("args = %#v, want %#v", got, tt.want)
+			}
+			if !reflect.DeepEqual(env, tt.env) {
+				t.Fatalf("env = %#v, want %#v", env, tt.env)
+			}
+		})
+	}
+}
+
+func TestSessionPreambleCarriesStandingPromptAndLanguagePin(t *testing.T) {
+	blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "  Coordinate work, not implementation.  "})
+	if len(blocks) != 1 {
+		t.Fatalf("SessionPreamble returned %d blocks, want 1", len(blocks))
+	}
+	text := blocks[0].Text.Text
+	if !strings.Contains(text, "Coordinate work, not implementation.") {
+		t.Errorf("preamble %q is missing the standing prompt", text)
+	}
+	if !strings.Contains(text, "Never output Chinese") {
+		t.Errorf("preamble %q is missing the output-language pin", text)
+	}
+	if !strings.Contains(text, "<ao-standing-instructions>") || !strings.Contains(text, "</ao-standing-instructions>") {
+		t.Errorf("preamble %q is not wrapped in ao_standing_instructions", text)
+	}
+	if strings.Index(text, "Coordinate work") > strings.Index(text, "Never output Chinese") {
+		t.Errorf("preamble %q puts the language pin ahead of the standing prompt", text)
+	}
+}
+
+func TestSessionPreambleNilWithoutStandingPrompt(t *testing.T) {
+	if blocks := SessionPreamble(acpdriver.LaunchConfig{}); blocks != nil {
+		t.Fatalf("SessionPreamble with no system prompt = %#v, want nil", blocks)
+	}
+	if blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "   "}); blocks != nil {
+		t.Fatalf("SessionPreamble with a whitespace system prompt = %#v, want nil", blocks)
+	}
+}
+
+func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
+	tests := []struct {
+		mode ports.PermissionMode
+		want string
+	}{
+		{ports.PermissionModeDefault, hermesModeDefault},
+		// NormalizePermissionMode collapses unknown modes onto Default, so an
+		// unrecognized AO mode still lands on Hermes' explicit ask mode.
+		{ports.PermissionMode("bogus"), hermesModeDefault},
+		{ports.PermissionModeAcceptEdits, hermesModeAcceptEdits},
+		{ports.PermissionModeAuto, hermesModeDontAsk},
+		{ports.PermissionModeBypassPermissions, hermesModeDontAsk},
+	}
+	for _, tt := range tests {
+		if got := sessionMode(tt.mode); got != tt.want {
+			t.Fatalf("sessionMode(%q) = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+}
+
+// The chat launch path respects the same process-environment bound as the TUI
+// path: a persona plus instructions that do not fit fail the launch instead of
+// truncating silently.
+func TestConfigureRejectsPromptExceedingEnvBound(t *testing.T) {
+	t.Setenv("HERMES_HOME", t.TempDir())
+	_, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SystemPrompt: strings.Repeat("a", 200*1024),
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment limit") {
+		t.Fatalf("configure error = %v, want the environment-limit refusal", err)
+	}
+}
+
+func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
+	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
+		t.Fatalf("empty settings options = %#v, want nil", got)
+	}
+	if got := sessionOptions(ports.ChatTurnSettings{Effort: "high"}); got != nil {
+		t.Fatalf("effort-only options = %#v, want nil", got)
+	}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "  "}); got != nil {
+		t.Fatalf("blank model options = %#v, want nil", got)
+	}
+	want := []acpdriver.SessionOption{{ID: "model", Value: "anthropic/claude-opus-4.6"}}
+	if got := sessionOptions(ports.ChatTurnSettings{Model: "  anthropic/claude-opus-4.6  "}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func allowOption(id string, kind acpsdk.PermissionOptionKind) acpsdk.PermissionOption {
+	optionID := acpsdk.PermissionOptionId(id)
+	return acpsdk.PermissionOption{OptionId: optionID, Name: id, Kind: kind}
+}
+
+func TestPermissionPolicyAutoApprovesOnlyInBypassMode(t *testing.T) {
+	request := acpsdk.RequestPermissionRequest{
+		Options: []acpsdk.PermissionOption{
+			allowOption("deny_once", acpsdk.PermissionOptionKindRejectOnce),
+			allowOption("allow_once", acpsdk.PermissionOptionKindAllowOnce),
+			allowOption("allow_session", acpsdk.PermissionOptionKindAllowAlways),
+			allowOption("allow_always", acpsdk.PermissionOptionKindAllowAlways),
+		},
+	}
+
+	if id, handled := permissionPolicy(ports.PermissionModeAcceptEdits, request); handled {
+		t.Fatalf("accept-edits policy handled the request with %q, want passthrough", id)
+	}
+	if id, handled := permissionPolicy(ports.PermissionModeDefault, request); handled {
+		t.Fatalf("default policy handled the request with %q, want passthrough", id)
+	}
+
+	// Bypass answers allow_once even when persistent kinds are offered: Hermes
+	// caches those grants across a later switch to Default.
+	id, handled := permissionPolicy(ports.PermissionModeBypassPermissions, request)
+	if !handled || id != "allow_once" {
+		t.Fatalf("bypass policy = (%q, %v), want allow_once", id, handled)
+	}
+
+	request.Options = []acpsdk.PermissionOption{
+		allowOption("allow_session", acpsdk.PermissionOptionKindAllowAlways),
+		allowOption("allow_always", acpsdk.PermissionOptionKindAllowAlways),
+	}
+	if _, handled = permissionPolicy(ports.PermissionModeBypassPermissions, request); handled {
+		t.Fatal("bypass policy granted a persistent kind, want passthrough")
+	}
+
+	request.Options = []acpsdk.PermissionOption{allowOption("deny_once", acpsdk.PermissionOptionKindRejectOnce)}
+	if _, handled = permissionPolicy(ports.PermissionModeBypassPermissions, request); handled {
+		t.Fatal("bypass policy handled a request with no allow option, want passthrough")
+	}
+}
+
+func TestVersionProbeRequiresVersionOutput(t *testing.T) {
+	if err := versionProbe(context.Background(), "/nonexistent/hermes"); err == nil {
+		t.Fatal("versionProbe with a missing binary should fail")
+	}
+}
+
+func TestDriverReusesHermesPluginForProbe(t *testing.T) {
+	plugin := &fakePlugin{status: ports.AgentAuthStatusAuthorized, binary: "/usr/bin/hermes"}
+	versionCalls := 0
+	driver := newDriver(plugin, func(_ context.Context, bin string) error {
+		versionCalls++
+		if bin != "/usr/bin/hermes" {
+			t.Fatalf("version probe binary = %q, want /usr/bin/hermes", bin)
+		}
+		return nil
+	}, nil)
+
+	caps, err := driver.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if driver.Harness() != domain.HarnessHermes {
+		t.Fatalf("harness = %q", driver.Harness())
+	}
+	for _, capability := range []ports.ChatCapability{
+		ports.ChatCapabilityStreaming, ports.ChatCapabilityTools, ports.ChatCapabilityApprovals,
+		ports.ChatCapabilityInterrupt, ports.ChatCapabilityResume, ports.ChatCapabilityDiffs,
+	} {
+		if !caps.Has(capability) {
+			t.Errorf("missing capability %q", capability)
+		}
+	}
+	if caps.Has(ports.ChatCapabilityUsage) {
+		t.Error("Hermes advertises no usage surface; usage capability should be off")
+	}
+	if plugin.resolveCalls != 1 || plugin.authCalls != 1 || versionCalls != 1 {
+		t.Fatalf("plugin calls = resolve %d, auth %d, version %d; want one each",
+			plugin.resolveCalls, plugin.authCalls, versionCalls)
+	}
+}
+
+func TestDriverRejectsUnauthenticatedHermes(t *testing.T) {
+	driver := newDriver(
+		&fakePlugin{status: ports.AgentAuthStatusUnauthorized, binary: "/usr/bin/hermes"},
+		func(context.Context, string) error { return nil },
+		nil,
+	)
+	if _, err := driver.Probe(context.Background()); !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("Probe error = %v, want ErrChatAuthRequired", err)
+	}
+}
+
+type fakePlugin struct {
+	binary       string
+	status       ports.AgentAuthStatus
+	resolveCalls int
+	authCalls    int
+}
+
+func (p *fakePlugin) ResolveBinary(context.Context) (string, error) {
+	p.resolveCalls++
+	return p.binary, nil
+}
+
+func (p *fakePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	p.authCalls++
+	return p.status, nil
+}

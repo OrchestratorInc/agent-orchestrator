@@ -9,6 +9,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -147,6 +148,9 @@ func (c *conversation) SetConfigOption(
 // notification and session setup — so an empty list means the session really
 // has no options and is applied as given.
 func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption) {
+	if c.suppressSessionModes {
+		options = withoutModeOptions(options)
+	}
 	normalized := normalizeConfigOptions(options)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -403,6 +407,53 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 			return "", false
 		}
 		matched = choice.Value
+	}
+	return matched, matched != ""
+}
+
+func resolveModelChoice(harness domain.AgentHarness, choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	if resolved, ok := resolveLegacyModelChoice(choices, requested); ok {
+		return resolved, true
+	}
+	if harness != domain.HarnessHermes {
+		return "", false
+	}
+	// Hermes' session/new offers auto:<model>, the id a composer start stores,
+	// but a session/load replaces that row with the provider it resolved to. A
+	// stored auto: id that is no longer offered re-resolves through its model.
+	if model, auto := strings.CutPrefix(requested, "auto:"); auto && model != "" {
+		return resolveProviderPrefixedChoice(choices, model)
+	}
+	return resolveProviderPrefixedChoice(choices, requested)
+}
+
+// resolveProviderPrefixedChoice maps a bare model value onto an advertised
+// choice that carries a provider prefix. Hermes advertises ids such as
+// auto:anthropic/claude-opus-4.6 and openrouter:anthropic/claude-opus-4.6
+// while its CLI-facing configuration names the bare model, so the requested
+// value must equal everything after the advertised id's first ':'. Several
+// providers may list the same model: a single auto:-prefixed row wins because
+// it resolves to the session's current provider, and any other collision stays
+// ambiguous rather than guessed.
+func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	auto, matched, ambiguous := "", "", false
+	for _, choice := range choices {
+		provider, model, found := strings.Cut(choice.Value, ":")
+		if !found || provider == "" || model == "" || model != requested {
+			continue
+		}
+		if provider == "auto" {
+			auto = choice.Value
+			continue
+		}
+		ambiguous = ambiguous || matched != ""
+		matched = choice.Value
+	}
+	if auto != "" {
+		return auto, true
+	}
+	if ambiguous {
+		return "", false
 	}
 	return matched, matched != ""
 }
