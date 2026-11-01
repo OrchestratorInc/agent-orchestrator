@@ -101,8 +101,11 @@ func resolveExcerptSegmentsWithAnchorError(rows ConversationRows, ref ports.Chat
 				break
 			}
 		}
-		if !found || sourceTurn == "" {
+		if !found {
 			return domain.ConversationTurn{}, ErrExcerptStale
+		}
+		if sourceTurn == "" {
+			return domain.ConversationTurn{}, anchorError
 		}
 		if turnID != "" && turnID != sourceTurn {
 			return domain.ConversationTurn{}, ErrExcerptInvalid

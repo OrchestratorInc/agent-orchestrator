@@ -140,7 +140,6 @@ export function ChatSelectionActions({
 				variant="quiet"
 				size="sm"
 				title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
-
 				disabled={pending || Boolean(reason)}
 				aria-describedby={reason ? reasonId : undefined}
 				onClick={() => void activate(false)}

@@ -199,3 +199,25 @@ func TestSegmentedAnchorUnavailableMatchesLegacy(t *testing.T) {
 		t.Fatalf("non-anchor error=%v", err)
 	}
 }
+
+func TestSegmentedAnchorMissingTurnAndStaleSource(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*ConversationRows)
+		want   error
+	}{
+		{"missing message turn", func(rows *ConversationRows) { rows.Messages[1].TurnID = "" }, ErrSideAnchorUnavailable},
+		{"missing command turn", func(rows *ConversationRows) { rows.Activities[0].TurnID = "" }, ErrSideAnchorUnavailable},
+		{"unfinished turn", func(rows *ConversationRows) { rows.Turns[0].State = domain.TurnStateRunning }, ErrSideAnchorUnavailable},
+		{"changed source", func(rows *ConversationRows) { rows.Messages[1].Revision++ }, ErrExcerptStale},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, ref := segmentedFixture()
+			tc.change(&rows)
+			_, err := resolveExcerptSegmentsWithAnchorError(rows, ref, ErrSideAnchorUnavailable)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error=%v want=%v", err, tc.want)
+			}
+		})
+	}
+}
