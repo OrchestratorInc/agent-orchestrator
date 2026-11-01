@@ -851,6 +851,24 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	return out, nil
 }
 
+// ListCommandTerminalsForCurrentAppRun returns the trusted command terminals
+// (native login and setup flows) owned by this app launch, including those a
+// previous daemon in the same launch opened: they deliberately survive a daemon
+// restart. Liveness is not checked; callers probe the ones they own.
+func (s *Service) ListCommandTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
+	recs, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	out := make([]ShellTerminal, 0, len(recs))
+	for _, rec := range recs {
+		if rec.Transient {
+			out = append(out, shellTerminalFromRecord(rec))
+		}
+	}
+	return out, nil
+}
+
 // ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
 // destroys abandoned trusted auth terminals. Live or unknown user runtimes
 // are preserved with their original associations and attach handles.

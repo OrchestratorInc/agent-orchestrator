@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -550,5 +551,99 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	}
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
+	}
+}
+
+// survivingAuthTerminals models shellterm after a daemon restart in the same
+// app launch: earlier command terminals are still listed and may still run.
+type survivingAuthTerminals struct {
+	terminals []shellterm.ShellTerminal
+	alive     map[string]bool
+	probeErr  error
+	listErr   error
+	probes    []string
+}
+
+func (*survivingAuthTerminals) OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
+	return shellterm.ShellTerminal{HandleID: "new-terminal"}, nil
+}
+
+func (s *survivingAuthTerminals) IsShellTerminalChildAlive(_ context.Context, handleID string) (bool, error) {
+	s.probes = append(s.probes, handleID)
+	return s.alive[handleID], s.probeErr
+}
+
+func (s *survivingAuthTerminals) ListCommandTerminalsForCurrentAppRun(context.Context) ([]shellterm.ShellTerminal, error) {
+	return s.terminals, s.listErr
+}
+
+func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	terminals := &survivingAuthTerminals{
+		terminals: []shellterm.ShellTerminal{
+			{HandleID: "github", Title: "Connect GitHub"},
+			{HandleID: "claude", Title: "Log in to Claude Code"},
+			{HandleID: "codex", Title: "Log in to Codex"},
+		},
+		alive: map[string]bool{"github": true, "claude": true, "codex": true},
+	}
+	// A fresh Service, as after a daemon restart: no terminalLogins yet.
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, terminals, dataDir)
+	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd {
+		t.Fatal("admitted a background login while the terminal login still runs")
+		return nil
+	}
+	t.Cleanup(svc.Close)
+	_, err := svc.StartLogin(t.Context(), "codex", "browser", "")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("expected the surviving Codex terminal to exclude login: %v", err)
+	}
+	if !reflect.DeepEqual(terminals.probes, []string{"codex"}) {
+		t.Fatalf("probes = %v, want only the Codex terminal", terminals.probes)
+	}
+	if _, err := svc.Start(t.Context(), "codex"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("expected the adopted terminal to exclude terminal login too: %v", err)
+	}
+	// Each harness is excluded only by its own surviving terminal.
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unrelated-harness"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("expected the Claude terminal to exclude Claude login: %v", err)
+	}
+	terminals.alive = map[string]bool{}
+	terminals.probes = nil
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-after-terminal-exit"); err != nil {
+		t.Fatalf("login after the terminal exited: %v", err)
+	}
+}
+
+func TestLoginRecognizesRenamedTerminalByHarnessWorkspace(t *testing.T) {
+	dataDir := t.TempDir()
+	terminals := &survivingAuthTerminals{
+		terminals: []shellterm.ShellTerminal{{HandleID: "claude-renamed", Title: "renamed tab", WorkingDir: filepath.Join(dataDir, "auth-workspace", "claude-code")}},
+		alive:     map[string]bool{"claude-renamed": true},
+	}
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, terminals, dataDir)
+	t.Cleanup(svc.Close)
+	_, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-renamed-terminal")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("expected the harness workspace terminal to exclude login: %v", err)
+	}
+}
+
+func TestLoginFailsClosedWhenSurvivingTerminalsCannotBeChecked(t *testing.T) {
+	for name, terminals := range map[string]*survivingAuthTerminals{
+		"list":  {listErr: errors.New("store unavailable")},
+		"probe": {terminals: []shellterm.ShellTerminal{{HandleID: "claude", Title: "Log out of Claude Code"}}, probeErr: errors.New("runtime unavailable")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, terminals, t.TempDir())
+			t.Cleanup(svc.Close)
+			_, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unchecked-terminal")
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_TERMINAL_UNKNOWN" {
+				t.Fatalf("expected an inconclusive check to refuse login: %v", err)
+			}
+		})
 	}
 }

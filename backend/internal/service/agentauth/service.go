@@ -195,6 +195,69 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	return s.start(ctx, plan)
 }
 
+// survivingTerminalLister finds trusted command terminals of this app launch.
+// A daemon restart keeps them running, but a new Service starts with an empty
+// terminalLogins, so reserveLogin reconciles them before admitting a login.
+type survivingTerminalLister interface {
+	ListCommandTerminalsForCurrentAppRun(context.Context) ([]shellterm.ShellTerminal, error)
+}
+
+var _ survivingTerminalLister = (*shellterm.Service)(nil)
+
+// ownsAuthTerminal recognizes this harness's native login or logout terminal by
+// the fixed title start gives it, or by the stable per-harness workspace of
+// plans that prepare one.
+func (s *Service) ownsAuthTerminal(agentID string, terminal shellterm.ShellTerminal) bool {
+	plan, ok := planByAgentID[agentID]
+	if !ok {
+		return false
+	}
+	title := strings.TrimSpace(terminal.Title)
+	if title != "" && (title == plan.title || title == strings.Replace(plan.title, "Log in to", "Log out of", 1)) {
+		return true
+	}
+	if strings.TrimSpace(s.dataDir) == "" || strings.TrimSpace(terminal.WorkingDir) == "" {
+		return false
+	}
+	return filepath.Clean(terminal.WorkingDir) == filepath.Join(s.dataDir, authWorkspaceRootName, agentID)
+}
+
+// checkSurvivingTerminalLogins excludes a login while a terminal login for the
+// same harness, opened before a daemon restart in this app launch, still runs.
+// Like the tracked-terminal probe, an inconclusive result never admits a login.
+func (s *Service) checkSurvivingTerminalLogins(ctx context.Context, agentID string) error {
+	lister, ok := s.terminals.(survivingTerminalLister)
+	if !ok {
+		return nil
+	}
+	terminals, err := lister.ListCommandTerminalsForCurrentAppRun(ctx)
+	if err != nil {
+		return apierr.Unavailable("AGENT_AUTH_TERMINAL_UNKNOWN", "The terminal login could not be checked. Close it and retry.")
+	}
+	s.mu.Lock()
+	tracked := s.terminalLogins[agentID]
+	s.mu.Unlock()
+	for _, terminal := range terminals {
+		if terminal.HandleID == "" || terminal.HandleID == tracked || !s.ownsAuthTerminal(agentID, terminal) {
+			continue
+		}
+		alive, err := s.terminals.IsShellTerminalChildAlive(ctx, terminal.HandleID)
+		if err != nil {
+			return apierr.Unavailable("AGENT_AUTH_TERMINAL_UNKNOWN", "The terminal login could not be checked. Close it and retry.")
+		}
+		if alive {
+			// Adopt it so later checks use the tracked-terminal probe.
+			s.mu.Lock()
+			if s.terminalLogins[agentID] == "" {
+				s.terminalLogins[agentID] = terminal.HandleID
+			}
+			s.mu.Unlock()
+			return apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Close the terminal login before starting another login.", nil)
+		}
+	}
+	return nil
+}
+
 // reserveLogin excludes both startup and live terminal commands. Runtime probes
 // run outside the registry lock; an inconclusive probe never releases exclusion.
 func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), error) {
@@ -241,6 +304,10 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		s.mu.Lock()
 		delete(s.terminalLogins, agentID)
 		s.mu.Unlock()
+	}
+	if err := s.checkSurvivingTerminalLogins(ctx, agentID); err != nil {
+		release()
+		return nil, err
 	}
 	return release, nil
 }
