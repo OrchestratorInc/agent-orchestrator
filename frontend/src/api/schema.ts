@@ -5692,6 +5692,7 @@ export interface components {
             status: string;
         };
         ConversationMessageResponse: {
+            authoredByUser?: boolean;
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
             continuation?: boolean;

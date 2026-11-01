@@ -162,9 +162,9 @@ export function ArtifactActionsMenu({
 	);
 	return (
 		<>
-			{sidebar && !session.cloud ? (
+			{sidebar ? (
 				<>
-					{onEdit && !fileMediaKind(artifact.path) ? (
+					{onEdit && !session.cloud && !fileMediaKind(artifact.path) ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={cn("text-muted-foreground hover:text-foreground", actionClassName)} onClick={onEdit} size="icon-sm" type="button" variant="ghost">
