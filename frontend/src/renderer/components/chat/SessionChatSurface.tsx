@@ -493,7 +493,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						isCurrent: current,
 						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId && (options?.shouldActivate() ?? true),
 					});
-					if (result.activated && current() && (options?.shouldActivate() ?? true)) openSideInspector();
+					// Creation owns the activation decision; its own focus update may clear the native selection.
+					if (result.activated && current()) openSideInspector();
 				} catch (error) {
 					// A confirmed close is terminal, not an unanswered creation. Do not retry
 					// automatically; the next deliberate Add may allocate a fresh request.

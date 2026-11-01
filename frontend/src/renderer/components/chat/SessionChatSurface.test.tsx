@@ -1,3 +1,4 @@
+import type { ChatExcerptActivation } from "../../../shared/chat-excerpt";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -93,7 +94,7 @@ const sideMocks = vi.hoisted(() => ({
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
 	activeId: "existing-side" as string | undefined,
-	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
+	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference, options?: ChatExcerptActivation) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
@@ -1414,6 +1415,17 @@ describe("selection side-chat operation ownership", () => {
 		expect(sideMocks.create.mock.calls[2][2]).toBe(key);
 		expect(sideMocks.create.mock.calls[0][0].segments[0].sourceId).toBe("one");
 	});
+	it("honors committed activation after creation focus clears the selection", async () => {
+		mount(); let selected = true;
+		sideMocks.create.mockImplementationOnce(async (_excerpt,_forceNew,_key,options) => {
+			expect(options.shouldActivate()).toBe(true);
+			selected = false;
+			return {id:"created",activated:true};
+		});
+		await act(async()=>{await sideMocks.attach!(excerpt,{shouldActivate:()=>selected});});
+		expect(useUiStore.getState().inspectorSessions[session.id]?.isOpen).toBe(true);
+	});
+
 	it.each([false,true])("opens the inspector only after an eligible creation succeeds: %s", async activated => {
 		mount(); let finish!: (value:{id:string;activated:boolean})=>void;
 		sideMocks.create.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
