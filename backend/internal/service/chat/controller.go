@@ -1048,6 +1048,14 @@ func nativeHistoryActivityFingerprint(
 	summary string,
 	detail []byte,
 ) string {
+	if kind == domain.ActivityKindReasoning && status == domain.ActivityStatusRecovered {
+		// History replay settles every open thought as recovered, while the live
+		// row completed. Nothing else about a thought differs, so an agent that
+		// replays thoughts under new item ids would otherwise re-import each one.
+		// Prose is deliberately not compared: Codex settles a summary-less thought
+		// with empty text while its row keeps the streamed deltas.
+		status = domain.ActivityStatusCompleted
+	}
 	return string(kind) + "\x00" + string(status) + "\x00" + summary + "\x00" + string(detail)
 }
 
