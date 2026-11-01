@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { clampPreviewText, isMarkdownPreviewPath, parseMarkdownFrontmatter } from "./markdown-frontmatter";
+import { clampPreviewText, isMarkdownPreviewPath, parseMarkdownFrontmatter, stripMarkdownFrontmatter } from "./markdown-frontmatter";
 
 const file = (body: string) => `---\n${body}\n---\n# Heading\n`;
+
+describe("stripMarkdownFrontmatter", () => {
+	it("removes complete metadata with LF, CRLF, or a BOM", () => {
+		expect(stripMarkdownFrontmatter(file("name: Guide"))).toBe("# Heading\n");
+		expect(stripMarkdownFrontmatter("\uFEFF---\r\nname: Guide\r\n---\r\n# Heading")).toBe("# Heading");
+		expect(stripMarkdownFrontmatter("---\n---\n# Heading")).toBe("# Heading");
+	});
+
+	it("preserves incomplete frontmatter and later horizontal rules", () => {
+		expect(stripMarkdownFrontmatter("---\nname: Guide")).toBe("---\nname: Guide");
+		expect(stripMarkdownFrontmatter("# Heading\n\n---\n\nBody")).toBe("# Heading\n\n---\n\nBody");
+	});
+});
 
 describe("parseMarkdownFrontmatter", () => {
 	it("reads name and description as plain text", () => {

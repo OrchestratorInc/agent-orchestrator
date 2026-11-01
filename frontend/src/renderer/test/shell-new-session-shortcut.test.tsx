@@ -687,14 +687,14 @@ describe("shell workspace startup", () => {
 		});
 	});
 
-	it("shows the Chat startup view while opening a cloud orchestrator", async () => {
+	it("shows the Cloud loader while opening a cloud orchestrator", async () => {
 		shellMocks.state.workspaces = [{ ...workspaces[0], kind: "cloud", sessions: [] }];
 		shellMocks.state.workspaceQuery.data = shellMocks.state.workspaces;
 		shellMocks.state.routeParams = { projectId: workspaces[0].id };
 		useUiStore.getState().setProjectProvisioning(workspaces[0].id, true);
 		await renderShell();
-		expect((await screen.findByLabelText("Message the agent")).closest("form")).toHaveAttribute("data-starting", "true");
-		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(await screen.findByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 	});
 
 	it("opens optimistic chat during submission without a loading page", async () => {

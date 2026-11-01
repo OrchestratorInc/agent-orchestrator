@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceFilesResponse, WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
 import {
@@ -84,6 +84,21 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 				workspaceVersion: "workspace-1",
 			},
 		}));
+	});
+
+	it("aborts an in-flight diff request when its review page loses its last observer", () => {
+		let requestSignal: AbortSignal | undefined;
+		postMock.mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+			requestSignal = init.signal;
+			requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+		}));
+		const client = new QueryClient();
+		const observer = new QueryObserver(client, sessionWorkspaceDiffsQueryOptions({ paths: ["README.md"], scope: "uncommitted", sessionId: "sess-cancel" }));
+		const unsubscribe = observer.subscribe(() => {});
+		expect(requestSignal?.aborted).toBe(false);
+		unsubscribe();
+		expect(requestSignal?.aborted).toBe(true);
+		client.clear();
 	});
 
 	it("skips a files summary that has no review sections", async () => {
@@ -224,6 +239,12 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 			oldFile: { contents: "new before\n" },
 			newFile: { contents: "new after\n" },
 		});
+	});
+
+	it("prefetches only the first page even when that page contains deferred files", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => file(`file-${index}.ts`, { size: index < 48 ? 600_000 : 40 }));
+		await prefetchDefaultWorkspaceReviewDiffs(new QueryClient(), "sess-prefetch-large", workspace(files));
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toEqual(files.slice(48, 96).map((entry) => entry.path));
 	});
 
 	it("skips lockfiles the review pane defers", async () => {

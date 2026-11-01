@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import type { PendingSideClose } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
 import type { components } from "../../../api/schema";
@@ -14,7 +15,7 @@ import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from 
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
-import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft } from "./sideChatDraft";
+import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
@@ -389,7 +390,7 @@ export function useIndependentSideChats(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
-	const [, setSendingRevision] = useState(0);
+	const [sendingRevision, setSendingRevision] = useState(0);
 	const sendingRef = useRef(new Set<string>());
 	const sending = Boolean(activeId && sendingRef.current.has(activeId));
 	const [editingTurnId, setEditingTurnId] = useState<string>();
@@ -398,6 +399,9 @@ export function useIndependentSideChats(
 	const activeIdRef = useRef(activeId);
 	activeIdRef.current = activeId;
 	const closedSidesRef = useRef(new Set<string>());
+	const [pendingCloses, setPendingCloses] = useState<PendingSideClose[]>([]);
+	const closingSidesRef = useRef(new Set<string>());
+	const closeRequests = useRef(new Set<string>());
 	const loadingOlderRef = useRef(false);
 	const olderGeneration = useRef(0);
 	const olderScope = useRef("");
@@ -412,7 +416,13 @@ export function useIndependentSideChats(
 	const sessionRef = useRef(sessionId);
 	sessionRef.current = enabled ? sessionId : "";
 	useEffect(() => {
+		sessionRef.current = enabled ? sessionId : "";
+		return () => { sessionRef.current = ""; };
+	}, [sessionId, enabled]);
+	useEffect(() => {
 		closedSidesRef.current.clear();
+		closingSidesRef.current.clear();
+		setPendingCloses([]);
 		setSides([]);
 		setActiveId(undefined);
 		setVisible(false);
@@ -437,12 +447,23 @@ export function useIndependentSideChats(
 			setError(apiErrorMessage(requestError));
 			return;
 		}
-		const nextSides = Array.isArray(data?.sides) ? data.sides : [];
+		const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
+		if (sessionRef.current !== sessionId) return;
+		setPendingCloses(closes);
+		closingSidesRef.current = new Set([...closes.map((side) => side.id), ...closeRequests.current]);
+		const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
+		for (const side of closes) {
+			if (!nextSides.some((current) => current.id === side.id)) nextSides.push({ ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
+		}
 		setSides(nextSides);
 		setActiveId((current) =>
 			current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
 		);
 	}, [sessionId, enabled]);
+	useEffect(() => {
+		if (!enabled) return;
+		return aoBridge.sideChats.onPendingClosesChanged(() => { void refreshList().catch((cause) => setError(String(cause))); });
+	}, [enabled, refreshList]);
 
 	useEffect(() => {
 		if (!enabled) return;
@@ -574,7 +595,7 @@ export function useIndependentSideChats(
 			.catch((error) => {
 				if (sessionRef.current === sessionId) setError(String(error));
 			});
-	}, [sessionId, activeId, drafts]);
+	}, [sessionId, activeId, drafts, sendingRevision]);
 
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID()) => {
@@ -637,6 +658,7 @@ export function useIndependentSideChats(
 			const next = {
 				...draft,
 				pendingDelivery: draftsRef.current[sideId]?.pendingDelivery,
+				pendingCommand: draftsRef.current[sideId]?.pendingCommand,
 				lastHandoffDelivery: draftsRef.current[sideId]?.lastHandoffDelivery,
 			};
 			// Apply the edit before awaiting I/O so its response cannot overwrite a newer receipt.
@@ -711,7 +733,7 @@ export function useIndependentSideChats(
 		if (!activeId || drafts[activeId] === undefined) return;
 		const draft = drafts[activeId];
 		const save = () => {
-			if (closedSidesRef.current.has(activeId)) return;
+			if (closedSidesRef.current.has(activeId) || (sendingRef.current.has(activeId) && activeIdRef.current === activeId && sessionRef.current === sessionId)) return;
 			const currentDraft = draftsRef.current[activeId] ?? draft;
 			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft))
 				.then(({ error: requestError }) => {
@@ -734,7 +756,45 @@ export function useIndependentSideChats(
 			)
 				save();
 		};
-	}, [sessionId, activeId, drafts]);
+	}, [sessionId, activeId, drafts, sendingRevision]);
+
+	const cancelHandoff = useCallback(async (sideId: string) => {
+		const pending = draftsRef.current[sideId]?.pendingCommand;
+		if (!pending || sendingRef.current.has(sideId) || closedSidesRef.current.has(sideId) || closingSidesRef.current.has(sideId)) return;
+		sendingRef.current.add(sideId);
+		setSendingRevision(version => version + 1);
+		const command = { ...pending, cancelRequested: true };
+		const available = () => sessionRef.current === sessionId && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+		const apply = (remove: boolean) => {
+			if (!available()) throw new Error("Side chat is no longer active.");
+			const current = draftsRef.current[sideId];
+			if (!current || (current.pendingCommand && current.pendingCommand.creationKey !== command.creationKey)) throw new Error("Side chat handoff changed.");
+			const { pendingCommand: _, ...rest } = current;
+			const next = remove ? rest : { ...rest, pendingCommand: command };
+			draftsRef.current = { ...draftsRef.current, [sideId]: next };
+			setDrafts(current => ({ ...current, [sideId]: next }));
+			return next;
+		};
+		const persist = async (draft: SideChatDraft) => {
+			const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(draft));
+			if (saved.error) throw saved.error;
+			await aoBridge.sideChats.capture();
+		};
+		try {
+			// A remount/crash after this capture can only finish cancellation, never send.
+			await persist(apply(false));
+			await persist(apply(true));
+			if (available()) setError(undefined);
+		} catch (cause) {
+			if (available()) {
+				if (!draftsRef.current[sideId]?.pendingCommand || draftsRef.current[sideId].pendingCommand?.creationKey === command.creationKey) apply(false); // Preserve newer edits and cancellation intent.
+				setError(apiErrorMessage(cause));
+			}
+		} finally {
+			sendingRef.current.delete(sideId);
+			setSendingRevision(version => version + 1);
+		}
+	}, [sessionId]);
 
 	const send = useCallback(
 		async (
@@ -744,14 +804,119 @@ export function useIndependentSideChats(
 			overrideReferences?: ChatDraftExcerptReference[],
 			propagateError = false,
 			handoffClientMessageId?: string,
+			preparedReceipt?: SideDeliveryReceipt,
+			canDispatch?: () => boolean,
 		): Promise<void> => {
-			const btw = /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
-			if (btw) {
-				const created = await create(undefined, true);
-				const question = text.slice(btw[0].length).trim();
-				if (question || extraAttachments.length || overrideReferences?.length)
-					await send(created.id, question, extraAttachments, overrideReferences, true);
-				updateDraft(sideId, "");
+			if (!preparedReceipt && draftsRef.current[sideId]?.pendingCommand?.cancelRequested) { await cancelHandoff(sideId); return; }
+			if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) {
+				if (propagateError) throw new Error("Side chat is closing.");
+				return;
+			}
+			const btw = preparedReceipt ? null : /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
+			if (!preparedReceipt && (btw || (!text && draftsRef.current[sideId]?.pendingCommand))) {
+				if (sendingRef.current.has(sideId)) return;
+				sendingRef.current.add(sideId);
+				setSendingRevision((version) => version + 1);
+				let command = draftsRef.current[sideId]?.pendingCommand;
+				const available = () => sessionRef.current === sessionId && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+				const persist = async () => {
+					if (!available()) throw new Error("Side chat is no longer active.");
+					const next = { ...(draftsRef.current[sideId] ?? emptySideChatDraft()), pendingCommand: command };
+					draftsRef.current = { ...draftsRef.current, [sideId]: next };
+					setDrafts((current) => ({ ...current, [sideId]: next }));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					if (saved.error) throw saved.error;
+					await aoBridge.sideChats.capture();
+				};
+				try {
+					if (!Object.hasOwn(draftsRef.current, sideId)) {
+						const loaded = await readSideChatDraft(sessionId, sideId);
+						if (loaded.error) throw loaded.error;
+						if (!available()) return;
+						draftsRef.current = { ...draftsRef.current, [sideId]: draftsRef.current[sideId] ?? parseSideChatDraft(loaded.data?.contentJson ?? "") };
+						command = draftsRef.current[sideId].pendingCommand;
+					}
+					const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+					if (command?.cancelRequested) {
+						sendingRef.current.delete(sideId);
+						await cancelHandoff(sideId);
+						return;
+					}
+					if (draft.pendingDelivery || (command && text && text !== command.receipt.submitted.text))
+						throw new Error("Retry the original handoff before sending another question.");
+					if (!command) {
+						const submitted = { text, attachments: [...draft.attachments], references: [...(overrideReferences ?? draft.references)] };
+						const parentId = sides.find((side) => side.id === sideId)?.mainConversationId;
+						if (submitted.references.some((ref) => ref.conversationId !== parentId))
+							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
+						const images = [...extraAttachments, ...(await Promise.all((attachments[sideId] ?? []).filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type)).map(({ file }) => sideFilePayload(file))))];
+						const staged = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
+						if (staged.length !== extraAttachments.length) throw new Error("Could not stage every attached file.");
+						const clientMessageId = crypto.randomUUID();
+						command = {
+							creationKey: crypto.randomUUID(),
+							receipt: {
+								clientMessageId, submitted,
+								request: {
+									clientMessageId,
+									text: text.slice(btw?.[0].length ?? 0).trim(),
+									resources: [...submitted.attachments.map((file) => file.path), ...staged].map((path) => ({ uri: path, name: path.split(/[\\/]/).at(-1) || "Attachment" })),
+									attachments: nativeImages ? images : [],
+									references: submitted.references.map(({ conversationId, messageId, revision, text }) => ({ conversationId, messageId, revision, text })),
+								},
+							},
+						};
+					}
+					await persist();
+					if (!available()) return;
+					if (!command.destinationId) {
+						const destination = await create(undefined, true, command.creationKey);
+						command = { ...command, destinationId: destination.id };
+						await persist();
+					}
+					if (!available()) return;
+					if (!command.accepted) {
+						const request = command.receipt.request;
+						if (request.text || request.resources?.length || request.attachments?.length || request.references?.length)
+							await send(command.destinationId!, request.text, [], [], true, command.receipt.clientMessageId, command.receipt, available);
+						command = { ...command, accepted: true };
+						await persist();
+					}
+					if (!available()) return;
+					const current = draftsRef.current[sideId];
+					const original = command.receipt.submitted;
+					const { pendingCommand: _, ...rest } = current;
+					const next = {
+						...rest,
+						text: current.text === original.text ? "" : current.text,
+						attachments: current.attachments.filter((file) => !original.attachments.some((submitted) => JSON.stringify(submitted) === JSON.stringify(file))),
+						references: current.references.filter((reference) => !original.references.some((submitted) => JSON.stringify(submitted) === JSON.stringify(reference))),
+					};
+					draftsRef.current = { ...draftsRef.current, [sideId]: next };
+					setDrafts((current) => ({ ...current, [sideId]: next }));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					if (saved.error) {
+						await persist();
+						throw saved.error;
+					}
+					setAttachments((current) => ({
+						...current,
+						[sideId]: (current[sideId] ?? []).filter(({ path }) => !original.attachments.some((submitted) => submitted.path === path)),
+					}));
+					await aoBridge.sideChats.capture().catch(() => undefined);
+				} catch (cause) {
+					if (available()) setError(apiErrorMessage(cause));
+					if (propagateError) throw cause;
+				} finally {
+					sendingRef.current.delete(sideId);
+					setSendingRevision((version) => version + 1);
+				}
+				return;
+			}
+			if (draftsRef.current[sideId]?.pendingCommand) {
+				const cause = new Error("Retry the original handoff before sending another question.");
+				setError(cause.message);
+				if (propagateError) throw cause;
 				return;
 			}
 
@@ -762,7 +927,7 @@ export function useIndependentSideChats(
 			sendingRef.current.add(sideId);
 			setSendingRevision((version) => version + 1);
 			setError(undefined);
-			let receipt = draftsRef.current[sideId]?.pendingDelivery;
+			let receipt = draftsRef.current[sideId]?.pendingDelivery ?? preparedReceipt;
 			try {
 				if (!Object.hasOwn(draftsRef.current, sideId)) {
 					const { data, error } = await readSideChatDraft(sessionId, sideId);
@@ -770,9 +935,10 @@ export function useIndependentSideChats(
 					const loaded = parseSideChatDraft(data?.contentJson ?? "");
 					const current = draftsRef.current[sideId] ?? loaded;
 					draftsRef.current = { ...draftsRef.current, [sideId]: current };
-					receipt = current.pendingDelivery;
+					receipt = current.pendingDelivery ?? preparedReceipt;
 				}
 				const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+				if (draft.pendingCommand) throw new Error("Retry the original handoff before sending another question.");
 				if (!receipt && handoffClientMessageId && draft.lastHandoffDelivery?.clientMessageId === handoffClientMessageId)
 					receipt = draft.lastHandoffDelivery;
 				if (receipt && handoffClientMessageId && receipt.clientMessageId !== handoffClientMessageId)
@@ -829,7 +995,10 @@ export function useIndependentSideChats(
 				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending));
 				if (saved.error) throw saved.error;
 				await aoBridge.sideChats.capture();
-				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId)) return;
+				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId) || closingSidesRef.current.has(sideId) || (canDispatch && !canDispatch())) {
+					if (propagateError) throw new Error("Side chat is no longer active.");
+					return;
+				}
 				const { error: requestError, response } = await apiClient.POST(
 					"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/messages",
 					{
@@ -877,34 +1046,43 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, updateDraft, attachments, stageAttachments, nativeImages, create],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff],
 	);
 
 	const close = useCallback(
 		async (sideId: string) => {
-			// Record close intent in Electron RAM before the request can race a daemon restart.
+			if (closeRequests.current.has(sideId)) return;
+			closeRequests.current.add(sideId);
+			closingSidesRef.current.add(sideId);
+			const summary = sides.find((side) => side.id === sideId);
+			if (summary) setPendingCloses((current) => [...current.filter((side) => side.id !== sideId), { id: sideId, sessionId, label: summary.label ?? "" }]);
 			try {
 				await aoBridge.sideChats.capture(sideId);
+				const { error: requestError, response } = await apiClient.DELETE(
+					"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
+					{ params: { path: { sessionId, sideId } } },
+				);
+				if (requestError) {
+					if (response.status === 404) {
+						await aoBridge.sideChats.confirmClose(sideId, true);
+						await refreshList();
+						return;
+					}
+					// A request timeout is uncertain even when represented as 4xx.
+					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
+						await aoBridge.sideChats.capture(sideId, true);
+					} else await aoBridge.sideChats.capture().catch(() => undefined);
+					throw new Error(apiErrorMessage(requestError));
+				}
+				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {
-				await aoBridge.sideChats.capture(sideId, true).catch(() => undefined);
+				await refreshList().catch(() => undefined);
 				throw cause;
-			}
-			const { error: requestError } = await apiClient
-				.DELETE("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}", {
-					params: { path: { sessionId, sideId } },
-				})
-				.catch(async (cause) => {
-					await aoBridge.sideChats.capture(sideId, true).catch(() => undefined);
-					throw cause;
-				});
-			if (requestError) {
-				await aoBridge.sideChats.capture(sideId, true).catch(() => undefined);
-				throw new Error(apiErrorMessage(requestError));
+			} finally {
+				closeRequests.current.delete(sideId);
 			}
 			if (sessionRef.current !== sessionId) return;
 			closedSidesRef.current.add(sideId);
-			await aoBridge.sideChats.capture().catch(() => undefined);
-			if (sessionRef.current !== sessionId) return;
 			setDrafts((current) => {
 				const next = { ...current };
 				delete next[sideId];
@@ -929,7 +1107,7 @@ export function useIndependentSideChats(
 				setSnapshot(undefined);
 			}
 		},
-		[sessionId, activeId, sides],
+		[sessionId, activeId, sides, refreshList],
 	);
 
 	const interrupt = useCallback(
@@ -1151,23 +1329,23 @@ export function useIndependentSideChats(
 										aria-keyshortcuts="F2"
 										onDoubleClick={(event) => {
 											event.preventDefault();
-											beginRename(side);
+											if (!closingSidesRef.current.has(side.id)) beginRename(side);
 										}}
 										onKeyDown={(event) => {
 											if (event.key === "F2") {
 												event.preventDefault();
-												beginRename(side);
+												if (!closingSidesRef.current.has(side.id)) beginRename(side);
 											}
 										}}
 										title={side.label}
 									>
 										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
-										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}</span>
+										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}{pendingCloses.some((pending) => pending.id === side.id) ? ` · ${t("sideChat.closingTab")}` : ""}</span>
 									</button>
 								)}
 								<button
 									type="button"
-									hidden={renameId === side.id}
+									hidden={renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)}
 									className="browser-panel__tab-close"
 									aria-label={t("sideChat.closeNamed", { name: side.label })}
 									onClick={() => {
@@ -1179,7 +1357,7 @@ export function useIndependentSideChats(
 								</button>
 							</div>
 						);
-						if (renameId === side.id) return tab;
+						if (renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)) return tab;
 						return (
 							<ContextMenu key={side.id}>
 								<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
@@ -1295,7 +1473,16 @@ export function useIndependentSideChats(
 			>
 				{tabBar}
 				{closeDialog}
-				{snapshot && snapshot.side.id === activeId ? (
+				{pendingCloses.some((side) => side.id === activeId) ? (
+					<div className="p-4" role="status">
+						<p>{t("sideChat.closing")}</p>
+						<button type="button" disabled={closing} onClick={() => {
+							if (!currentActiveId) return;
+							setClosing(true);
+							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
+						}}>{t("sideChat.retryClose")}</button>
+					</div>
+				) : snapshot && snapshot.side.id === activeId ? (
 					<>
 						{snapshot.side.state !== "ready" ? (
 							<p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
@@ -1365,7 +1552,7 @@ export function useIndependentSideChats(
 								{t("sideChat.retryConnection")}
 							</Button>
 						) : null}
-						{drafts[activeId]?.pendingDelivery && !sendingRef.current.has(activeId) ? (
+						{(drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand) && !sendingRef.current.has(activeId) ? (
 							<div className="px-3 text-xs text-muted-foreground">
 								<p>{t("sideChat.deliveryIsUnconfirmedRetryTheOriginalQuestionBeforeSendingAnother")}</p>
 								<Button
@@ -1375,8 +1562,12 @@ export function useIndependentSideChats(
 									disabled={sending}
 									onClick={() => void send(activeId, "")}
 								>
-									{t("sideChat.retryDelivery")}
+									{drafts[activeId]?.pendingCommand?.cancelRequested ? t("sideChat.finishCancellation") : t("sideChat.retryDelivery")}
 								</Button>
+								{drafts[activeId]?.pendingCommand ? <>
+									<p>{t("sideChat.cancelHandoffHelp")}</p>
+									{!drafts[activeId]?.pendingCommand?.cancelRequested ? <Button type="button" size="sm" variant="ghost" disabled={sending} onClick={() => void cancelHandoff(activeId)}>{t("sideChat.cancelHandoff")}</Button> : null}
+								</> : null}
 							</div>
 						) : null}
 						<SideComposer
@@ -1406,7 +1597,7 @@ export function useIndependentSideChats(
 							}}
 							files={[]}
 							ready={snapshot.side.state === "ready"}
-							deliveryPending={Boolean(drafts[activeId]?.pendingDelivery)}
+							deliveryPending={Boolean(drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand)}
 							skills={skills}
 							focusKey={focusKey}
 							onFocusSide={canCreate ? () => void create(undefined, true).catch(() => undefined) : undefined}
@@ -1555,6 +1746,7 @@ export function useIndependentSideChats(
 		pending,
 		error,
 		send,
+		cancelHandoff,
 		setQuestionDraft: updateDraft,
 		replaceDraft,
 		addReference,

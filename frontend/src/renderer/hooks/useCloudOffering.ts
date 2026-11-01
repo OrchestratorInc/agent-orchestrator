@@ -57,9 +57,11 @@ const EMPTY: ResolvedCloudOffering = {
 	source: "fallback",
 };
 
-export function useCloudOffering(): UseCloudOfferingResult {
-	const { client, ready, baseUrl, userId } = useCloudCp();
-	const { org } = useCloudOrg();
+// enabled=false keeps a caller that may not need the offering (a remote host's
+// board) from reading this machine's settings, as useCloudCp(enabled) does.
+export function useCloudOffering(enabled = true): UseCloudOfferingResult {
+	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
+	const { org } = useCloudOrg(enabled);
 	const orgId = org?.id ?? "";
 	const me = useQuery<CloudCpMeResponse>({
 		queryKey: [...cloudMeQueryKey, baseUrl, userId],

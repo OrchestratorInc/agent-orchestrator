@@ -111,22 +111,23 @@ type containerReapConfig struct {
 // --config-json. Every domain key must be modeled here, or set-config drops it
 // (TestProjectConfigMirrorsDomainJSONKeys guards this).
 type projectConfig struct {
-	ContainerReap     *containerReapConfig `json:"containerReap,omitempty"`
-	CanonicalRepoURL  string               `json:"canonicalRepoURL,omitempty"`
-	DefaultBranch     string               `json:"defaultBranch,omitempty"`
-	SessionPrefix     string               `json:"sessionPrefix,omitempty"`
-	Env               map[string]string    `json:"env,omitempty"`
-	Symlinks          []string             `json:"symlinks,omitempty"`
-	PostCreate        []string             `json:"postCreate,omitempty"`
-	PreRemove         []string             `json:"preRemove,omitempty"`
-	AgentRules        string               `json:"agentRules,omitempty"`
-	AgentRulesFile    string               `json:"agentRulesFile,omitempty"`
-	OrchestratorRules string               `json:"orchestratorRules,omitempty"`
-	AgentConfig       agentConfig          `json:"agentConfig,omitempty"`
-	Worker            roleOverride         `json:"worker,omitempty"`
-	Orchestrator      roleOverride         `json:"orchestrator,omitempty"`
-	TrackerIntake     trackerIntakeConfig  `json:"trackerIntake,omitempty"`
-	AutoReview        bool                 `json:"autoReview,omitempty"`
+	ContainerReap         *containerReapConfig `json:"containerReap,omitempty"`
+	CanonicalRepoURL      string               `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch         string               `json:"defaultBranch,omitempty"`
+	SessionPrefix         string               `json:"sessionPrefix,omitempty"`
+	Env                   map[string]string    `json:"env,omitempty"`
+	Symlinks              []string             `json:"symlinks,omitempty"`
+	PostCreate            []string             `json:"postCreate,omitempty"`
+	PreRemove             []string             `json:"preRemove,omitempty"`
+	AgentRules            string               `json:"agentRules,omitempty"`
+	AgentRulesFile        string               `json:"agentRulesFile,omitempty"`
+	OrchestratorRules     string               `json:"orchestratorRules,omitempty"`
+	OrchestratorRulesFile string               `json:"orchestratorRulesFile,omitempty"`
+	AgentConfig           agentConfig          `json:"agentConfig,omitempty"`
+	Worker                roleOverride         `json:"worker,omitempty"`
+	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
+	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
+	AutoReview            bool                 `json:"autoReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
@@ -140,26 +141,27 @@ type setConfigRequest struct {
 }
 
 type projectSetConfigOptions struct {
-	canonicalRepoURL  string
-	defaultBranch     string
-	sessionPrefix     string
-	model             string
-	permission        string
-	workerAgent       string
-	orchestratorAgent string
-	agentRules        string
-	agentRulesFile    string
-	orchestratorRules string
-	env               []string
-	symlink           []string
-	postCreate        []string
-	trackerIntake     bool
-	trackerRepo       string
-	trackerAssignee   string
-	reviewers         []string
-	configJSON        string
-	clear             bool
-	json              bool
+	canonicalRepoURL      string
+	defaultBranch         string
+	sessionPrefix         string
+	model                 string
+	permission            string
+	workerAgent           string
+	orchestratorAgent     string
+	agentRules            string
+	agentRulesFile        string
+	orchestratorRules     string
+	orchestratorRulesFile string
+	env                   []string
+	symlink               []string
+	postCreate            []string
+	trackerIntake         bool
+	trackerRepo           string
+	trackerAssignee       string
+	reviewers             []string
+	configJSON            string
+	clear                 bool
+	json                  bool
 }
 
 type projectListResult struct {
@@ -348,6 +350,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.agentRules, "agent-rules", "", "Project-specific standing instructions for worker sessions")
 	f.StringVar(&opts.agentRulesFile, "agent-rules-file", "", "Repo-relative file containing worker standing instructions")
 	f.StringVar(&opts.orchestratorRules, "orchestrator-rules", "", "Project-specific standing instructions for orchestrator sessions")
+	f.StringVar(&opts.orchestratorRulesFile, "orchestrator-rules-file", "", "Repo-relative file containing orchestrator standing instructions")
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
@@ -365,8 +368,8 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 var projectConfigFlags = []string{
 	"canonical-repo-url", "default-branch", "session-prefix", "model", "permission",
 	"worker-agent", "orchestrator-agent", "agent-rules", "agent-rules-file",
-	"orchestrator-rules", "env", "symlink", "post-create", "tracker-intake",
-	"tracker-repo", "tracker-assignee", "reviewer",
+	"orchestrator-rules", "orchestrator-rules-file", "env", "symlink", "post-create",
+	"tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
 }
 
 // buildProjectConfig turns the set-config flags into the typed config sent to
@@ -412,6 +415,7 @@ func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) 
 	setIfChanged("agent-rules", &cfg.AgentRules, opts.agentRules)
 	setIfChanged("agent-rules-file", &cfg.AgentRulesFile, opts.agentRulesFile)
 	setIfChanged("orchestrator-rules", &cfg.OrchestratorRules, opts.orchestratorRules)
+	setIfChanged("orchestrator-rules-file", &cfg.OrchestratorRulesFile, opts.orchestratorRulesFile)
 	setIfChanged("tracker-repo", &cfg.TrackerIntake.Repo, opts.trackerRepo)
 	setIfChanged("tracker-assignee", &cfg.TrackerIntake.Assignee, opts.trackerAssignee)
 	if changed("tracker-intake") {

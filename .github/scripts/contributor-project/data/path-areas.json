@@ -195,7 +195,6 @@
   {"glob": "backend/cmd/genspec/*", "area": "api-data-contracts"},
   {"glob": "backend/sqlc.yaml", "area": "api-data-contracts"},
   {"glob": "scripts/create-migration*", "area": "api-data-contracts"},
-  {"glob": "cloud/*", "area": "cloud-control-plane"},
   {"glob": "contracts/cloud/*", "area": "cloud-control-plane"},
   {"glob": "packages/cloud-client/*", "area": "cloud-control-plane"},
   {"glob": "private/ao-cloud", "area": "cloud-control-plane"},

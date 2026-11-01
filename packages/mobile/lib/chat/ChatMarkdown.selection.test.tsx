@@ -259,3 +259,45 @@ it("adds the exact native selection without changing the response or link handle
 	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
 	act(() => renderer.unmount());
 });
+
+it.each([false, true])("opens an orchestrator's ao://sessions links as sessions, a bare one named for its session (continuous: %s)", (continuousSelection) => {
+	const onLinkOpen = vi.fn();
+	const sessionName = (id: string) => id === "ao-259" ? "Fix table rendering" : undefined;
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen} sessionName={sessionName}>
+			<ChatMarkdown continuousSelection={continuousSelection} text={"Done: ao://sessions/proj/ao-259. Also [the review](ao://sessions/proj/ao-241) and <ao://sessions/proj/ao-999>."} />
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	// Named for the session when the board knows it, its id otherwise; an authored label is kept. Prose punctuation stays prose.
+	expect(links.map(textOf)).toEqual(["Fix table rendering", "the review", "ao-999"]);
+	expect(textOf(renderer.root)).toContain("Fix table rendering. Also");
+	act(() => links[0]!.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/ao-259");
+	act(() => renderer.unmount());
+});
+
+it("leaves an ao:// link as words where nothing knows which machine it is on", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See ao://sessions/proj/ao-259 now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See ao-259 now");
+	act(() => renderer.unmount());
+});
+
+it("asks once for the name of a session the surface does not know, then shows it", () => {
+	const wanted = vi.fn();
+	const names: Record<string, string> = {};
+	const tree = () => <ChatLinkProvider onLinkOpen={vi.fn()} sessionName={(id) => names[id]} onSessionNameNeeded={wanted}><ChatMarkdown text="Archived: ao://sessions/proj/ao-241" /></ChatLinkProvider>;
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(tree()); });
+	const link = () => renderer.root.find((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(textOf(link())).toBe("ao-241");
+	expect(wanted).toHaveBeenCalledExactlyOnceWith("ao-241");
+	names["ao-241"] = "Review PR #7113";
+	act(() => renderer.update(tree()));
+	expect(textOf(link())).toBe("Review PR #7113");
+	expect(wanted).toHaveBeenCalledTimes(1);
+	act(() => renderer.unmount());
+});

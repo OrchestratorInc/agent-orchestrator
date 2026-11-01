@@ -35,6 +35,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useRemoteProjectQuery: (hostId: string) => ({
 		data: mocks.workspaces[hostId], isError: false, isSuccess: Boolean(mocks.workspaces[hostId]),
 	}),
+	useCloudProjectsQuery: () => ({ data: undefined }),
 }));
 vi.mock("../hooks/useBoardPresentation", () => ({
 	useBoardPresentation: () => ({ showStartup: true, showWelcome: false, showProjectEmpty: false, workspaceStartupState: "error" }),

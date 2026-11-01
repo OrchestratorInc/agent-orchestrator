@@ -133,3 +133,10 @@ it("abandons an unresolved delivery only when asked", async () => {
 	expect(onEditingChange).toHaveBeenLastCalledWith(false);
 });
 
+
+it("opens an edit on what the user typed, without the worker reports folded into it", () => {
+	const folded: ConversationMessage = { ...prompt("t1", 1), text: "Which workers can stop?\n\n<ao-worker-reports>\nReports since your previous turn:\n\n[done] ao://sessions/p/w-1\nDone.\n</ao-worker-reports>" };
+	render([folded, reply("t1", 2)]);
+	act(() => latest!.startEdit(folded));
+	expect(latest!.editDraft).toMatchObject({ turnId: "t1", initialText: "Which workers can stop?" });
+});

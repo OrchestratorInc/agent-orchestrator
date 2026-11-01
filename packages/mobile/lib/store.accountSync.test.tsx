@@ -11,6 +11,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem
 vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: (_: string, callback: (value: string) => void) => {
 	state.onState = callback; return { remove: () => {} };
 } } }));
+vi.mock("expo-network", () => ({ getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true, type: "WIFI" }), addNetworkStateListener: () => ({ remove: () => {} }) }));
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: vi.fn(), getNotifications: vi.fn() }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolveConfig, runtimeResolveDeps: () => ({}) }));
 vi.mock("./config", () => ({ isConfigured: () => false, machineIdentity: () => "" }));

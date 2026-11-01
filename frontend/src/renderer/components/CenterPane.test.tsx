@@ -36,6 +36,7 @@ vi.mock("motion/react", () => ({
 		),
 	},
 	useDragControls: () => ({ start: vi.fn() }),
+	useMotionValue: () => ({ get: () => 0, set: vi.fn(), on: () => () => {} }),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -248,8 +249,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const mainTab = screen.getByRole("tab", { name: /^do the thing/ });
 		const mainContainer = mainTab.closest("[data-terminal-tab-frame]");
-		expect(mainContainer).toHaveAttribute("data-terminal-role", "primary");
-		expect(mainContainer).toHaveClass("self-stretch", "w-shell-tab-connected");
+		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-shell-tab-max");
 		expect(mainContainer).not.toHaveClass("bg-surface");
 		expect(mainContainer).not.toHaveClass("session-primary-tab");
 		expect(mainContainer).not.toHaveClass("rounded-md");
@@ -280,7 +280,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(ownerCard).not.toHaveClass("w-full", "max-w-full");
 		expect(ownerTab).not.toHaveClass("min-w-flex-min");
 		expect(scrollRegion?.contains(ownerCard)).toBe(true);
-		expect(avatar?.classList.contains("size-terminal-agent-icon")).toBe(true);
+		expect(avatar?.classList.contains("size-icon-sm!")).toBe(true);
 	});
 
 	it("closes only the selected auxiliary terminal from the application shortcut", () => {
@@ -423,12 +423,12 @@ describe("CenterPane toolbar session label", () => {
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
 		const shellTab = screen.getByRole("tab", { name: shell.title });
 		expect(reviewerTab).toHaveAttribute("aria-current", "true");
-		expect(reviewerTab.querySelector('img, [style*="mask"]')).toHaveClass("size-terminal-agent-icon");
+		expect(reviewerTab.querySelector('img, [style*="mask"]')).toHaveClass("size-icon-sm!");
 		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass(
 			"min-w-shell-tab-min",
 			"shrink-0",
 			"self-stretch",
-			"w-shell-tab-connected",
+			"max-w-shell-tab-max",
 			"border-r",
 			"border-border",
 			"bg-overlay",
@@ -438,8 +438,6 @@ describe("CenterPane toolbar session label", () => {
 			"self-stretch",
 			"max-w-shell-tab-max",
 		);
-		expect(shellTab.closest("[data-terminal-tab-frame]")).not.toHaveClass("w-shell-tab-connected");
-		expect(reviewerTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-terminal-role", "primary");
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).not.toHaveAttribute("aria-current", "true");
 		// The reviewer's mark is drawn: an <img>, or a tinted mask for a single-colour logo.
 		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
@@ -455,10 +453,8 @@ describe("CenterPane toolbar session label", () => {
 		});
 
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
-		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch", "w-shell-tab-connected");
-		expect(reviewerTab).toHaveClass("px-2", "cursor-pointer");
-		expect(reviewerTab).toHaveClass("focus-visible:outline-2", "focus-visible:outline-accent/50");
-		expect(reviewerTab.parentElement).not.toHaveClass("px-2", "w-shell-tab-connected");
+		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch", "max-w-shell-tab-max");
+		expect(reviewerTab).toHaveClass("h-full", "px-2", "cursor-pointer");
 
 		fireEvent.click(reviewerTab);
 		expect(onSelectReviewerTerminal).toHaveBeenCalledWith({ handleId: "review-sess-1", harness: "codex" });
@@ -528,7 +524,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(terminalRegion).not.toContainElement(screen.getByRole("button", { name: "New terminal" }));
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "right-1", "inset-y-0");
+		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "left-2", "top-1/2");
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1");
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
@@ -588,7 +584,6 @@ describe("CenterPane toolbar session label", () => {
 			const frame = tab.closest("[data-terminal-tab-frame]");
 			expect(frame?.classList.contains("max-w-shell-tab-max")).toBe(true);
 			expect(frame?.classList.contains("shrink-0")).toBe(true);
-			expect(frame?.classList.contains("w-shell-tab-connected")).toBe(false);
 			expect(frame?.classList.contains("min-w-16")).toBe(false);
 			expect(tab.classList.contains("min-w-0")).toBe(true);
 		}

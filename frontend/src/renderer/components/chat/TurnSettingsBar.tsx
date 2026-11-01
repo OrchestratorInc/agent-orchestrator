@@ -450,7 +450,8 @@ export function TurnSettingsBar({
 								currentHarness={harness}
 								current={current}
 								agentSwitch={agentSwitch}
-								disabled={optionDisabled}
+								// Stays usable while a pick is saved; overlapping saves are written in order.
+								disabled={disabled || rememberPermissionsPending}
 								// Only an agent that sends back its own settings has any to load; AO's would just flicker.
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
@@ -882,6 +883,7 @@ function ClubbedConfigPicker({
 				disabled={disabled}
 				onChange={(value) => onChange(option.id, value)}
 				groupClaude={groupClaude}
+				align="start"
 			/>
 		);
 	}
@@ -1157,6 +1159,7 @@ function ConfigOptionPicker({
 	footer,
 	leadIcon,
 	groupClaude,
+	align,
 }: {
 	option: ChatConfigOption;
 	label?: string;
@@ -1166,9 +1169,11 @@ function ConfigOptionPicker({
 	footer?: ReactNode;
 	leadIcon?: LucideIcon;
 	groupClaude?: boolean;
+	align?: "start" | "end";
 }) {
 	return (
 		<Picker
+			align={align}
 			label={label ?? optionCurrentLabel(option)}
 			title={title || option.description || option.name}
 			disabled={disabled}
@@ -1392,7 +1397,7 @@ function PermissionRow({
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className={cn("text-xs", unrestricted ? "text-warning" : "text-foreground")}>{title}</span>
 				{description ? (
-					<span className={cn("truncate text-[11px] leading-snug", unrestricted ? "text-warning/80" : "text-muted-foreground")}>
+					<span className={cn("text-[11px] leading-snug", unrestricted ? "text-warning/80" : "text-muted-foreground")}>
 						{description}
 					</span>
 				) : null}
@@ -1515,18 +1520,21 @@ function Picker({
 	onFocus,
 	leadIcon: LeadIcon,
 	alert,
+	align = "end",
 }: {
 	label: string;
 	title: string;
 	disabled?: boolean;
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
-	/** Set on the permission control when it leads the row: marked with this, opening rightwards. */
+	/** Set on the permission control: marked with this. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
 	children: React.ReactNode;
 	onFocus?: (event: FocusEvent<HTMLDivElement>) => void;
+	/** Which trigger edge the panel pins to: the one that stays put while the label changes width. */
+	align?: "start" | "end";
 }) {
 	return (
 		<OptionMenu>
@@ -1543,9 +1551,10 @@ function Picker({
 					{badge}
 				</OptionMenuTrigger>
 			<OptionMenuContent
-				align={LeadIcon ? "start" : "end"}
-				// The permission menu fits every mode on one line each, plus the remember switch, without scrolling.
-				className={cn(CHAT_MENU_CLASS, LeadIcon ? "max-h-(--radix-dropdown-menu-content-available-height)! max-w-[calc(100vw-2rem)]!" : undefined)}
+				align={align}
+				side="top"
+				steady
+				className={cn(CHAT_MENU_CLASS, LeadIcon ? "w-80 max-h-(--radix-dropdown-menu-content-available-height)!" : undefined)}
 				onFocus={onFocus}
 			>
 				{children}
