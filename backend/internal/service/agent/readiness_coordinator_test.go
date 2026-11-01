@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -1285,6 +1286,53 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 	// Recorded as an observation, not a failure, so it is not retried as one.
 	if items[0].Authentication.CheckedAt == nil {
 		t.Fatal("a configured verdict is a definite observation and must be marked checked")
+	}
+}
+
+type readinessClaudeTokenAgent struct {
+	*claudecode.Plugin
+	t       *testing.T
+	dataDir string
+	status  ports.AgentAuthStatus
+}
+
+func (a *readinessClaudeTokenAgent) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	a.t.Error("readiness used an auth probe without the runtime credentials")
+	return ports.AgentAuthStatusUnauthorized, nil
+}
+
+func (a *readinessClaudeTokenAgent) AuthStatusForRuntime(_ context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	if dataDir != a.dataDir {
+		a.t.Errorf("runtime auth data directory = %q, want %q", dataDir, a.dataDir)
+	}
+	return a.status, domain.AgentAccountIdentity{}, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("setup token probe", "token_probe_completed")}, nil
+}
+
+// The adapter owns which credential a launch uses (see claudecode's local
+// credential tests); readiness only has to route the check through it with the
+// daemon's data directory.
+func TestReadinessChecksAuthenticationWithRuntimeCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status ports.AgentAuthStatus
+		want   domain.AgentAuthenticationState
+	}{
+		{"accepted setup token", ports.AgentAuthStatusAuthorized, domain.AgentAuthenticationAuthorized},
+		{"rejected setup token", ports.AgentAuthStatusUnauthorized, domain.AgentAuthenticationUnauthorized},
+		{"unverified setup token", ports.AgentAuthStatusConfigured, domain.AgentAuthenticationConfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const dataDir = "/daemon/data"
+			agent := &readinessClaudeTokenAgent{Plugin: claudecode.New(), t: t, dataDir: dataDir, status: tc.status}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{DataDir: dataDir})
+			observation, failed := coordinator.checkAuthentication(readinessHarness("claude-code", "Claude Code", agent), domain.AgentReadinessPurposeDisplay)
+			if failed || observation.State != tc.want {
+				t.Fatalf("authentication = %q, failed = %v; want %q", observation.State, failed, tc.want)
+			}
+			if len(observation.Diagnostics) == 0 || observation.Diagnostics[0].Code != "token_probe_completed" {
+				t.Fatal("runtime credential verification lost its diagnostics")
+			}
+		})
 	}
 }
 

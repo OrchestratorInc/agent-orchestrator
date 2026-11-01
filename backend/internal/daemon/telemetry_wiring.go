@@ -3,11 +3,14 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -35,19 +38,23 @@ var aggregatedEventNames = []string{
 // newTelemetrySink also returns the live telemetry identity (nil when the data
 // dir is unknown), shared with the remote sink so a sign-in or opt-out seen by
 // the identity routes is what the exporter stamps and honors.
-func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore) {
+func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, bool) {
 	if !cfg.Telemetry.Events {
-		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log)
+		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), false
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local, standaloneIdentity(cfg, log)
+		return local, standaloneIdentity(cfg, log), false
 	}
 	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost,
 		cfg.Telemetry.AppVersion, cfg.Agent, nil, log)
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local, standaloneIdentity(cfg, log)
+		return local, standaloneIdentity(cfg, log), false
+	}
+	// app-state.json and update-settings.json live beside running.json.
+	if cfg.RunFilePath != "" {
+		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
 	}
 	// Both wrap only the billed remote sink; local storage keeps every event
 	// unaggregated and unfiltered for debugging regardless of PostHog volume.
@@ -60,6 +67,8 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// CLI usage is already one event per command path and error kind. The
 	// minute cap would drop most of that daily burst. The day cap stays.
 	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
+	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
+	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
 	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
 	// minute rollup and the rate limit already bound it. CLI usage is one
@@ -73,7 +82,16 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity()
+	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity(), true
+}
+
+// Recording is independent of sink startup so a temporary remote setup
+// failure does not lose accepted local usage facts.
+func configureUsageRecording(cfg config.Config, store *sqlite.Store, identity ports.TelemetryIdentityStore) {
+	if !cfg.Telemetry.Events || cfg.Telemetry.Remote != config.TelemetryRemotePostHog || identity == nil {
+		return
+	}
+	store.SetUsageTelemetryAllowed(func() bool { return !identity.OptedOut() })
 }
 
 // standaloneIdentity serves the identity routes when nothing is exported, so the
@@ -106,6 +124,7 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 		return
 	}
 	go func() {
+		defer sentryobs.RecoverBackground()
 		for _, delay := range gitHubLoginRetryDelays {
 			select {
 			case <-ctx.Done():
@@ -125,4 +144,74 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 			}
 		}
 	}()
+}
+
+// emitInstallLifecycleEvents sends the install anchors once each.
+// ao.app.installed only fires on a brand-new install's first daemon start, so
+// it undercounts installs whose CLI ran first or that predate it.
+// ao.app.first_open fires once per install ID on any build and is the reliable
+// "first seen" count. Each is reserved durably before it is queued, so a
+// restart cannot send it twice.
+func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, log *slog.Logger) {
+	if ident == nil || !cfg.Telemetry.Events {
+		return
+	}
+	payload := map[string]any{"launcher": daemonLauncher(os.Getenv)}
+	marked, err := ident.MarkInstalledEvent(context.Background())
+	if err != nil {
+		log.Warn("record telemetry install event", "error", err)
+	} else if marked {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.app.installed",
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelInfo,
+			Payload:    payload,
+		})
+	}
+	// Only reserve first_open when it can actually be exported; otherwise a
+	// local-only run would spend the one send.
+	if !remoteExportConfigured(cfg) {
+		return
+	}
+	marked, err = ident.MarkFirstOpenEvent(context.Background())
+	if err != nil {
+		log.Warn("record telemetry first open event", "error", err)
+		return
+	}
+	if marked {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.app.first_open",
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelInfo,
+			Payload:    payload,
+		})
+	}
+}
+
+func remoteExportConfigured(cfg config.Config) bool {
+	return cfg.Telemetry.Remote == config.TelemetryRemotePostHog &&
+		strings.TrimSpace(cfg.Telemetry.PostHogKey) != "" &&
+		strings.TrimSpace(cfg.Telemetry.PostHogHost) != ""
+}
+
+// daemonLauncher reports who started this daemon. The desktop supervisor
+// always sets AO_OWNER (app or persistent); a CLI-started daemon has none.
+// The common client property stays "cli" for every daemon event, so this is
+// how install events split desktop from CLI-only installs.
+func daemonLauncher(getenv func(string) string) string {
+	if getenv("AO_OWNER") != "" {
+		return "desktop"
+	}
+	return "cli"
+}
+
+// installMilestones backs first_for_install. Returned as a nil interface (not
+// a typed nil) when there is no data dir, so services omit the property.
+func installMilestones(cfg config.Config) ports.InstallMilestones {
+	if m := telemetryadapter.NewMilestones(cfg.DataDir); m != nil {
+		return m
+	}
+	return nil
 }

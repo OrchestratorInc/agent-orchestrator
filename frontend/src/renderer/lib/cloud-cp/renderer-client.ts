@@ -4,6 +4,7 @@ import { queryClient } from "../query-client";
 import { cachedCloudBillingMode, cloudMeQueryKey } from "../cloud-offering";
 import { appI18n } from "../../i18n";
 import { instrumentCloudClient, reportPlanRefusal } from "../cloud-telemetry";
+import { raceAbort } from "./transport";
 
 type CloudCpBridgeRequest = (init: {
 	baseUrl: string;
@@ -29,13 +30,18 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	const prefixIndex = url.pathname.indexOf(API_PREFIX);
 	const mount = prefixIndex > 0 ? url.pathname.slice(0, prefixIndex) : "";
-	const result = await request({
+	// An aborted caller sends nothing, as with fetch.
+	if (init?.signal?.aborted) throw init.signal.reason;
+	const pending = request({
 		baseUrl: url.origin + mount,
 		path: url.pathname.slice(mount.length) + url.search,
 		method: init?.method ?? "GET",
 		headers: Object.fromEntries(new Headers(init?.headers).entries()),
 		body: typeof init?.body === "string" ? init.body : undefined,
 	});
+	// The main process finishes the request regardless; the caller stops
+	// waiting when its signal fires, as with fetch.
+	const result = init?.signal ? await raceAbort(pending, init.signal) : await pending;
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };

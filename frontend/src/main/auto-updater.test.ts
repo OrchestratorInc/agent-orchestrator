@@ -326,6 +326,7 @@ async function importAutoUpdater(
   vi.resetModules();
   const updaterEvents = new Map<string, UpdaterEventHandler>();
   const autoUpdater = createAutoUpdaterMock();
+  const powerMonitor = new EventEmitter();
   const nativeUpdaterEvents = new Map<string, UpdaterEventHandler>();
   const nativeAutoUpdater = new EventEmitter();
   // Record each native handler so a test can fire it directly with explicit
@@ -379,6 +380,7 @@ async function importAutoUpdater(
   }));
   vi.doMock("electron-updater", () => ({ autoUpdater }));
   vi.doMock("electron", () => ({
+    powerMonitor,
     autoUpdater: nativeAutoUpdater,
     app: {
       isPackaged: options.isPackaged ?? true,
@@ -430,6 +432,7 @@ async function importAutoUpdater(
   // the staging preflight in tests that have nothing to do with disk space.
   module.__setStagingProbesForTesting({ stagingDiskIsFull: () => false });
   return {
+    powerMonitor,
     nativeAutoUpdater,
     startMacUpdateProgress,
     sent,
@@ -3434,6 +3437,21 @@ describe("quitAndInstallUpdate", () => {
     } finally { restore(); }
   });
 
+  it("returns a new remembered target for confirmation despite an earlier native error", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({ version: "2.1.0", stagedAt: Date.now(), channel: "latest" }));
+      const { module, autoUpdater, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater({ enabled: false, channel: "latest", nightlyAck: false, feature: null });
+      await module.startAutoUpdates(stateDir);
+      nativeAutoUpdater.emit("error", new Error("earlier signature rejected"));
+      autoUpdater.checkForUpdates.mockResolvedValue({ isUpdateAvailable: true, updateInfo: { version: "2.2.0" } });
+      await expect(module.quitAndInstallUpdate("2.1.0")).resolves.toMatchObject({ state: "confirmation-required", version: "2.2.0" });
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      expect(startMacUpdateProgress).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
   it("requires confirmation again if the feed changes a second time", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
@@ -3552,7 +3570,7 @@ describe("quitAndInstallUpdate", () => {
     } finally { vi.useRealTimers(); restore(); }
   });
 
-  it("times out a remembered native transfer that never settles and rejects late retries", async () => {
+  it("recovers a remembered native transfer on late success without another download", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     vi.useFakeTimers();
     try {
@@ -3566,17 +3584,42 @@ describe("quitAndInstallUpdate", () => {
         updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
         return transfer.promise;
       });
-      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/nothing changed/);
+      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
       await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(180_000);
       await assertion;
       nativeAutoUpdater.emit("update-downloaded");
       transfer.resolve();
       await flushMicrotasks();
-      await expect(module.quitAndInstallUpdate()).rejects.toThrow(/nothing changed/);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
       expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); restore(); }
+  });
+
+  it("abandons an install on native failure while the progress helper is starting", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const assertion = expect(install).rejects.toThrow("signature rejected");
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+      nativeAutoUpdater.emit("error", new Error("signature rejected"));
+      await assertion;
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(progress.fail).toHaveBeenCalledWith(expect.stringContaining("cancelled"));
+      expect(progress.assertAlive).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(module.isUpdateRestartRequested()).toBe(false);
+    } finally { restore(); }
   });
 
   it("ignores duplicate downloads during native preparation and accepts a later replacement", async () => {
@@ -4512,7 +4555,7 @@ describe("live download-to-install flow", () => {
   });
 });
 
-it("keeps timed-out native preparation non-installable even after a late event", async () => {
+it("recovers a timed-out native preparation when its native success arrives late", async () => {
   vi.useFakeTimers();
   const restore = stubProcess("darwin", process.execPath);
   try {
@@ -4522,19 +4565,149 @@ it("keeps timed-out native preparation non-installable even after a late event",
     updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
     await vi.advanceTimersByTimeAsync(3 * 60_000);
     expect(module.getUpdateStatus()).toMatchObject({ state: "error", staged: { ready: false } });
-    expect(module.getUpdateStatus().message).toContain("nothing changed");
-    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/nothing changed/);
+    expect(module.getUpdateStatus().message).toContain("Relaunch AO");
+    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     nativeUpdaterEvents.get("update-downloaded")?.({}, "notes", "2.0.0");
-    expect(module.getUpdateStatus().state).toBe("error");
+    expect(module.getUpdateStatus().state).toBe("downloaded");
+    await module.quitAndInstallUpdate("2.0.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
     const records = readFileSync(nodePath.join(stateDir, "logs", "updater.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(records).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "native-preparation-started", version: "2.0.0", initialBytes: 1, runningVersion: "1.0.0" }),
       expect.objectContaining({ event: "native-preparation-sample", bytes: 1, elapsedMs: 10_000 }),
       expect.objectContaining({ event: "native-preparation-watchdog", reason: "inactivity", elapsedMs: 180_000, inactiveMs: 180_000 }),
       expect.objectContaining({ event: "operation-blocked", requestedOperation: "manual-install" }),
-      expect.objectContaining({ event: "native-update-downloaded", accepted: false, preparationBlocked: true }),
+      expect.objectContaining({ event: "native-update-downloaded", accepted: true, preparationBlocked: true }),
     ]));
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it.each(["plateau", "no-signal", "growing"])("excludes a 16-minute suspend from native preparation deadlines (%s)", async signal => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, nativeAutoUpdater, powerMonitor, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    module.__setStagingProbesForTesting({ readStagingBytes: () => signal === "no-signal" ? undefined : signal === "growing" ? Date.now() : 1 });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    powerMonitor.emit("suspend");
+    // Timers do not run during real sleep. Move wall time forward, then fire
+    // resume and the first overdue watchdog tick, nine seconds before success.
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+    powerMonitor.emit("resume");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(module.getUpdateStatus().state).toBe("preparing");
+    await vi.advanceTimersByTimeAsync(1_000);
+    nativeAutoUpdater.emit("update-downloaded", {}, "notes", "2.0.0");
+    expect(module.getUpdateStatus().state).toBe("downloaded");
+    await module.quitAndInstallUpdate("2.0.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it("still times out active work after resume", async () => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, powerMonitor } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    const probe = vi.fn(() => 1);
+    module.__setStagingProbesForTesting({ readStagingBytes: probe });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    await vi.advanceTimersByTimeAsync(170_000);
+    powerMonitor.emit("suspend");
+    // As on a sleeping Mac, wall time passes without executing JS timers.
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+    powerMonitor.emit("resume");
+    powerMonitor.emit("resume"); // Repeated notifications cannot extend the budget.
+    await vi.advanceTimersByTimeAsync(80_000);
+    expect(module.getUpdateStatus().state).toBe("preparing");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(module.getUpdateStatus().state).toBe("error");
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it.each(["no-events", "missing-suspend", "missing-resume"])("survives a 16-minute timer gap with %s", async events => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, nativeAutoUpdater, powerMonitor, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    module.__setStagingProbesForTesting({ readStagingBytes: () => 1 });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    if (events === "missing-resume") powerMonitor.emit("suspend");
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+    if (events === "missing-suspend") powerMonitor.emit("resume");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(module.getUpdateStatus().state).toBe("preparing");
+    await vi.advanceTimersByTimeAsync(1_000);
+    nativeAutoUpdater.emit("update-downloaded", {}, "notes", "2.0.0");
+    await module.quitAndInstallUpdate("2.0.0");
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+    const records = readFileSync(nodePath.join(stateDir, "logs", "updater.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records).toContainEqual(expect.objectContaining(events === "missing-resume"
+      ? { event: "native-preparation-resumed", source: "watchdog-tick" }
+      : { event: "native-preparation-clock-gap", excludedMs: 16 * 60_000 }));
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it.each(["stale-suspend", "no-events", "backwards-clock"])("keeps real stalls bounded with %s", async events => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, powerMonitor } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    module.__setStagingProbesForTesting({ readStagingBytes: () => 1 });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    if (events === "stale-suspend") powerMonitor.emit("suspend");
+    else vi.setSystemTime(Date.now() + (events === "backwards-clock" ? -1 : 1) * 16 * 60_000);
+    await vi.advanceTimersByTimeAsync(190_000);
+    expect(module.getUpdateStatus().state).toBe("error");
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it.each([true, false])("retains the absolute active-time cap across repeated suspends (power events: %s)", async powerEvents => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, powerMonitor } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    let bytes = 0;
+    module.__setStagingProbesForTesting({ readStagingBytes: () => ++bytes });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    for (let sleep = 0; sleep < 2; sleep++) {
+      await vi.advanceTimersByTimeAsync(7 * 60_000);
+      if (powerEvents) powerMonitor.emit("suspend");
+      vi.setSystemTime(Date.now() + 16 * 60_000);
+      if (powerEvents) powerMonitor.emit("resume");
+      expect(module.getUpdateStatus().state).toBe("preparing");
+    }
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(module.getUpdateStatus().state).toBe("preparing");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(module.getUpdateStatus().state).toBe("error");
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it.each(["wrong-version", "native-error", "channel-change"])("does not recover a timeout after %s", async invalidation => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, nativeAutoUpdater, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    module.__setStagingProbesForTesting({ readStagingBytes: () => 1 });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    await vi.advanceTimersByTimeAsync(180_000);
+    if (invalidation === "native-error") nativeAutoUpdater.emit("error", new Error("codesign rejected"));
+    if (invalidation === "channel-change") module.configureFeed({ channel: "nightly", feature: null });
+    nativeAutoUpdater.emit("update-downloaded", {}, "notes", invalidation === "wrong-version" ? "3.0.0" : "2.0.0");
+    expect(module.getUpdateStatus().state).toBe("error");
+    await expect(module.quitAndInstallUpdate()).rejects.toThrow();
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
   } finally { restore(); vi.useRealTimers(); }
 });
 
@@ -4648,7 +4821,7 @@ it("falls back to the 2 GiB cap when the archive size is unknown", async () => {
 });
 
 describe("disk preflight refusal (#6607)", () => {
-  const DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then retry.";
+  const DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then try again.";
   // Answers a check by announcing `version` the way electron-updater does.
   const offer = (
     autoUpdater: AutoUpdaterMock,

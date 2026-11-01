@@ -13,7 +13,7 @@ type PluralMessageKey = TrayMessageKey extends infer Key extends string
 		: never
 	: never;
 
-function catalogFor(locale: AppLocale): Record<TrayMessageKey, string> {
+function catalogFor(locale: AppLocale): Record<TrayMessageKey, string> & Partial<Record<string, string>> {
 	return trayCatalogs[locale] ?? trayCatalogs.en;
 }
 import type { TrayAttentionState, TrayAttentionZone, TrayOpenSessionTarget, TraySessionEntry } from "../shared/tray";
@@ -58,7 +58,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 
 	const tray = new Tray(icon);
 	let sessions: TraySessionEntry[] = [];
-	let catalog = catalogFor(options.locale);
+	let locale = options.locale;
+	let catalog = catalogFor(locale);
 
 	const t = (key: MessageKey, vars?: Record<string, string | number>): string => {
 		const raw = catalog[key] ?? key;
@@ -66,8 +67,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	};
 
 	const tPlural = (base: PluralMessageKey, count: number): string => {
-		const key = (count === 1 ? `${base}_one` : `${base}_other`) as MessageKey;
-		return t(key, { count });
+		const form = new Intl.PluralRules(locale).select(count);
+		return format(catalog[`${base}_${form}`] ?? catalog[`${base}_other`], { count });
 	};
 
 	const sessionItem = (entry: TraySessionEntry): MenuItemConstructorOptions => {
@@ -120,7 +121,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 			sessions = state.sessions ?? [];
 			render();
 		},
-		setLocale(locale) {
+		setLocale(next) {
+			locale = next;
 			catalog = catalogFor(locale);
 			render();
 		},

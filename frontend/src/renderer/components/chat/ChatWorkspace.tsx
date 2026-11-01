@@ -2,6 +2,7 @@ import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -135,6 +136,7 @@ import {
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
+	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
@@ -393,6 +395,12 @@ export interface ChatWorkspaceProps {
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
 	newWorkDisabled?: boolean;
+	/**
+	 * A Freestyle cloud orchestrator being created, before its session exists:
+	 * drawn as that session's in-place start (prompt suggestions and the queue
+	 * placeholder) so the handoff to it changes nothing on screen.
+	 */
+	pendingInPlaceStart?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -704,6 +712,7 @@ function ChatWorkspaceContent({
 	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
+	pendingInPlaceStart = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -1593,6 +1602,13 @@ function ChatWorkspaceContent({
 		startupState === "provisioning" || agentResuming ||
 		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
+	// A Freestyle Chat session starting or waking stays on its conversation:
+	// the composer shimmers and its messages wait in the control plane's turn
+	// queue until the worker connects (cloudChatStartingInPlace).
+	const cloudStarting = cloudChatStartingInPlace(session);
+	// A local or other-provider orchestrator opens its composer once it is up.
+	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
+	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
 		: currentSetupStep === "worktree" ? "Preparing your workspace"
@@ -1931,9 +1947,9 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
-									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
 								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
@@ -2003,23 +2019,23 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
+										willQueue={Boolean(turn) || startupQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning"
+											session?.provisionState === "provisioning" || cloudStarting
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder
-												: openingStarting && !session
+												: (openingStarting && !session) || pendingInPlaceStart
 												// Same words the session shows once it can queue, so nothing changes on handoff.
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-												: orchestratorStarting
+												: orchestratorBlocksComposer
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
@@ -3514,12 +3530,18 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		return groupByTurn({ ...snapshot, items: timelineItems })
+		const groups = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
+		if (!workerUpdates) return groups;
+		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return groups;
+		return groups
+			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+			.filter((group) => group.items.length > 0);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's

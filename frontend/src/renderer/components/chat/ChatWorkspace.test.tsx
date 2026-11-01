@@ -2280,6 +2280,30 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
 	});
 
+	it("shimmers the composer and queues messages while a Freestyle Chat session starts or wakes", () => {
+		const cloudSession = (role: "orchestrator" | "worker", observedState: string, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: role, mode: "chat" as const, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		for (const [role, observedState] of [["orchestrator", "provisioning"], ["worker", "bootstrapping"], ["worker", "stopped"]] as const) {
+			const view = render(<ChatWorkspace sessionRole={role} snapshot={chatFixtureEmpty} session={cloudSession(role, observedState)} />);
+			const composer = screen.getByRole("combobox", { name: "Message the agent" });
+			expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+			expect(composer).toHaveAttribute("contenteditable", "true");
+			expect(screen.getByText(/Queue a follow-up while .* gets ready/)).toBeInTheDocument();
+			// No startup checklist in the conversation: the composer carries the start.
+			expect(screen.queryByText("Preparing your workspace")).not.toBeInTheDocument();
+			view.unmount();
+		}
+		// Once its worker connects the composer settles.
+		const connected = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={{ ...cloudSession("worker", "running"), runtimeConnected: true }} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" }).closest("form")).not.toHaveAttribute("data-starting");
+		connected.unmount();
+		// A Coder orchestrator still opens its composer only once it is up.
+		render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} session={cloudSession("orchestrator", "provisioning", "coder")} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
 	it.each([
 		["fetch", "Getting the latest code"],
 		["worktree", "Preparing your workspace"],

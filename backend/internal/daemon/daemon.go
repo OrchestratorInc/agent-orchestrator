@@ -220,9 +220,12 @@ func Run(buildVersion string) error {
 	// policy file. It gates Sentry capture only: product telemetry answers to
 	// AO_TELEMETRY_EVENTS alone, as documented.
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
-	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
-	sentryobs.SetPolicyEnabled(eventsAllowed)
-	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
+	sentryobs.SetPolicyCheck(func(ctx context.Context) bool {
+		return telemetryPolicy.EventsAllowed(ctx, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
+	})
+	defer sentryobs.SetPolicyCheck(nil)
+	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
+	configureUsageRecording(cfg, store, telemetryIdentity)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
@@ -250,25 +253,21 @@ func Run(buildVersion string) error {
 			"agent": cfg.Agent,
 		},
 	})
-	if telemetryIdentity != nil && cfg.Telemetry.Events {
-		marked, err := telemetryIdentity.MarkInstalledEvent(context.Background())
-		if err != nil {
-			log.Warn("record telemetry install event", "error", err)
-		} else if marked {
-			telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
-				Name:       "ao.app.installed",
-				Source:     "daemon",
-				OccurredAt: time.Now().UTC(),
-				Level:      ports.TelemetryLevelInfo,
-			})
-		}
-	}
+	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, log)
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go telemetryPolicy.Watch(ctx, time.Second, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit, eventsAllowed, sentryobs.SetPolicyEnabled)
+	var usage *usageTelemetryFlusher
+	if remoteTelemetryActive && telemetryIdentity != nil {
+		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, log)
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			usage.flush(flushCtx, false)
+		}()
+	}
 	startGitHubLoginResolver(ctx, cfg, telemetryIdentity, log)
 	cdcPipe, err := startCDC(ctx, store, log)
 	if err != nil {
@@ -414,7 +413,10 @@ func Run(buildVersion string) error {
 			// The session's own account (a saved one, or this computer's login) is
 			// read again off the chat path; the CLI probe can take seconds.
 			if accounts := agentAccountSvc; accounts != nil {
-				go accounts.RecheckSessionAccount(ctx, sessionID, harness)
+				go func() {
+					defer sentryobs.RecoverBackground()
+					accounts.RecheckSessionAccount(ctx, sessionID, harness)
+				}()
 			}
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
@@ -512,7 +514,8 @@ func Run(buildVersion string) error {
 	}
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
-		Cache: store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
+		DataDir: cfg.DataDir,
+		Cache:   store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -549,6 +552,9 @@ func Run(buildVersion string) error {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
 		return fmt.Errorf("wire session service: %w", err)
+	}
+	if usage != nil {
+		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
@@ -646,7 +652,7 @@ func Run(buildVersion string) error {
 	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -836,6 +842,7 @@ func Run(buildVersion string) error {
 		// continuation transcripts) and rebuilds the watch set. Survives
 		// coordinator restarts because the pipeline forwards to the live instance.
 		go func() {
+			defer sentryobs.RecoverBackground()
 			ticker := time.NewTicker(usageReconcileTick)
 			defer ticker.Stop()
 			for {
@@ -925,44 +932,6 @@ func Run(buildVersion string) error {
 	// would silently report offline.
 	presenceTracker := presence.NewTracker()
 
-	// Managed remote-access connector. Reap first: a daemon that died without
-	// stopping its connector leaves a public tunnel to this machine running
-	// with nobody watching it.
-	tunnelPID := mobilebridge.TunnelPIDPath(cfg.DataDir)
-	if reapErr := mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess); reapErr != nil {
-		log.Warn("could not reap a stale mobile tunnel", "error", reapErr)
-	}
-	// Looked up again whenever the bridge is enabled, so a cloudflared the user
-	// installs from Connect Mobile is picked up without restarting AO.
-	bs.ResolveTunnel = func() controllers.TunnelController {
-		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
-		if res.NeedsInstall {
-			return nil
-		}
-		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
-			Binary: res.Path, PIDPath: tunnelPID, Log: log,
-		})
-	}
-	// A system cloudflared is version-checked by running it (30-120ms, up to a
-	// 5s timeout), so resolve off the boot path. Status reads and anything that
-	// needs a connector, such as restoring an enabled bridge, wait for this
-	// lookup rather than racing it.
-	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
-		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
-		if res.NeedsInstall {
-			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-			// Mobile behaves exactly as it did before remote access existed.
-			log.Info("mobile remote access unavailable; cloudflared not installed",
-				"rejectedSystemPath", res.SystemPath)
-			return nil
-		}
-		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
-			Binary: res.Path, PIDPath: tunnelPID, Log: log,
-		})
-	})
-
 	// Stable, machine-bound host identity, served by the unauthenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
 	// answers 501 and the phone falls back to pairing without identity
@@ -972,12 +941,65 @@ func Run(buildVersion string) error {
 		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)
 	}
 
+	// Managed remote-access connector. Reap first: a daemon that died without
+	// stopping its connector leaves a public tunnel to this machine running
+	// with nobody watching it.
+	tunnelPID := mobilebridge.TunnelPIDPath(cfg.DataDir)
+	if reapErr := mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess); reapErr != nil {
+		log.Warn("could not reap a stale mobile tunnel", "error", reapErr)
+	}
+	managedTunnel := func(res mobilebridge.CloudflaredResolution) controllers.TunnelController {
+		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
+		deps := mobilebridge.ManagedTunnelDeps{Binary: res.Path, PIDPath: tunnelPID, Log: log}
+		// A machine a signed-in device links gets a fixed address from AO
+		// Cloud; it needs the host identity that AO Cloud registered.
+		if cfg.CloudControlPlaneURL != "" && hostIdentity.HostID != "" {
+			deps.Fixed = mobilebridge.NewFixedTunnelSource(cfg.CloudControlPlaneURL, cfg.DataDir)
+			deps.HostID = hostIdentity.HostID
+		}
+		return mobilebridge.NewManagedTunnel(deps)
+	}
+	// Looked up again whenever the bridge is enabled, so a cloudflared installed
+	// since boot is picked up without restarting AO. Finding none on a machine
+	// an AO account links starts AO's own pinned download, and the connector
+	// starts once it lands. Any other machine waits for the desktop's Install,
+	// as before fixed addresses.
+	bs.ConnectorInstalling = systemInstall.CloudflaredInstalling
+	bs.ResolveTunnel = func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
+		if res.NeedsInstall {
+			if st, err := mobilebridge.Load(bs.ConfigPath); err == nil && st.AccountTokenHash != "" {
+				systemInstall.DownloadCloudflaredInBackground(bs.ConnectorInstalled)
+			}
+			return nil
+		}
+		return managedTunnel(res)
+	}
+	// A system cloudflared is version-checked by running it (30-120ms, up to a
+	// 5s timeout), so resolve off the boot path. Status reads and anything that
+	// needs a connector, such as restoring an enabled bridge, wait for this
+	// lookup rather than racing it.
+	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
+		if res.NeedsInstall {
+			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
+			// Mobile behaves exactly as it did before remote access existed.
+			log.Info("mobile remote access unavailable; cloudflared not installed",
+				"rejectedSystemPath", res.SystemPath)
+			return nil
+		}
+		return managedTunnel(res)
+	})
+
 	bs.HostID = hostIdentity.HostID
 	// Pushes include the authoritative host identity so a phone can reject
 	// same-numbered sessions on another machine. No identity means no push.
 	if pushDevices != nil && hostIdentity.HostID != "" {
 		dispatcher := push.NewDispatcher(notificationHub, pushDevices, push.NewExpoClient(os.Getenv("EXPO_ACCESS_TOKEN")), hostIdentity.HostID, log)
-		go dispatcher.Run(ctx)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			dispatcher.Run(ctx)
+		}()
 	}
 	if mobilebridge.KeepAwakeSupported() {
 		ka := mobilebridge.NewKeepAwake(os.Getpid())
@@ -1047,8 +1069,13 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
-		Mobile:             mc,
-		BrowserLive:        browserLive,
+		UsageFlush: func(ctx context.Context) {
+			if usage != nil {
+				usage.flush(ctx, false)
+			}
+		},
+		Mobile:      mc,
+		BrowserLive: browserLive,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -1083,6 +1110,7 @@ func Run(buildVersion string) error {
 		}
 		log.Info("browser runtime: listening", "addr", addr)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := browserBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
 			}
@@ -1103,6 +1131,7 @@ func Run(buildVersion string) error {
 		}
 		log.Info("browser stream: listening", "addr", addr)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := browserStreamBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser stream: serve stopped with error", "err", err)
 			}
@@ -1125,7 +1154,10 @@ func Run(buildVersion string) error {
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
 		log.Warn("restore mobile bridge on boot failed", "err", err)
 	}
-	go runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
+	go func() {
+		defer sentryobs.RecoverBackground()
+		runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
+	}()
 
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
@@ -1141,6 +1173,7 @@ func Run(buildVersion string) error {
 		log.Info("supervisor: listening", "addr", addr)
 		sup := supervisor.New(supervisorGrace, srv.RequestShutdown, log)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := sup.Serve(ctx, ln); err != nil {
 				log.Warn("supervisor: serve stopped with error", "err", err)
 			}
@@ -1156,13 +1189,17 @@ func Run(buildVersion string) error {
 		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
 		if cfg.HarnessUpdateChecks {
-			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
-				return systemInstall.UpdateAdvisory(ctx, target, refresh)
-			}, log)
+			go func() {
+				defer sentryobs.RecoverBackground()
+				watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+					return systemInstall.UpdateAdvisory(ctx, target, refresh)
+				}, log)
+			}()
 		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {
+			defer sentryobs.RecoverBackground()
 			defer close(done)
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
@@ -1183,6 +1220,7 @@ func Run(buildVersion string) error {
 			}
 		}()
 		go func() {
+			defer sentryobs.RecoverBackground()
 			// The session operation gate skips reconciliation in progress, so
 			// a slow provider reconnect must not stall hibernation of others.
 			ticker := time.NewTicker(chatHibernateSweepTick)
@@ -1204,6 +1242,7 @@ func Run(buildVersion string) error {
 		resumeDone := make(chan struct{})
 		usageLimitResumeDone = resumeDone
 		go func() {
+			defer sentryobs.RecoverBackground()
 			defer close(resumeDone)
 			var sweeps sync.WaitGroup
 			defer sweeps.Wait()
@@ -1223,6 +1262,7 @@ func Run(buildVersion string) error {
 				// The service bounds overlapping scans and provider attempts. A wake
 				// must not stop the next tick discovering another session's deadline.
 				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("usage-limit auto-resume failed", "err", err)
 					}
@@ -1234,7 +1274,10 @@ func Run(buildVersion string) error {
 				}
 			}
 		}()
-		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+		}()
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
@@ -1497,8 +1540,12 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	} else if home, err := os.UserHomeDir(); err == nil {
 		claudeHome, claudeConfig = filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
 	}
+	claudePlugin := claudecodeagent.New()
 	providers := []ports.AgentAccountProviderCLI{
-		&agentaccount.Claude{Binary: claudecodeagent.New().ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig},
+		&agentaccount.Claude{
+			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
+			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
+		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)

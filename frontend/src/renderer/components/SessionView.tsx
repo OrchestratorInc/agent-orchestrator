@@ -63,6 +63,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
 	refetchCloudProjectsForUnknownSessions,
+	refreshCloudSessionLifecycle,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
 	useRemoteSessionProjectKind,
@@ -71,7 +72,8 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -246,6 +248,12 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	// The loader comes down once the sessions list says the worker connected.
+	// Its own stream and poll learn that first, and refresh the list then
+	// instead of leaving the loader up until the list's next poll.
+	const listedConnected = useRef(workerConnected);
+	listedConnected.current = workerConnected;
+	const mountedAt = useRef(Date.now());
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
@@ -268,6 +276,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					: event.type === "agent.ready" ? 3
 					: undefined;
 				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+				// A connect from before this loader (allowing for clock skew) is an
+				// earlier worker's, not the one it waits for.
+				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
 			},
 		});
 		return () => controller.abort();
@@ -284,6 +295,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
 				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
+				if (session.runtimeConnected && !listedConnected.current) void refreshCloudSessionLifecycle(queryClient);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
@@ -708,7 +720,24 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	const showLifecycleLoader = !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
+	// A Freestyle Chat session starting or waking stays on its conversation, not
+	// the startup screen: its composer shimmers and its messages queue until the
+	// worker connects (cloudChatStartingInPlace). Latched until it connects, so
+	// the moment its sandbox reports running before the worker does never
+	// flashes the screen in. Other providers keep the startup screen: a Coder
+	// start shows its steps and its workspace link there.
+	const chatStartingInPlaceRef = useRef("");
+	const freestyleChat = session?.mode === "chat" && session.cloud?.sandboxProvider === FREESTYLE_PROVIDER;
+	if (cloudChatStartingInPlace(session)) chatStartingInPlaceRef.current = sessionId;
+	else if (!freestyleChat || cloudStage === "connected" || isCloudPausedStage(cloudStage)) chatStartingInPlaceRef.current = "";
+	const chatStartingInPlace = chatStartingInPlaceRef.current === sessionId;
+	// Waking an idle-paused session keeps its paused badge until the worker is
+	// back, rather than raising the startup screen over the conversation.
+	const chatWakingRef = useRef("");
+	if (freestyleChat && (isCloudPausedStage(cloudStage) || cloudStage === "resuming_workspace")) chatWakingRef.current = sessionId;
+	else if (!chatStartingInPlace) chatWakingRef.current = "";
+	const chatWaking = chatWakingRef.current === sessionId && chatStartingInPlace;
+	const showLifecycleLoader = !startupFailure && !chatStartingInPlace && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");
@@ -729,7 +758,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudResumeRef = useRef("");
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
-		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
+		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
 		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
@@ -742,7 +771,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// failure card's Retry runs it again.
 		const problem = cloudStartupProblem(session);
 		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
-		void requestCloudResume(!setupFailed).catch(() => {
+		// Only a connected worker can prepare its workspace again. A session
+		// still waking has none (the request is refused), and the worker it
+		// wakes prepares the workspace as it starts. A recorded checkout failure
+		// still asks, in case the list has not yet seen its worker connect.
+		const workerCanPrepare = session.runtimeConnected === true || (problem?.phase === "failed" && isWorkspaceStartupError(problem.code));
+		void requestCloudResume(!setupFailed && workerCanPrepare).catch(() => {
 			// Keep the paused lifecycle projection visible. A later message, shell
 			// open, or route visit can issue a fresh explicit resume intent.
 		});
@@ -1956,7 +1990,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{isOrchestrator && session?.cloud && routedWorkspace ? (
 								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
 							) : null}
-							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
+							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
 							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
 								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} ended={terminated} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />

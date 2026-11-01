@@ -227,12 +227,17 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	return func() { _ = os.Remove(path) }, nil
 }
 
-func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+func readDescriptorOnce(dataDir, sessionID string) (Descriptor, error) {
 	path, err := descriptorPath(dataDir, sessionID)
 	if err != nil {
 		return Descriptor{}, err
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
+	f, err := openHostFile(path)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	b, err := io.ReadAll(f)
+	_ = f.Close()
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -523,8 +528,40 @@ func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
 
+func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(context.Background(), dataDir, sessionID)
+}
+
+func readDescriptorContext(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	d, err := readDescriptorOnce(dataDir, sessionID)
+	if !isDescriptorSharingViolation(err) {
+		return d, err
+	}
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return Descriptor{}, ctx.Err()
+		case <-timeout.C:
+			return Descriptor{}, err
+		case <-ticker.C:
+			d, err = readDescriptorOnce(dataDir, sessionID)
+			if !isDescriptorSharingViolation(err) {
+				return d, err
+			}
+		}
+	}
+}
+
+func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(ctx, dataDir, sessionID)
+}
+
 func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
-	d, err := readDescriptor(dataDir, sessionID)
+	d, err := readShutdownDescriptor(ctx, dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -566,7 +603,7 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		current, readErr := readDescriptor(dataDir, sessionID)
+		current, readErr := readShutdownDescriptor(waitCtx, dataDir, sessionID)
 		if readErr == nil && current.Token != d.Token {
 			return nil // A new owner could only publish after the old lock released.
 		}
@@ -577,7 +614,9 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 			} else if lockErr != nil {
 				return lockErr
 			}
-		} else if readErr != nil {
+		} else if readErr != nil && !hostFileBusy(readErr) {
+			// A busy descriptor is the exiting host deleting it, or another
+			// reader; the next poll sees it gone.
 			return readErr
 		}
 		select {

@@ -581,7 +581,7 @@ const SPAWNED = /\bspawned\s+session\s+([\w.-]+)/i;
 export function spawnedSessionIds(items: readonly ConversationItem[]): string[] {
 	const ids: string[] = [];
 	for (const item of items) {
-		if (item.kind !== "activity" || item.activityKind !== "command") continue;
+		if (item.kind !== "activity" || item.activityKind !== "command" || item.status !== "completed") continue;
 		if (!/\bao'?\s+spawn\b/.test(item.detail?.command ?? item.summary)) continue;
 		const match = SPAWNED.exec(item.detail?.output ?? "");
 		if (match) ids.push(match[1]!);
@@ -589,9 +589,17 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
+export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
+	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
+		&& item.detail?.action === "session.spawned"
+		&& typeof item.detail.targetSessionId === "string"
+		&& item.detail.operationId === item.detail.targetSessionId
+		&& spawnedIds.has(item.detail.targetSessionId);
+}
+
 /** The workers a turn started, each showing where it is now. */
 export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(false);
 	return (
 		<div className="min-w-0 text-xs">
 			<button
@@ -623,19 +631,45 @@ function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
 	const href = session?.workspaceId ? sessionHref({ sessionId, projectId: session.workspaceId }) : latest ? sessionHref(latest) : undefined;
 	let lead: ReactNode;
 	let status: ReactNode;
-	if (pr) {
+	if (latest?.state === "needs_input" || latest?.state === "stuck"
+		|| session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
+		status = <span className="text-status-needs-you">{latest?.state === "stuck" ? "Stuck" : "Needs input"}</span>;
+	} else if (pr) {
 		const ready = readyToMerge(pr);
 		lead = <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", ready ? "text-status-ready" : "text-muted-foreground")} />;
 		status = ready ? `#${pr.number} · ready to merge` : `#${pr.number}`;
 	} else if (latest?.state === "done") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-ready" />;
 		status = "Done";
-	} else if (latest?.state === "needs_input" || latest?.state === "stuck") {
+	} else if (session?.isTerminated || session?.status === "terminated") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Terminated";
+	} else if (session?.provisionState === "provisioning") {
+		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
+		status = "Spawning";
+	} else if (session?.provisionState === "failed") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = <span className="text-status-needs-you">{latest.state === "stuck" ? "Stuck" : "Needs input"}</span>;
-	} else {
+		status = "Start failed";
+	} else if (session?.activity?.state === "exited" || session?.status === "exited") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Exited";
+	} else if (session?.statusReadiness === "checking") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Checking status";
+	} else if (!session || session.statusReadiness === "unavailable"
+		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Status unavailable";
+	} else if (session.activity?.state === "idle" || session.status === "idle") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Idle";
+	} else if (session.activity?.state === "active" || session.status === "working") {
 		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
 		status = latest ? splitHeadline(splitArtifacts(latest.body).text).headline : "Working";
+	} else {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Status unavailable";
 	}
 	return (
 		<div className="flex min-w-0 items-center gap-2 py-0.5 pl-5">

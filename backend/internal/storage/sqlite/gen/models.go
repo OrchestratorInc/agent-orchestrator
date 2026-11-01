@@ -884,6 +884,28 @@ type UsageCodexSourceDiscovery struct {
 	HasMixedChildTypes     int64
 }
 
+type UsageMessageSummary struct {
+	SessionID    string
+	PendingCount int64
+	FirstAt      sql.NullTime
+	LastAt       sql.NullTime
+}
+
+type UsagePRMeasurement struct {
+	PRKey              string
+	ProjectID          string
+	Historical         int64
+	HistoricalMerged   int64
+	AssociatedReported int64
+	MergedReported     int64
+}
+
+type UsageProjectIdentity struct {
+	ProjectID   string
+	InstallID   string
+	TelemetryID string
+}
+
 type UsageSessionIntegrity struct {
 	SessionID  string
 	Incomplete int64
