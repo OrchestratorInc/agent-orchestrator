@@ -216,3 +216,28 @@ func TestQwenOversizeAndTornRecords(t *testing.T) {
 		t.Fatalf("oversize/torn history: shortened=%v messages=%#v", got.shortened, got.messages)
 	}
 }
+
+func TestQwenScanGroupsNativeIDAcrossProjects(t *testing.T) {
+	root, project := t.TempDir(), t.TempDir()
+	source := writeQwenChat(t, root, project, qwenID, qwenConversation(project))
+	body, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(root, "projects", "-another-project", "chats", qwenID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copyPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessQwen: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Candidates) != 1 || preview.Candidates[0].ID != candidateID(domain.HarnessQwen, canonical(root), qwenID) {
+		t.Fatalf("copies must share one native candidate: %#v", preview.Candidates)
+	}
+}
