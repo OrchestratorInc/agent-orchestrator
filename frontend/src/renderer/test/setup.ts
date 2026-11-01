@@ -191,7 +191,8 @@ if (typeof window !== "undefined") {
 			save: async () => true,
 		},
 		cloudArtifact: {
-			fetch: async () => new Uint8Array(),
+			save: async () => true,
+			cancelSave: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {

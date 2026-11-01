@@ -1780,6 +1780,8 @@
 	"artifacts.copyMarkdown": "复制为 Markdown",
 	"artifacts.copyContents": "复制内容",
 	"artifacts.download": "下载",
+	"artifacts.cancelDownload": "取消下载",
+	"artifacts.downloaded": "已保存 {{name}}",
 	"artifacts.delete": "删除产物",
 	"artifacts.deleteTitle": "删除产物？",
 	"artifacts.deleteDescription": "这会从此会话的产物文件夹中永久删除 {{name}}。",

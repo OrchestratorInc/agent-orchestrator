@@ -385,7 +385,8 @@ const api = {
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
 	cloudArtifact: {
-		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
+		save: (input: { url: string; name: string; id?: string }) => ipcRenderer.invoke("cloudArtifact:save", input) as Promise<boolean>,
+		cancelSave: (id: string) => ipcRenderer.invoke("cloudArtifact:cancelSave", id) as Promise<void>,
 		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
 			ipcRenderer.on("cloudArtifact:frameNavigated", wrapped);

@@ -226,8 +226,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 	});
 
 	it("downloads a cloud file from the session's current access link", async () => {
-		const fetchFile = vi.spyOn(aoBridge.cloudArtifact, "fetch").mockResolvedValue(new Uint8Array([1, 2]));
-		const save = vi.spyOn(aoBridge.chatImage, "save").mockResolvedValue(true);
+		const save = vi.spyOn(aoBridge.cloudArtifact, "save").mockResolvedValue(true);
 		const session = cloudSession();
 		session.artifactFiles = [{ kind: "file", name: "report.pdf", path: "report.pdf", size: 2, updatedAt: "2026-09-24T00:00:00Z" }];
 		renderView(<SessionArtifactsView session={session} />);
@@ -235,10 +234,34 @@ describe("SessionArtifactsView for a cloud session", () => {
 		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
 
-		expect(fetchFile).toHaveBeenCalledWith(`${CLOUD_ROOT}report.pdf?v=2026-09-24T00%3A00%3A00Z`);
-		expect(save).toHaveBeenCalledWith({ name: "report.pdf", bytes: new Uint8Array([1, 2]) });
-		fetchFile.mockRestore();
+		expect(save).toHaveBeenCalledWith({ url: `${CLOUD_ROOT}report.pdf?v=2026-09-24T00%3A00%3A00Z`, name: "report.pdf", id: expect.any(String) });
+		expect(await screen.findByRole("status")).toHaveTextContent("Saved report.pdf");
 		save.mockRestore();
+	});
+
+	it("offers to cancel a cloud download while it is still saving", async () => {
+		let finish: (saved: boolean) => void = () => undefined;
+		const save = vi.spyOn(aoBridge.cloudArtifact, "save").mockImplementation(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+		const cancelSave = vi.spyOn(aoBridge.cloudArtifact, "cancelSave").mockResolvedValue(undefined);
+		const session = cloudSession();
+		session.artifactFiles = [{ kind: "file", name: "report.pdf", path: "report.pdf", size: 2, updatedAt: "2026-09-24T00:00:00Z" }];
+		renderView(<SessionArtifactsView session={session} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.pdf/ }));
+		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
+		expect(screen.queryByRole("menuitem", { name: "Download" })).toBeNull();
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Cancel download" }));
+		const { id } = save.mock.calls[0]![0] as { id: string };
+		expect(cancelSave).toHaveBeenCalledWith(id);
+
+		finish(false);
+		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
+		expect(await screen.findByRole("menuitem", { name: "Download" })).toBeInTheDocument();
+		expect(screen.queryByRole("status")).toBeNull();
+		save.mockRestore();
+		cancelSave.mockRestore();
 	});
 
 	it("offers no local folder actions", async () => {

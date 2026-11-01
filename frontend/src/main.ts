@@ -178,7 +178,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { abortCloudArtifactSaves, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -3162,7 +3162,7 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
-registerCloudArtifactIpc({ ipcMain });
+registerCloudArtifactIpc({ ipcMain, dialog, downloadsDirectory: () => app.getPath("downloads") });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -3859,6 +3859,8 @@ app.on("before-quit", (event) => {
 	// Never respawn the daemon while the app is shutting down; the daemon's own
 	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
 	cancelDaemonAutoRestart();
+	// A cloud artifact download cut off by the quit removes its partial file.
+	abortCloudArtifactSaves();
 	disposeBrowserRuntimeLink();
 	disposeBrowserStreamLink();
 	trayLifecycle.dispose();

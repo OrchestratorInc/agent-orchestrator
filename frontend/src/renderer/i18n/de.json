@@ -1796,6 +1796,8 @@
 	"artifacts.copyMarkdown": "Als Markdown kopieren",
 	"artifacts.copyContents": "Inhalt kopieren",
 	"artifacts.download": "Herunterladen",
+	"artifacts.cancelDownload": "Download abbrechen",
+	"artifacts.downloaded": "{{name}} gespeichert",
 	"artifacts.delete": "Artefakt löschen",
 	"artifacts.deleteTitle": "Artefakt löschen?",
 	"artifacts.deleteDescription": "Dadurch wird {{name}} endgültig aus dem Artefaktordner dieser Sitzung gelöscht.",

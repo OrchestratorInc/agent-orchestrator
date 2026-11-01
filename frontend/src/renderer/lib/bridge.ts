@@ -90,11 +90,16 @@ export const aoBridge: AoBridge =
 			},
 		},
 		cloudArtifact: {
-			fetch: async (url: string) => {
-				const response = await fetch(url);
-				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
-				return new Uint8Array(await response.arrayBuffer());
+			// Browser-preview fallback only. Browsers ignore `download` for a
+			// cross-origin link, so this opens the artifact rather than saving it.
+			save: async ({ url, name }: { url: string; name: string; id?: string }) => {
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = name;
+				link.click();
+				return true;
 			},
+			cancelSave: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {

@@ -1826,6 +1826,8 @@
 	"artifacts.copyMarkdown": "Copier en Markdown",
 	"artifacts.copyContents": "Copier le contenu",
 	"artifacts.download": "Télécharger",
+	"artifacts.cancelDownload": "Annuler le téléchargement",
+	"artifacts.downloaded": "{{name}} enregistré",
 	"artifacts.delete": "Supprimer l'artefact",
 	"artifacts.deleteTitle": "Supprimer l'artefact ?",
 	"artifacts.deleteDescription": "Cette action supprime définitivement {{name}} du dossier d'artefacts de cette session.",

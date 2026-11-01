@@ -134,7 +134,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					save: async () => true,
 				},
 				cloudArtifact: {
-					fetch: async () => new Uint8Array(),
+					save: async () => true,
+					cancelSave: async () => undefined,
 					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
@@ -1036,7 +1037,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					save: async () => true,
 				},
 				cloudArtifact: {
-					fetch: async () => new Uint8Array(),
+					save: async () => true,
+					cancelSave: async () => undefined,
 					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {

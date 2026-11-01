@@ -2111,6 +2111,8 @@
 	"artifacts.copyMarkdown": "Copy as Markdown",
 	"artifacts.copyContents": "Copy contents",
 	"artifacts.download": "Download",
+	"artifacts.cancelDownload": "Cancel download",
+	"artifacts.downloaded": "Saved {{name}}",
 	"artifacts.delete": "Delete artifact",
 	"artifacts.deleteTitle": "Delete artifact?",
 	"artifacts.deleteDescription": "This permanently deletes {{name}} from this session's artifacts folder.",
