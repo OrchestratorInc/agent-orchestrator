@@ -1283,9 +1283,9 @@ describe("side command routing", () => {
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
 	});
 
-	it.each(["btw", "side"])(
-		"/%s creates a new side for every new submission and reuses a retry key",
-		async (command) => {
+	it(
+		"/btw creates a new side for every new submission and reuses a retry key",
+		async () => {
 			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
 			sideMocks.send.mockReset().mockResolvedValue(undefined);
 			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1295,9 +1295,9 @@ describe("side command routing", () => {
 				</Wrapper>,
 			);
 			await act(async () => {
-				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw first", undefined, "submission-1");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
 			});
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
@@ -1324,6 +1324,16 @@ describe("side command routing", () => {
 			);
 		},
 	);
+	it.each(["/side", "/side question"])("sends literal %s to the main agent even when side creation is available", async text => {
+		sideMocks.create.mockReset();
+		const mainSend=vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as {send?:unknown}).send=mainSend;
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session}/></Wrapper>);
+		await act(async()=>{await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({text}));
+		delete (conversationCommandState as {send?:unknown}).send;
+	});
 	it.each(["btw", "side"])("preserves provider /%s when resume is unavailable", async (command) => {
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [] };
 		sideMocks.create.mockReset();

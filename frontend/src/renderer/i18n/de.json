@@ -2590,7 +2590,7 @@
 	"settings.diagnostics": "Diagnose",
 	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
 	"settings.sideChats": "Seiten-Chats",
-	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw oder /side eine Frage stellen.",
+	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
 	"settings.chromeAgents.hint": "Agenten können in deinem eigenen Chrome surfen, mit deinen Anmeldungen. Richte es in den Browser-Einstellungen ein.",
 	"settings.chromeAgents.goTo": "Öffnen",

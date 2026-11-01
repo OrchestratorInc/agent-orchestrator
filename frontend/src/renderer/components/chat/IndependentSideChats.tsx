@@ -89,32 +89,25 @@ export function SideComposer({
 		return () => window.clearTimeout(timer);
 	}, [sending]);
 	const filePicker = useRef<HTMLInputElement>(null);
-	const btwHandled = useRef(false);
 	const compactHandled = useRef(false);
 	const [highlighted, setHighlighted] = useState(0);
 	const [dismissed, setDismissed] = useState<string>();
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	const commands = useMemo(
 		() => [
-			...(onFocusSide ? ["btw", "side"].map((name) => ({ name, displayName: name, description: "Opens a side chat", source: "AO" })) : []),
+			...(onFocusSide ? ["btw"].map((name) => ({ name, displayName: name, description: "Opens a side chat", source: "AO" })) : []),
 			{
 				name: "compact",
 				displayName: "compact",
 				description: "Compacts this side chat",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "compact" && (!onFocusSide || (skill.name !== "btw" && skill.name !== "side"))),
+			...skills.filter((skill) => skill.name !== "compact" && (!onFocusSide || skill.name !== "btw")),
 		],
 		[skills, onFocusSide],
 	);
 	const suggestions = trigger?.kind === "skill" && trigger.key !== dismissed ? rankSkills(commands, trigger.query) : [];
 	const choose = (value: string) => {
-		if ((value === "btw" || value === "side") && onFocusSide) {
-			onChange((editor.current?.getSnapshot().text ?? draft.text).replace(/\/[^\s]*$/, "").trim());
-			onFocusSide();
-			setDismissed(trigger?.key);
-			return;
-		}
 		if (trigger) editor.current?.insertToken(trigger, value);
 	};
 	useEffect(() => {
@@ -231,13 +224,6 @@ export function SideComposer({
 						onComplete={(next, key) => {
 							const matches = next.trigger?.kind === "skill" ? rankSkills(commands, next.trigger.query) : [];
 							const chosen = matches[Math.min(highlighted, matches.length - 1)];
-							if ((chosen?.value === "btw" || chosen?.value === "side") && key === "Enter" && onFocusSide) {
-								btwHandled.current = true;
-								onChange(next.text.replace(/\/[^\s]*$/, "").trim());
-								onFocusSide();
-								setDismissed(next.trigger?.key);
-								return undefined;
-							}
 							if (chosen?.value === "compact" && key === "Enter" && next.text.trim() === "/compact") {
 								compactHandled.current = true;
 								onCompact();
@@ -247,15 +233,11 @@ export function SideComposer({
 						}}
 						onEnter={(next, event) => {
 							if (event.shiftKey) return false;
-							if (btwHandled.current) {
-								btwHandled.current = false;
-								return true;
-							}
 							if (compactHandled.current) {
 								compactHandled.current = false;
 								return true;
 							}
-							if (/^\/(?:btw|side)$/i.test(next.text.trim()) && onFocusSide) {
+							if (/^\/btw$/i.test(next.text.trim()) && onFocusSide) {
 								onChange("");
 								onFocusSide();
 								return true;
@@ -812,7 +794,7 @@ export function useIndependentSideChats(
 				if (propagateError) throw new Error("Side chat is closing.");
 				return;
 			}
-			const btw = preparedReceipt ? null : /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
+			const btw = preparedReceipt ? null : /^\/btw(?:\s+|$)/i.exec(text);
 			if (!preparedReceipt && (btw || (!text && draftsRef.current[sideId]?.pendingCommand))) {
 				if (sendingRef.current.has(sideId)) return;
 				sendingRef.current.add(sideId);

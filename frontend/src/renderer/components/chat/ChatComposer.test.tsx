@@ -805,6 +805,22 @@ describe("send keys", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it("retries a saved /side message as ordinary agent text with its original key", async () => {
+		const sessionId = "side-routing";
+		writeChatComposerText(sessionId, "/side original question");
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "/side original question",
+			requestText: "/side original question",
+			attachments: [],
+			clientMessageId: "original-key",
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend).toHaveBeenCalledWith("/side original question", undefined, "original-key");
+	});
 	it.each(["read", "write"])("preserves safe retry when recording acceptance fails to %s storage", async (failure) => {
 		const sessionId = `composer-live-acceptance-storage-failure-${failure}`;
 		const durableStorage = window.localStorage;
@@ -1846,6 +1862,18 @@ describe("slash commands", () => {
 		scrollIntoView.mockRestore();
 	});
 
+	it.each(["Enter", "Tab"])("finds /btw through /side and completes with %s before sending the prompt", async key => {
+		const {onSend,field}=renderComposer({skills:[{name:"btw",displayName:"btw",description:"Open a new side chat",source:"AO"}]});
+		await typeInComposer(field,"/side");
+		expect(screen.getByRole("option",{name:/\/btw/})).toBeInTheDocument();
+		expect(screen.queryByRole("option",{name:/^\/side\b/})).not.toBeInTheDocument();
+		await userEvent.keyboard(`{${key}}`);
+		expect(composerWireText(field)).toBe("/btw ");
+		expect(onSend).not.toHaveBeenCalled();
+		await typeInComposer(field,"explain this");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(()=>expect(onSend).toHaveBeenCalledWith(expect.stringContaining("/btw explain this")));
+	});
 	it("inserts the highlighted skill on Enter instead of sending", async () => {
 		const { onSend, field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/rev");
