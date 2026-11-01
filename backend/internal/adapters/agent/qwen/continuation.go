@@ -1,58 +1,54 @@
 package qwen
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+	"unicode/utf16"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const qwenHomeEnv = "QWEN_HOME"
 
-// qwenNativeSessionID matches a Qwen chat id: the <id>.jsonl file name, which is
-// a UUID and is globally unique across projects.
 var qwenNativeSessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// qwenNonAlnum mirrors Qwen Code's sanitizeCwd exactly: it replaces every
-// non-alphanumeric byte of the cwd with a dash to name the project folder
-// (so "/Users/x/.ao" becomes "-Users-x--ao"). Pinned by continuation_test.go.
-var qwenNonAlnum = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
-	_ ports.AgentNativeSessionResumePreparer = (*Plugin)(nil)
+	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
+	_ ports.AgentImportedSessionRelocator   = (*Plugin)(nil)
 )
 
-// sanitizeQwenCwd encodes a working directory the way Qwen Code's Storage does
-// when it names a project folder: `cwd.replace(/[^a-zA-Z0-9]/g, "-")`.
-func sanitizeQwenCwd(cwd string) string {
-	return qwenNonAlnum.ReplaceAllString(cwd, "-")
-}
-
-// resolveQwenCwd returns the path Qwen keys its project folder by. Qwen resolves
-// symlinks before encoding, so AO does too (e.g. /tmp -> /private/tmp on macOS).
-func resolveQwenCwd(cwd string) string {
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		return resolved
+// sanitizeQwenCwdForPlatform mirrors Qwen Code 0.26.4 sanitizeCwd: lowercase
+// on win32, then replace /[^a-zA-Z0-9]/g. The JS regexp operates on UTF-16
+// code units. U+0130 has a multi-character lowercase mapping in JavaScript.
+func sanitizeQwenCwdForPlatform(cwd string, windows bool) string {
+	if windows {
+		cwd = strings.ToLower(strings.ReplaceAll(cwd, "İ", "i\u0307"))
 	}
-	return filepath.Clean(cwd)
+	var encoded strings.Builder
+	for _, c := range utf16.Encode([]rune(cwd)) {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			encoded.WriteByte(byte(c))
+		} else {
+			encoded.WriteByte('-')
+		}
+	}
+	return encoded.String()
 }
 
-// qwenChatPath is the transcript Qwen reads when it runs in cwd:
-// <configDir>/projects/<sanitizeCwd(resolved cwd)>/chats/<id>.jsonl.
+// ACP session/load uses its raw cwd parameter, unlike CLI getcwd. Resolving
+// symlinks here makes /tmp imports fail on macOS (Resource not found).
 func qwenChatPath(configDir, cwd, sessionID string) string {
-	return filepath.Join(configDir, "projects", sanitizeQwenCwd(resolveQwenCwd(cwd)), "chats", sessionID+".jsonl")
+	return filepath.Join(configDir, "projects", sanitizeQwenCwdForPlatform(cwd, runtime.GOOS == "windows"), "chats", sessionID+".jsonl")
 }
 
 // NativeSessionConfigDir returns the Qwen Code state root used by a launch:
@@ -128,163 +124,54 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return "", false, nil
 }
 
-// PrepareNativeSessionResume copies the imported chat to the project folder Qwen
-// will read when it runs in cwd, rewriting the cwd on every record so Qwen loads
-// the history instead of reporting the session missing. The original is never
-// touched, and an existing copy is left in place because it holds AO's own turns
-// after the first resume.
-func (p *Plugin) PrepareNativeSessionResume(ctx context.Context, ref ports.NativeSessionRef, cwd, priorCwd string) (string, error) {
+// RelocateImportedSession prepares Qwen's cwd-keyed lookup on first open.
+// Every record gets the raw launch cwd. CopyOnce keeps the original untouched
+// and preserves any existing copy, which may already contain AO's later turns.
+func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	sessionID := strings.TrimSpace(ref.NativeSessionID)
-	if !qwenNativeSessionID.MatchString(sessionID) {
-		return "", fmt.Errorf("qwen: invalid native session id")
-	}
-	configDir := strings.TrimSpace(ref.ConfigDir)
-	if configDir == "" {
-		return "", fmt.Errorf("qwen: missing config dir")
-	}
-	if strings.TrimSpace(cwd) == "" || !filepath.IsAbs(cwd) {
-		return "", fmt.Errorf("qwen: resume working directory must be absolute")
-	}
-	resolvedCWD := resolveQwenCwd(cwd)
-	target := qwenChatPath(configDir, cwd, sessionID)
-	// First open writes the copy; later opens at the same cwd keep it, since it
-	// now carries the turns AO added after the resume.
-	if info, err := os.Stat(target); err == nil {
-		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("qwen: resume target is not a regular file: %s", target)
-		}
-		return target, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("qwen: stat resume target: %w", err)
-	}
-	// Choose what to copy from. When a previous open already prepared a copy
-	// (priorCwd) and the launch cwd has since drifted, that prior copy holds AO's
-	// appended turns and is authoritative; the untouched original is only a
-	// fallback when the prior copy is gone. Never pick by newest mtime: a
-	// lock-less provider the user kept running could make the original newest.
-	source := ""
-	if strings.TrimSpace(priorCwd) != "" {
-		if prior := qwenChatPath(configDir, priorCwd, sessionID); prior != target {
-			if info, err := os.Stat(prior); err == nil && info.Mode().IsRegular() {
-				source = prior
-			}
-		}
-	}
-	if source == "" {
-		located, ok, err := p.LocateTranscript(ctx, ref)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", fmt.Errorf("qwen: source transcript for %s not found under %s", sessionID, configDir)
-		}
-		source = located
-	}
-	if source == target {
-		// The chat already lives where Qwen will read it (same folder); nothing to do.
-		return target, nil
-	}
-	if err := copyQwenTranscriptRewritingCWD(ctx, source, target, resolvedCWD); err != nil {
-		return "", err
-	}
-	return target, nil
-}
-
-// copyQwenTranscriptRewritingCWD streams src to dst line by line, replacing the
-// top-level "cwd" field of each JSON record with newCWD, then atomically renames
-// the temp file into place at mode 0600. The source is only read.
-func copyQwenTranscriptRewritingCWD(ctx context.Context, src, dst, newCWD string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("qwen: open source transcript: %w", err)
-	}
-	defer func() { _ = in.Close() }()
-
-	dir := filepath.Dir(dst)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("qwen: create project chats dir: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".ao-import-*.jsonl.tmp")
-	if err != nil {
-		return fmt.Errorf("qwen: create temp transcript: %w", err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("qwen: chmod temp transcript: %w", err)
-	}
-
-	newCWDJSON, err := json.Marshal(newCWD)
-	if err != nil {
 		return err
 	}
-	reader := bufio.NewReaderSize(in, 256<<10)
-	writer := bufio.NewWriterSize(tmp, 256<<10)
-	for {
+	if !qwenNativeSessionID.MatchString(r.NativeSessionID) {
+		return errors.New("qwen: invalid native session id")
+	}
+	if strings.TrimSpace(r.ConfigDir) == "" {
+		return errors.New("qwen: missing config dir")
+	}
+	if strings.TrimSpace(r.LaunchCWD) == "" || !filepath.IsAbs(r.LaunchCWD) {
+		return errors.New("qwen: resume working directory must be absolute")
+	}
+	source := r.TranscriptPath
+	if source == "" {
+		path, _, err := p.LocateTranscript(ctx, ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir})
+		if err != nil {
+			return err
+		}
+		source = path
+	}
+	n := 0
+	_, err := importcopy.CopyOnce(source, qwenChatPath(r.ConfigDir, r.LaunchCWD, r.NativeSessionID), func(line []byte) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if id, ok := importcopy.StringField(line, "sessionId"); ok && id != r.NativeSessionID {
+			return nil, errors.New("qwen: native identity mismatch")
+		}
+		out, err := importcopy.SetStringField(line, "cwd", r.LaunchCWD)
+		if err == nil {
+			n++
+		}
+		return out, err
+	}, func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			rewritten := rewriteQwenCWDLine(line, newCWDJSON)
-			if _, err := writer.Write(rewritten); err != nil {
-				return fmt.Errorf("qwen: write transcript: %w", err)
-			}
+		if n == 0 {
+			return errors.New("qwen: transcript has no records to relocate")
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("qwen: read source transcript: %w", readErr)
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("qwen: flush transcript: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("qwen: sync transcript: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("qwen: close transcript: %w", err)
-	}
-	cleanup = false
-	if err := os.Rename(tmpPath, dst); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("qwen: place transcript: %w", err)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("qwen: relocate imported transcript: %w", err)
 	}
 	return nil
-}
-
-// rewriteQwenCWDLine replaces only the top-level "cwd" value of one JSONL record,
-// preserving every other field and the trailing newline. A line that is not a
-// JSON object, or has no cwd, is copied through unchanged so the copy stays a
-// faithful replica apart from the folder the chat resumes in.
-func rewriteQwenCWDLine(line, newCWDJSON []byte) []byte {
-	trimmed := strings.TrimRight(string(line), "\r\n")
-	if trimmed == "" {
-		return line
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(trimmed), &fields) != nil {
-		return line
-	}
-	if _, ok := fields["cwd"]; !ok {
-		return line
-	}
-	fields["cwd"] = append(json.RawMessage(nil), newCWDJSON...)
-	encoded, err := json.Marshal(fields)
-	if err != nil {
-		return line
-	}
-	suffix := line[len(trimmed):]
-	return append(encoded, suffix...)
 }

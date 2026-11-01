@@ -82,28 +82,34 @@ type AgentTranscriptLocator interface {
 	LocateTranscript(ctx context.Context, ref NativeSessionRef) (path string, ok bool, err error)
 }
 
-// AgentNativeSessionResumePreparer makes a provider-owned conversation resumable
-// from the AO worktree. Some harnesses (Gemini/Pi forks such as Qwen, OMP and
-// Kimchi) locate a chat by the folder the agent runs in, so AO cannot resume an
-// imported chat from its own worktree until the native transcript is copied to
-// where the provider will look for cwd. The implementation:
+// ImportedSessionRelocation describes an imported native session that AO is
+// about to resume for the first time, from a different directory than the one
+// the provider recorded it in.
+type ImportedSessionRelocation struct {
+	NativeSessionID string
+	// ConfigDir is the provider state root that holds the imported session.
+	ConfigDir string
+	// TranscriptPath is the provider file the import read, when known.
+	TranscriptPath string
+	// SourceCWD is the directory the provider recorded for the session.
+	SourceCWD string
+	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
+	// provider's own path normalization, such as resolving symlinks.
+	LaunchCWD string
+}
+
+// AgentImportedSessionRelocator is implemented by adapters whose provider finds
+// a native session by the directory it runs in, not by id alone. Before AO
+// first resumes an imported session, it calls RelocateImportedSession so the
+// provider can load the same native id from LaunchCWD. AO then launches every
+// later open of that session in LaunchCWD (SessionImportSource.ResumeCwd), so
+// it is called once per import and never has to move a copy that already holds
+// AO's turns. Providers that find a session by id from any directory do not
+// implement it.
 //
-//   - copies its own source transcript (found via AgentTranscriptLocator) to the
-//     native lookup path for cwd, rewriting any embedded folder paths, and never
-//     modifies the original;
-//   - is idempotent and first-open-only: it writes tmp+rename at mode 0600 and,
-//     when the target already exists, returns that path without overwriting it,
-//     because after the first resume the copy holds AO's own new messages;
-//   - decides for itself whether to resolve cwd's symlinks, matching exactly how
-//     its provider encodes the folder name.
-//
-// cwd is the raw launch working directory the provider will run in this open.
-// priorCwd is the cwd a previous open already prepared for ("" on the first
-// open): when the launch cwd drifts (a later Setup can move it into a gitignored
-// subdirectory), the adapter re-keys by copying from the prior copy — which
-// holds AO's appended turns — rather than from the untouched original or the
-// newest file on disk. The returned path is where the copy now lives, so the
-// caller can confirm it landed at the provider's lookup path.
-type AgentNativeSessionResumePreparer interface {
-	PrepareNativeSessionResume(ctx context.Context, ref NativeSessionRef, cwd, priorCwd string) (preparedPath string, err error)
+// Implementations must leave the source session untouched, write atomically
+// with private permissions, and keep a copy that already exists: once AO has
+// resumed, that copy holds AO's later turns.
+type AgentImportedSessionRelocator interface {
+	RelocateImportedSession(ctx context.Context, r ImportedSessionRelocation) error
 }

@@ -22,10 +22,8 @@ var (
 
 // Qwen Code is a Gemini-CLI fork. It stores one conversation per file at
 // <root>/projects/<sanitized-cwd>/chats/<sessionId>.jsonl, where the file name is
-// the native session id. Its ACP session/load is keyed to the original folder's
-// project directory, so an imported chat cannot be resumed from AO's worktree;
-// imports are history-only (see domain.SessionImportSource.HistoryOnly and the
-// prepareImportedWorkspace guard).
+// the native session id. On first open the Qwen adapter copies it to the
+// project's raw ACP launch-cwd lookup path before resuming the same native id.
 
 // qwenIsTranscript reports whether a walked file is a live Qwen chat transcript.
 // Archived chats live under chats/archive and are intentionally skipped, as are

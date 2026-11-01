@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,11 +161,6 @@ func TestQwenPromptlessIsNotAConversation(t *testing.T) {
 }
 
 func TestQwenImportIsFullResume(t *testing.T) {
-	// Qwen now does a full copy-and-resume import, so it must NOT be flagged
-	// history-only (that would lock the composer and block resume).
-	if historyOnlyImport(domain.HarnessQwen) {
-		t.Fatal("Qwen imports must not be history-only; they resume via transcript relocation")
-	}
 	ctx := context.Background()
 	root := t.TempDir()
 	project := t.TempDir()
@@ -185,10 +181,38 @@ func TestQwenImportIsFullResume(t *testing.T) {
 		t.Fatalf("import: %v %v", results, err)
 	}
 	rec := st.sessions[0]
-	if rec.Metadata.ImportSource == nil || rec.Metadata.ImportSource.HistoryOnly {
-		t.Fatalf("import source must be resumable, not history-only: %#v", rec.Metadata.ImportSource)
+	if rec.Metadata.ImportSource == nil || rec.Metadata.ImportSource.NativeID != qwenID {
+		t.Fatalf("import source must retain the native id: %#v", rec.Metadata.ImportSource)
 	}
 	if !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat {
 		t.Fatalf("unexpected record: %#v", rec)
+	}
+}
+
+func TestQwenOversizeAndTornRecords(t *testing.T) {
+	oldRecord, oldString := maxRecordBytes, maxSkimString
+	maxRecordBytes, maxSkimString = 1024, 512
+	t.Cleanup(func() { maxRecordBytes, maxSkimString = oldRecord, oldString })
+	root := t.TempDir()
+	records := qwenConversation("/work/repo")
+	records = append(records, map[string]any{"type": "assistant", "provenance": "assistant_output",
+		"message": map[string]any{"parts": []map[string]any{{"text": strings.Repeat("x", 4096)}, {"text": "Readable tail"}}}})
+	path := writeQwenChat(t, root, "/work/repo", qwenID, records)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"user","message":`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.shortened || len(got.messages) != 3 || got.messages[2].Text != "Readable tail" {
+		t.Fatalf("oversize/torn history: shortened=%v messages=%#v", got.shortened, got.messages)
 	}
 }

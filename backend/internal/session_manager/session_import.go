@@ -63,10 +63,6 @@ func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
 var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there to continue here")
 
-// ErrImportHistoryOnly reports an import AO can only display: the provider cannot
-// reopen a CLI-created conversation from AO's worktree, so AO never launches it.
-var ErrImportHistoryOnly = errors.New("this imported chat is read-only; its provider cannot continue it from another folder")
-
 // applyImportedConfigEnv points a launch at the provider home that owns the
 // imported conversation. It leaves a launch alone when that home already holds
 // the conversation: Claude Code keys its keychain login by CLAUDE_CONFIG_DIR, so
@@ -121,46 +117,67 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
 
-// prepareImportedNativeResume relocates an imported conversation so a cwd-keyed
-// provider can resume it from the AO worktree. It is called on every launch but
-// is idempotent: the adapter copies the transcript to the worktree's native
-// lookup path on the first open and leaves that copy — which then carries AO's
-// own turns — untouched on later opens. It is a no-op for harnesses that resume
-// cwd-independently (no AgentNativeSessionResumePreparer) and for non-import
-// launches. It fails clearly when the copy does not land at the lookup path, so
-// a provider that silently starts an empty session is caught rather than shipped.
-func (m *Manager) prepareImportedNativeResume(ctx context.Context, rec domain.SessionRecord, launchPath string) error {
+// relocateImportedSession lets a provider that finds a session by the directory
+// it runs in (OMP, Qwen, Kimchi) load the imported session from AO's launch
+// directory, before the first resume. Providers that find a session by id from
+// any directory do not implement the relocator and need nothing.
+//
+// It records the launch directory as ResumeCwd, and every later launch of the
+// session is pinned to it (pinnedImportLaunchPath), so the provider keeps
+// finding the same copy, which then holds AO's turns. If the copy is still not
+// where the provider looks, the required first-open replay comes back without
+// messages and the import fails rather than continuing an empty chat.
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
-	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
-		return nil
+	if source == nil || m.agents == nil {
+		return rec, nil
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return nil
+		return rec, nil
 	}
-	preparer, ok := agent.(ports.AgentNativeSessionResumePreparer)
+	relocator, ok := agent.(ports.AgentImportedSessionRelocator)
 	if !ok {
-		return nil
+		return rec, nil
 	}
-	prepared, err := preparer.PrepareNativeSessionResume(ctx, ports.NativeSessionRef{NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir}, launchPath, source.ResumeCwd)
+	err := relocator.RelocateImportedSession(ctx, ports.ImportedSessionRelocation{
+		NativeSessionID: source.NativeID,
+		ConfigDir:       source.ConfigDir,
+		TranscriptPath:  rec.Metadata.NativeTranscriptPath,
+		SourceCWD:       source.CWD,
+		LaunchCWD:       launchPath,
+	})
 	if err != nil {
-		return err
+		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), err)
 	}
-	if info, statErr := os.Stat(prepared); statErr != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("prepared native transcript is not at the provider's lookup path %q: %w", prepared, statErr)
+	if source.ResumeCwd == launchPath {
+		return rec, nil
 	}
-	// Remember the cwd we prepared for so a later open whose launch cwd drifted
-	// re-keys from this copy, not the untouched original. Only written when it
-	// changed (first open, or a drift), so steady-state opens do no DB write.
-	if source.ResumeCwd != launchPath {
-		next := *source
-		next.ResumeCwd = launchPath
-		if _, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock()); err != nil {
-			// Best effort: the copy is already in place, and the next open recomputes.
-			m.logger.Warn("could not persist imported resume cwd", "sessionID", rec.ID, "error", err)
-		}
+	next := *source
+	next.ResumeCwd = launchPath
+	updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
+	if err != nil {
+		return rec, err
 	}
-	return nil
+	if !updated {
+		return rec, importNotice("session changed while preparing the conversation; retry")
+	}
+	rec.Metadata.ImportSource = &next
+	return rec, nil
+}
+
+// pinnedImportLaunchPath is the launch directory of a relocated import: the one
+// its provider's copy was prepared for. It must stay inside the workspace, and
+// is recreated when something removed it, so the provider never looks for the
+// session in another folder.
+func pinnedImportLaunchPath(workspace, resumeCwd string) (string, error) {
+	if !pathWithin(workspace, resumeCwd) {
+		return "", importNotice("this chat's folder is no longer inside its AO workspace")
+	}
+	if err := os.MkdirAll(resumeCwd, 0o755); err != nil {
+		return "", err
+	}
+	return resumeCwd, nil
 }
 
 func sameDirectory(a, b string) bool {
@@ -195,14 +212,12 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		if claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), source.NativeID, rec.Metadata.WorkspacePath) {
 			return true
 		}
+	case domain.HarnessQwen:
+		return qwenSessionLive(ctx, source.ConfigDir, source.NativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessKimi:
 		// Kimi publishes a per-session lock file holding the live writer's pid;
 		// its transcript is append-open-close so it is never held open for lsof.
 		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
-	case domain.HarnessQwen:
-		// Qwen registers each live process under sessions/<pid>.json; its
-		// transcript is append-open-close so lsof never sees a held writer.
-		return qwenSessionLive(ctx, source.ConfigDir, source.NativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
 		// per-session lock or live-session registry, and its transcript path is a
@@ -228,10 +243,10 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), nativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessCodex:
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
-	case domain.HarnessKimi:
-		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	case domain.HarnessQwen:
 		return qwenSessionLive(ctx, source.ConfigDir, nativeID, rec.Metadata.WorkspacePath)
+	case domain.HarnessKimi:
+		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	}
 	return false
 }
@@ -336,12 +351,6 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
-	// A history-only import is never resumed: the provider cannot reopen the
-	// native conversation from AO's worktree, so AO shows the archive and stops
-	// here rather than creating a workspace or launching the provider.
-	if source := rec.Metadata.ImportSource; source != nil && source.HistoryOnly {
-		return rec, ErrImportHistoryOnly
-	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}

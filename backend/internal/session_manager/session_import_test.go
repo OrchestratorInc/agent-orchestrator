@@ -580,23 +580,6 @@ func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
 	}
 }
 
-// A history-only import (e.g. Qwen) is never resumed: preparing its workspace
-// stops with ErrImportHistoryOnly instead of creating a worktree or launching
-// the provider, because the provider cannot reopen the chat from AO's worktree.
-func TestHistoryOnlyImportIsNotResumed(t *testing.T) {
-	launcher := &recordingLauncher{}
-	m, st, _ := newChatManager(launcher)
-	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessQwen, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, ProvisionState: domain.SessionProvisionReady}
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: "/provider-home", HistoryOnly: true}}
-	st.sessions[rec.ID] = rec
-	if _, err := m.prepareImportedWorkspace(context.Background(), rec, st.projects["mer"]); !errors.Is(err, ErrImportHistoryOnly) {
-		t.Fatalf("prepareImportedWorkspace err = %v, want ErrImportHistoryOnly", err)
-	}
-	if len(launcher.started) != 0 {
-		t.Fatalf("history-only import launched a provider: %d", len(launcher.started))
-	}
-}
-
 // Provider worktrees are often deleted once their branch merges; the imported
 // conversation still continues natively from the project checkout.
 func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T) {
@@ -919,5 +902,103 @@ func TestImportedConfigEnvDroidHomeOverride(t *testing.T) {
 	m.applyImportedConfigEnv(context.Background(), rec, env)
 	if env["FACTORY_HOME_OVERRIDE"] != other {
 		t.Fatalf("FACTORY_HOME_OVERRIDE = %q, want %q", env["FACTORY_HOME_OVERRIDE"], other)
+	}
+}
+
+type relocatingAgent struct {
+	fakeAgent
+	got *[]ports.ImportedSessionRelocation
+	err error
+}
+
+func (a relocatingAgent) RelocateImportedSession(_ context.Context, r ports.ImportedSessionRelocation) error {
+	*a.got = append(*a.got, r)
+	return a.err
+}
+
+type relocatingAgents struct{ agent ports.Agent }
+
+func (a relocatingAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return a.agent, true }
+
+func pendingRelocation(st *fakeStore) domain.SessionRecord {
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessKimchi}
+	rec.Metadata = domain.SessionMetadata{
+		WorkspacePath:        "/ao/worktree",
+		NativeTranscriptPath: "/home/u/.config/kimchi/harness/sessions/--work--/t_native.jsonl",
+		ImportSource:         &domain.SessionImportSource{NativeID: "native", ConfigDir: "/home/u/.config/kimchi/harness", CWD: "/work", Transferred: true, Prepared: true},
+	}
+	st.sessions[rec.ID] = rec
+	return rec
+}
+
+func TestRelocateImportedSessionHandsTheProviderItsLaunchDirectoryAndPinsIt(t *testing.T) {
+	var got []ports.ImportedSessionRelocation
+	st := newFakeStore()
+	m := &Manager{agents: relocatingAgents{relocatingAgent{got: &got}}, store: st, clock: time.Now}
+	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree/child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ports.ImportedSessionRelocation{
+		NativeSessionID: "native",
+		ConfigDir:       "/home/u/.config/kimchi/harness",
+		TranscriptPath:  "/home/u/.config/kimchi/harness/sessions/--work--/t_native.jsonl",
+		SourceCWD:       "/work",
+		LaunchCWD:       "/ao/worktree/child",
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("relocations = %+v, want [%+v]", got, want)
+	}
+	if rec.Metadata.ImportSource.ResumeCwd != "/ao/worktree/child" {
+		t.Fatalf("returned ResumeCwd = %q", rec.Metadata.ImportSource.ResumeCwd)
+	}
+	if stored := st.sessions["mer-1"].Metadata.ImportSource.ResumeCwd; stored != "/ao/worktree/child" {
+		t.Fatalf("stored ResumeCwd = %q; later launches would not be pinned", stored)
+	}
+}
+
+func TestRelocateImportedSessionFailureIsAUserNotice(t *testing.T) {
+	var got []ports.ImportedSessionRelocation
+	st := newFakeStore()
+	m := &Manager{agents: relocatingAgents{relocatingAgent{got: &got, err: errors.New("open /home/u/private: permission denied")}}, store: st, clock: time.Now}
+	_, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree")
+	notice, ok := ImportFailureNotice(err)
+	if !ok || strings.Contains(notice, "/home/u") {
+		t.Fatalf("notice = %q, %v; want a fixed sentence without local paths", notice, ok)
+	}
+	if st.sessions["mer-1"].Metadata.ImportSource.ResumeCwd != "" {
+		t.Fatal("a failed relocation pinned the launch directory")
+	}
+}
+
+// Providers that find a session by id from any directory need no copy and no pin.
+func TestRelocateImportedSessionSkipsProvidersThatFindSessionsByID(t *testing.T) {
+	st := newFakeStore()
+	m := &Manager{agents: fakeAgents{}, store: st, clock: time.Now}
+	rec, err := m.relocateImportedSession(context.Background(), pendingRelocation(st), "/ao/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Metadata.ImportSource.ResumeCwd != "" || st.sessions["mer-1"].Metadata.ImportSource.ResumeCwd != "" {
+		t.Fatal("an id-addressed provider was pinned")
+	}
+}
+
+// A later launch uses the folder the copy was prepared for, even after the
+// working subfolder it came from was removed.
+func TestPinnedImportLaunchPathKeepsTheRelocatedFolder(t *testing.T) {
+	workspace := t.TempDir()
+	pinned := filepath.Join(workspace, "child")
+	got, err := pinnedImportLaunchPath(workspace, pinned)
+	if err != nil || got != pinned {
+		t.Fatalf("pinnedImportLaunchPath = %q, %v", got, err)
+	}
+	if info, err := os.Stat(pinned); err != nil || !info.IsDir() {
+		t.Fatalf("pinned folder was not recreated: %v", err)
+	}
+	if _, err := pinnedImportLaunchPath(workspace, filepath.Join(filepath.Dir(workspace), "elsewhere")); err == nil {
+		t.Fatal("a folder outside the workspace was accepted")
+	} else if _, ok := ImportFailureNotice(err); !ok {
+		t.Fatalf("outside folder error is not a user notice: %v", err)
 	}
 }

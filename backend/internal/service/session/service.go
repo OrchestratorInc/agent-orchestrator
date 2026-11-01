@@ -1671,7 +1671,6 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		WorkspaceCleanup: cleanup,
 		StatusReadiness:  readiness,
 		NeedsResume:      rec.NeedsImportResume(),
-		HistoryOnly:      rec.Metadata.ImportSource != nil && rec.Metadata.ImportSource.HistoryOnly && rec.NeedsImportResume(),
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1730,8 +1729,6 @@ func mapSessionError(err error) error {
 			"The agent is still running; only exited agents can be resumed", nil)
 	case errors.Is(err, sessionmanager.ErrSessionOpenElsewhere):
 		return apierr.Conflict("SESSION_OPEN_ELSEWHERE", sessionmanager.ErrSessionOpenElsewhere.Error(), nil)
-	case errors.Is(err, sessionmanager.ErrImportHistoryOnly):
-		return apierr.Conflict("SESSION_IMPORT_READ_ONLY", sessionmanager.ErrImportHistoryOnly.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrResumeInProgress):
 		return apierr.Conflict("AGENT_RESUME_IN_PROGRESS",
 			"The agent is already being resumed", nil)

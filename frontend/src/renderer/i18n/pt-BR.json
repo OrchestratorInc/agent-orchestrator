@@ -3656,8 +3656,6 @@
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
 	"sessionImport.description": "Importe as conversas do {{agent}} deste computador. Uma conversa de uma pasta Git que ainda não é um projeto adiciona essa pasta como projeto.",
-	"sessionImport.readOnlyComposer": "Este chat importado é somente leitura.",
-	"sessionImport.readOnlyNotice": "Este chat do {{agent}} foi importado como somente leitura. O {{agent}} só pode continuar um chat a partir da pasta em que ele foi iniciado.",
 	"sessionImport.allProjects": "Todos os projetos e conversas independentes",
 	"sessionImport.selectionHelp": "Conversas ativas nos últimos 30 dias são pré-selecionadas. Você também pode selecionar conversas mais antigas. Todas as sessões permanecem ociosas após a importação.",
 	"sessionImport.reading": "Lendo históricos locais…",

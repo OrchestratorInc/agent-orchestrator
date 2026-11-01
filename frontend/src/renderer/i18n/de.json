@@ -3590,8 +3590,6 @@
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
 	"sessionImport.description": "{{agent}}-Unterhaltungen von diesem Computer importieren. Eine Unterhaltung aus einem Git-Ordner, der noch kein Projekt ist, fügt diesen Ordner als Projekt hinzu.",
-	"sessionImport.readOnlyComposer": "Dieser importierte Chat ist schreibgeschützt.",
-	"sessionImport.readOnlyNotice": "Dieser {{agent}}-Chat wurde schreibgeschützt importiert. {{agent}} kann einen Chat nur in dem Ordner fortsetzen, in dem er gestartet wurde.",
 	"sessionImport.allProjects": "Alle Projekte und eigenständigen Unterhaltungen",
 	"sessionImport.selectionHelp": "Unterhaltungen mit Aktivität in den letzten 30 Tagen sind vorausgewählt. Ältere Unterhaltungen können ebenfalls ausgewählt werden. Nach dem Import bleiben alle Sitzungen inaktiv.",
 	"sessionImport.reading": "Lokale Verläufe werden gelesen…",

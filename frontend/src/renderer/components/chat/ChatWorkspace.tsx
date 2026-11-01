@@ -395,8 +395,6 @@ export interface ChatWorkspaceProps {
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
 	newWorkDisabled?: boolean;
-	/** A history-only import: show the conversation but never offer to resume it. */
-	importReadOnly?: boolean;
 	/**
 	 * A Freestyle cloud orchestrator being created, before its session exists:
 	 * drawn as that session's in-place start (prompt suggestions and the queue
@@ -716,7 +714,6 @@ function ChatWorkspaceContent({
 	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
-	importReadOnly = false,
 	pendingInPlaceStart = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
@@ -1942,7 +1939,6 @@ function ChatWorkspaceContent({
 									controller={snapshot.controller}
 									provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 									quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
-									readOnly={importReadOnly}
 									needsResume={session?.needsResume}
 									automaticWakePending={suppressStopped}
 									transitioning={controllerTransitioning || agentResuming}
@@ -2455,7 +2451,6 @@ function ControllerBanner({
 	controller,
 	provisionState,
 	needsResume,
-	readOnly,
 	transitioning,
 	automaticWakePending,
 	reconnecting,
@@ -2474,8 +2469,6 @@ function ControllerBanner({
 	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
 	needsResume?: boolean;
-	/** A history-only import never resumes, so it shows no stopped/retry banner. */
-	readOnly?: boolean;
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
@@ -2502,9 +2495,6 @@ function ControllerBanner({
 		}, OPEN_ELSEWHERE_RECHECK_MS);
 		return () => window.clearTimeout(timer);
 	}, [openElsewhere, resuming]);
-	// A history-only import shows its archive with a locked composer; a stopped
-	// controller is expected and must not surface as a crash or a resume prompt.
-	if (readOnly) return null;
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");

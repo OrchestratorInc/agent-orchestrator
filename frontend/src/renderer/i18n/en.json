@@ -3571,8 +3571,6 @@
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
 	"sessionImport.description": "Import {{agent}} chats from this computer. A chat from a Git folder that is not a project yet adds that folder as a project.",
-	"sessionImport.readOnlyComposer": "This imported chat is read-only.",
-	"sessionImport.readOnlyNotice": "This {{agent}} chat was imported read-only. {{agent}} can only continue a chat from the folder it started in.",
 	"sessionImport.allProjects": "All projects and Standalone",
 	"sessionImport.selectionHelp": "Conversations active in the last 30 days are preselected. You can also select older conversations. Import leaves every session idle.",
 	"sessionImport.reading": "Reading local histories…",

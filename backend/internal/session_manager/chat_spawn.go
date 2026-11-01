@@ -524,14 +524,21 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
 	}
 	launchPath := ws.Path
-	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
+	if source := rec.Metadata.ImportSource; source != nil && source.ResumeCwd != "" {
+		pinned, pinErr := pinnedImportLaunchPath(ws.Path, source.ResumeCwd)
+		if pinErr != nil {
+			return RestoreResult{}, relaunchFailed("import launch directory", fmt.Errorf("%s %s: %w", operation, rec.ID, pinErr))
+		}
+		launchPath = pinned
+	} else if source != nil && source.WorkingSubdir != "" {
 		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
 	}
-	// A cwd-keyed provider (Qwen and other Gemini/Pi forks) finds a chat by the
-	// folder it runs in, so relocate the imported transcript to the worktree's
-	// native path before resuming. Idempotent and a no-op for other harnesses.
-	if err := m.prepareImportedNativeResume(ctx, rec, launchPath); err != nil {
-		return RestoreResult{}, relaunchFailed("native resume prep", fmt.Errorf("%s %s: prepare native resume: %w", operation, rec.ID, err))
+	if requireNativeHistory && rec.NeedsImportResume() {
+		relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath)
+		if relocateErr != nil {
+			return RestoreResult{}, relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, relocateErr))
+		}
+		rec = relocated
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget

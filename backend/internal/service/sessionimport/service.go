@@ -384,21 +384,6 @@ func repositoryRoot(common string) string {
 
 var errManagedByAO = errors.New("this conversation already belongs to an AO session")
 
-// historyOnlyImportHarnesses lists harnesses whose imports AO can only display,
-// never resume: their native resume is keyed to the original folder, so a chat
-// cannot be reopened from AO's worktree. Each such harness registers itself here.
-//
-// Qwen used to be listed here, but it now does a full copy-and-resume import (the
-// transcript is relocated into the worktree's native project on first open, see
-// adapters/agent/qwen/continuation.go). The map stays as the shared opt-in for any
-// harness that is still read-only while its full-import support is in progress.
-var historyOnlyImportHarnesses = map[domain.AgentHarness]bool{}
-
-// historyOnlyImport reports whether a harness's imports are history-only.
-func historyOnlyImport(harness domain.AgentHarness) bool {
-	return historyOnlyImportHarnesses[harness]
-}
-
 func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	sum := sha256.Sum256([]byte(string(harness) + "\x00" + root + "\x00" + nativeID))
 	return hex.EncodeToString(sum[:])
@@ -537,9 +522,7 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	// Claude, Droid and Qwen each name a conversation by its own <id>.jsonl file;
-	// Codex's id is the thread recorded inside the rollout.
-	if len(f.paths) > 0 && (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid || f.harness == domain.HarnessQwen) {
+	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid || f.harness == domain.HarnessQwen) && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
 	if f.harness == domain.HarnessPi && len(f.paths) > 0 {
@@ -734,7 +717,7 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	}
 	now := time.Now().UTC()
 	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
-	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, HistoryOnly: historyOnlyImport(source.harness)}}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
 	// Claude and Pi resume on AO's or the user's default model unless told
 	// otherwise, which may be a provider the chat never used; keep the chat's own.
 	switch source.harness {
