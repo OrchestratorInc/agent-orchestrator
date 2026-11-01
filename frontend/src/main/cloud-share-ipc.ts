@@ -20,6 +20,7 @@ import {
 	type CloudShareApi,
 	listShareLinks,
 	resolveShareFile,
+	shareLinksAvailable,
 	scanShareFile,
 	type ShareSnapshot,
 	snapshotShareFile,
@@ -62,15 +63,23 @@ function baseUrlArgument(value: unknown): string {
 	return baseUrl;
 }
 
-/** Refuses a call from anything but a window's main frame, where the bridge lives. */
+/**
+ * Refuses a call from anything but a window's main frame, where the bridge
+ * lives: a frame with a parent is a subframe. It compares no frame objects,
+ * so it does not depend on Electron returning the same one twice.
+ */
 function requireMainFrame(event: unknown): void {
-	const { sender, senderFrame } = event as Partial<IpcMainInvokeEvent>;
-	if (senderFrame === null || (senderFrame && sender?.mainFrame && senderFrame !== sender.mainFrame)) {
+	const { senderFrame } = event as Partial<IpcMainInvokeEvent>;
+	if (senderFrame === null || (senderFrame && senderFrame.parent !== null)) {
 		throw new CloudShareError("invalid_request", "Sharing is only available from the app window.");
 	}
 }
 
-/** Maps a refusal the person can act on to its result; rethrows the rest. */
+/**
+ * Maps a refusal to its result. Every refusal is returned, not thrown: a
+ * thrown error reaches the renderer wrapped in Electron's IPC text. Anything
+ * else is a bug and is thrown.
+ */
 function refusal(error: unknown): CloudSharePublishResult {
 	if (error instanceof CloudShareError) {
 		switch (error.code) {
@@ -81,6 +90,7 @@ function refusal(error: unknown): CloudSharePublishResult {
 			case "artifact_share_type_unsupported":
 				return { status: "unsupported", message: error.message };
 		}
+		return { status: "error", message: error.message };
 	}
 	throw error;
 }
@@ -104,6 +114,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		};
 	});
 
+	deps.ipcMain.handle("cloudShare:available", async (_event, value: unknown): Promise<boolean | null> =>
+		shareLinksAvailable(deps, baseUrlArgument(value)));
+
 	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> =>
 		listShareLinks(deps, baseUrlArgument(value)));
 
@@ -123,7 +136,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
 		const sender = event.sender;
-		if (inFlight.has(sender.id)) throw new CloudShareError("busy", "Another file is being shared.");
+		if (inFlight.has(sender.id)) return { status: "error", message: "Another file is being shared." };
 		// Hold the window's slot before anything waits, so a second Publish
 		// is refused rather than racing this one.
 		const controller = new AbortController();

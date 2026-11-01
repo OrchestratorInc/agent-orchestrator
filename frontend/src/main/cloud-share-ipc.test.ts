@@ -28,12 +28,13 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; listStatus?: number; unreachable?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
 	const records = new ShareLinkRecords(path.join(dataDir, "share-links.json"));
 	const sent: unknown[] = [];
+	const authorizations: Array<string | null> = [];
 	const sender = { id: 7, isDestroyed: () => false, send: vi.fn((channel: string, value: unknown) => channel === CLOUD_SHARE_PROGRESS_CHANNEL && sent.push(value)) };
 	registerCloudShareIpc({
 		ipcMain: { handle: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler)) },
@@ -46,7 +47,12 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			requests.push(`${init.method ?? "GET"} ${pathname}`);
 			if (typeof init.body === "string") bodies.set(pathname, JSON.parse(init.body));
 			const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-			if (pathname.endsWith("/me/artifact-shares")) return json({ shares: [], limit: 3, used: 1 });
+			if (pathname.endsWith("/me/artifact-shares")) {
+				if (options.unreachable) throw new TypeError("fetch failed");
+				authorizations.push(new Headers(init.headers).get("authorization"));
+				if (options.listStatus) return json({ code: "not_found" }, options.listStatus);
+				return json({ shares: [], limit: 3, used: 1 });
+			}
 			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
 			if (pathname === "/p") return new Response("", { headers: { etag: '"e1"' } });
@@ -66,7 +72,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 		const { fingerprint } = (await invoke("cloudShare:inspect", target)) as { fingerprint: string };
 		return invoke("cloudShare:publish", { ...target, fingerprint });
 	};
-	return { invoke, publish, file, requests, bodies, records, sent, handlers, sender };
+	return { invoke, publish, file, requests, bodies, records, sent, handlers, sender, authorizations };
 }
 
 async function snapshots(): Promise<string[]> {
@@ -137,7 +143,8 @@ describe("cloudShare IPC", () => {
 
 	it("refuses malformed requests and files outside the artifacts folder", async () => {
 		const { invoke, file } = setup();
-		await expect(invoke("cloudShare:publish", { ...file, path: "../../etc/passwd" })).rejects.toThrow();
+		// A file outside the artifacts folder is a refusal the popover shows.
+		await expect(invoke("cloudShare:publish", { ...file, path: "../../etc/passwd" })).resolves.toMatchObject({ status: "error" });
 		await expect(invoke("cloudShare:publish", { ...file, projectId: 5 })).rejects.toThrow("Not a file to share");
 		// An empty project would name a second document for the same file.
 		await expect(invoke("cloudShare:publish", { ...file, projectId: "" })).rejects.toThrow("Not a file to share");
@@ -163,16 +170,32 @@ describe("cloudShare IPC", () => {
 		const { invoke, file } = setup();
 		const { fingerprint } = (await invoke("cloudShare:inspect", file)) as { fingerprint: string };
 		const first = invoke("cloudShare:publish", { ...file, fingerprint });
-		await expect(invoke("cloudShare:publish", { ...file, fingerprint })).rejects.toThrow("Another file is being shared");
+		await expect(invoke("cloudShare:publish", { ...file, fingerprint })).resolves.toEqual({ status: "error", message: "Another file is being shared." });
 		await expect(first).resolves.toMatchObject({ status: "published" });
 	});
 
 	it("answers only the window's main frame", async () => {
 		const { handlers, sender, file } = setup();
-		const mainFrame = {};
-		const fromSubframe = { sender: { ...sender, mainFrame }, senderFrame: {} };
+		// A subframe has a parent; the main frame has none. No frame objects are compared.
+		const fromSubframe = { sender, senderFrame: { parent: {} } };
 		await expect(Promise.resolve().then(() => handlers.get("cloudShare:inspect")!(fromSubframe, file))).rejects.toThrow("only available from the app window");
 		await expect(Promise.resolve().then(() => handlers.get("cloudShare:publish")!(fromSubframe, file))).rejects.toThrow("only available from the app window");
-		await expect(Promise.resolve().then(() => handlers.get("cloudShare:inspect")!({ sender: { ...sender, mainFrame }, senderFrame: mainFrame }, file))).resolves.toMatchObject({ name: "report.html" });
+		await expect(Promise.resolve().then(() => handlers.get("cloudShare:inspect")!({ sender, senderFrame: { parent: null } }, file))).resolves.toMatchObject({ name: "report.html" });
+		await expect(Promise.resolve().then(() => handlers.get("cloudShare:inspect")!({ sender, senderFrame: null }, file))).rejects.toThrow("only available from the app window");
+	});
+
+	it("says whether the control plane serves share links, signed in or not", async () => {
+		const on = setup();
+		await expect(on.invoke("cloudShare:available", { baseUrl: "https://cp.test" })).resolves.toBe(true);
+		expect(on.authorizations).toEqual(["Bearer token-1"]);
+		// Its share routes 404 while its share flag is off.
+		const off = setup({ listStatus: 404 });
+		await expect(off.invoke("cloudShare:available", { baseUrl: "https://cp.test" })).resolves.toBe(false);
+		// Signed out, a control plane that serves them answers 401.
+		const signedOut = setup({ token: null, listStatus: 401 });
+		await expect(signedOut.invoke("cloudShare:available", { baseUrl: "https://cp.test" })).resolves.toBe(true);
+		expect(signedOut.authorizations).toEqual([null]);
+		const unreachable = setup({ unreachable: true });
+		await expect(unreachable.invoke("cloudShare:available", { baseUrl: "https://cp.test" })).resolves.toBeNull();
 	});
 });

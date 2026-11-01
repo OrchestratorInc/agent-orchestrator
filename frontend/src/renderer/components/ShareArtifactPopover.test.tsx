@@ -8,10 +8,11 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
 	status: "authenticated" as string,
+	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
 }));
 
-vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.test" } }) }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.baseUrl } }) }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status, session: null }) }));
 vi.mock("../stores/ui-store", () => ({
 	useUiStore: (select: (state: { openGlobalSettings: typeof mocks.openSettings }) => unknown) => select({ openGlobalSettings: mocks.openSettings }),
@@ -35,12 +36,13 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 
 async function openPopover(path = file.path, name = "report.html") {
 	render(<TooltipProvider><ShareArtifactButton file={{ ...file, path }} name={name} /></TooltipProvider>);
-	await userEvent.click(screen.getByRole("button", { name: `Share: ${name}` }));
+	await userEvent.click(await screen.findByRole("button", { name: `Share: ${name}` }));
 	return screen.findByRole("dialog");
 }
 
 beforeEach(() => {
 	mocks.status = "authenticated";
+	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
 	vi.restoreAllMocks();
 });
@@ -175,10 +177,32 @@ describe("ShareArtifactButton", () => {
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(cancel).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Share: long.html" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Share: long.html" }));
 		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
 		finish({ status: "published", replaced: false, share });
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
+	});
+
+	it("is not offered where the control plane does not serve share links", async () => {
+		mocks.baseUrl = "https://no-shares.test";
+		const available = vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(false);
+		render(<TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider>);
+		await waitFor(() => expect(available).toHaveBeenCalledWith("https://no-shares.test"));
+		expect(screen.queryByRole("button", { name: /^Share/ })).toBeNull();
+		// The answer is kept: a second button does not ask again.
+		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "b.html" }} name="b.html" /></TooltipProvider>);
+		expect(available).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole("button", { name: /^Share/ })).toBeNull();
+	});
+
+	it("shows a refusal's message, without Electron's IPC wrapper", async () => {
+		stub(inspection, links, { status: "error", message: "There is not enough free disk space to prepare this file for sharing." });
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("Sharing failed: There is not enough free disk space to prepare this file for sharing.")).toBeTruthy();
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockRejectedValue(new Error("Error invoking remote method 'cloudShare:inspect': CloudShareError: The file is no longer available."));
+		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(await screen.findByText("Sharing failed: The file is no longer available.")).toBeTruthy();
 	});
 
 	it("returns to Publish when the upload is cancelled", async () => {
@@ -188,9 +212,9 @@ describe("ShareArtifactButton", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy());
 	});
 
-	it("disables Share for a video", () => {
+	it("disables Share for a video", async () => {
 		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
-		expect(screen.getByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
 	});
 
 	it("formats sizes", () => {

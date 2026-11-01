@@ -78,6 +78,8 @@ export type CloudSharePublishResult =
 	/** Over the free plan's link limit: offer Upgrade. */
 	| { status: "limit"; message: string }
 	| { status: "unsupported"; message: string }
+	/** Refused for another reason, such as no free disk space or another file being shared. */
+	| { status: "error"; message: string }
 	| { status: "signed_out" };
 
 /**
