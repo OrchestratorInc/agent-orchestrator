@@ -2920,7 +2920,7 @@ export function Timeline({
 				(isMacPlatform() ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)) return;
 			const toolbar = selectionButton.current;
 			const target = event.target instanceof Element ? event.target : document.activeElement;
-			if (!toolbar || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') ||
+			if (!toolbar || isDialogOrMenuOpen() ||
 				target?.closest('input, textarea, select, [contenteditable], .xterm, webview, [data-browser-view]')) return;
 			if (target && target !== document.body && !scroller.current?.contains(target) && !toolbar.contains(target)) return;
 			const native = window.getSelection();

@@ -1468,12 +1468,15 @@ describe("ChatWorkspace timeline", () => {
 		const browserControl = document.createElement("button"); document.body.append(browserControl);
 		expect(fireEvent.keyDown(browserControl,chord)).toBe(true);
 		expect(count()).toBe(0); browserControl.remove();
-		const menu = document.createElement("div"); menu.setAttribute("role","menu"); document.body.append(menu);
-		expect(fireEvent.keyDown(log,chord)).toBe(true); expect(count()).toBe(0); menu.remove();
+		const menu = document.createElement("div"); menu.setAttribute("role","menu"); menu.setAttribute("data-state","open"); document.body.append(menu);
+		expect(fireEvent.keyDown(log,chord)).toBe(true); expect(count()).toBe(0);
+		menu.remove();
 		const input = document.createElement("input"); document.body.append(input);
 		expect(fireEvent.keyDown(input,chord)).toBe(true); expect(count()).toBe(0); input.remove();
 		expect(fireEvent.keyDown(log,{...chord,repeat:true})).toBe(false); expect(count()).toBe(0);
+		menu.setAttribute("data-state", "closed"); document.body.append(menu);
 		expect(fireEvent.keyDown(log,chord)).toBe(false);
+		menu.remove();
 		fireEvent.keyDown(log,chord);
 		expect(count()).toBe(1);
 		expect(fireEvent.keyDown(log,chord)).toBe(true);

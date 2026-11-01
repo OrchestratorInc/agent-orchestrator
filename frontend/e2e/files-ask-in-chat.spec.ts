@@ -519,6 +519,16 @@ test("chat selection toolbar follows its start, pins while scrolled, and support
  };
  await expect(async()=>await follows()).toPass();
  await page.screenshot({path:test.info().outputPath("chat-following.png")});
+ await pane.evaluate(element => {
+  const first = getSelection()!.getRangeAt(0).getClientRects()[0];
+  element.scrollTop += first.top - element.getBoundingClientRect().top - 20;
+ });
+ await expect(async () => {
+  const first = await page.evaluate(() => getSelection()!.getRangeAt(0).getClientRects()[0].bottom);
+  const box = (await toolbar.boundingBox())!;
+  expect(Math.abs(box.y - first - 6)).toBeLessThan(2);
+ }).toPass();
+ await page.screenshot({path:test.info().outputPath("chat-flipped-below.png")});
  await pane.evaluate(element=>{element.scrollTop=500;});
  await expect(async()=>{
   const bounds=(await pane.boundingBox())!,box=(await toolbar.boundingBox())!;

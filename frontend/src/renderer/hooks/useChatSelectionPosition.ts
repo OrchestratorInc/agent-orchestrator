@@ -54,7 +54,9 @@ export function useChatSelectionPosition(
 			const left = Math.max(bounds.left + 8, Math.min(
 				rect.left + rect.width / 2 - size.width / 2, bounds.right - size.width - 8,
 			)) - parent.left;
-			const top = Math.max(bounds.top + 8, Math.min(rect.top - size.height - 6,
+			const above = rect.top - size.height - 6;
+			const preferredTop = rect.top >= bounds.top && above < bounds.top + 8 ? rect.bottom + 6 : above;
+			const top = Math.max(bounds.top + 8, Math.min(preferredTop,
 				Math.max(bounds.top + 8, bounds.bottom - size.height - 8))) - parent.top;
 			const visible = bounds.bottom > bounds.top && bounds.right > bounds.left &&
 				extent.bottom > bounds.top && extent.top < bounds.bottom &&
@@ -63,13 +65,16 @@ export function useChatSelectionPosition(
 				? previous : { left, top, visible });
 		};
 		const schedule = () => { frame ??= window.requestAnimationFrame(update); };
+		const onScroll = (event: Event) => {
+			if (event.target instanceof Node && event.target.contains(viewport)) schedule();
+		};
 		const resize = new ResizeObserver(schedule);
 		resize.observe(viewport);
 		resize.observe(source);
 		resize.observe(button);
 		const mutation = new MutationObserver(schedule);
 		mutation.observe(viewport, { subtree: true, childList: true, characterData: true, attributes: true });
-		document.addEventListener("scroll", schedule, true);
+		document.addEventListener("scroll", onScroll, true);
 		window.visualViewport?.addEventListener("resize", schedule);
 		window.visualViewport?.addEventListener("scroll", schedule);
 		window.addEventListener("resize", schedule);
@@ -79,7 +84,7 @@ export function useChatSelectionPosition(
 			if (frame !== undefined) window.cancelAnimationFrame(frame);
 			resize.disconnect();
 			mutation.disconnect();
-			document.removeEventListener("scroll", schedule, true);
+			document.removeEventListener("scroll", onScroll, true);
 			window.visualViewport?.removeEventListener("resize", schedule);
 			window.visualViewport?.removeEventListener("scroll", schedule);
 			window.removeEventListener("resize", schedule);
