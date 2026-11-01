@@ -592,6 +592,110 @@ describe("SessionInspector PR section", () => {
         .closest("[data-testid='inspector-section']") as HTMLElement,
     );
 
+  const openAttachedReview = async () => {
+    await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
+    for (const row of await screen.findAllByTestId("review-pr-row")) {
+      if (row.getAttribute("aria-expanded") === "false") await userEvent.click(row);
+    }
+  };
+
+  it("shows review-triggered PR context before workspace PR facts catch up", async () => {
+    const attached = prSummary(7, "open", {
+      url: "https://github.com/acme/repo/pull/7",
+    });
+    const state = {
+      ...reviewState(7, "up_to_date"),
+      prUrl: attached.url,
+      latestRun: {
+        ...approvedReview,
+        prUrl: attached.url,
+        targetSha: "sha-7",
+        githubReviewId: "98765",
+        body: "Review-only carrier approved this change.",
+        autoInjectReview: false,
+      },
+    };
+    const respond = commonGetsResponder([], "reviewer-pane", [state]);
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { sessionId: "sess-1", prs: [attached], linkedPrs: [] } }
+        : respond(path),
+    );
+    renderWithQuery(
+      <SessionInspector session={session([], { autoInjectReview: false })} />,
+    );
+
+    expect(await screen.findByRole("link", { name: "PR 7" })).toHaveAttribute("href", attached.url);
+    await openAttachedReview();
+    expect(await screen.findByText("Review-only carrier approved this change.")).toBeInTheDocument();
+    expect(postMock.mock.calls.filter(([path]) => path.startsWith("/api/v1/sessions/") || path.startsWith("/api/v1/prs/"))).toEqual([]);
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
+  it("includes a new review-triggered PR context alongside an existing PR", async () => {
+    const owned = prSummary(7, "open", { url: "https://github.com/acme/repo/pull/7" });
+    const attached = prSummary(8, "open", { url: "https://github.com/acme/repo/pull/8" });
+    const respond = commonGetsResponder([], "reviewer-pane", [
+      { ...reviewState(7, "needs_review"), prUrl: owned.url },
+      {
+        ...reviewState(8, "up_to_date"),
+        prUrl: attached.url,
+        latestRun: { ...approvedReview, prUrl: attached.url, targetSha: "sha-8", body: "New attachment reviewed." },
+      },
+    ]);
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [owned, attached], linkedPrs: [] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: owned.url })])} />);
+
+    await screen.findByRole("link", { name: "PR 8" });
+    expect(prSection("Pull requests (2)").getAllByText(/^PR #\d+$/)).toHaveLength(2);
+    await openAttachedReview();
+    expect(await screen.findByText("New attachment reviewed.")).toBeInTheDocument();
+    expect(postMock.mock.calls.filter(([path]) => path.startsWith("/api/v1/sessions/") || path.startsWith("/api/v1/prs/"))).toEqual([]);
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["merged", "closed"] as const)("keeps review-triggered PR context hidden for %s PRs", async (state) => {
+    const attached = prSummary(7, state, { url: "https://github.com/acme/repo/pull/7" });
+    const respond = commonGetsResponder([], "reviewer-pane", [
+      { ...reviewState(7, "up_to_date"), prUrl: attached.url },
+    ]);
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr"
+        ? { data: { prs: [attached], linkedPrs: [] } }
+        : respond(path),
+    );
+    renderWithQuery(<SessionInspector session={session([])} />);
+
+    await screen.findByRole("link", { name: "PR 7" });
+    expect(screen.queryByRole("tab", { name: "Reviews" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Merge PR/ })).not.toBeInTheDocument();
+  });
+
+  it("retains a controlled review-triggered PR context selection while loading", async () => {
+    const attached = prSummary(7, "open", { url: "https://github.com/acme/repo/pull/7" });
+    let release = () => {};
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const respond = commonGetsResponder([], "reviewer-pane", [
+      { ...reviewState(7, "needs_review"), prUrl: attached.url },
+    ]);
+    getMock.mockImplementation(async (path: string) => {
+      if (path !== "/api/v1/sessions/{sessionId}/pr") return respond(path);
+      await pending;
+      return { data: { prs: [attached], linkedPrs: [] } };
+    });
+    const onViewChange = vi.fn();
+    renderWithQuery(<SessionInspector session={session([])} view="reviews" onViewChange={onViewChange} />);
+
+    expect(onViewChange).not.toHaveBeenCalledWith("summary");
+    await act(async () => { release(); });
+    expect(await screen.findByRole("tab", { name: "Reviews" })).toHaveAttribute("aria-selected", "true");
+    expect(onViewChange).not.toHaveBeenCalledWith("summary");
+  });
+
   it("shows a reported external PR from one SCM request without tracked actions", async () => {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {

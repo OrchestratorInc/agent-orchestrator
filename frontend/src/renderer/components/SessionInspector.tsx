@@ -4,7 +4,7 @@ import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -211,6 +211,33 @@ export const SessionInspector = memo(function SessionInspector({
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
 	const onlyBrowser = browserOnly;
+	const reviewPRs = useSessionScmSummary(
+		session?.cloud ? undefined : session?.id,
+		!onlyBrowser,
+		undefined,
+		false,
+		hostId,
+	);
+	// An attached PR can reach the SCM query before the workspace snapshot.
+	// Retain existing URLs because stored AO review runs refer to them.
+	const reviewSession = useMemo(() => {
+		if (!session || session.cloud || !reviewPRs.data) return session;
+		const factsByURL = new Map(session.prs.map((fact) => [fact.url, fact]));
+		for (const pr of reviewPRs.data.prs) {
+			factsByURL.set(pr.url, {
+				...factsByURL.get(pr.url),
+				url: pr.url,
+				number: pr.number,
+				state: pr.state,
+				ci: pr.ci?.state ?? "unknown",
+				review: pr.review?.decision ?? "none",
+				mergeability: pr.mergeability?.state ?? "unknown",
+				reviewComments: pr.review?.hasUnresolvedHumanComments ?? false,
+				updatedAt: pr.updatedAt ?? session.updatedAt,
+			});
+		}
+		return { ...session, prs: [...factsByURL.values()] };
+	}, [session, reviewPRs.data]);
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -260,7 +287,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const openFilesView = useCallback(() => setView("files"), [setView]);
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
-	const reviewsAvailable = reviewsTabVisible(session);
+	const reviewsAvailable = reviewsTabVisible(reviewSession);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
@@ -272,9 +299,10 @@ export const SessionInspector = memo(function SessionInspector({
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
 		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (requestedView === "reviews" && !onlyBrowser && !session?.cloud && reviewPRs.isPending) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, onlyBrowser, requestedView, reviewPRs.isPending, session?.cloud, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -345,7 +373,7 @@ export const SessionInspector = memo(function SessionInspector({
 				loadingText={session ? undefined : t("inspector.loadingSession")}
 				onViewChange={setView}
 				reviewsView={
-					session ? <ReviewsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={session} /> : undefined
+					reviewSession ? <ReviewsView hostId={hostId} key={sessionUiKey(reviewSession.id, hostId)} onOpenReviewFile={onOpenReviewFile} onOpenReviewerTerminal={onOpenReviewerTerminal} onOpenReviewerChat={onOpenReviewerChat} onWorkerMessageSent={onWorkerMessageSent} session={reviewSession} /> : undefined
 				}
 				summaryView={
 					session ? (
