@@ -200,6 +200,18 @@ type UsageEventCosts struct {
 // ProviderUsageJSON is the bounded usage object the CLI emitted, stored
 // verbatim so optional and future provider fields survive. It is empty when the
 // event predates the capture or the object exceeded its size bound.
+//
+// ServiceTier is the provider's own word for the tier that served the request:
+// Codex's thread service_tier ("default", "priority") or Claude's usage speed
+// ("standard", "fast"). It is empty when nothing reported one, which prices at
+// standard rates. It is a column rather than a member of ProviderUsageJSON
+// because Codex reports it on a different line, and a stored usage object is
+// immutable: adding it would make every replay of an older event a conflict.
+//
+// ProviderMessageID is the provider's id for the billed response, such as
+// Anthropic's msg_... id. A response is stored once across every source, so a
+// forked transcript's copy of its parent's history is not billed again. It is
+// empty when the transcript names no id.
 type ModelUsageEvent struct {
 	ProviderID            UsageProviderID
 	BillingProviderID     string
@@ -208,6 +220,8 @@ type ModelUsageEvent struct {
 	MeasurementKind       UsageMeasurementKind
 	Tokens                UsageTokenMetrics
 	ProviderUsageJSON     string
+	ServiceTier           string
+	ProviderMessageID     string
 	Costs                 UsageEventCosts
 	CreatedAt             time.Time
 	SourceEventKey        string
@@ -225,6 +239,7 @@ type UsageCostCandidate struct {
 	MeasurementKind   UsageMeasurementKind
 	Tokens            UsageTokenMetrics
 	ProviderUsageJSON string
+	ServiceTier       string
 	PricingVersion    string
 	SourceEventKey    string
 }
@@ -266,7 +281,10 @@ type LegacyUsageRepair struct {
 	BillingProviderID       string
 	BillingProviderSource   UsageBillingProviderSource
 	ProviderUsageJSON       string
-	Costs                   UsageEventCosts
+	// ServiceTier fills a tier the stored row lacks; the repair's cost is
+	// estimated at it. A tier already stored is never replaced.
+	ServiceTier string
+	Costs       UsageEventCosts
 }
 
 // EstimatedCostCoverage describes how much of a usage scope has a durable

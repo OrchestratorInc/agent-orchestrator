@@ -548,6 +548,17 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersClearNotificationsResponse":       "ClearNotificationsResponse",
 	"ControllersUsageHookMetadata":                "UsageHookMetadata",
 	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
+	"ControllersUsageLimitHistoryRequest":         "UsageLimitHistoryRequest",
+	"ControllersUsageLimitHistoryResponse":        "UsageLimitHistoryResponse",
+	"ControllersUsageLimitWindowsQuery":           "UsageLimitWindowsQuery",
+	"ControllersUsageLimitWindowsResponse":        "UsageLimitWindowsResponse",
+	"DomainUsageLimitLogin":                       "UsageLimitLogin",
+	"DomainUsageLimitSpan":                        "UsageLimitSpan",
+	"DomainUsageLimitPoint":                       "UsageLimitPoint",
+	"ControllersUsageReportQuery":                 "UsageReportQuery",
+	"ControllersUsageReportResponse":              "UsageReportResponse",
+	"ControllersUsageReportRowResponse":           "UsageReportRowResponse",
+	"ControllersUsageReportSessionResponse":       "UsageReportSessionResponse",
 	"ControllersEstimatedCostResponse":            "EstimatedCostResponse",
 	"ControllersCompactSessionUsageResponse":      "CompactSessionUsageResponse",
 	"ControllersListSessionMemoryResponse":        "ListSessionMemoryResponse",
@@ -1087,6 +1098,39 @@ type conversationSnapshotQuery struct {
 
 func usageOperations() []operation {
 	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/usage/report", id: "getUsageReport", tag: "usage",
+			summary:    "Read token and estimated cost usage over a window, by day or hour, for the usage page",
+			pathParams: []any{controllers.UsageReportQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageReportResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/usage/limit-history", id: "setUsageLimitHistory", tag: "usage",
+			summary: "Turn keeping limit readings, and reading limits in the background, on or off",
+			reqBody: controllers.UsageLimitHistoryRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitHistoryResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/limit-windows", id: "getUsageLimitWindows", tag: "usage",
+			summary:    "Read each login's five-hour and weekly windows from the limit readings AO took",
+			pathParams: []any{controllers.UsageLimitWindowsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UsageLimitWindowsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
 		{
 			method: http.MethodGet, path: "/api/v1/usage/sessions", id: "listCompactSessionUsage", tag: "usage",
 			summary:    "List compact token and estimated cost usage for session cards",

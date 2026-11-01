@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,6 +79,9 @@ type exactRates struct {
 type providerSnapshot struct {
 	version string
 	models  map[string]exactRates
+	// longContext lists, largest first, the sizes in thousands of input tokens
+	// over which a row bills at other rates, keyed by the row they extend.
+	longContext map[string][]int64
 }
 
 // Snapshot is an immutable, validated view of all provider catalogs. Its maps
@@ -235,6 +239,15 @@ func buildProviderSnapshot(blob catalogProviderBlob, ref catalogProviderRef) (pr
 			return providerSnapshot{}, fmt.Errorf("provider %q model %q: %w", ref.ProviderID, model.ModelID, err)
 		}
 		provider.models[canonicalID] = rates
+		if base, aboveK, ok := longContextThreshold(canonicalID); ok {
+			if provider.longContext == nil {
+				provider.longContext = make(map[string][]int64)
+			}
+			provider.longContext[base] = append(provider.longContext[base], aboveK)
+		}
+	}
+	for _, sizes := range provider.longContext {
+		sort.Slice(sizes, func(i, j int) bool { return sizes[i] > sizes[j] })
 	}
 	return provider, nil
 }
@@ -330,12 +343,15 @@ func (s *Snapshot) ProviderForModel(modelID string) string {
 //
 // InputNanos covers every non-cache-read input charge. Cache writes are input
 // that happens to be written to the cache, so folding their charge in here is
-// what keeps the three components disjoint and additive.
+// what keeps the three components disjoint and additive. CacheWriteNanos is
+// the part of InputNanos that the cache writes cost, for reports that show it
+// apart; it is never added to the total again.
 type Estimate struct {
 	InputNanos       *int64
 	CachedInputNanos *int64
 	OutputNanos      *int64
 	TotalNanos       *int64
+	CacheWriteNanos  *int64
 	PricingVersion   string
 }
 
@@ -348,16 +364,24 @@ type cacheWriteSplit struct {
 	oneH  *int64
 }
 
-// Estimate prices one normalized usage event against this immutable snapshot.
+// Estimate prices one normalized usage event against this immutable snapshot,
+// at the rates of the service tier that served it.
 func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	providerID := CanonicalProviderID(event.BillingProviderID)
 	modelID := CanonicalModelID(providerID, event.ModelID)
+	tier, knownTier := catalogServiceTier(event.ProviderID, event.ServiceTier)
+	if tier != "" {
+		modelID = TierModelID(modelID, tier)
+	}
 	var rates exactRates
 	version := ""
 	if s != nil {
 		if provider, ok := s.providers[providerID]; ok {
 			version = provider.version
-			rates = provider.models[modelID]
+			modelID = provider.longContextRow(modelID, event.Tokens.InputTokens)
+			if knownTier {
+				rates = provider.models[modelID]
+			}
 		}
 	}
 	for _, value := range []*int64{
@@ -367,7 +391,7 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 			return Estimate{}, errors.New("usage tokens must be nonnegative")
 		}
 	}
-	input, err := estimateInput(event, rates)
+	input, cacheWrite, err := estimateInput(event, rates)
 	if err != nil {
 		return Estimate{}, fmt.Errorf("input cost: %w", err)
 	}
@@ -379,7 +403,7 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	if err != nil {
 		return Estimate{}, fmt.Errorf("output cost: %w", err)
 	}
-	estimate := Estimate{InputNanos: input, CachedInputNanos: cached, OutputNanos: output, PricingVersion: version}
+	estimate := Estimate{InputNanos: input, CachedInputNanos: cached, OutputNanos: output, CacheWriteNanos: cacheWrite, PricingVersion: version}
 	if input != nil && cached != nil && output != nil {
 		total, err := checkedCostSum(*input, *cached, *output)
 		if err != nil {
@@ -390,38 +414,113 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	return estimate, nil
 }
 
-// estimateInput charges every non-cache-read input token.
+// longContextRow is the row that prices a request of input tokens on rowID: the
+// largest size the request passes, or rowID itself. A request with an unknown
+// input count stays on rowID.
+func (p providerSnapshot) longContextRow(rowID string, input *int64) string {
+	if input == nil {
+		return rowID
+	}
+	for _, aboveK := range p.longContext[rowID] {
+		if *input > aboveK*1000 {
+			return LongContextModelID(rowID, aboveK)
+		}
+	}
+	return rowID
+}
+
+// Speed tiers a report groups usage by. Unknown is a tier word AO has no
+// pricing rule for.
+const (
+	SpeedStandard = "standard"
+	SpeedUnknown  = "unknown"
+)
+
+// SpeedTier names the tier an event was billed at for reports: "standard", a
+// catalog tier (priority, flex, ultrafast, fast), or "unknown".
+func SpeedTier(providerID domain.UsageProviderID, reported string) string {
+	tier, known := catalogServiceTier(providerID, reported)
+	switch {
+	case !known:
+		return SpeedUnknown
+	case tier == "":
+		return SpeedStandard
+	default:
+		return tier
+	}
+}
+
+// catalogServiceTier maps the tier word a provider reported for one event to
+// the catalog row that prices it. "" is the model's standard row, which is also
+// what an unreported tier means. known is false for a word AO has no rule for:
+// it prices as unknown, because billing a premium tier at standard rates would
+// record a wrong number as fact.
+func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tier string, known bool) {
+	if reported == "" {
+		return "", true
+	}
+	switch providerID {
+	case domain.UsageProviderOpenAI:
+		switch reported {
+		case "default", "standard":
+			return "", true
+		// Codex's own config spells priority processing "fast".
+		case "priority", "fast":
+			return ServiceTierPriority, true
+		case "flex":
+			return ServiceTierFlex, true
+		case "ultrafast":
+			return ServiceTierUltrafast, true
+		}
+	case domain.UsageProviderAnthropic:
+		switch reported {
+		case "standard":
+			return "", true
+		case "fast":
+			return ServiceTierFast, true
+		}
+	}
+	return "", false
+}
+
+// estimateInput charges every non-cache-read input token, and reports the part
+// of that charge the cache writes make up.
 //
 // A catalog without a cache-write rate for the model is not missing data: the
 // provider does not bill writes separately, so the whole uncached bucket is
 // charged at the plain input rate. Only when a distinct write rate exists — as
 // Anthropic publishes, with its own five-minute and one-hour tiers — does the
 // split matter, and only then can an unavailable split leave the cost unknown.
-func estimateInput(event domain.ModelUsageEvent, rates exactRates) (*int64, error) {
+func estimateInput(event domain.ModelUsageEvent, rates exactRates) (input, cacheWrite *int64, err error) {
 	uncached := event.Tokens.UncachedInputTokens
+	split := cacheWriteSplitFor(event)
 	if rates.write == nil && rates.write1H == nil {
-		return chargeOptional(uncached, rates.input)
+		input, err = chargeOptional(uncached, rates.input)
+		if err != nil || input == nil || split.total == nil || uncached == nil || *split.total > *uncached {
+			return input, nil, err
+		}
+		cacheWrite, err = charge(*split.total, rates.input)
+		return input, cacheWrite, err
 	}
 	if uncached == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	split := cacheWriteSplitFor(event)
 	if split.total == nil || *split.total > *uncached {
-		return nil, nil
+		return nil, nil, nil
 	}
 	write, err := chargeCacheWrite(split, rates)
 	if err != nil || write == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fresh, err := charge(*uncached-*split.total, rates.input)
 	if err != nil || fresh == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	total, err := checkedCostSum(*fresh, *write)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return costPointer(total), nil
+	return costPointer(total), write, nil
 }
 
 func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {

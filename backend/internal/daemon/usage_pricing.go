@@ -136,3 +136,13 @@ func (r *usagePricingRuntime) Wait() {
 	r.repairer.Wait()
 	r.backfiller.Wait()
 }
+
+// usageReportReader builds the usage page's report reader. It reads prices from
+// the pricing runtime when one started; without it the report still carries
+// every stored cost.
+func usageReportReader(store *sqlite.Store, runtime *usagePricingRuntime) *usagesvc.ReportReader {
+	if runtime == nil || runtime.Manager() == nil {
+		return usagesvc.NewReportReader(store, nil)
+	}
+	return usagesvc.NewReportReader(store, runtime.Manager())
+}

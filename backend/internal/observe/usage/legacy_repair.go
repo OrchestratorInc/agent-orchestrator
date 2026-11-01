@@ -19,6 +19,8 @@ type legacyRepairStore interface {
 	ListLegacyUsageSources(context.Context) ([]domain.UsageSourceContext, error)
 	ListLegacyUsageEvents(context.Context, int64) ([]domain.LegacyUsageEvent, error)
 	ApplyLegacyUsageRepairs(context.Context, []domain.LegacyUsageRepair, time.Time) (int, error)
+	ListUsageSourcesWithUntimedEvents(context.Context) ([]domain.UsageSourceContext, error)
+	SetUsageEventTimes(context.Context, int64, map[string]time.Time) (int, error)
 }
 
 // LegacyRepairerConfig controls bounded replay and lifecycle diagnostics.
@@ -107,6 +109,11 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 				settleTimer.Stop()
 			}
 		}()
+		// Times come only from rereading transcripts, and every row that lacks
+		// one was written by an earlier build, so one pass per start suffices.
+		if err := r.repairEventTimes(ctx); err != nil && ctx.Err() == nil {
+			r.config.OnError(err)
+		}
 		retry := r.config.RaceRetry
 		// The daemon starts pricing before it starts ingesting, so the first
 		// pass can read the table before startup ingestion has written to it.
@@ -313,6 +320,7 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 				BillingProviderID:       billingProviderID,
 				BillingProviderSource:   providerSource,
 				ProviderUsageJSON:       event.ProviderUsageJSON,
+				ServiceTier:             event.ServiceTier,
 				Costs:                   domain.UsageEventCosts{PricingVersion: snapshot.ProviderVersion(billingProviderID)},
 			}
 			estimate, estimateErr := snapshot.Estimate(event)

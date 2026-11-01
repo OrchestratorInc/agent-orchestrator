@@ -39,6 +39,19 @@ type AgentInstallJob struct {
 	UpdatedAt           time.Time
 }
 
+type AgentLimitReading struct {
+	AccountID       string
+	Provider        string
+	Email           string
+	Plan            string
+	WindowID        string
+	Label           string
+	DurationMinutes int64
+	UsedPercent     float64
+	ResetsAtMs      sql.NullInt64
+	ReadAtMs        int64
+}
+
 type AgentModelCatalog struct {
 	AgentID          string
 	ProjectID        string
@@ -172,6 +185,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	LimitHistory       bool
 }
 
 type Automation struct {
@@ -459,6 +473,8 @@ type ModelUsageEvent struct {
 	EstimatedCostNanos    sql.NullInt64
 	PricingVersion        string
 	BillingProviderSource sql.NullString
+	ServiceTier           sql.NullString
+	ProviderMessageID     sql.NullString
 }
 
 type Notification struct {

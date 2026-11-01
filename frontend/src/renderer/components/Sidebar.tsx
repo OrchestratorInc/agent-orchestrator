@@ -26,6 +26,7 @@ import {
 	File,
 	Folder,
 	FolderOpen,
+	Gauge,
 	LogIn,
 	LogOut,
 	MoreVertical,
@@ -547,6 +548,7 @@ function useSelection() {
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
+	const goUsage = useCallback(() => void navigate({ to: "/usage" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
@@ -573,6 +575,7 @@ function useSelection() {
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
 		isArtifacts: pathname === "/artifacts",
+		isUsage: pathname === "/usage",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -581,6 +584,7 @@ function useSelection() {
 		goHome,
 		goAutomations,
 		goArtifacts,
+		goUsage,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
@@ -589,7 +593,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -1062,6 +1066,15 @@ export function Sidebar({
 							onClick={selection.goArtifacts}
 							tooltip={isCollapsed ? t("artifacts.title") : undefined}
 							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
+						/>
+					</SidebarMenuItem>
+					<SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isUsage}
+							icon={<Gauge aria-hidden="true" />}
+							label={t("usage.title")}
+							onClick={selection.goUsage}
+							tooltip={isCollapsed ? t("usage.title") : undefined}
 						/>
 					</SidebarMenuItem>
 				</SidebarMenu>

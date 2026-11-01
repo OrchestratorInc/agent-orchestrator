@@ -1956,6 +1956,89 @@ type ListUsageSessionsQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Optional project id filter for dashboard cards."`
 }
 
+// UsageReportQuery selects the usage page's window.
+type UsageReportQuery struct {
+	Days      int              `query:"days,omitempty" minimum:"1" maximum:"90" description:"Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7."`
+	Offset    int              `query:"offset,omitempty" minimum:"0" description:"Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0."`
+	TimeZone  string           `query:"tz,omitempty" description:"IANA time zone that days and hours are bucketed in. Defaults to UTC."`
+	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
+}
+
+// UsageLimitHistoryRequest turns keeping limit readings on or off.
+type UsageLimitHistoryRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UsageLimitHistoryResponse is whether limit readings are now kept.
+type UsageLimitHistoryResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// UsageLimitWindowsQuery is the period of limit readings to read.
+type UsageLimitWindowsQuery struct {
+	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
+}
+
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a
+// period, built only from the limit readings AO took itself.
+type UsageLimitWindowsResponse struct {
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+	// FirstReadingAt is the oldest reading in the period; absent when there is none.
+	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
+	Logins         []domain.UsageLimitLogin `json:"logins"`
+}
+
+// UsageReportResponse is token and estimated-cost usage over a window, by day
+// or by hour in the requested time zone. Costs are API-equivalent estimates in
+// nano-USD, not a subscription bill.
+type UsageReportResponse struct {
+	Days       int                          `json:"days"`
+	TimeZone   string                       `json:"timeZone"`
+	Resolution string                       `json:"resolution" enum:"day,hour"`
+	Since      time.Time                    `json:"since"`
+	Until      time.Time                    `json:"until"`
+	Periods    []string                     `json:"periods" description:"Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour."`
+	Rows       []UsageReportRowResponse     `json:"rows"`
+	Sessions   []UsageReportSessionResponse `json:"sessions"`
+}
+
+// UsageReportRowResponse is one period's usage for one harness, model and
+// speed tier. Token counts are disjoint. The four category costs add up to
+// costNanos; premiumNanos and cacheSavingsNanos are views of it.
+type UsageReportRowResponse struct {
+	Period              string `json:"period"`
+	Harness             string `json:"harness"`
+	Model               string `json:"model"`
+	Speed               string `json:"speed" description:"standard, priority, fast, flex, ultrafast, or unknown."`
+	Events              int64  `json:"events"`
+	PricedEvents        int64  `json:"pricedEvents"`
+	InputTokens         int64  `json:"inputTokens" description:"Uncached input that was not written to the cache."`
+	CacheReadTokens     int64  `json:"cacheReadTokens"`
+	CacheWriteTokens    int64  `json:"cacheWriteTokens"`
+	OutputTokens        int64  `json:"outputTokens"`
+	InputCostNanos      int64  `json:"inputCostNanos"`
+	CacheReadCostNanos  int64  `json:"cacheReadCostNanos"`
+	CacheWriteCostNanos int64  `json:"cacheWriteCostNanos"`
+	OutputCostNanos     int64  `json:"outputCostNanos"`
+	CostNanos           int64  `json:"costNanos"`
+	PremiumNanos        int64  `json:"premiumNanos" description:"Part of costNanos above standard rates, from priority, fast or ultrafast processing."`
+	CacheSavingsNanos   int64  `json:"cacheSavingsNanos" description:"What cache reads saved against paying input rates for those tokens."`
+}
+
+// UsageReportSessionResponse is one session's usage over the report window.
+type UsageReportSessionResponse struct {
+	SessionID    string    `json:"sessionId"`
+	ProjectID    string    `json:"projectId,omitempty"`
+	Harness      string    `json:"harness"`
+	Title        string    `json:"title"`
+	Events       int64     `json:"events"`
+	PricedEvents int64     `json:"pricedEvents"`
+	Tokens       int64     `json:"tokens"`
+	CostNanos    int64     `json:"costNanos"`
+	LastUsedAt   time.Time `json:"lastUsedAt"`
+}
+
 // EstimatedCostResponse is a nano-USD estimate reused at every usage summary
 // scope. Coverage stays an API fact for aggregation, catalog backfills, and
 // contextual disclosure; it is never a pricing label or a mathematical

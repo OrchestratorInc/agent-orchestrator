@@ -7,6 +7,7 @@ import {
 	Folder,
 	FolderPlus,
 	FileText,
+	Gauge,
 	GitPullRequest,
 	House,
 	Keyboard,
@@ -27,6 +28,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-search-files": FileSearch,
 	"global-home": House,
 	"global-new-project": FolderPlus,
+	"global-usage": Gauge,
 	"global-settings": Settings,
 	"global-theme": Sun,
 };

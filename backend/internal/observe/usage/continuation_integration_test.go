@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,9 +35,12 @@ func TestPipelineIngestsDiscoveredClaudeContinuation(t *testing.T) {
 			strconv.Itoa(in) + `,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":` + strconv.Itoa(out) + `}}}` + "\n"
 	}
 	writeLine(t, filepath.Join(projectDir, "old-root.jsonl"), assistantLine("msg-1", 8, 2))
+	// A fork opens with a copy of its parent's messages. msg-1 was billed once
+	// and is already counted from old-root.jsonl.
 	writeLine(t, filepath.Join(projectDir, "continuation-root.jsonl"),
 		`{"type":"last-prompt","sessionId":"continuation-root"}`+"\n"+
 			`{"type":"user","sessionId":"continuation-root","cwd":"`+session.Metadata.WorkspacePath+`"}`+"\n"+
+			assistantLine("msg-1", 8, 2)+
 			assistantLine("msg-2", 30, 10))
 
 	collector := usagesvc.NewCollector(store, usagesvc.SourceRoots{ClaudeProjects: claudeRoot}, nil)
@@ -74,4 +78,54 @@ func writeLine(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Break caught: titles and prompt suggestions run as separate Claude calls in
+// a temporary workspace. No session claims that workspace's project folder, so
+// their tokens were never counted, and a session-end style hook would have
+// finalized the worker's own binding with them.
+func TestCollectorCountsABackgroundTaskWithoutFinalizingTheWorker(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessClaudeCode, domain.ActivityIdle, "worker-root", now,
+	)
+	worker, err := store.UpsertUsageBinding(ctx, domain.UsageBindingRecord{
+		SessionID: session.ID, Harness: session.Harness, NativeRootID: "worker-root",
+		ProviderHint: "anthropic", State: domain.UsageBindingActive, UpdatedAt: now,
+	})
+	mustNoError(t, err)
+
+	claudeRoot := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "background-tasks", "title-123")
+	mustNoError(t, os.MkdirAll(workspace, 0o700))
+	resolved, err := filepath.EvalSymlinks(workspace)
+	mustNoError(t, err)
+	projectDir := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, resolved)
+	writeLine(t, filepath.Join(claudeRoot, projectDir, "title-call.jsonl"),
+		`{"type":"assistant","uuid":"u1","message":{"id":"msg-t","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":6}}}`+"\n")
+
+	collector := usagesvc.NewCollector(store, usagesvc.SourceRoots{ClaudeProjects: claudeRoot}, nil)
+	mustNoError(t, collector.RecordBackgroundTask(ctx, session.ID, session.Harness, workspace))
+
+	call, ok, err := store.GetUsageBinding(ctx, session.ID, session.Harness, "title-call")
+	if err != nil || !ok {
+		t.Fatalf("background binding ok=%v err=%v", ok, err)
+	}
+	if call.State != domain.UsageBindingFinalizing || call.ProviderHint != "anthropic" {
+		t.Fatalf("background binding = %+v, want finalizing on the worker's route", call)
+	}
+	after, _, err := store.GetUsageBinding(ctx, session.ID, session.Harness, "worker-root")
+	mustNoError(t, err)
+	if after.State != worker.State {
+		t.Fatalf("worker binding state = %s, want %s", after.State, worker.State)
+	}
+
+	ingestAllWatchable(ctx, t, store, NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }}))
+	assertTokenAggregate(t, store, session.ID, 46)
 }

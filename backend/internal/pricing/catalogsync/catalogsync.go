@@ -14,9 +14,12 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
 const (
@@ -77,15 +80,43 @@ type rates struct {
 	OutputUSDPerToken        string  `json:"outputUsdPerToken"`
 }
 
+type upstreamRates struct {
+	Input   *json.Number
+	Output  *json.Number
+	Read    *json.Number
+	Write   *json.Number
+	Write1H *json.Number
+}
+
 type upstreamRecord struct {
 	Provider string `json:"litellm_provider"`
 	Mode     string `json:"mode"`
-	Input    *json.Number
-	Output   *json.Number
-	Read     *json.Number
-	Write    *json.Number
-	Write1H  *json.Number
+	upstreamRates
+	// Tiers holds the rates published under a service tier's field suffix,
+	// such as input_cost_per_token_priority.
+	Tiers map[string]upstreamRates
+	// FastMultiple is provider_specific_entry.fast: a fast mode billed as a
+	// multiple of every standard rate.
+	FastMultiple *json.Number
+	// LongContext holds the rates published for prompts over a size, keyed by
+	// that size in thousands of tokens: input_cost_per_token_above_272k_tokens
+	// is LongContext[272].
+	LongContext map[int64]longContextRates
 }
+
+// longContextRates are a model's rates for a prompt over one size, and each
+// service tier's rates over that size.
+type longContextRates struct {
+	upstreamRates
+	Tiers map[string]upstreamRates
+}
+
+// longContextInputField matches the input rate that announces a size, such as
+// input_cost_per_token_above_272k_tokens.
+var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
+
+// suffixTiers are the service tiers LiteLLM prices with their own rate fields.
+var suffixTiers = []string{pricing.ServiceTierPriority, pricing.ServiceTierFlex, pricing.ServiceTierUltrafast}
 
 func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
@@ -101,22 +132,83 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("mode: %w", err)
 	}
 	var err error
-	if u.Input, err = decodeNumber(fields["input_cost_per_token"]); err != nil {
-		return fmt.Errorf("input_cost_per_token: %w", err)
+	if u.upstreamRates, err = decodeRates(fields, ""); err != nil {
+		return err
 	}
-	if u.Output, err = decodeNumber(fields["output_cost_per_token"]); err != nil {
-		return fmt.Errorf("output_cost_per_token: %w", err)
+	for _, tier := range suffixTiers {
+		rates, err := decodeRates(fields, "_"+tier)
+		if err != nil {
+			return err
+		}
+		if rates != (upstreamRates{}) {
+			if u.Tiers == nil {
+				u.Tiers = make(map[string]upstreamRates, len(suffixTiers))
+			}
+			u.Tiers[tier] = rates
+		}
 	}
-	if u.Read, err = decodeNumber(fields["cache_read_input_token_cost"]); err != nil {
-		return fmt.Errorf("cache_read_input_token_cost: %w", err)
+	for name := range fields {
+		match := longContextInputField.FindStringSubmatch(name)
+		if match == nil {
+			continue
+		}
+		aboveK, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil || aboveK <= 0 {
+			return fmt.Errorf("%s: size out of range", name)
+		}
+		suffix := "_above_" + match[1] + "k_tokens"
+		long := longContextRates{}
+		if long.upstreamRates, err = decodeRates(fields, suffix); err != nil {
+			return err
+		}
+		for _, tier := range suffixTiers {
+			rates, err := decodeRates(fields, suffix+"_"+tier)
+			if err != nil {
+				return err
+			}
+			if rates != (upstreamRates{}) {
+				if long.Tiers == nil {
+					long.Tiers = make(map[string]upstreamRates, len(suffixTiers))
+				}
+				long.Tiers[tier] = rates
+			}
+		}
+		if u.LongContext == nil {
+			u.LongContext = make(map[int64]longContextRates)
+		}
+		u.LongContext[aboveK] = long
 	}
-	if u.Write, err = decodeNumber(fields["cache_creation_input_token_cost"]); err != nil {
-		return fmt.Errorf("cache_creation_input_token_cost: %w", err)
-	}
-	if u.Write1H, err = decodeNumber(fields["cache_creation_input_token_cost_above_1hr"]); err != nil {
-		return fmt.Errorf("cache_creation_input_token_cost_above_1hr: %w", err)
+	// The entry also carries values that are not rates, such as a Bedrock
+	// invocation schema, so only its fast member is read.
+	var entry map[string]json.RawMessage
+	if raw := fields["provider_specific_entry"]; len(raw) > 0 && json.Unmarshal(raw, &entry) == nil {
+		if u.FastMultiple, err = decodeNumber(entry["fast"]); err != nil {
+			return fmt.Errorf("provider_specific_entry.fast: %w", err)
+		}
 	}
 	return nil
+}
+
+func decodeRates(fields map[string]json.RawMessage, suffix string) (upstreamRates, error) {
+	var r upstreamRates
+	for _, field := range []struct {
+		name   string
+		target **json.Number
+	}{
+		{"input_cost_per_token", &r.Input},
+		{"output_cost_per_token", &r.Output},
+		{"cache_read_input_token_cost", &r.Read},
+		{"cache_creation_input_token_cost", &r.Write},
+		{"cache_creation_input_token_cost_above_1hr", &r.Write1H},
+	} {
+		name := field.name + suffix
+		number, err := decodeNumber(fields[name])
+		if err != nil {
+			return upstreamRates{}, fmt.Errorf("%s: %w", name, err)
+		}
+		*field.target = number
+	}
+	return r, nil
 }
 
 func decodeString(raw json.RawMessage, target *string) error {
@@ -250,14 +342,24 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 		if err != nil {
 			return generatedCatalog{}, err
 		}
-		r, err := normalizeRates(record)
+		r, err := normalizeRates(record.upstreamRates)
 		if err != nil {
 			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
 		}
-		if previous, exists := modelsByProvider[providerID][modelID]; exists && !equalRates(previous, r) {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: conflicting duplicate rates", providerID, modelID)
+		rows, err := serviceTierRows(modelID, record, r)
+		if err != nil {
+			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
 		}
-		modelsByProvider[providerID][modelID] = r
+		rows[modelID] = r
+		if err := addLongContextRows(rows, modelID, record); err != nil {
+			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+		}
+		for rowID, rowRates := range rows {
+			if previous, exists := modelsByProvider[providerID][rowID]; exists && !equalRates(previous, rowRates) {
+				return generatedCatalog{}, fmt.Errorf("%s/%s: conflicting duplicate rates", providerID, rowID)
+			}
+			modelsByProvider[providerID][rowID] = rowRates
+		}
 	}
 
 	providers := []string{"anthropic", "openai", "zai"}
@@ -297,7 +399,131 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 	return generated, nil
 }
 
-func normalizeRates(record upstreamRecord) (rates, error) {
+// serviceTierRows prices the service tiers one record publishes, keyed by
+// pricing.TierModelID.
+//
+// A suffix tier ships only when it is complete: it must carry every rate the
+// standard row carries. Filling a gap with the standard rate would bill a
+// premium request's cache reads at the standard price as fact, and leaving the
+// row out prices that tier as unknown instead.
+func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map[string]rates, error) {
+	rows := make(map[string]rates)
+	for tier, upstream := range record.Tiers {
+		if upstream.Input == nil || upstream.Output == nil {
+			continue
+		}
+		r, err := normalizeRates(upstream)
+		if err != nil {
+			return nil, fmt.Errorf("%s tier: %w", tier, err)
+		}
+		if (standard.CacheReadUSDPerToken != nil && r.CacheReadUSDPerToken == nil) ||
+			(standard.CacheWriteUSDPerToken != nil && r.CacheWriteUSDPerToken == nil) ||
+			(standard.CacheWrite1HUSDPerToken != nil && r.CacheWrite1HUSDPerToken == nil) {
+			continue
+		}
+		rows[pricing.TierModelID(modelID, tier)] = r
+	}
+	if record.FastMultiple != nil {
+		multiple, err := normalizeDecimal(record.FastMultiple.String())
+		if err != nil {
+			return nil, fmt.Errorf("fast multiple: %w", err)
+		}
+		if multiple != "0" {
+			r, err := scaleRates(standard, multiple)
+			if err != nil {
+				return nil, fmt.Errorf("fast tier: %w", err)
+			}
+			rows[pricing.TierModelID(modelID, pricing.ServiceTierFast)] = r
+		}
+	}
+	return rows, nil
+}
+
+// addLongContextRows prices the sizes over which one record bills a prompt at
+// other rates, keyed by pricing.LongContextModelID. Each extends a row already
+// in rows: the standard row, or a service tier's. Like a tier, a size ships
+// only when it carries every rate the row it extends carries; leaving it out
+// prices that request at the base row instead of mixing two sets of rates.
+func addLongContextRows(rows map[string]rates, modelID string, record upstreamRecord) error {
+	for aboveK, long := range record.LongContext {
+		extend := func(rowID string, upstream upstreamRates) error {
+			base, ok := rows[rowID]
+			if !ok || upstream.Input == nil || upstream.Output == nil {
+				return nil
+			}
+			r, err := normalizeRates(upstream)
+			if err != nil {
+				return fmt.Errorf("above %dk: %w", aboveK, err)
+			}
+			if (base.CacheReadUSDPerToken != nil && r.CacheReadUSDPerToken == nil) ||
+				(base.CacheWriteUSDPerToken != nil && r.CacheWriteUSDPerToken == nil) ||
+				(base.CacheWrite1HUSDPerToken != nil && r.CacheWrite1HUSDPerToken == nil) {
+				return nil
+			}
+			rows[pricing.LongContextModelID(rowID, aboveK)] = r
+			return nil
+		}
+		if err := extend(modelID, long.upstreamRates); err != nil {
+			return err
+		}
+		for tier, upstream := range long.Tiers {
+			if err := extend(pricing.TierModelID(modelID, tier), upstream); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func scaleRates(r rates, multiple string) (rates, error) {
+	var scaled rates
+	var err error
+	if scaled.UncachedInputUSDPerToken, err = multiplyDecimals(r.UncachedInputUSDPerToken, multiple); err != nil {
+		return rates{}, err
+	}
+	if scaled.OutputUSDPerToken, err = multiplyDecimals(r.OutputUSDPerToken, multiple); err != nil {
+		return rates{}, err
+	}
+	for _, field := range []struct {
+		from *string
+		to   **string
+	}{
+		{r.CacheReadUSDPerToken, &scaled.CacheReadUSDPerToken},
+		{r.CacheWriteUSDPerToken, &scaled.CacheWriteUSDPerToken},
+		{r.CacheWrite1HUSDPerToken, &scaled.CacheWrite1HUSDPerToken},
+	} {
+		if field.from == nil {
+			continue
+		}
+		value, err := multiplyDecimals(*field.from, multiple)
+		if err != nil {
+			return rates{}, err
+		}
+		*field.to = &value
+	}
+	return scaled, nil
+}
+
+// multiplyDecimals multiplies two canonical decimals exactly. The product of
+// two terminating decimals terminates within their combined fraction digits,
+// so FloatString at that precision never rounds.
+func multiplyDecimals(left, right string) (string, error) {
+	x, okX := new(big.Rat).SetString(left)
+	y, okY := new(big.Rat).SetString(right)
+	if !okX || !okY {
+		return "", errors.New("rate is not a decimal")
+	}
+	return normalizeDecimal(new(big.Rat).Mul(x, y).FloatString(fractionDigits(left) + fractionDigits(right)))
+}
+
+func fractionDigits(decimal string) int {
+	if point := strings.IndexByte(decimal, '.'); point >= 0 {
+		return len(decimal) - point - 1
+	}
+	return 0
+}
+
+func normalizeRates(record upstreamRates) (rates, error) {
 	input, err := normalizeRequired(record.Input)
 	if err != nil {
 		return rates{}, fmt.Errorf("input: %w", err)
