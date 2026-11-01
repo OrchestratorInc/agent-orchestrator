@@ -162,6 +162,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
+	"ControllersAgentLoginActionRequest":                   "AgentLoginActionRequest",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
 	"ControllersAgentAccountSessionIDParam":                "AgentAccountSessionIDParam",
 	"ControllersAgentAccountListQuery":                     "AgentAccountListQuery",
@@ -532,6 +533,16 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
 	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
+	"AgentauthProviderKey":                        "ProviderKey",
+	"ProviderkeysCheckResult":                     "ProviderKeyCheck",
+	"ControllersProviderKeyNameParam":             "ProviderKeyNameParam",
+	"ControllersListProviderKeysResponse":         "ListProviderKeysResponse",
+	"ControllersSaveProviderKeyRequest":           "SaveProviderKeyRequest",
+	"ControllersCheckProviderKeyRequest":          "CheckProviderKeyRequest",
+	"AgentauthCatalogProvider":                    "CatalogProvider",
+	"ControllersCatalogProviderParam":             "CatalogProviderParam",
+	"ControllersListCatalogProvidersResponse":     "ListCatalogProvidersResponse",
+	"ControllersListCatalogModelsResponse":        "ListCatalogModelsResponse",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
@@ -1931,6 +1942,13 @@ func cueOperations() []operation {
 func agentOperations() []operation {
 	return []operation{
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/actions", id: "actOnAgentUILogin", tag: "agents",
+			summary:    "Send a fixed action to a recognized native login menu",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			reqBody:    controllers.AgentLoginActionRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",
 			summary:    "Submit a one-time Claude sign-in code to the existing native login",
 			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
@@ -1964,6 +1982,43 @@ func agentOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/providers", id: "listAgentCatalogProviders", tag: "agents",
+			summary:    "List the key-only providers in an agent's own provider catalog on this device",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListCatalogProvidersResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/providers/{provider}/models", id: "listAgentCatalogModels", tag: "agents",
+			summary:    "List the model IDs an agent's own catalog offers for one provider",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.CatalogProviderParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListCatalogModelsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/provider-keys", id: "listProviderKeys", tag: "agents",
+			summary: "List reviewed provider keys with display-safe saved state; values are never returned",
+			resps:   []respUnit{{http.StatusOK, controllers.ListProviderKeysResponse{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/agents/provider-keys/{name}", id: "saveProviderKey", tag: "agents",
+			summary:    "Save a provider key for AO sessions and set whether it is published to the OS user environment",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			reqBody:    controllers.SaveProviderKeyRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKey{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/agents/provider-keys/{name}", id: "removeProviderKey", tag: "agents",
+			summary:    "Remove a provider key from AO and from the OS user environment when AO published it",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKey{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/provider-keys/{name}/check", id: "checkProviderKey", tag: "agents",
+			summary:    "Ask the provider whether it accepts a key and list the models it offers",
+			pathParams: []any{controllers.ProviderKeyNameParam{}},
+			reqBody:    controllers.CheckProviderKeyRequest{},
+			resps:      []respUnit{{http.StatusOK, agentauth.ProviderKeyCheck{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/agents/chat/unavailable", id: "listUnavailableChatAgents", tag: "conversations",

@@ -2,6 +2,7 @@ package deepseekharness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -200,4 +201,14 @@ func secretValuePresent(value any) bool {
 	default:
 		return false
 	}
+}
+
+// CredentialsPath is the Harness credential store AO reads for sign-in and
+// writes when the user saves a DeepSeek key from AO.
+func CredentialsPath() (string, error) {
+	path, err := deepseekCredentialsPath()
+	if err == nil && path == "" {
+		err = errors.New("DeepSeek Harness home is unavailable")
+	}
+	return path, err
 }

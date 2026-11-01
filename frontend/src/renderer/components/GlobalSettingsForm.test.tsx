@@ -574,7 +574,7 @@ describe("GlobalSettingsForm", () => {
 
 		await user.click(toggle);
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the sound notifications preference.");
+		expect(await screen.findByText("Could not save the sound notifications preference.")).toHaveAttribute("role", "alert");
 		expect(useSoundNotificationsStore.getState().enabled).toBe(true);
 		expect(toggle).toBeChecked();
 	});

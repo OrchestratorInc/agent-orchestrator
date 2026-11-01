@@ -63,7 +63,7 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	}
 
 	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, aiderAPIKeyEnvVars...) != "" {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusConfigured, true, nil
 	}
 	if fileErr != nil {
 		return ports.AgentAuthStatusUnknown, false, fileErr
@@ -104,7 +104,7 @@ func aiderAuthStatusFromFile(path string) (ports.AgentAuthStatus, bool, error) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	if fileContainsAPIKey(text) {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusConfigured, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }

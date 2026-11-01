@@ -210,6 +210,62 @@ paths:
       summary: Read recognized login prompts and background process state
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/actions:
+    post:
+      operationId: actOnAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentLoginActionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Send a fixed action to a recognized native login menu
+      tags:
+      - agents
   /api/v1/agents/{agent}/auth/operations/{operationId}/code:
     post:
       operationId: submitAgentUILoginCode
@@ -270,6 +326,92 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Submit a one-time Claude sign-in code to the existing native login
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/providers:
+    get:
+      operationId: listAgentCatalogProviders
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogProvidersResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the key-only providers in an agent's own provider catalog on this
+        device
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/providers/{provider}/models:
+    get:
+      operationId: listAgentCatalogModels
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Provider ID from the harness's catalog.
+        in: path
+        name: provider
+        required: true
+        schema:
+          description: Provider ID from the harness's catalog.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogModelsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the model IDs an agent's own catalog offers for one provider
       tags:
       - agents
   /api/v1/agents/{agent}/chat/prewarm:
@@ -1703,6 +1845,162 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve the safe installation plan for every supported agent harness
+      tags:
+      - agents
+  /api/v1/agents/provider-keys:
+    get:
+      operationId: listProviderKeys
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProviderKeysResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List reviewed provider keys with display-safe saved state; values are
+        never returned
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}:
+    delete:
+      operationId: removeProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Remove a provider key from AO and from the OS user environment when
+        AO published it
+      tags:
+      - agents
+    put:
+      operationId: saveProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Save a provider key for AO sessions and set whether it is published
+        to the OS user environment
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}/check:
+    post:
+      operationId: checkProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Ask the provider whether it accepts a key and list the models it offers
       tags:
       - agents
   /api/v1/agents/readiness:
@@ -13896,6 +14194,26 @@ components:
       required:
       - agents
       type: object
+    AgentLoginActionRequest:
+      properties:
+        action:
+          enum:
+          - previous
+          - next
+          - select
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+          - "7"
+          - "8"
+          - "9"
+          type: string
+      required:
+      - action
+      type: object
     AgentLoginMethod:
       properties:
         id:
@@ -13925,6 +14243,18 @@ components:
         loginUrl:
           type: string
         method:
+          type: string
+        nativeOptions:
+          items:
+            type: string
+          type: array
+        nativePrompt:
+          enum:
+          - waiting
+          - menu
+          - terminal_required
+          type: string
+        selectedOption:
           type: string
         status:
           enum:
@@ -14891,6 +15221,21 @@ components:
       - ok
       - sessionId
       type: object
+    CatalogProvider:
+      properties:
+        env:
+          type: string
+        id:
+          type: string
+        models:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - models
+      type: object
     ChatAgentPermissionModes:
       properties:
         agent:
@@ -14958,6 +15303,11 @@ components:
           type: array
       required:
       - agents
+      type: object
+    CheckProviderKeyRequest:
+      properties:
+        secret:
+          type: string
       type: object
     ClaimPRRequest:
       properties:
@@ -18248,6 +18598,24 @@ components:
       required:
       - automations
       type: object
+    ListCatalogModelsResponse:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+      required:
+      - models
+      type: object
+    ListCatalogProvidersResponse:
+      properties:
+        providers:
+          items:
+            $ref: '#/components/schemas/CatalogProvider'
+          type: array
+      required:
+      - providers
+      type: object
     ListCompactSessionUsageResponse:
       properties:
         sessions:
@@ -18342,6 +18710,15 @@ components:
           type: array
       required:
       - projects
+      type: object
+    ListProviderKeysResponse:
+      properties:
+        keys:
+          items:
+            $ref: '#/components/schemas/ProviderKey'
+          type: array
+      required:
+      - keys
       type: object
     ListReportsResponse:
       properties:
@@ -19126,6 +19503,48 @@ components:
       - providerTurnId
       - activityId
       type: object
+    ProviderKey:
+      properties:
+        agents:
+          items:
+            type: string
+          type: array
+        checkable:
+          type: boolean
+        configured:
+          type: boolean
+        device:
+          type: boolean
+        hint:
+          type: string
+        label:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      - label
+      - configured
+      - device
+      - checkable
+      - agents
+      type: object
+    ProviderKeyCheck:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+        status:
+          enum:
+          - valid
+          - invalid
+          - unverified
+          - unreachable
+          type: string
+      required:
+      - status
+      type: object
     ProviderSwitchRequest:
       properties:
         autoCompactWindow:
@@ -19732,6 +20151,15 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveProviderKeyRequest:
+      properties:
+        device:
+          type: boolean
+        secret:
+          type: string
+      required:
+      - device
       type: object
     SaveRenderArtifactRequest:
       properties:
@@ -21616,7 +22044,13 @@ components:
       type: object
     StartAgentUILoginRequest:
       properties:
+        device:
+          type: boolean
         method:
+          type: string
+        model:
+          type: string
+        provider:
           type: string
         secret:
           type: string
