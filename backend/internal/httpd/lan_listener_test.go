@@ -154,6 +154,31 @@ func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
 	}
 }
 
+// TestLANManagerFallsBackOnPortConflict confirms the authenticated listener,
+// like the primary one, moves to an ephemeral port when its requested port is
+// already held, and reports the port it actually bound.
+func TestLANManagerFallsBackOnPortConflict(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	heldPort := held.Addr().(*net.TCPAddr).Port
+
+	m := NewMobileLAN(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "h_test", 0, nil, nil)
+	port, err := m.StartLoopback(heldPort)
+	if err != nil {
+		t.Fatalf("StartLoopback on a held port = %v, want ephemeral fallback", err)
+	}
+	defer m.Stop(context.Background())
+	if port == heldPort || port == 0 {
+		t.Fatalf("StartLoopback bound port %d with %d held; want a different, real port", port, heldPort)
+	}
+	if got := m.ln.Addr().(*net.TCPAddr).Port; got != port {
+		t.Fatalf("listener bound %d but StartLoopback reported %d", got, port)
+	}
+}
+
 func TestAccountTokenIssuanceReturnsThroughRealLANListener(t *testing.T) {
 	bridge := &controllers.BridgeService{ConfigPath: mobilebridge.Path(t.TempDir()), HostID: "h_test"}
 	if err := mobilebridge.Save(bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
