@@ -530,7 +530,7 @@
 	"quitConfirm.bodyKeepsRunning": "AO läuft im Hintergrund weiter. Du kannst es über die Menüleiste wieder öffnen.",
 	"quitConfirm.quit": "Beenden",
 	"createProject.agentsCached": "Agenten-Verfügbarkeit ist zwischengespeichert.",
-	"createProject.addCodeDescription": "Wo liegt der Code?",
+	"createProject.addCodeDescription": "Wie möchtest du anfangen?",
 	"createProject.addCodeTitle": "Neues Projekt",
 	"createProject.machine": "Computer",
 	"createProject.sandboxProvider.docker": "Docker",

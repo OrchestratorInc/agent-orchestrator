@@ -530,7 +530,7 @@
 	"quitConfirm.bodyKeepsRunning": "AO はバックグラウンドで動作し続けます。メニューバーから再度開けます。",
 	"quitConfirm.quit": "終了",
 	"createProject.agentsCached": "エージェントの利用可否はキャッシュされています。",
-	"createProject.addCodeDescription": "コードはどこにありますか？",
+	"createProject.addCodeDescription": "どこから始めますか？",
 	"createProject.addCodeTitle": "新しいプロジェクト",
 	"createProject.machine": "マシン",
 	"createProject.sandboxProvider.docker": "Docker",

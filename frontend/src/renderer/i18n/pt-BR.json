@@ -533,7 +533,7 @@
 	"quitConfirm.bodyKeepsRunning": "O AO continuará em execução em segundo plano. Você pode reabri-lo pela barra de menus.",
 	"quitConfirm.quit": "Sair",
 	"createProject.agentsCached": "A disponibilidade dos agentes está em cache.",
-	"createProject.addCodeDescription": "Onde está o código?",
+	"createProject.addCodeDescription": "Como você quer começar?",
 	"createProject.addCodeTitle": "Novo projeto",
 	"createProject.machine": "Computador",
 	"createProject.sandboxProvider.docker": "Docker",

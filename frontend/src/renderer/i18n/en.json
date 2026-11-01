@@ -527,7 +527,7 @@
 	"quitConfirm.bodyKeepsRunning": "AO will keep running in the background. You can reopen it from the menu bar.",
 	"quitConfirm.quit": "Quit",
 	"createProject.agentsCached": "Agent availability is cached.",
-	"createProject.addCodeDescription": "Where's the code?",
+	"createProject.addCodeDescription": "How do you want to start?",
 	"createProject.addCodeTitle": "New project",
 	"createProject.machine": "Machine",
 	"createProject.sandboxProvider.docker": "Docker",

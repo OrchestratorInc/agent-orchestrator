@@ -533,7 +533,7 @@
 	"quitConfirm.bodyKeepsRunning": "AO продолжит работать в фоновом режиме. Его можно снова открыть из строки меню.",
 	"quitConfirm.quit": "Выйти",
 	"createProject.agentsCached": "Доступность агентов кэшируется.",
-	"createProject.addCodeDescription": "Где находится код?",
+	"createProject.addCodeDescription": "С чего начнём?",
 	"createProject.addCodeTitle": "Новый проект",
 	"createProject.machine": "Компьютер",
 	"createProject.sandboxProvider.docker": "Docker",

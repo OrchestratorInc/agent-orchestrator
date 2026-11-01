@@ -530,7 +530,7 @@
 	"quitConfirm.bodyKeepsRunning": "AO 会在后台继续运行。你可以从菜单栏重新打开它。",
 	"quitConfirm.quit": "退出",
 	"createProject.agentsCached": "代理可用性已缓存。",
-	"createProject.addCodeDescription": "代码在哪里？",
+	"createProject.addCodeDescription": "你想如何开始？",
 	"createProject.addCodeTitle": "新项目",
 	"createProject.machine": "设备",
 	"createProject.sandboxProvider.docker": "Docker",
