@@ -21,7 +21,16 @@ function aoCurLangName() {
    components differ structurally. Runs after hydration; re-runs on
    Mintlify SPA navigations and resize across breakpoints. */
 (function () {
-  var GH_BASE = "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/frontend/src/docs/content/";
+  /* Source lives on the fork preview branch until PR #7529 merges; after merge,
+     switch this base to .../OrchestratorInc/agent-orchestrator/blob/main/docs/ */
+  var GH_BASE = "https://github.com/atul-upadhyay-7/agent-orchestrator/blob/mintlify-preview/docs/";
+  /* Routes served by a directory index.mdx (route itself has no <route>.mdx file). */
+  var GH_INDEX_ROUTES = {"":1,"archive":1,"archive/performance/chat-responsiveness":1,"archive/screenshots":1,"archive/screenshots/issue-5280":1,"archive/screenshots/pr-4924":1,"archive/screenshots/pr-4925":1,"archive/screenshots/pr-4926":1,"archive/screenshots/pr-4928":1,"archive/screenshots/pr-4932":1,"configuration":1,"engineering":1,"engineering/cli":1,"guides":1,"ja":1,"plugins":1,"plugins/agents":1,"plugins/notifiers":1,"plugins/runtimes":1,"plugins/scm":1,"plugins/terminals":1,"plugins/trackers":1,"plugins/workspaces":1,"zh-CN":1};
+  function pageMdxSourcePath() {
+    var p = location.pathname.replace(/\/+$/, "");
+    var key = p.replace(/^\/+/, "");
+    return (GH_INDEX_ROUTES[key] ? p + "/index" : (p === "" ? "/index" : p)) + ".mdx";
+  }
 
   function clean(t) { return (t || "").replace(/\u200b/g, "").trim(); }
   function isMobileToc() { return window.innerWidth < 1280; } /* original: xl:hidden */
@@ -573,7 +582,7 @@ function aoCurLangName() {
     /* View on GitHub: same target as original */
     var gh = document.createElement("a");
     gh.className = "ao-action";
-    gh.href = GH_BASE.replace(/\/+$/, "") + pageMdxPath();
+    gh.href = GH_BASE.replace(/\/+$/, "") + pageMdxSourcePath();
     gh.target = "_blank";
     gh.rel = "noreferrer";
     gh.innerHTML =
