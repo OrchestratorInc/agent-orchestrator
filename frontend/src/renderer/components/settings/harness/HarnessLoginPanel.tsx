@@ -402,7 +402,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 								{models.length > 0
 									? <SettingsOptionMenu aria-label={t("settings.apiKeys.model")} value={model} options={models.map((id) => ({ value: id, label: id }))} onChange={setModel} searchable searchPlaceholder={t("settings.apiKeys.searchModels")} disabled={locked} triggerClassName="h-8 min-w-0 flex-1 justify-between font-mono" />
 									: <Input aria-labelledby={titleId + "-model"} className="min-w-0 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
-								{selectedKey?.checkable && models.length === 0 && <Button type="button" size="sm" variant="outline" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
+								{selectedKey?.checkable && models.length === 0 && <Button type="button" size="sm" variant="secondary" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
 									{loadingModels && <LoaderCircle className="animate-spin" aria-hidden="true" />}{t("settings.apiKeys.loadModels")}
 								</Button>}
 							</div>
@@ -437,23 +437,24 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 				<code className="break-all font-mono text-[15px] leading-6 font-medium tracking-wide text-settings-label" aria-label={t("settings.harness.loginUi.deviceCode")}>{operation.deviceCode}</code>
 				<Button size="sm" variant="ghost" onClick={() => act(async () => { await aoBridge.clipboard.writeText(operation.deviceCode!); setCopied(true); })}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.loginUi.copied" : "settings.harness.loginUi.copyCode")}</Button>
 			</div>}
-			{running && operation?.nativePrompt === "menu" && nativeOptions.length > 0 && <div className="space-y-2 rounded-md border border-border bg-(--color-bg-secondary) p-3">
+			{running && operation?.nativePrompt === "menu" && nativeOptions.length > 0 && <div className="space-y-2 rounded-md bg-(--color-bg-secondary) p-3">
 				<p id={titleId + "-native-options"} className="text-control leading-5 text-settings-label">{t("settings.harness.loginUi.nativeChoose")}</p>
-				<div role="group" aria-labelledby={titleId + "-native-options"} className="flex flex-col gap-1">
-					{nativeOptions.map((option, index) => <Button key={`${index}-${option}`} type="button" size="sm" variant="outline" className="justify-start" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction)}>
+				{/* One shared list with dividers, like the method list above it. */}
+				<div role="group" aria-labelledby={titleId + "-native-options"} className="flex flex-col divide-y divide-border overflow-hidden rounded-md bg-(--color-bg-primary)">
+					{nativeOptions.map((option, index) => <button key={`${index}-${option}`} type="button" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction)} className="flex min-h-8 w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-control leading-5 text-settings-label outline-none transition-colors hover:bg-(--color-interactive-hover) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 						<span className="tabular-nums text-settings-muted">{index + 1}.</span> {option}
-					</Button>)}
+					</button>)}
 				</div>
-				<div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-2">
+				<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 					<Button type="button" size="sm" variant="ghost" className="-ml-2" disabled={busy} onClick={() => void menuAction("select")}>{t("settings.harness.loginUi.nativeEnter")}</Button>
 					<span className="text-xs leading-4 text-settings-muted">{t("settings.harness.loginUi.nativeEnterHint")}</span>
 				</div>
 			</div>}
-			{running && operation?.nativePrompt === "menu" && nativeOptions.length === 0 && <div className="space-y-2 rounded-md border border-border bg-(--color-bg-secondary) p-3">
+			{running && operation?.nativePrompt === "menu" && nativeOptions.length === 0 && <div className="space-y-2 rounded-md bg-(--color-bg-secondary) p-3">
 				<p className="text-control leading-5 text-settings-label">{t("settings.harness.loginUi.nativeSelected", { option: operation.selectedOption })}</p>
 				<div className="flex flex-wrap gap-2">
-					<Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void menuAction("previous")}><ChevronUp aria-hidden="true" />{t("settings.harness.loginUi.nativePrevious")}</Button>
-					<Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void menuAction("next")}><ChevronDown aria-hidden="true" />{t("settings.harness.loginUi.nativeNext")}</Button>
+					<Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void menuAction("previous")}><ChevronUp aria-hidden="true" />{t("settings.harness.loginUi.nativePrevious")}</Button>
+					<Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void menuAction("next")}><ChevronDown aria-hidden="true" />{t("settings.harness.loginUi.nativeNext")}</Button>
 					<Button type="button" size="sm" disabled={busy} onClick={() => void menuAction("select")}><Check aria-hidden="true" />{t("settings.harness.loginUi.nativeSelect")}</Button>
 				</div>
 			</div>}

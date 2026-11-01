@@ -34,10 +34,7 @@ export function KeyStatusDot({ configured }: { configured: boolean }) {
 	/>;
 }
 
-/**
- * Opt-in to publish a key to the OS user environment. Bordered so it reads as
- * a separate decision from typing the key, with its consequence stated.
- */
+/** Opt-in to publish a key to the OS user environment, with its consequence stated. */
 export function DeviceEnvToggle({ checked, disabled, onChange, className }: {
 	checked: boolean;
 	disabled?: boolean;
@@ -45,7 +42,7 @@ export function DeviceEnvToggle({ checked, disabled, onChange, className }: {
 	className?: string;
 }) {
 	const { t } = useTranslation();
-	return <label className={cn("flex cursor-pointer items-start gap-2.5 rounded-md border border-border px-3 py-2.5 has-disabled:cursor-default", className)}>
+	return <label className={cn("flex cursor-pointer items-start gap-2 has-disabled:cursor-default", className)}>
 		<Checkbox checked={checked} className="mt-0.5" disabled={disabled} onCheckedChange={(next) => onChange(next === true)} />
 		<span className="min-w-0 flex-1 space-y-0.5">
 			<span className="block text-control leading-5 text-settings-label">{t("settings.apiKeys.device")}</span>
@@ -56,7 +53,7 @@ export function DeviceEnvToggle({ checked, disabled, onChange, className }: {
 
 /** A consequence the user should read before saving, such as billing. */
 export function KeyWarning({ children, className }: { children: ReactNode; className?: string }) {
-	return <p className={cn("flex items-start gap-2 rounded-md border border-warning/30 bg-warning/8 px-3 py-2.5 text-xs leading-4 text-settings-label", className)}>
+	return <p className={cn("flex items-start gap-2 rounded-md bg-warning/8 px-3 py-2.5 text-xs leading-4 text-settings-label", className)}>
 		<TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden="true" />
 		<span>{children}</span>
 	</p>;

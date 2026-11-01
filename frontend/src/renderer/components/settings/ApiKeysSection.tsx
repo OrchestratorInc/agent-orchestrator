@@ -122,7 +122,7 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 			{key.configured && key.checkable && !editing ? <Button type="button" size="sm" variant="ghost" disabled={checking} onClick={() => void check()}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.apiKeys.check")}
 			</Button> : null}
-			<Button type="button" size="sm" variant={key.configured || editing ? "ghost" : "outline"} aria-expanded={editing} onClick={onEdit}>
+			<Button type="button" size="sm" variant={key.configured || editing ? "ghost" : "secondary"} aria-expanded={editing} onClick={onEdit}>
 				{t(editing ? "settings.apiKeys.close" : key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
 			</Button>
 		</div>
