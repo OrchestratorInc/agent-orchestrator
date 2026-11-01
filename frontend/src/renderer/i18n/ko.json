@@ -3052,7 +3052,7 @@
 	"artifacts.share.signIn": "로그인",
 	"artifacts.share.title": "{{name}} 공유",
 	"artifacts.share.public": "링크가 있는 사람은 누구나 이 파일을 볼 수 있습니다.",
-	"artifacts.share.usage": "무료 플랜: 활성 링크 {{used}}/{{limit}}개",
+	"artifacts.share.usage": "무료 플랜: 남은 링크 {{left}}/{{limit}}개",
 	"artifacts.share.secrets": "이 파일에 {{kinds}}이(가) 포함된 것 같습니다. 게시하면 공개됩니다.",
 	"artifacts.share.publish": "게시",
 	"artifacts.share.publishing": "게시 중… {{percent}}%",

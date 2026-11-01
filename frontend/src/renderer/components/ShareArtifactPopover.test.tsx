@@ -65,7 +65,7 @@ describe("ShareArtifactButton", () => {
 		stub({ ...inspection, secretFindings: ["AWS access key"] }, links);
 		await openPopover();
 		expect(await screen.findByText("Anyone with the link can view this file.")).toBeTruthy();
-		expect(screen.getByText("2.0 KB · Free plan: 2 of 3 active links.")).toBeTruthy();
+		expect(screen.getByText("2.0 KB · Free plan: 2 of 3 links left.")).toBeTruthy();
 		expect(screen.getByRole("alert").textContent).toContain("AWS access key");
 	});
 
@@ -114,7 +114,7 @@ describe("ShareArtifactButton", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
 		expect(unpublish).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
-		expect(screen.getByText("2.0 KB · Free plan: 1 of 3 active links.")).toBeTruthy();
+		expect(screen.getByText("2.0 KB · Free plan: 3 of 3 links left.")).toBeTruthy();
 	});
 
 	it("treats a record of an unpublished link as unpublished", async () => {

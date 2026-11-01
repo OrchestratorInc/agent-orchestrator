@@ -3034,7 +3034,7 @@
 	"artifacts.share.signIn": "登录",
 	"artifacts.share.title": "分享 {{name}}",
 	"artifacts.share.public": "任何拥有链接的人都可以查看此文件。",
-	"artifacts.share.usage": "免费版：已使用 {{used}}/{{limit}} 个有效链接。",
+	"artifacts.share.usage": "免费版：剩余 {{left}}/{{limit}} 个链接。",
 	"artifacts.share.secrets": "此文件似乎包含 {{kinds}}。发布后这些内容将会公开。",
 	"artifacts.share.publish": "发布",
 	"artifacts.share.publishing": "正在发布… {{percent}}%",

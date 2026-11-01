@@ -227,7 +227,7 @@ function SharePanel({
 					{note(t("artifacts.share.public"))}
 					<p className="mt-1 text-caption text-muted-foreground">
 						{formatBytes(inspection.size)}
-						{links.unlimited ? null : ` · ${t("artifacts.share.usage", { used: links.used + 1, limit: links.limit })}`}
+						{links.unlimited ? null : ` · ${t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })}`}
 					</p>
 					{inspection.secretFindings.length > 0 ? (
 						<p role="alert" className="mt-2 text-caption leading-4 text-error">

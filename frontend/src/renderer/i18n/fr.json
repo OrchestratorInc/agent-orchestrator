@@ -3110,7 +3110,7 @@
 	"artifacts.share.signIn": "Se connecter",
 	"artifacts.share.title": "Partager {{name}}",
 	"artifacts.share.public": "Toute personne disposant du lien peut voir ce fichier.",
-	"artifacts.share.usage": "Offre gratuite : {{used}} liens actifs sur {{limit}}.",
+	"artifacts.share.usage": "Offre gratuite : {{left}} liens restants sur {{limit}}.",
 	"artifacts.share.secrets": "Ce fichier semble contenir un {{kinds}}. Le publier le rendra public.",
 	"artifacts.share.publish": "Publier",
 	"artifacts.share.publishing": "Publication… {{percent}} %",

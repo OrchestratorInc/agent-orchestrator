@@ -3110,7 +3110,7 @@
 	"artifacts.share.signIn": "Entrar",
 	"artifacts.share.title": "Compartilhar {{name}}",
 	"artifacts.share.public": "Qualquer pessoa com o link pode ver este arquivo.",
-	"artifacts.share.usage": "Plano gratuito: {{used}} de {{limit}} links ativos.",
+	"artifacts.share.usage": "Plano gratuito: restam {{left}} de {{limit}} links.",
 	"artifacts.share.secrets": "Este arquivo parece conter um {{kinds}}. Publicá-lo torna isso público.",
 	"artifacts.share.publish": "Publicar",
 	"artifacts.share.publishing": "Publicando… {{percent}}%",

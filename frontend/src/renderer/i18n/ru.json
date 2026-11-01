@@ -3160,7 +3160,7 @@
 	"artifacts.share.signIn": "Войти",
 	"artifacts.share.title": "Поделиться {{name}}",
 	"artifacts.share.public": "Любой, у кого есть ссылка, может просмотреть этот файл.",
-	"artifacts.share.usage": "Бесплатный план: активных ссылок {{used}} из {{limit}}.",
+	"artifacts.share.usage": "Бесплатный план: осталось ссылок {{left}} из {{limit}}.",
 	"artifacts.share.secrets": "Похоже, этот файл содержит {{kinds}}. При публикации эти данные станут общедоступными.",
 	"artifacts.share.publish": "Опубликовать",
 	"artifacts.share.publishing": "Публикация… {{percent}}%",

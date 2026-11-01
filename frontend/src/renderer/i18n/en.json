@@ -3036,7 +3036,7 @@
 	"artifacts.share.signIn": "Sign in",
 	"artifacts.share.title": "Share {{name}}",
 	"artifacts.share.public": "Anyone with the link can view this file.",
-	"artifacts.share.usage": "Free plan: {{used}} of {{limit}} active links.",
+	"artifacts.share.usage": "Free plan: {{left}} of {{limit}} links left.",
 	"artifacts.share.secrets": "This file looks like it contains a {{kinds}}. Publishing it makes that public.",
 	"artifacts.share.publish": "Publish",
 	"artifacts.share.publishing": "Publishing… {{percent}}%",

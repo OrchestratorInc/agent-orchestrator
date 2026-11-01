@@ -3052,7 +3052,7 @@
 	"artifacts.share.signIn": "サインイン",
 	"artifacts.share.title": "{{name}} を共有",
 	"artifacts.share.public": "リンクを知っている人は誰でもこのファイルを閲覧できます。",
-	"artifacts.share.usage": "無料プラン: 有効なリンク {{used}} / {{limit}}",
+	"artifacts.share.usage": "無料プラン: 残りのリンク {{left}} / {{limit}}",
 	"artifacts.share.secrets": "このファイルには {{kinds}} が含まれているようです。公開するとその内容も公開されます。",
 	"artifacts.share.publish": "公開",
 	"artifacts.share.publishing": "公開中… {{percent}}%",
