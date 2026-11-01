@@ -5383,13 +5383,6 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-// confirmActive fences each retry's input timestamp check through its Enter
-// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
-// the operator's new draft while trying to confirm its own prompt.
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
-	return m.confirmActiveWithStop(ctx, guard, id, evidence, inputBaseline, nil)
-}
-
 func (m *Manager) confirmActiveWithStop(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time, stop confirmationStopCheck) error {
 	return m.confirmActiveWithNudge(ctx, id, evidence, stop, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		accepted := false
