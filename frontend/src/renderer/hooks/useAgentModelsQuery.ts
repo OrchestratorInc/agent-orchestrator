@@ -1,4 +1,4 @@
-import { queryOptions, type QueryClient } from "@tanstack/react-query";
+import { partialMatchKey, queryOptions, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
@@ -11,6 +11,35 @@ export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
 const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
 const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
+
+// Survive observer teardown during a session open, while keeping hosts and
+// credential scopes separate. Login invalidation drops pending reads too.
+type PendingOpenCodeCatalog = { promise: Promise<AgentModelCatalog>; queryKey: QueryKey; invalidated: boolean };
+const pendingOpenCodeCatalogs = new Map<string, PendingOpenCodeCatalog>();
+// Every unsettled read, including ones evicted from sharing, so a later
+// catalog change still reaches queryFns awaiting them.
+const liveOpenCodeCatalogs = new Set<PendingOpenCodeCatalog>();
+const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
+
+/**
+ * Stop sharing pending OpenCode reads for queries an invalidation covers.
+ * TanStack emits no invalidate event while a query is still invalidated, so
+ * the event transport calls this directly. After an actual catalog change,
+ * `reread` also makes any queryFn still awaiting a covered read, evicted or
+ * not, read again: an observerless prefetch gets no cancellation or catch-up.
+ * Periodic refreshes must not set it, or a read slower than the polling
+ * interval never finishes.
+ */
+export function discardPendingAgentModelReads(queryKey: QueryKey, { reread = false }: { reread?: boolean } = {}): void {
+	for (const [requestKey, pending] of pendingOpenCodeCatalogs) {
+		if (partialMatchKey(pending.queryKey, queryKey)) pendingOpenCodeCatalogs.delete(requestKey);
+	}
+	if (!reread) return;
+	for (const pending of liveOpenCodeCatalogs) {
+		if (partialMatchKey(pending.queryKey, queryKey)) pending.invalidated = true;
+	}
+}
+
 
 /** Whether the daemon is still refreshing this catalog in the background. */
 export function isRefreshingCatalog(catalog: Pick<AgentModelCatalog, "refreshState"> | undefined): boolean {
@@ -70,6 +99,51 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 		initialData: () => readCachedAgentModels(agentId, catalogScope, hostId),
 		initialDataUpdatedAt: 0,
 		queryFn: async ({ client, signal }): Promise<AgentModelCatalog> => {
+			if (!catalogOnly && (agentId === "opencode" || agentId === "opencode-v2")) {
+				// One response contains all picker options and recency. Fetching the
+				// Settings browsing catalog first duplicates the largest catalog.
+				const browsing = client.getQueryData<AgentModelCatalog>([...key, "catalog"]);
+				if (!client.getQueryData(key) && browsing) client.setQueryData(key, browsing);
+				const before = client.getQueryData<AgentModelCatalog>(key);
+				const requestKey = openCodeRequestPrefix(agentId, hostId) + catalogScope;
+				let result: AgentModelCatalog;
+				for (;;) {
+					let pending = pendingOpenCodeCatalogs.get(requestKey);
+					if (!pending) {
+						pending = { promise: requestAgentModels(agentId, catalogScope, "cached", hostId), queryKey: key, invalidated: false };
+						pendingOpenCodeCatalogs.set(requestKey, pending);
+						liveOpenCodeCatalogs.add(pending);
+						const active = pending;
+						void active.promise.finally(() => {
+							liveOpenCodeCatalogs.delete(active);
+							if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
+						}).catch(() => {});
+					}
+					const active = pending;
+					// CDC also invalidates inactive queries after their last observer
+					// cancels. Do not let a remount reuse that detached pre-event GET.
+					const unsubscribe = client.getQueryCache().subscribe((event) => {
+						if (event.type === "updated" && event.action.type === "invalidate"
+							&& event.query === client.getQueryCache().find({ queryKey: key, exact: true })) {
+							active.invalidated = true;
+							if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
+						}
+					});
+					try {
+						result = await active.promise;
+					} finally {
+						unsubscribe();
+					}
+					signal.throwIfAborted();
+					// An active query can also be invalidated without cancellation.
+					// Guarantee a post-event read before publishing or saving it.
+					if (!active.invalidated) break;
+				}
+				const current = client.getQueryData<AgentModelCatalog>(key);
+				const latest = current && current !== before ? current : result;
+				cacheAgentModels(latest, agentId, catalogScope, hostId);
+				return latest;
+			}
 			if (catalogOnly) return requestAgentModels(agentId, catalogScope, "cached", hostId, true, signal);
 			const catalogKey = [...key, "catalog"] as const;
 			if (!client.getQueryData<AgentModelCatalog>(key)) {
@@ -135,6 +209,11 @@ export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning"
  * Call after anything that can change what the agent's login allows.
  */
 export async function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+	const prefix = openCodeRequestPrefix(agentId, hostId);
+	for (const key of pendingOpenCodeCatalogs.keys()) {
+		if (key.startsWith(prefix)) pendingOpenCodeCatalogs.delete(key);
+	}
+
 	const queryKey = hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId);
 	// Cancel inactive catalog reads too, so the next task read cannot dedupe
 	// onto a request made before the login changed.

@@ -2,10 +2,13 @@ package controllers_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -337,4 +340,83 @@ func btoi(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// This credential-free fixture models the provider-cache expansion, not a
+// measurement of the unavailable configured perf-lab machine.
+func TestOpenCodeModelPayloadPreservesOptions(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	usedAt := time.Date(2026, 10, 18, 1, 0, 0, 0, time.UTC)
+	catalog := ports.AgentModelCatalog{AgentID: "opencode", Providers: []string{"provider-0"}, BinaryVersion: "fixture-version", InputFingerprint: "fixture-fingerprint", Models: []ports.AgentModelInfo{}, RunnableModels: []string{"provider-0/model-0"}, Metadata: map[string]string{"source": "fixture"}}
+	for i := 0; i < 10000; i++ {
+		catalog.Models = append(catalog.Models, ports.AgentModelInfo{ID: fmt.Sprintf("provider-%d/model-%d", i%100, i), Label: fmt.Sprintf("Model %d", i), Provider: fmt.Sprintf("provider-%d", i%100), ContextWindow: 200000, Inputs: []string{"text", "image"}, Efforts: []string{"low", "high"}, DefaultEffort: "low", SupportsFast: true, LastUsedAt: &usedAt, IsDefault: i == 0})
+	}
+	service := &fakeAgentCatalog{models: catalog}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Agents: service}, httpd.ControlDeps{}))
+	defer srv.Close()
+	client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+	defer client.CloseIdleConnections()
+	original, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query    string
+		browsing bool
+	}{
+		{"", false}, {"?catalogOnly=true", true}, {"/refresh", false},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			method := http.MethodGet
+			if tc.query == "/refresh" {
+				method = http.MethodPost
+			}
+			req, err := http.NewRequest(method, srv.URL+"/api/v1/agents/opencode/models"+tc.query, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			raw, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("status: %d", res.StatusCode)
+			}
+			var got ports.AgentModelCatalog
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Models) != len(catalog.Models) {
+				t.Fatalf("lost models: %d", len(got.Models))
+			}
+			for i, model := range got.Models {
+				want := catalog.Models[i]
+				if !tc.browsing {
+					want.ContextWindow = 0
+					want.Inputs = nil
+				}
+				if !reflect.DeepEqual(model, want) {
+					t.Fatalf("model %d changed: %#v want %#v", i, model, want)
+				}
+			}
+			if !reflect.DeepEqual(got.RunnableModels, catalog.RunnableModels) {
+				t.Fatal("runnable options changed")
+			}
+			if !tc.browsing && (got.Metadata != nil || got.Providers != nil || got.BinaryVersion != "" || got.InputFingerprint != "") {
+				t.Fatal("picker received unused discovery metadata")
+			}
+			if !tc.browsing && len(raw) >= len(original) {
+				t.Fatal("picker JSON did not shrink")
+			}
+			t.Logf("synthetic 10000-model fixture: before JSON=%d after JSON=%d browsing=%v", len(original), len(raw), tc.browsing)
+		})
+	}
+	if catalog.Models[0].ContextWindow != 200000 || len(catalog.Models[0].Inputs) != 2 {
+		t.Fatal("shared catalog mutated")
+	}
 }
