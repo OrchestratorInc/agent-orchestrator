@@ -286,6 +286,30 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## Notifications setup and What's new
+
+When desktop product telemetry is enabled, Orchestrator.inc records:
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.onboarding.step_viewed`, `ao.onboarding.step_completed`, `ao.onboarding.step_skipped` | The onboarding notifications step is shown, finished, or skipped | `step` (`notifications`) |
+| `ao.notifications.permission` | You send a test notification from that step | `state`: `granted`, `denied`, `unsupported`, or `unknown` |
+| `ao.whats_new.shown` | A What's new item is shown, at most once per item per launch | `item_id` |
+| `ao.whats_new.clicked` | You open a What's new item's link or action | `item_id` |
+| `ao.whats_new.dismissed` | You dismiss the What's new card | `item_id` |
+
+`state` describes what your operating system did with the test notification;
+Orchestrator.inc cannot read the system permission directly. `item_id` is the
+identifier the Orchestrator.inc team gives each item in the published feed.
+
+The What's new feed is a static file,
+`https://docs.orchestrator.inc/whats-new/feed.json`, fetched at most once a day
+when the desktop app starts. The request carries no cookies, installation or
+account identifier, or app version; like any web request it reveals your IP
+address to the host. Images and videos in the feed load only from
+`docs.orchestrator.inc`. The cached feed and the items you have seen are stored
+in `~/.ao/whats-new.json`. Set `AO_WHATS_NEW=0` to stop fetching and showing it.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:

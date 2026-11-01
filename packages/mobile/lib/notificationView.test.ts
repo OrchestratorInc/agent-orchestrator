@@ -4,10 +4,10 @@ import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
 	it("gives every known type its own label", () => {
-		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged", "review_completed", "review_changes_requested"].map(
+		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged", "review_completed", "review_changes_requested", "agent_completed"].map(
 			(t) => notificationVisual(darkTheme, t).label,
 		);
-		expect(new Set(labels).size).toBe(6);
+		expect(new Set(labels).size).toBe(7);
 	});
 
 	// The renderer draws these with GitHub's own vocabulary, and merged has its own
@@ -46,6 +46,11 @@ describe("notificationTarget", () => {
 		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, "host-a"))
 			.toBe("/session/abc?hostId=host-a");
 		expect(notificationTarget({ type: "needs_input", sessionId: "abc", hostId: "host-a" }, new Set(["host-a", "host-b"])))
+			.toBe("/session/abc?hostId=host-a");
+	});
+
+	it("opens the session for a finished agent", () => {
+		expect(notificationTarget({ type: "agent_completed", sessionId: "abc", hostId: "host-a" }, "host-a"))
 			.toBe("/session/abc?hostId=host-a");
 	});
 

@@ -3579,7 +3579,17 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 			return
 		}
 		activityState := domain.ActivityIdle
+		// Lifecycle tells a finished turn from an unfinished one by this event:
+		// only a completed turn notifies "agent finished". A recovered turn's
+		// outcome is unknown, so it counts as unfinished with failures.
 		activityEvent := "chat.turn.completed"
+		switch settledTurnState(event) {
+		case domain.TurnStateCompleted:
+		case domain.TurnStateInterrupted, domain.TurnStateCancelled:
+			activityEvent = "chat.turn.interrupted"
+		default:
+			activityEvent = "chat.turn.failed"
+		}
 		if reauthRequired {
 			activityState = domain.ActivityWaitingInput
 			activityEvent = "chat.account.reauth"

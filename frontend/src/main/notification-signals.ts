@@ -9,7 +9,14 @@
  */
 
 /** The notification types defined by `backend/internal/domain/notification.go`. */
-export type NotificationType = "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged";
+export type NotificationType =
+	| "needs_input"
+	| "ready_to_merge"
+	| "pr_merged"
+	| "pr_closed_unmerged"
+	| "review_completed"
+	| "review_changes_requested"
+	| "agent_completed";
 
 /**
  * Whether to fire the Windows/Linux taskbar flash. Restricted to the

@@ -51,3 +51,24 @@ func TestEnrichReadyToMergeFallsBackWithoutPRTitle(t *testing.T) {
 		t.Fatalf("title = %q, want %q", rec.Title, want)
 	}
 }
+
+func TestEnrichAgentCompletedNeedsNoPR(t *testing.T) {
+	t.Parallel()
+
+	rec, err := enrich(Intent{
+		Type:               domain.NotificationAgentCompleted,
+		SessionID:          "sess-1",
+		SessionDisplayName: "Checkout flow",
+		SourceKey:          "agent_completed:sess-1:1",
+		CreatedAt:          time.Date(2026, 10, 29, 4, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("enrich agent completed notification: %v", err)
+	}
+	if want := "Checkout flow finished"; rec.Title != want {
+		t.Fatalf("title = %q, want %q", rec.Title, want)
+	}
+	if want := "Your agent finished its work and is ready for review."; rec.Body != want {
+		t.Fatalf("body = %q, want %q", rec.Body, want)
+	}
+}

@@ -1,9 +1,13 @@
+import { notificationSettingsUrl } from "../shared/notification-permission";
+
 const APP_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
-// macOS System Settings panes the renderer may open, matched exactly: the
-// Privacy & Security panes where Cua Driver's permissions are managed.
+// System Settings panes the renderer may open, matched exactly: the macOS
+// Privacy & Security panes where Cua Driver's permissions are managed, and
+// this app's notification settings on macOS and Windows.
 const APP_EXTERNAL_EXACT_URLS = new Set([
 	"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
 	"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+	...(["darwin", "win32"] as const).map((platform) => notificationSettingsUrl(platform) as string),
 ]);
 
 export type ExternalOpener = {

@@ -16,6 +16,7 @@ import { DesktopReleaseNotes } from "../DesktopReleaseNotes";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { setWhatsNewPanelOpen } from "../../lib/whats-new";
 import { captureRendererEvent, releaseChannelFrom, setReleaseChannelContext } from "../../lib/telemetry";
 
 export const updateSettingsQueryKey = ["update-settings"] as const;
@@ -280,6 +281,12 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 			</SettingsSection>
 
 			<SettingsSection title={t("settings.updates.preferencesSection")} grouped>
+				<SettingsRow label={t("whatsNew.title")} description={t("whatsNew.description")}>
+					<Button type="button" variant="ghost" size="sm" className={GHOST_ACTION} onClick={() => setWhatsNewPanelOpen(true)}>
+						{t("whatsNew.show")}
+					</Button>
+				</SettingsRow>
+
 				<SettingsRow
 					label={t("settings.updates.automatic")}
 					description={t("settings.updates.automaticHelp")}

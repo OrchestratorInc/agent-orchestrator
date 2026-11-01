@@ -7220,3 +7220,43 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
 	}
 }
+
+// Lifecycle notifies "agent finished" only for a completed turn, so the idle a
+// turn end reports must say how the turn ended.
+func TestTurnEndReportsHowTheTurnEnded(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		state domain.TurnState
+		err   error
+		event string
+	}{
+		{name: "completed", state: domain.TurnStateCompleted, event: "chat.turn.completed"},
+		{name: "failed", state: domain.TurnStateFailed, event: "chat.turn.failed"},
+		{name: "provider error", state: domain.TurnStateCompleted, err: errors.New("rate limited"), event: "chat.turn.failed"},
+		{name: "interrupted", state: domain.TurnStateInterrupted, event: "chat.turn.interrupted"},
+		{name: "cancelled", state: domain.TurnStateCancelled, event: "chat.turn.interrupted"},
+		{name: "recovered", state: domain.TurnStateRecovered, event: "chat.turn.failed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "c1"}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			h.conv.emit(ports.ChatEvent{
+				Kind:            ports.ChatEventTurnCompleted,
+				ProviderEventID: "turn-end",
+				ProviderTurnID:  "provider-turn-1",
+				TurnState:       tt.state,
+				Err:             tt.err,
+			})
+			deadline := time.Now().Add(5 * time.Second)
+			for !hasActivitySignal(h.activity.snapshot(), domain.ActivityIdle, tt.event) {
+				if time.Now().After(deadline) {
+					t.Fatalf("activity signals = %+v, want idle %q", h.activity.snapshot(), tt.event)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
