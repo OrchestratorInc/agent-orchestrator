@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, resumeCloudSession } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -171,5 +171,32 @@ describe("cloudStartupProblem", () => {
 		const local = session("running", "terminated");
 		delete local.cloud;
 		expect(cloudStartupProblem(local)).toBeUndefined();
+	});
+});
+
+describe("resumeCloudSession", () => {
+	it("sends one request for a session however many views ask while it is in flight", async () => {
+		const answers: ((value: unknown) => void)[] = [];
+		const resumeSession = vi.fn(() => new Promise((resolve) => { answers.push(resolve); }));
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		const first = resumeCloudSession(client, "org", "session-a");
+		const second = resumeCloudSession(client, "org", "session-a");
+		const other = resumeCloudSession(client, "org", "session-b");
+		expect(resumeSession).toHaveBeenCalledTimes(2);
+		expect(second).toBe(first);
+		expect(other).not.toBe(first);
+		answers.forEach((answer) => answer({}));
+		await first;
+		// Once it answered, a later open asks again.
+		void resumeCloudSession(client, "org", "session-a");
+		expect(resumeSession).toHaveBeenCalledTimes(3);
+	});
+
+	it("shares a refusal with every caller and asks again afterwards", async () => {
+		const resumeSession = vi.fn().mockRejectedValueOnce(new Error("terminated")).mockResolvedValue({});
+		const client = { resumeSession } as unknown as Parameters<typeof resumeCloudSession>[0];
+		await expect(Promise.all([resumeCloudSession(client, "org", "s"), resumeCloudSession(client, "org", "s")])).rejects.toThrow("terminated");
+		await expect(resumeCloudSession(client, "org", "s")).resolves.toEqual({});
+		expect(resumeSession).toHaveBeenCalledTimes(2);
 	});
 });

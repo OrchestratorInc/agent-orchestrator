@@ -182,7 +182,7 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		pendingPreview:      make(map[domain.SessionID]string),
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
-		executable:          os.Executable,
+		executable:          agentlaunch.Executable,
 		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
 	}
@@ -194,7 +194,15 @@ func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
 		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+	child := map[string]string{"PATH": path}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, s.dataDir)
+	if err != nil {
+		s.log.Warn("shell terminal startup files may put another ao first on PATH", "err", err)
+	}
+	for key, value := range loginEnv {
+		child[key] = value
+	}
+	return agentlaunch.MergeEnv(projectEnv, child)
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -444,6 +452,7 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
+	readiness.env["AO_CUE_COMMAND"] = ""
 	env = agentlaunch.MergeEnv(env, readiness.env)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
@@ -456,8 +465,16 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
 		return ShellTerminal{}, err
 	}
-	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
+	delivery, err := prepareCueCommand(s.dataDir, argv, in.Command)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer delivery.cleanup()
+	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, delivery.input); err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
+	}
+	if err := waitForCueCommandConsumed(ctx, delivery.file); err != nil {
+		return ShellTerminal{}, err
 	}
 	return terminal, nil
 }
