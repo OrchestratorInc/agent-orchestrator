@@ -2146,7 +2146,7 @@ function ImportSourcePicker({
 			disabled={disabled}
 			onClick={onClick}
 		>
-			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-interactive-active text-muted-foreground group-hover:bg-foreground/10 group-hover:text-foreground">{icon}</span>
+			<span className="flex shrink-0 text-muted-foreground group-hover:text-foreground">{icon}</span>
 			<span className="min-w-0">
 				<span className="block text-[14px] font-medium text-foreground">{label}</span>
 				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
