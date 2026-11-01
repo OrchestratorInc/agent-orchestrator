@@ -1,9 +1,11 @@
 package codexappserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -147,15 +149,18 @@ func TestUserInputOtherAndFreeText(t *testing.T) {
 
 func TestUserInputRefusesMalformedAndSecretRequests(t *testing.T) {
 	for name, params := range map[string]string{
-		"secret":                 strings.Replace(inputParams, `"header":"Direction"`, `"isSecret":true,"header":"Direction"`, 1),
-		"old prompt field":       strings.Replace(inputParams, `"question":`, `"prompt":`, 1),
-		"unknown question field": strings.Replace(inputParams, `"header":"Direction"`, `"multiSelect":true,"header":"Direction"`, 1),
-		"unknown option field":   strings.Replace(inputParams, `"label":"Native"`, `"id":"option-id","label":"Native"`, 1),
-		"missing question":       strings.Replace(inputParams, "Which direction should we take?", "", 1),
-		"empty questions":        `{"threadId":"thread-1","turnId":"turn-1","itemId":"tool-1","questions":[]}`,
-		"duplicate id":           strings.TrimSuffix(inputParams, `]}`) + `,{"id":"first_value","header":"Again","question":"Again?"}]}`,
-		"duplicate label":        strings.Replace(inputParams, `"label":"Bridge"`, `"label":"Native"`, 1),
-		"invalid options":        strings.Replace(inputParams, `"options":[`, `"options":{},"ignored":[`, 1),
+		"secret":            strings.Replace(inputParams, `"header":"Direction"`, `"isSecret":true,"header":"Direction"`, 1),
+		"old prompt field":  strings.Replace(inputParams, `"question":`, `"prompt":`, 1),
+		"missing header":    strings.Replace(inputParams, `"header":"Direction",`, "", 1),
+		"blank question id": strings.Replace(inputParams, `"id":"first_value"`, `"id":" "`, 1),
+		"missing thread":    strings.Replace(inputParams, `"threadId":"thread-1",`, "", 1),
+		"missing turn":      strings.Replace(inputParams, `"turnId":"turn-1",`, "", 1),
+		"missing item":      strings.Replace(inputParams, `"itemId":"tool-1",`, "", 1),
+		"missing question":  strings.Replace(inputParams, "Which direction should we take?", "", 1),
+		"empty questions":   `{"threadId":"thread-1","turnId":"turn-1","itemId":"tool-1","questions":[]}`,
+		"duplicate id":      strings.TrimSuffix(inputParams, `]}`) + `,{"id":"first_value","header":"Again","question":"Again?"}]}`,
+		"duplicate label":   strings.Replace(inputParams, `"label":"Bridge"`, `"label":"Native"`, 1),
+		"invalid options":   strings.Replace(inputParams, `"options":[`, `"options":{},"ignored":[`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d, srv := newTestDriver(t)
@@ -174,6 +179,90 @@ func TestUserInputRefusesMalformedAndSecretRequests(t *testing.T) {
 				if ev.Kind == ports.ChatEventInputRequested || ev.Kind == ports.ChatEventApprovalRequested {
 					t.Fatalf("unsupported input was exposed to history/UI: %#v", ev)
 				}
+			}
+		})
+	}
+}
+
+func TestUserInputAcceptsAdditiveFields(t *testing.T) {
+	_, expected, err := parseUserInput(json.RawMessage(inputParams))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, params := range map[string]string{
+		"top level":  strings.Replace(inputParams, `"threadId":`, `"futureContext":{"nested":[true,null,"extra"]},"threadId":`, 1),
+		"question":   strings.Replace(inputParams, `"header":"Direction"`, `"multiSelect":true,"header":"Direction"`, 1),
+		"option":     strings.Replace(inputParams, `"label":"Native"`, `"id":"option-id","label":"Native"`, 1),
+		"all levels": `{"threadId":"thread-1","turnId":"turn-1","itemId":"tool-1","futureContext":{},"questions":[{"id":"first_value","header":"Direction","question":"Which direction should we take?","futureQuestion":[],"options":[{"label":"Native","description":"Use the native protocol","futureOption":null},{"label":"Bridge","description":"Keep the bridge"}]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, input, err := parseUserInput(json.RawMessage(params))
+			if err != nil {
+				t.Fatalf("additive fields rejected: %v", err)
+			}
+			if !reflect.DeepEqual(input, expected) {
+				t.Fatalf("additive fields changed the known form: %#v", input)
+			}
+			d, srv := newTestDriver(t)
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conv.Close() }()
+			srv.push(`{"id":"additive","method":"item/tool/requestUserInput","params":` + params + `}`)
+			ev := nextEvent(t, conv.Events(), ports.ChatEventInputRequested)
+			if ev.Input == nil || !reflect.DeepEqual(*ev.Input, expected) || ev.ActivityKind != domain.ActivityKindUserInput {
+				t.Fatalf("question was not the known structured form: %#v", ev)
+			}
+			if err := conv.(ports.ChatInputResponder).ResolveInput(context.Background(), ev.RequestID, ports.ChatInputResponse{
+				Action: ports.ChatInputActionAccept, Content: map[string]any{"first_value": "Native"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			reply := srv.awaitFrame(func(f frame) bool { return f.ID != nil && string(*f.ID) == `"additive"` && f.Method == "" })
+			if reply.Error != nil || string(reply.Result) != `{"answers":{"first_value":{"answers":["Native"]}}}` {
+				t.Fatalf("native answer = %s, error = %#v", reply.Result, reply.Error)
+			}
+		})
+	}
+}
+
+func TestUserInputRefusalDiagnosticsDoNotLeakPayload(t *testing.T) {
+	const canary = "private-payload-canary"
+	private := strings.ReplaceAll(inputParams, "Direction", canary+"-header")
+	private = strings.ReplaceAll(private, "Which direction should we take?", canary+"-question")
+	private = strings.ReplaceAll(private, "Native", canary+"-option")
+	for name, params := range map[string]string{
+		"secret":          strings.Replace(private, `"header":`, `"isSecret":true,"header":`, 1),
+		"missing header":  strings.Replace(private, `"header":`, `"`+canary+`-unknown":`, 1),
+		"invalid options": strings.Replace(private, `"options":[`, `"options":false,"ignored":[`, 1),
+		"malformed JSON":  strings.TrimSuffix(private, "}"),
+		"trailing data":   private + ` {"answer":"` + canary + `-answer"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			c := &conversation{log: slog.New(slog.NewJSONHandler(&logs, nil)), events: make(chan ports.ChatEvent, eventBuffer)}
+			_, err := c.requestUserInput(context.Background(), serverRequest{
+				ID: json.RawMessage(`"diagnostic-request"`), Method: codexproto.MethodItemToolRequestUserInput, Params: json.RawMessage(params),
+			})
+			if err == nil {
+				t.Fatal("invalid request accepted")
+			}
+			if len(c.pendingInputs) != 0 || len(c.events) != 0 {
+				t.Fatal("invalid input was parked or exposed to history")
+			}
+			if strings.Contains(logs.String(), canary) {
+				t.Fatal("diagnostic leaked request contents")
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatalf("missing refusal diagnostic: %v", err)
+			}
+			if entry["level"] != "WARN" || entry["msg"] != "refusing invalid request_user_input payload" || entry["request_id"] != "diagnostic-request" {
+				t.Fatalf("unexpected refusal diagnostic: %#v", entry)
+			}
+			if len(entry) != 4 {
+				t.Fatalf("refusal diagnostic contains unexpected fields: %#v", entry)
 			}
 		})
 	}

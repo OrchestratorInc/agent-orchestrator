@@ -40,7 +40,6 @@ type userInputReply struct {
 func parseUserInput(raw json.RawMessage) (*parkedInput, ports.ChatInputRequest, error) {
 	var params codexproto.ToolRequestUserInputParams
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&params); err != nil {
 		return nil, ports.ChatInputRequest{}, errors.New("unsupported or malformed request_user_input payload")
 	}
@@ -112,6 +111,7 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 	}
 	parked, input, err := parseUserInput(req.Params)
 	if err != nil {
+		c.log.Warn("refusing invalid request_user_input payload", "request_id", requestID)
 		return nil, err
 	}
 	c.mu.Lock()
