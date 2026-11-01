@@ -1,0 +1,33 @@
+{
+  "label": "after (7a9e17a6ad)",
+  "results": [
+    {
+      "surface": "inspector",
+      "userSelect": "text",
+      "selection": "The review requirement is satisfied, but failing checks still block this PR.",
+      "clipboard": "The review requirement is satisfied, but failing checks still block this PR.",
+      "url": "/#/projects/ao-demo/sessions/demo-ci-failed"
+    },
+    {
+      "surface": "markdown",
+      "userSelect": "text",
+      "selection": "Run ao session ls to list sessions.",
+      "clipboard": "Run ao session ls to list sessions.",
+      "url": "/e2e/text-selection/harness.html"
+    },
+    {
+      "surface": "alert",
+      "userSelect": "text",
+      "selection": "Push rejected: branch demo/new-task-flake is protected.",
+      "clipboard": "Push rejected: branch demo/new-task-flake is protected.",
+      "url": "/e2e/text-selection/harness.html"
+    },
+    {
+      "surface": "board-card",
+      "userSelect": "none",
+      "selection": "",
+      "clipboard": "<clipboard untouched>",
+      "url": "/#/projects/ao-demo/sessions/demo-working"
+    }
+  ]
+}

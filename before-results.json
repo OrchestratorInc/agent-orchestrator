@@ -1,0 +1,33 @@
+{
+  "label": "before (main e8e3342d3f)",
+  "results": [
+    {
+      "surface": "inspector",
+      "userSelect": "none",
+      "selection": "",
+      "clipboard": "<clipboard untouched>",
+      "url": "/#/projects/ao-demo/sessions/demo-ci-failed"
+    },
+    {
+      "surface": "markdown",
+      "userSelect": "none",
+      "selection": "",
+      "clipboard": "<clipboard untouched>",
+      "url": "/e2e/text-selection/harness.html"
+    },
+    {
+      "surface": "alert",
+      "userSelect": "none",
+      "selection": "",
+      "clipboard": "<clipboard untouched>",
+      "url": "/e2e/text-selection/harness.html"
+    },
+    {
+      "surface": "board-card",
+      "userSelect": "none",
+      "selection": "",
+      "clipboard": "<clipboard untouched>",
+      "url": "/#/projects/ao-demo/sessions/demo-working"
+    }
+  ]
+}
