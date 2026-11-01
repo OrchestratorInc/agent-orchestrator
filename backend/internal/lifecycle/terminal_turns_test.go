@@ -89,6 +89,40 @@ func TestTerminalTurnsAreRecordedFromHooksInTerminalModeOnly(t *testing.T) {
 	}
 }
 
+// Kimi reports a turn that a provider error ended through StopFailure, never
+// Stop (#3387). The failed turn ends: a pending permission prompt clears, the
+// session reads idle, and the user's retry starts a turn of its own instead of
+// joining the unanswered one.
+func TestKimiStopFailureEndsTheTurnUnanswered(t *testing.T) {
+	store := &turnRecordingStore{fakeStore: newFakeStore()}
+	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
+	manager := New(store, nil)
+	apply := func(signal ports.ActivitySignal) {
+		t.Helper()
+		signal.Valid, signal.LaunchID = true, "launch"
+		if err := manager.ApplyActivitySignal(context.Background(), "s-1", signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "fix the importer"})
+	apply(ports.ActivitySignal{Event: "permission-request", State: domain.ActivityWaitingInput})
+	apply(ports.ActivitySignal{Event: "stop-failure", State: domain.ActivityIdle})
+	if got := store.sessions["s-1"].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity after stop-failure = %q, want idle", got)
+	}
+	apply(ports.ActivitySignal{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "fix the importer"})
+	apply(ports.ActivitySignal{Event: "stop", State: domain.ActivityIdle, FinalAssistantMessage: "importer fixed"})
+
+	want := []string{
+		"request:kimi:kimi-1:fix the importer", "response:",
+		"request:kimi:kimi-1:fix the importer", "response:importer fixed",
+	}
+	if !reflect.DeepEqual(store.calls, want) {
+		t.Fatalf("recorded %q, want %q", store.calls, want)
+	}
+}
+
 // After a provider switch the previous agent's hook config can still be in the
 // workspace. A signal that names an agent the session no longer runs is dropped
 // before it can record a turn or change activity.

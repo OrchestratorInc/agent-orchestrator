@@ -376,6 +376,8 @@ timeout = 7
 		`command = "ao hooks kimi permission-request"`,
 		`event = "Stop"`,
 		`command = "ao hooks kimi stop"`,
+		`event = "StopFailure"`,
+		`command = "ao hooks kimi stop-failure"`,
 		kimiHooksSentinelEnd,
 	} {
 		if !strings.Contains(text, want) {
@@ -384,6 +386,76 @@ timeout = 7
 	}
 	if _, err := os.Stat(kimiInstructionsPath(workspace)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("instructions path err = %v, want not exist", err)
+	}
+}
+
+// A provider error (an invalid API key, a rate limit) ends a Kimi turn through
+// StopFailure, never Stop. A managed block written before AO installed it must
+// gain it on the next rewrite, or those sessions keep reading "working".
+func TestGetAgentHooksAddsStopFailureToLegacyManagedBlock(t *testing.T) {
+	workspace := t.TempDir()
+	kimiHome := t.TempDir()
+	t.Setenv(kimiCodeHomeEnv, t.TempDir())
+	configPath := filepath.Join(kimiHome, "config.toml")
+	legacy := `default_model = "kimi-code/kimi-for-coding"
+
+` + kimiHooksSentinelStart + `
+
+[[hooks]]
+event = "SessionStart"
+matcher = "startup"
+command = "ao hooks kimi session-start"
+timeout = 5
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = "ao hooks kimi user-prompt-submit"
+timeout = 5
+
+[[hooks]]
+event = "PermissionRequest"
+command = "ao hooks kimi permission-request"
+timeout = 5
+
+[[hooks]]
+event = "Stop"
+command = "ao hooks kimi stop"
+timeout = 5
+
+` + kimiHooksSentinelEnd + `
+
+[[hooks]]
+event = "Notification"
+command = "notify-send done"
+`
+	if err := os.WriteFile(configPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{
+		WorkspacePath: workspace,
+		Env:           map[string]string{kimiCodeHomeEnv: kimiHome},
+	}); err != nil {
+		t.Fatalf("GetAgentHooks err = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	for want, count := range map[string]int{
+		kimiHooksSentinelStart:                        1,
+		`event = "Stop"`:                              1,
+		`command = "ao hooks kimi stop"`:              1,
+		`event = "StopFailure"`:                       1,
+		`command = "ao hooks kimi stop-failure"`:      1,
+		`default_model = "kimi-code/kimi-for-coding"`: 1,
+		`command = "notify-send done"`:                1,
+	} {
+		if got := strings.Count(text, want); got != count {
+			t.Fatalf("count of %q = %d, want %d:\n%s", want, got, count, text)
+		}
 	}
 }
 
