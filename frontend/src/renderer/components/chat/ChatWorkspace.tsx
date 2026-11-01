@@ -552,6 +552,8 @@ export interface ChatWorkspaceProps {
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
 	onFileQuery?: (query: string) => void;
+	/** Something the chat will run in is still starting (a Cloud sandbox started ahead of the brief): the composer shows it. */
+	composerStarting?: boolean;
 	/** The path list was capped by the daemon rather than being all of them. */
 	filePathsTruncated?: boolean;
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
@@ -794,6 +796,7 @@ function ChatWorkspaceContent({
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
+	composerStarting = false,
 	localEchos,
 	onStageAttachments,
 	nativeImages,
@@ -2030,7 +2033,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat || cloudStarting}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined

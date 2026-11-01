@@ -19,6 +19,12 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
+	cloudDeleteSession: vi.fn(),
+	cloudRenameSession: vi.fn(),
+	cloudSendSessionMessage: vi.fn(),
+	cloudGetSession: vi.fn(),
+	cloudOfferingLoaded: false,
+	cloudDefaultProvider: "",
 	cloudListUserAgentModels: vi.fn(),
 	cloudListProviderConnections: vi.fn(),
 	cloudChatHarnesses: ["claude-code", "codex", "cursor"],
@@ -101,12 +107,15 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		baseUrl: h.cloudBaseUrl,
 		userId: h.cloudUserId,
-		client: { createSession: h.cloudCreateSession, listUserAgentModels: h.cloudListUserAgentModels, listUserProviderConnections: h.cloudListProviderConnections },
+		client: {
+			createSession: h.cloudCreateSession, listUserAgentModels: h.cloudListUserAgentModels, listUserProviderConnections: h.cloudListProviderConnections,
+			deleteSession: h.cloudDeleteSession, renameSession: h.cloudRenameSession, sendSessionMessage: h.cloudSendSessionMessage, getSession: h.cloudGetSession,
+		},
 	}),
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
-	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses }),
+	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider }),
 }));
 
 import { TaskComposer, useTaskLaunch } from "./TaskComposer";
@@ -203,6 +212,13 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
+	h.cloudDeleteSession.mockReset().mockResolvedValue(undefined);
+	h.cloudRenameSession.mockReset();
+	h.cloudSendSessionMessage.mockReset();
+	h.cloudGetSession.mockReset();
+	h.cloudOfferingLoaded = false;
+	h.cloudDefaultProvider = "";
+	window.localStorage.removeItem("ao.cloudPreparedSessions.v1");
 	h.cloudListUserAgentModels.mockReset();
 	h.cloudListProviderConnections.mockReset();
 	h.cloudChatHarnesses = ["claude-code", "codex", "cursor"];
@@ -3160,6 +3176,78 @@ describe("useTaskLaunch agent choices", () => {
 		] };
 		render(<Wrap><Choices /></Wrap>);
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
+	});
+});
+
+describe("useTaskLaunch Cloud pre-start", () => {
+	beforeEach(() => {
+		h.cloudProjects.length = 0;
+		h.cloudCreateSession.mockReset();
+		h.cloudDeleteSession.mockReset().mockResolvedValue(undefined);
+		h.cloudRenameSession.mockReset();
+		h.cloudSendSessionMessage.mockReset();
+		h.cloudGetSession.mockReset();
+		h.cloudListUserAgentModels.mockReset();
+		window.localStorage.removeItem("ao.cloudPreparedSessions.v1");
+	});
+	let task!: ReturnType<typeof useTaskLaunch>;
+	function Launcher({ prestart = true }: { prestart?: boolean }) {
+		task = useTaskLaunch({ projectId: "cloud-1", prestartCloud: prestart });
+		return <p>{task.cloudSessionStarting ? "starting" : "idle"}{task.canSubmit ? " ready" : ""}</p>;
+	}
+
+	it("starts a Freestyle project's session as the page opens, and the send makes it the task", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex" } });
+		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex", runtimeConnected: false } });
+		h.cloudRenameSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex", displayName: "Fix the bug" } });
+		h.cloudSendSessionMessage.mockResolvedValue({ event: {} });
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-1", harness: "codex", prompt: "", displayName: "New task" });
+		await screen.findByText(/starting/);
+		// Until a send claims it, the session lists leave it out.
+		const { isUnclaimedPreparedCloudSession } = await import("../lib/cloud-session-prestart");
+		expect(isUnclaimedPreparedCloudSession("pre-1")).toBe(true);
+
+		let sessionId!: string;
+		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-1" }); });
+		expect(sessionId).toBe("pre-1");
+		expect(h.cloudCreateSession).toHaveBeenCalledOnce();
+		expect(h.cloudRenameSession).toHaveBeenCalledWith("org-1", "pre-1", "Fix the bug");
+		expect(h.cloudSendSessionMessage).toHaveBeenCalledWith("org-1", "pre-1", expect.objectContaining({ text: "Fix the bug" }), { idempotencyKey: "req-1" });
+		expect(isUnclaimedPreparedCloudSession("pre-1")).toBe(false);
+		expect(h.cloudDeleteSession).not.toHaveBeenCalled();
+	});
+
+	it("deletes a pre-started session no send claimed when the page goes away", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "pre-2", harness: "codex" } });
+		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-2", harness: "codex", runtimeConnected: true } });
+		const view = render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
+		await screen.findByText(/idle ready/);
+		view.unmount();
+		await waitFor(() => expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "pre-2"));
+	});
+
+	it("never pre-starts a Coder project's session", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudProjects[0].config = { ...h.cloudProjects[0].config, sandboxProvider: "coder" };
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText(/ready/);
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		expect(task.isCoderCloudProject).toBe(true);
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 });
 

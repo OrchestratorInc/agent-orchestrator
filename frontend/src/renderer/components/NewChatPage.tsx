@@ -38,7 +38,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const navigate = useNavigate();
 	const router = useRouter();
 	const queryClient = useQueryClient();
-	const task = useTaskLaunch({ projectId, hostId });
+	// A Cloud task's session starts spinning up as the page opens (not Coder's).
+	const task = useTaskLaunch({ projectId, hostId, prestartCloud: true });
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
@@ -194,6 +195,13 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			window.removeEventListener("keydown", onKeyDown);
 		};
 	}, [router]);
+
+	// A Coder project keeps the New Task dialog and its own start-up: a link here hands over to it.
+	useEffect(() => {
+		if (!task.isCoderCloudProject) return;
+		void navigate({ to: "/new", search: { host: hostId }, replace: true });
+		useUiStore.getState().requestNewTask(projectId, hostId);
+	}, [hostId, navigate, projectId, task.isCoderCloudProject]);
 
 	// Load the session page's code now: a first visit otherwise renders the
 	// router's empty pending frame between this page and the session.
@@ -370,6 +378,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				}
 				onSend={send}
 				busy={pending}
+				// The Cloud session started for this task is still coming up.
+				composerStarting={task.cloudSessionStarting && !pending}
 				// The session's own composer controls from the start: the same bar, held
 				// still once sent, with the agent at the top of the model menu.
 				draftSettings={frozen ? (frozenSettings ? <LaunchSettingsBar {...frozenSettings} /> : null) : (
