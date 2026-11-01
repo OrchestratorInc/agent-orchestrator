@@ -178,11 +178,15 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toBeInTheDocument();
 	});
 
-	it("does not offer rename on the project orchestrator's tab", async () => {
+	it.each([
+		["the project orchestrator's", { ...worker, id: "sess-orch", kind: "orchestrator" as const }, /^Orchestrator/],
+		// AO Cloud has no rename route; the local daemon has never heard of the session.
+		["a Cloud session's", { ...worker, cloud: { orgId: "org-1" } }, /^do the thing/],
+	])("does not offer rename on %s tab", async (_, session, tabName) => {
 		const user = userEvent.setup();
-		renderCenterPane({ session: { ...worker, id: "sess-orch", kind: "orchestrator" } });
+		renderCenterPane({ session });
 
-		const tab = screen.getByRole("tab", { name: /^Orchestrator/ });
+		const tab = screen.getByRole("tab", { name: tabName });
 		expect(tab).not.toHaveAttribute("aria-keyshortcuts");
 		await user.dblClick(tab);
 		tab.focus();

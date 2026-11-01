@@ -2444,7 +2444,8 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 
 // One worker-session row. Reads as a link by default; double-click/double-tap
 // on the name or F2 flips the label into an inline input (Enter/blur saves,
-// Escape cancels) that persists through the daemon rename endpoint.
+// Escape cancels) that persists through the daemon rename endpoint. Cloud
+// sessions and the project orchestrator have no rename, so none of these start one.
 const SessionRow = memo(function SessionRow({
 	session,
 	active,
@@ -2479,6 +2480,7 @@ const SessionRow = memo(function SessionRow({
 		[queryClient, session.hostId],
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
+	const canRename = rename.canRename;
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -2576,7 +2578,7 @@ const SessionRow = memo(function SessionRow({
 						<button
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
-							aria-keyshortcuts="F2"
+							aria-keyshortcuts={canRename ? "F2" : undefined}
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
@@ -2607,7 +2609,7 @@ const SessionRow = memo(function SessionRow({
 							}}
 							onKeyDown={(event) => {
 								reorder?.listeners?.onKeyDown?.(event);
-								if (event.key !== "F2") return;
+								if (event.key !== "F2" || !canRename) return;
 								event.preventDefault();
 								beginRename();
 							}}
@@ -2628,7 +2630,7 @@ const SessionRow = memo(function SessionRow({
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
-										if (event.pointerType !== "touch") return;
+										if (event.pointerType !== "touch" || !canRename) return;
 										const now = Date.now();
 										if (now - lastTouchAtRef.current <= 500) {
 											suppressTouchOpenRef.current = true;
