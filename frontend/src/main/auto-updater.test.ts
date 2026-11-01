@@ -1291,6 +1291,29 @@ describe("startAutoUpdates", () => {
     expect(latestInterval(intervals).delay).toBe(15 * 60 * 1000);
   });
 
+  it("keeps backing off when an available update repeatedly fails to download", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      updaterEvents.get("update-available")?.({ version: "2.0.0" });
+      return Promise.resolve({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.0.0" },
+        downloadPromise: Promise.reject(new Error("download failed")),
+      });
+    });
+
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(4);
+  });
+
   it("logs updater error events during automatic checks without broadcasting renderer errors", async () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")

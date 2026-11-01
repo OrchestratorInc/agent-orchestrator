@@ -2062,7 +2062,6 @@ function wireUpdaterEvents(): void {
     consecutiveAutomaticNetFailures = 0;
     consecutiveAutomaticCheckFailures = 0;
     failingChecksPublished = false;
-    automaticRetryFailures = 0;
     // A manual re-check reports the already-staged build as merely "available"
     // (autoDownload is off on that path). It is still in cache and installs on
     // quit, so keep the richer downloaded status instead of hiding the row.
@@ -2099,7 +2098,6 @@ function wireUpdaterEvents(): void {
     consecutiveAutomaticNetFailures = 0;
     consecutiveAutomaticCheckFailures = 0;
     failingChecksPublished = false;
-    automaticRetryFailures = 0;
     broadcastCompletedCheck(unavailableChannelStatus(info?.version));
     // The staged build outlives a "nothing newer" answer (e.g. after a channel
     // switch); follow up so the restart row returns.
