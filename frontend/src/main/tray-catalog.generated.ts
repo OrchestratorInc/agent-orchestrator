@@ -126,6 +126,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.attentionTooltip_many": "{{count}} sessões precisam de atenção"
 	},
 	"ru": {
+		"tray.awakeActive": "Предотвращение сна: Mac остаётся включённым",
+		"tray.awakeUnknown": "Предотвращение сна: состояние недоступно",
 		"tray.untitledSession": "Сессия без названия",
 		"tray.attentionTooltip_one": "{{count}} сессия требует внимания",
 		"tray.attentionTooltip_other": "{{count}} сессии требуют внимания",

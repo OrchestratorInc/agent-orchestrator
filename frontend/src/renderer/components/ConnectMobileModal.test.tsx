@@ -1217,6 +1217,6 @@ test.each([false, true])("remembers the combined lid preference %s during a cold
 	const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
 	expect(toggle).toHaveAttribute("aria-checked", String(lidClosed));
 	expect(toggle).toBeDisabled();
-	await waitFor(() => expect(toggle).toBeEnabled());
-	expect(toggle).toHaveAttribute("aria-checked", String(lidClosed));
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
+	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toHaveAttribute("aria-checked", String(lidClosed));
 });

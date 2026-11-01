@@ -104,7 +104,7 @@ describe("combined mobile wake with the shared hook", () => {
 		expect(mobileEnabled).toBe(bridgeEnabled);
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 		if (bridgeEnabled) {
-			await userEvent.click(screen.getByRole("button", { name: "Turn off mobile connection" }));
+			await userEvent.click(screen.getByRole("switch", { name: "Connect mobile" }));
 			await waitFor(() => expect(mobileEnabled).toBe(false));
 			await waitFor(() => expect(toggle).toBeEnabled());
 			expect(toggle).toBeChecked();
