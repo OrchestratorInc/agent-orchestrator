@@ -8,10 +8,12 @@ vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1") }));
 
 import { CLOUD_SHARE_PROGRESS_CHANNEL } from "../shared/cloud-share";
-import { type CloudShareConfirmation, confirmationText, formatShareSize, registerCloudShareIpc } from "./cloud-share-ipc";
+import { registerCloudShareIpc } from "./cloud-share-ipc";
+import { ShareLinkRecords, shareRecordKey } from "./cloud-share-links";
 
 // Built at runtime so the repository's secret scanner does not flag the fixture.
 const FAKE_AWS_KEY = ["AKIA", "ABCDEFGHIJKLMNOP"].join("");
+const SHARE_ID = "0b6e7a3c-2f4d-4a51-9c8e-1d2f3a4b5c6d";
 
 let dataDir: string;
 
@@ -26,11 +28,11 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { confirm?: boolean; token?: string | null; finalizeStatus?: number; finalizeCode?: string } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
-	const confirmations: CloudShareConfirmation[] = [];
+	const records = new ShareLinkRecords(path.join(dataDir, "share-links.json"));
 	const sent: unknown[] = [];
 	const sender = { id: 7, isDestroyed: () => false, send: vi.fn((channel: string, value: unknown) => channel === CLOUD_SHARE_PROGRESS_CHANNEL && sent.push(value)) };
 	registerCloudShareIpc({
@@ -38,10 +40,7 @@ function setup(options: { confirm?: boolean; token?: string | null; finalizeStat
 		daemonDataDir: () => dataDir,
 		snapshotDir: () => path.join(dataDir, "snapshots"),
 		getToken: async () => (options.token === undefined ? "token-1" : options.token),
-		confirm: vi.fn(async (_sender, confirmation: CloudShareConfirmation) => {
-			confirmations.push(confirmation);
-			return options.confirm ?? true;
-		}),
+		records,
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
 			const { pathname } = new URL(url);
 			requests.push(`${init.method ?? "GET"} ${pathname}`);
@@ -53,15 +52,16 @@ function setup(options: { confirm?: boolean; token?: string | null; finalizeStat
 			if (pathname === "/p") return new Response("", { headers: { etag: '"e1"' } });
 			if (pathname.endsWith("/finalize")) {
 				if (options.finalizeStatus) return json({ code: options.finalizeCode, message: "Free plan: up to 3 active links. Upgrade to share more." }, options.finalizeStatus);
-				return json({ share: { id: "s-1", slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
+				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
+			if (init.method === "DELETE" && pathname.includes("/me/artifact-shares/")) return new Response(null, { status: 204 });
 			return new Response("", { status: 404 });
 		}),
 	});
 	const invoke = (channel: string, value?: unknown) => handlers.get(channel)!({ sender }, value);
 	const file = { baseUrl: "https://cp.test", sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
-	return { invoke, file, requests, bodies, confirmations, sent };
+	return { invoke, file, requests, bodies, records, sent };
 }
 
 async function snapshots(): Promise<string[]> {
@@ -77,19 +77,29 @@ describe("cloudShare IPC", () => {
 		expect(requests).toEqual([]);
 	});
 
-	it("publishes only after the person confirms", async () => {
-		const declined = setup({ confirm: false });
-		await expect(declined.invoke("cloudShare:publish", declined.file)).resolves.toEqual({ status: "cancelled" });
-		expect(declined.requests).toEqual(["GET /api/cloud/v1/me/artifact-shares"]);
-		expect(await snapshots()).toEqual([]);
-
-		const { invoke, file, requests, confirmations, sent } = setup();
+	it("publishes when the window asks, with no second confirmation", async () => {
+		const { invoke, file, requests, sent } = setup();
 		const result = await invoke("cloudShare:publish", file);
-		expect(result).toMatchObject({ status: "published", share: { id: "s-1" }, replaced: false });
-		expect(confirmations[0]).toEqual({ name: "report.html", size: 20, secretFindings: ["AWS access key"], usage: { used: 1, limit: 3 }, update: false });
+		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID }, replaced: false });
 		expect(requests).toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
 		expect(sent).toEqual([{ sessionId: "sess-1", path: "docs/report.html", sentBytes: 20, totalBytes: 20 }]);
 		expect(await snapshots()).toEqual([]);
+	});
+
+	it("remembers the link a file was published to until it is unpublished", async () => {
+		const { invoke, file, records } = setup();
+		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("shareId");
+		await invoke("cloudShare:publish", file);
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID });
+		// The record survives a restart: a new store reads it back from disk.
+		const reopened = new ShareLinkRecords(path.join(dataDir, "share-links.json"));
+		await expect(reopened.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBe(SHARE_ID);
+		// Another control plane's record is a different file.
+		await expect(invoke("cloudShare:inspect", { ...file, baseUrl: "https://other.test" })).resolves.not.toHaveProperty("shareId");
+
+		await invoke("cloudShare:unpublish", { baseUrl: "https://cp.test", shareId: SHARE_ID });
+		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("shareId");
+		await expect(records.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBeUndefined();
 	});
 
 	it("names the document by project, session and folder", async () => {
@@ -103,7 +113,7 @@ describe("cloudShare IPC", () => {
 	it("turns refusals into results the dialog can act on", async () => {
 		const video = setup();
 		await expect(video.invoke("cloudShare:publish", { ...video.file, path: "clip.mp4" })).resolves.toMatchObject({ status: "unsupported" });
-		expect(video.confirmations).toEqual([]);
+		expect(video.requests).toEqual([]);
 
 		const limit = setup({ finalizeStatus: 409, finalizeCode: "artifact_share_limit_reached" });
 		await expect(limit.invoke("cloudShare:publish", limit.file)).resolves.toEqual({
@@ -113,7 +123,7 @@ describe("cloudShare IPC", () => {
 
 		const signedOut = setup({ token: null });
 		await expect(signedOut.invoke("cloudShare:publish", signedOut.file)).resolves.toEqual({ status: "signed_out" });
-		expect(signedOut.confirmations).toEqual([]);
+		expect(signedOut.requests).toEqual([]);
 	});
 
 	it("refuses malformed requests and files outside the artifacts folder", async () => {
@@ -122,21 +132,5 @@ describe("cloudShare IPC", () => {
 		await expect(invoke("cloudShare:publish", { ...file, projectId: 5 })).rejects.toThrow("Not a file to share");
 		await expect(invoke("cloudShare:list", {})).rejects.toThrow("Not a control plane");
 		await expect(invoke("cloudShare:unpublish", { baseUrl: "https://cp.test", shareId: "../x" })).rejects.toThrow("Not a share link");
-	});
-});
-
-describe("confirmation text", () => {
-	it("says the link is public, the plan usage and any credential found", () => {
-		const text = confirmationText({ name: "report.html", size: 2048, secretFindings: ["AWS access key"], usage: { used: 1, limit: 3 }, update: false });
-		expect(text.message).toBe("Publish this file as a public link?");
-		expect(text.button).toBe("Publish");
-		expect(text.detail).toContain("report.html · 2.0 KB");
-		expect(text.detail).toContain("Anyone with the link can view this file.");
-		expect(text.detail).toContain("Free plan: 2 of 3 active links.");
-		expect(text.detail).toContain("looks like it contains a AWS access key");
-		const update = confirmationText({ name: "a.md", size: 3, secretFindings: [], update: true });
-		expect(update.button).toBe("Update link");
-		expect(update.detail).not.toContain("Free plan");
-		expect(formatShareSize(5 * 1024 ** 3)).toBe("5.0 GB");
 	});
 });

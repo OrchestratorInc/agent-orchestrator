@@ -17,7 +17,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { ShareArtifactButton } from "./ShareArtifactDialog";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";

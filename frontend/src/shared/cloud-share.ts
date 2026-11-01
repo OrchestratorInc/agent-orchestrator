@@ -52,6 +52,8 @@ export interface CloudShareInspection {
 	secretFindings: string[];
 	/** Video is not shared yet. */
 	unsupported: boolean;
+	/** The link this file was last published to from this computer, if any. */
+	shareId?: string;
 }
 
 export type CloudSharePublishResult =

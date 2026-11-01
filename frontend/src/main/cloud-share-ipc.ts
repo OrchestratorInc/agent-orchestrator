@@ -1,12 +1,12 @@
 /**
  * cloudShare IPC: the only way to publish a share link. Agents, the ao CLI,
- * MCP and the daemon have no route to it; the renderer can only ask, and the
- * main process asks the person in a native dialog the renderer cannot answer.
+ * MCP and the daemon have no route to it; only the app's own window can ask,
+ * when the person presses Publish in its share popover.
  */
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { IpcMain, WebContents } from "electron";
+import type { IpcMain } from "electron";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
@@ -24,16 +24,7 @@ import {
 	unpublishShareLink,
 	uploadShare,
 } from "./cloud-share";
-
-/** What the native confirmation shows. */
-export interface CloudShareConfirmation {
-	name: string;
-	size: number;
-	secretFindings: string[];
-	/** "2 of 3 active links" on the free plan; undefined when unlimited. */
-	usage?: { used: number; limit: number };
-	update: boolean;
-}
+import { type ShareLinkRecordStore, shareRecordKey } from "./cloud-share-links";
 
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -41,8 +32,8 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	daemonDataDir: () => string;
 	/** A private directory for upload snapshots. */
 	snapshotDir: () => string;
-	/** Asks the person to confirm publishing; true only on their explicit yes. */
-	confirm: (sender: WebContents, confirmation: CloudShareConfirmation) => Promise<boolean>;
+	/** Which link each local file was last published to. */
+	records: ShareLinkRecordStore;
 }
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
@@ -88,11 +79,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	deps.ipcMain.handle("cloudShare:inspect", async (_event, value: unknown): Promise<CloudShareInspection> => {
 		const file = shareFileArgument(value);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
+		const shareId = await deps.records.get(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath));
 		return {
 			name: resolved.name,
 			size: resolved.size,
 			secretFindings: await scanShareFile(resolved),
 			unsupported: isVideo(resolved.name),
+			...(shareId ? { shareId } : {}),
 		};
 	});
 
@@ -103,6 +96,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const shareId = (value as { shareId?: unknown } | null)?.shareId;
 		if (typeof shareId !== "string") throw new CloudShareError("invalid_request", "Not a share link.");
 		await unpublishShareLink(deps, baseUrlArgument(value), shareId);
+		await deps.records.forgetShare(shareId);
 	});
 
 	deps.ipcMain.handle("cloudShare:cancel", (event) => {
@@ -115,12 +109,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		if (inFlight.has(sender.id)) throw new CloudShareError("busy", "Another file is being shared.");
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 		if (isVideo(resolved.name)) return { status: "unsupported", message: "Sharing videos is coming soon." };
-		let links: CloudShareLinks;
-		try {
-			links = await listShareLinks(deps, file.baseUrl);
-		} catch (error) {
-			return refusal(error);
-		}
+		if (!(await deps.getToken())) return { status: "signed_out" };
 		const controller = new AbortController();
 		inFlight.set(sender.id, controller);
 		const snapshot = await snapshotShareFile(resolved, deps.snapshotDir()).catch((error: unknown) => {
@@ -128,14 +117,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			throw error;
 		});
 		try {
-			const confirmed = await deps.confirm(sender, {
-				name: resolved.name,
-				size: snapshot.size,
-				secretFindings: snapshot.secretFindings,
-				usage: links.unlimited ? undefined : { used: links.used, limit: links.limit },
-				update: Boolean(file.shareId),
-			});
-			if (!confirmed || controller.signal.aborted) return { status: "cancelled" };
+			if (controller.signal.aborted) return { status: "cancelled" };
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);
 			const result = await uploadShare(deps, {
@@ -150,6 +132,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 					sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes: snapshot.size });
 				}
 			}, controller.signal);
+			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };
@@ -159,37 +142,4 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			await fs.rm(snapshot.path, { force: true });
 		}
 	});
-}
-
-/** Formats a byte count for the confirmation dialog. */
-export function formatShareSize(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	const units = ["KB", "MB", "GB", "TB"];
-	let value = bytes / 1024;
-	let unit = 0;
-	while (value >= 1024 && unit < units.length - 1) {
-		value /= 1024;
-		unit++;
-	}
-	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-}
-
-/** The native confirmation's text. */
-export function confirmationText(confirmation: CloudShareConfirmation): { message: string; detail: string; button: string } {
-	const lines = [
-		`${confirmation.name} · ${formatShareSize(confirmation.size)}`,
-		"Anyone with the link can view this file.",
-	];
-	if (confirmation.usage) {
-		const used = confirmation.update ? confirmation.usage.used : confirmation.usage.used + 1;
-		lines.push(`Free plan: ${used} of ${confirmation.usage.limit} active links.`);
-	}
-	if (confirmation.secretFindings.length > 0) {
-		lines.push("", `This file looks like it contains a ${confirmation.secretFindings.join(", ")}. Publishing it makes that public.`);
-	}
-	return {
-		message: confirmation.update ? "Update the public link to this file?" : "Publish this file as a public link?",
-		detail: lines.join("\n"),
-		button: confirmation.update ? "Update link" : "Publish",
-	};
 }

@@ -12,7 +12,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { ShareArtifactButton } from "./ShareArtifactDialog";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";

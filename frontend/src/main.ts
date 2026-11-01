@@ -154,7 +154,8 @@ import {
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { clearShareSnapshots } from "./main/cloud-share";
-import { confirmationText, registerCloudShareIpc } from "./main/cloud-share-ipc";
+import { registerCloudShareIpc } from "./main/cloud-share-ipc";
+import { ShareLinkRecords } from "./main/cloud-share-links";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
@@ -3072,8 +3073,8 @@ registerChatImageIpc({
 });
 registerCloudArtifactIpc({ ipcMain });
 
-// Share links: publishing reads the file, holds the token and asks the person
-// here, in the main process; the renderer can only ask for it.
+// Share links: publishing reads the file and holds the token here, in the main
+// process; the renderer asks for it when the person presses Publish.
 const shareSnapshotDir = path.join(desktopDataDir, "tmp", "share-uploads");
 void clearShareSnapshots(shareSnapshotDir).catch(() => undefined);
 registerCloudShareIpc({
@@ -3082,22 +3083,7 @@ registerCloudShareIpc({
 	snapshotDir: () => shareSnapshotDir,
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
-	confirm: async (sender, confirmation) => {
-		const text = confirmationText(confirmation);
-		const risky = confirmation.secretFindings.length > 0;
-		const options = {
-			type: risky ? ("warning" as const) : ("question" as const),
-			message: text.message,
-			detail: text.detail,
-			buttons: [text.button, "Cancel"],
-			defaultId: risky ? 1 : 0,
-			cancelId: 1,
-			noLink: true,
-		};
-		const window = BrowserWindow.fromWebContents(sender);
-		const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
-		return response === 0;
-	},
+	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
