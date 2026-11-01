@@ -1021,20 +1021,24 @@ func (q *Queries) MovePRAliasReviews(ctx context.Context, arg MovePRAliasReviews
 }
 
 const recordWorkerPRUsage = `-- name: RecordWorkerPRUsage :exec
-INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported)
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported, closed_reported)
 SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
         THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
         ELSE pr.url END,
     sessions.project_id,
     CASE WHEN ?1 = 0 THEN 1 ELSE 0 END,
-    CASE WHEN ?1 = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END
+    CASE WHEN ?1 = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END,
+    CASE WHEN ?1 = 0 AND pr.pr_state = 'closed' THEN 1 ELSE 0 END
 FROM pr JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = ?2 AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
 ON CONFLICT(pr_key) DO UPDATE SET
     associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
     merged_reported = CASE WHEN ?1 = 0 AND
         (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
-        THEN 1 ELSE usage_pr_measurement.merged_reported END
+        THEN 1 ELSE usage_pr_measurement.merged_reported END,
+    closed_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'closed'
+        THEN 1 ELSE usage_pr_measurement.closed_reported END
 `
 
 type RecordWorkerPRUsageParams struct {
@@ -1042,6 +1046,8 @@ type RecordWorkerPRUsageParams struct {
 	PRURL         string
 }
 
+// While export is not allowed, every outcome observed (association, merge,
+// close) is consumed here, so a later opt-in never exports the off interval.
 func (q *Queries) RecordWorkerPRUsage(ctx context.Context, arg RecordWorkerPRUsageParams) error {
 	_, err := q.db.ExecContext(ctx, recordWorkerPRUsage, arg.ExportAllowed, arg.PRURL)
 	return err

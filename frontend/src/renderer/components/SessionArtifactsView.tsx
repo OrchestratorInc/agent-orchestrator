@@ -390,7 +390,7 @@ export function SessionArtifactsView({
 	const livePreviewPaths = useMemo(() => new Set(
 		artifacts.filter((artifact) =>
 			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
-			|| (!cloud && /\.pdf$/i.test(artifact.path) && artifact.rawUrl),
+			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [artifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);

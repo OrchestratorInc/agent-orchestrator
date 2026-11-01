@@ -31,7 +31,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
-import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import { isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
@@ -619,7 +619,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models a picker offers, for Cloud
 	// tasks too: a switched-off model is left out of the Cloud catalog as well.
-	const { models: offeredModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
+	const { models: localOfferedModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 	});
@@ -634,6 +634,12 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
 		skip: !isCloudProject,
 	});
+	// The daemon marks models this computer's agent CLI is too old for. A cloud task
+	// runs on the worker's own CLI, so those marks say nothing about it.
+	const offeredModels = useMemo(
+		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
+		[isCloudProject, localOfferedModels],
+	);
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
 				allowCustom: localCatalog.allowCustom,
@@ -669,8 +675,10 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		: localModelCatalog;
 	// An unmarked first row is not evidence of what the provider will run.
 	const catalogModels = (isCloudProject ? cloudModels : offeredModels).filter((item) => isConcreteModelID(item.id));
+	// Automatic choices never land on a model the picker shows as unavailable.
+	const selectableModels = catalogModels.filter(isModelSelectable);
 	const catalogDefaultOption =
-		isCloudProject ? "" : catalogModels.find((item) => item.isDefault)?.id ?? "";
+		isCloudProject ? "" : selectableModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalog?.selectionMode === "mode";
 	// The model this user ran most recently. Cloud reports no last use per
 	// model; the newest Cloud session of this agent that named one stands in.
@@ -679,17 +687,18 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	// this computer's models, listed for an older control plane, are suggestions.
 	const cloudPicksAllowed = !isCloudProject || cloudCatalog !== undefined;
 	const lastUsedOption = isCloudProject
-		? cloudPicksAllowed ? lastCloudSessionModel(cloudSessions, selectedAgent, catalogModels) : ""
-		: catalogModels
+		? cloudPicksAllowed ? lastCloudSessionModel(cloudSessions, selectedAgent, selectableModels) : ""
+		: selectableModels
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
 	const claudeFallbackOption =
 		cloudPicksAllowed && selectedAgent === "claude-code" && !catalogUsesModes
-			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			? (splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
 			: "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
+		!catalogModels.some((item) => item.id === rememberedModel && !isModelSelectable(item)) &&
 		Boolean(
 			modelCatalog &&
 				(modelCatalog.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
@@ -698,7 +707,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	// A model is always selected: the provider's default, else the first one listed.
 	// A cloud task starts on the project's or the agent's default unless one is chosen.
-	const catalogPick = isCloudProject ? "" : catalogDefaultOption || catalogModels[0]?.id || "";
+	const catalogPick = isCloudProject ? "" : catalogDefaultOption || selectableModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||

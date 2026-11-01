@@ -291,7 +291,7 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 }
 
 /** Cloud artifact files read as text at once; any other cloud file is read as text when it is small UTF-8 (cloudArtifactText). */
-export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
+export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
 export class CloudArtifactAccessError extends Error {}

@@ -28,6 +28,7 @@ import {
 	MousePointer2,
 	RefreshCw,
 	ChevronRight,
+	CornerDownRight,
 	type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -35,7 +36,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
 import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
@@ -275,6 +276,30 @@ export function AutomationMessage({ message, queued, fallback }: { message: Conv
 		<YourAction queued={queued} createdAt={message.createdAt}>
 			<UserActionBody action={automation} />
 		</YourAction>
+	);
+}
+
+/** The Browser annotations a steer carried, or null for any other steer. */
+export function steeredBrowserFeedback(activity: ConversationActivity): ParsedBrowserAnnotationMessage | null {
+	return parseBrowserAnnotationMessage(activity.detail?.text ?? "");
+}
+
+/**
+ * A queued annotation batch the user steered into the running turn. It keeps
+ * the card it had while queued instead of exposing the agent-facing transport.
+ */
+export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
+	const { t } = useTranslation();
+	return (
+		<div className="flex flex-col items-end gap-1" data-testid="steered-browser-feedback">
+			<div className={cn(humanBubbleClass(), "min-w-0")}>
+				<BrowserFeedbackBody annotations={annotations} />
+			</div>
+			<span className="flex items-center gap-1 text-xs text-muted-foreground">
+				<CornerDownRight aria-hidden="true" className="size-3" />
+				{t("chat.automation.steered")}
+			</span>
+		</div>
 	);
 }
 

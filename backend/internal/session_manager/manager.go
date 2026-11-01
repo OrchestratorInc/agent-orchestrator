@@ -965,7 +965,7 @@ func New(d Deps) *Manager {
 		m.lookPath = exec.LookPath
 	}
 	if m.executable == nil {
-		m.executable = os.Executable
+		m.executable = agentlaunch.Executable
 	}
 	if m.newLaunchID == nil {
 		m.newLaunchID = uuid.NewString
@@ -1712,6 +1712,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
+	}
+	if selected != nil && selected.RequiresVersion != "" {
+		// Launching would only fail on the first turn with the provider's
+		// claude_code_version_too_old rejection; say so before spawning. This runs
+		// for any listed model, not only when the model is validated: a model the
+		// catalog does not list (a gateway alias) has no known requirement.
+		return ports.AgentConfig{}, fmt.Errorf("%w: model %q: %s", ErrUnsupportedModel, modelID, selected.UnavailableReason)
 	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
 		// A family alias ("opus") carries no capabilities of its own; the CLI
@@ -6317,6 +6324,14 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, m.dataDir)
+	if err != nil {
+		m.logger.Warn("login shells in the session may run another ao: their startup files can reorder the pinned PATH",
+			"session", id, "error", err)
+	}
+	for key, value := range loginEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 	return env, accountErr
 }
 
@@ -7035,15 +7050,25 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	var cmd []string
+	var ok bool
+	var err error
+	nativeID := meta.AgentSessionID
+	if resolver, supported := agent.(ports.AgentNativeRestoreCommand); supported {
+		cmd, nativeID, ok, err = resolver.GetRestoreCommandWithSessionID(ctx, cfg)
+	} else {
+		cmd, ok, err = agent.GetRestoreCommand(ctx, cfg)
+	}
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
+	ref.Metadata[ports.MetadataKeyAgentSessionID] = nativeID
 	// The id is real but the provider never persisted a conversation under it —
 	// a session torn down before its first turn, or one whose switch away failed
 	// after the source stopped. Resuming that id fails with "No conversation
 	// found" every time, so the id alone must not gate restore.
-	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, meta.AgentSessionID, env)
+	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, nativeID, env)
 	if ok && !conversationLost {
 		return cmd, ports.PromptDeliveryInCommand, RestoreModeNative, nil
 	}

@@ -13714,8 +13714,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -16370,6 +16374,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        authoredByUser:
+          type: boolean
         clientMessageId:
           type: string
         content:
@@ -16765,6 +16771,10 @@ components:
         diff:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
+          type: string
+        failureCode:
+          enum:
+          - provider_key_missing
           type: string
         hasHumanPrompt:
           type: boolean
