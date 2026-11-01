@@ -10,7 +10,6 @@ import {
 	$getNodeByKey,
 	$getRoot,
 	$getSelection,
-	$setSelection,
 	$isElementNode,
 	$isRangeSelection,
 	$isTextNode,
@@ -473,17 +472,8 @@ function editorSnapshot(): ComposerEditorSnapshot {
 }
 
 function focusEditor(editor: LexicalEditor): void {
-	const root = editor.getRootElement();
-	const domSelection = getDOMSelectionFromTarget(root);
-	// A native arrow can move the DOM caret before Lexical's selectionchange
-	// update. Adopt that caret before focus restores an older editor selection.
-	if (root && domSelection?.anchorNode && root.contains(domSelection.anchorNode) && domSelection.focusNode && root.contains(domSelection.focusNode)) {
-		editor.update(() => {
-			const selection = $createRangeSelectionFromDom(domSelection, editor);
-			if (selection) $setSelection(selection);
-		}, { discrete: true });
-	}
 	editor.focus();
+	const root = editor.getRootElement();
 	if (root && document.activeElement !== root) root.focus({ preventScroll: true });
 }
 
