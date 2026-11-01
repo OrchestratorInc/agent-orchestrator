@@ -426,9 +426,10 @@ beforeEach(() => {
 });
 
 describe("first run project actions", () => {
-	it("opens the first run clone dialog without cloning and routes local folder to the native picker", async () => {
+	it("keeps the first run modal behind the native picker and after cancellation", async () => {
 		const onFirstRunDismiss = vi.fn();
-		bridgeMocks.chooseDirectory.mockResolvedValue(null);
+		let resolvePicker!: (path: string | null) => void;
+		bridgeMocks.chooseDirectory.mockImplementation(() => new Promise<string | null>((resolve) => { resolvePicker = resolve; }));
 		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
 		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
 		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
@@ -436,6 +437,28 @@ describe("first run project actions", () => {
 		expect(apiMocks.POST).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Open a local folder" }));
 		await waitFor(() => expect(bridgeMocks.chooseDirectory).toHaveBeenCalledOnce());
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+		await act(async () => resolvePicker(null));
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+	});
+
+	it("closes the first run modal only after the selected local folder is validated", async () => {
+		const onFirstRunDismiss = vi.fn();
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		let resolveValidation!: (value: { data: ReturnType<typeof projectValidation> }) => void;
+		apiMocks.POST.mockImplementationOnce(() => new Promise((resolve) => { resolveValidation = resolve; }));
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Open a local folder" }));
+		await waitFor(() => expect(apiMocks.POST).toHaveBeenCalledOnce());
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(onFirstRunDismiss).not.toHaveBeenCalled();
+		await act(async () => resolveValidation({ data: projectValidation("/repo/project") }));
+		expect(await screen.findByTestId("agent-sheet")).toBeInTheDocument();
+		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
 		expect(onFirstRunDismiss).toHaveBeenCalledOnce();
 	});
 
