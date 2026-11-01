@@ -176,7 +176,7 @@ WHERE pr.head_sha != ''
 
 -- name: FailUnsubmittedReviewBatchForChatTurn :exec
 UPDATE review_run SET status = 'failed', body = COALESCE(
-    (SELECT NULLIF(trim(turn.error_message, char(9) || char(10) || char(11) || char(12) || char(13) || ' '), '') FROM conversation_turns AS turn
+    (SELECT NULLIF(CAST(sqlc.arg(error_summary) AS TEXT), '') FROM conversation_turns AS turn
      WHERE turn.id = sqlc.arg(turn_id) AND turn.state = 'failed'),
     'reviewer Chat turn ended without submitting a result'
 )
