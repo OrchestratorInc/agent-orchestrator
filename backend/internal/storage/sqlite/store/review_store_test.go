@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -750,7 +751,13 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 	}{
 		{name: "completed", state: domain.TurnStateCompleted},
 		{name: "failed", state: domain.TurnStateFailed},
-		{name: "provider failure", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"}}`, wantBody: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"}}`},
+		{name: "provider failure", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"}}`, wantBody: "HTTP 400: invalid_request_error: Model unavailable for this account"},
+		{name: "discard request diagnostics", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Model unavailable for this account"},"request":{"api_key":"synthetic-secret"},"diagnostics":"private payload"}`, wantBody: "HTTP 400: invalid_request_error: Model unavailable for this account"},
+		{name: "secret in message", state: domain.TurnStateFailed, errorMessage: `{"status":400,"error":{"type":"invalid_request_error","message":"Authorization: Bearer synthetic-secret"}}`, wantBody: "HTTP 400: invalid_request_error: provider error details withheld"},
+		{name: "malformed failure", state: domain.TurnStateFailed, errorMessage: `{"message":"synthetic-secret`},
+		{name: "bounded multibyte failure", state: domain.TurnStateFailed, errorMessage: strings.Repeat("模 ", 1000), wantBody: strings.Repeat("模 ", 255) + "…"},
+		{name: "oversized multibyte failure", state: domain.TurnStateFailed, errorMessage: strings.Repeat("模 ", 5000)},
+		{name: "unicode whitespace failure", state: domain.TurnStateFailed, errorMessage: "\u2003"},
 		{name: "blank failure", state: domain.TurnStateFailed, errorMessage: "   "},
 		{name: "whitespace failure", state: domain.TurnStateFailed, errorMessage: "\t\n\r\v\f "},
 		{name: "completed with stale error", state: domain.TurnStateCompleted, errorMessage: "not a failed turn"},
@@ -782,7 +789,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			}
 			for _, run := range []domain.ReviewRun{
 				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
-				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result API_KEY=legitimate-review-text"},
 				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
 			} {
 				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
@@ -827,7 +834,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 				t.Fatalf("failure explanation = %q", missing.Body)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
-			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result API_KEY=legitimate-review-text" {
 				t.Fatalf("submitted result changed: %+v %v", submitted, err)
 			}
 			next, _, err := s.GetReviewRun(ctx, "next")
