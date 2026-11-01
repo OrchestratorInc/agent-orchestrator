@@ -32,4 +32,25 @@ describe("background task queries", () => {
 		view.unmount();
 		client.clear();
 	});
+
+	it.each([
+		["session", { status: "ok" }],
+		["session", { sessionId: "s", availability: "ready", tasks: null }],
+		["board", { status: "ok" }],
+		["board", { sessions: [{ sessionId: "s", availability: "ready" }] }],
+	])("treats a malformed %s response as a query error without breaking Chat", async (scope, data) => {
+		getMock.mockResolvedValue({ data });
+		function Consumer() {
+			const board = useBackgroundTaskReadings(scope === "board");
+			const session = useBackgroundTasks("s", scope === "session");
+			const query = scope === "board" ? board : session;
+			return <span>{query.isError ? "unavailable" : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Consumer /></QueryClientProvider>);
+		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
+		expect(getMock).toHaveBeenCalledTimes(1);
+		view.unmount();
+		client.clear();
+	});
 });
