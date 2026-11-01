@@ -323,7 +323,7 @@ func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
 				Capabilities: ports.ChatCapabilities{
 					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
 				},
-				Launch:  func(context.Context, LaunchConfig) (Launch, error) {
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
 					return Launch{
 						Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"}, Env: env,
 					}, nil
@@ -5713,7 +5713,7 @@ func TestLegacyModelDiscoveryStaysHermesOnly(t *testing.T) {
 			agent := &legacyKimiAgent{}
 			driver := New(Config{
 				Harness: harness,
-				Launch:  func(context.Context, LaunchConfig) (Launch, error) {
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
 					return Launch{Command: "fake"}, nil
 				},
 			}, slog.New(slog.DiscardHandler))
