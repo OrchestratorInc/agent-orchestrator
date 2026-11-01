@@ -363,7 +363,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
 	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
 	return (
-		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen">
+		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen" data-startup-cover="">
 			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
 				<Loader2 aria-hidden="true" className="size-6 animate-spin" />
 				<span className="text-sm">{label}</span>
