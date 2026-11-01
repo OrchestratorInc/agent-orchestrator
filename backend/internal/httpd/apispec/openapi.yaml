@@ -19666,6 +19666,8 @@ components:
       properties:
         commits:
           type: integer
+        headSha:
+          type: string
         remoteBranch:
           type: string
         unpushed:

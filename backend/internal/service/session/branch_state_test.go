@@ -60,6 +60,7 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 		if err := svc.ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
+		want.HeadSHA = strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 		if got := st.sessions["ao-1"].BranchState; got == nil || *got != want {
 			t.Fatalf("branch state = %+v, want %+v", got, want)
 		}
@@ -97,7 +98,7 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	if err := (&Service{store: st}).ReconcileBranchStates(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1}
+	want := domain.SessionBranchState{Commits: 1, Unpushed: 1, HeadSHA: strings.TrimSpace(runGit(t, worktree, "rev-parse", "HEAD"))}
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -142,7 +143,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 	if got := pass(); got != 2 {
 		t.Fatalf("pass after one commit ran %d git processes, want 2", got)
 	}
-	want := domain.SessionBranchState{Commits: 2, Unpushed: 2}
+	want := domain.SessionBranchState{Commits: 2, Unpushed: 2, HeadSHA: strings.TrimSpace(runGit(t, worktrees["s1"], "rev-parse", "HEAD"))}
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("s1 branch state = %+v, want %+v", got, want)
 	}
