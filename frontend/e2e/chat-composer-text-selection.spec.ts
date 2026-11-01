@@ -108,8 +108,19 @@ async function openChatWithDraft(page: Page, text = draft) {
 	return composer;
 }
 
+// Lexical skips the next `selectionchange` after writing the DOM selection itself
+// (fill, typing, or a focus restore). A caret key sent while that event is still
+// queued can be merged into it and never reach the editor's own selection, so the
+// next `editor.focus()` restores the stale caret (upstream PR #7379 documents this
+// exact race at line 134 below: expected 4, received 5). Let the queued event
+// settle before sending a caret key so the assertions stay deterministic.
+async function settleComposerSelection(page: Page) {
+	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+}
+
 test("clicking chat whitespace and composer padding keeps the draft caret position @T0", async ({ page }) => {
 	const composer = await openChatWithDraft(page, "abcdef");
+	await settleComposerSelection(page);
 	await composer.press("ArrowLeft");
 	await composer.press("ArrowLeft");
 	const caretOffset = () =>
@@ -127,6 +138,8 @@ test("clicking chat whitespace and composer padding keeps the draft caret positi
 	await page.keyboard.type("X");
 	await expect(composer).toHaveText("abcdXef");
 
+	// Same race as above: the typed "X" made Lexical write the DOM selection.
+	await settleComposerSelection(page);
 	await composer.press("ArrowLeft");
 	await expect.poll(caretOffset).toBe(4);
 	await composer.locator("xpath=ancestor::form").click({ position: { x: 20, y: 6 } });
