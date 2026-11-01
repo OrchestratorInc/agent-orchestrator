@@ -155,8 +155,8 @@ export type WorkspaceSession = {
 	 */
 	displayStatus?: string;
 	/**
-	 * One-line card summary the agent set with `ao summary`, or a line derived
-	 * from lifecycle and PR facts until it has.
+	 * One-line card summary the agent set with `ao summary`. Absent until it
+	 * sets one.
 	 */
 	summary?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
