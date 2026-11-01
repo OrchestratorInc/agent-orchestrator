@@ -124,8 +124,8 @@ func TestLANTunnelLocksOutTheTunnelsClient(t *testing.T) {
 		}
 	}
 	local, visitor := tunnel(""), tunnel("203.0.113.2")
-	for range 5 {
-		if status := local("wrong123", ""); status != http.StatusUnauthorized {
+	for i := range 5 {
+		if status := local(fmt.Sprintf("wrong%d", i), ""); status != http.StatusUnauthorized {
 			t.Fatalf("wrong password inside the tunnel: got %d, want 401", status)
 		}
 	}
