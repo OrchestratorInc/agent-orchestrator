@@ -154,7 +154,7 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 			}
 			if (pathname.endsWith("/finalize")) {
 				if (options.finalizeError) return json({ code: options.finalizeError.code, message: "refused" }, options.finalizeError.status);
-				return json({ share: { id: "s-1", linkId: "abc" }, replaced: false }, 201);
+				return json({ share: { id: "s-1", slug: "abc" }, replaced: false }, 201);
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
 			if (pathname.endsWith("/me/artifact-shares")) return json({ shares: [], limit: 3, used: 1 });

@@ -21,7 +21,8 @@ export interface CloudShareFile {
 /** A public share link, as the control plane lists it. */
 export interface CloudShareLink {
 	id: string;
-	linkId: string;
+	/** The link's ID, the first label of its contentUrl host. */
+	slug: string;
 	name: string;
 	contentUrl: string;
 	viewerUrl?: string;

@@ -58,7 +58,7 @@ describe("ShareArtifactDialog", () => {
 		const publish = stub(inspection, links, {
 			status: "published",
 			replaced: false,
-			share: { id: "s-1", linkId: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://viewer.test/artifact/abc",
+			share: { id: "s-1", slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://viewer.test/artifact/abc",
 				contentType: "text/html", size: 2048, sha256: "", createdAt: "", updatedAt: "" },
 		});
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();

@@ -53,7 +53,7 @@ function setup(options: { confirm?: boolean; token?: string | null; finalizeStat
 			if (pathname === "/p") return new Response("", { headers: { etag: '"e1"' } });
 			if (pathname.endsWith("/finalize")) {
 				if (options.finalizeStatus) return json({ code: options.finalizeCode, message: "Free plan: up to 3 active links. Upgrade to share more." }, options.finalizeStatus);
-				return json({ share: { id: "s-1", linkId: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
+				return json({ share: { id: "s-1", slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
 			}
 			if (pathname.endsWith("/uploads/abort")) return new Response(null, { status: 204 });
 			return new Response("", { status: 404 });
