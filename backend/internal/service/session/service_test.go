@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +21,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -3842,6 +3847,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"Windows command line too long", fmt.Errorf("spawn: %w: escaped command line is 32769 UTF-16 code units", ports.ErrRuntimeCommandLineTooLong), apierr.KindInvalid, "WINDOWS_COMMAND_LINE_TOO_LONG"},
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
+		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
 		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
@@ -4077,6 +4083,34 @@ func TestToAPIError_NotResumable(t *testing.T) {
 	var e *apierr.Error
 	if !errors.As(mapped, &e) || e.Kind != apierr.KindConflict || e.Code != "SESSION_NOT_RESUMABLE" {
 		t.Fatalf("mapped = %v, want Conflict SESSION_NOT_RESUMABLE", mapped)
+	}
+}
+
+// A send to a chat session with no live controller (it stopped, or never
+// started because provisioning failed) must answer the same 409
+// CHAT_CONTROLLER_NOT_READY that steer-or-send gives, not a bare 500.
+func TestSendWithoutChatControllerIsControllerNotReady(t *testing.T) {
+	for _, sentinel := range []error{chatsvc.ErrNoController, chatsvc.ErrNotProvisioning} {
+		svc := &Service{manager: &fakeCommander{sendErr: fmt.Errorf("send mer-1: %w", sentinel)}}
+		for name, send := range map[string]func() error{
+			"send": func() error { return svc.Send(context.Background(), "mer-1", "hello", nil) },
+			"send with options": func() error {
+				return svc.SendWithOptions(context.Background(), "mer-1", "hello", nil, ports.MessageDeliveryOptions{AuthoredByUser: true})
+			},
+		} {
+			t.Run(sentinel.Error()+"/"+name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				envelope.WriteError(rec, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/mer-1/send", nil), send())
+				var body envelope.APIError
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusConflict || body.Code != "CHAT_CONTROLLER_NOT_READY" ||
+					body.Message != "the agent controller for this session is not running" {
+					t.Fatalf("status=%d body=%s, want 409 CHAT_CONTROLLER_NOT_READY", rec.Code, rec.Body)
+				}
+			})
+		}
 	}
 }
 
