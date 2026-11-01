@@ -2260,6 +2260,63 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 	return account, nil
 }
 
+// ConversationAwaitingLogin is a session conversation whose provider asked for
+// credentials, and the harness its session runs.
+type ConversationAwaitingLogin struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+}
+
+// ConversationsAwaitingLogin lists session conversations with an unanswered
+// credential demand.
+func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationAwaitingLogin, error) {
+	rows, err := s.qr.SelectConversationsAwaitingLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ConversationAwaitingLogin, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ConversationAwaitingLogin(row))
+	}
+	return out, nil
+}
+
+// ConfirmConversationLogin clears a credential demand that a later check of the
+// session's account answered: at is when a check began that found the account
+// signed in and read its limits from the provider with that login. A demand
+// recorded at or after at stays, since that check cannot speak for it.
+func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.qw.WithTx(tx)
+	row, err := q.SelectConversationByID(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+	account := conversationToDomain(row).Account
+	if account == nil || account.ReauthRequiredAt == nil || !account.ReauthRequiredAt.Before(at) {
+		return false, nil
+	}
+	if account.LastAuthFailureAt == nil {
+		account.LastAuthFailureAt = account.ReauthRequiredAt
+		account.LastAuthFailureReason = account.ReauthReason
+	}
+	account.AuthenticationState = "authenticated"
+	account.AuthVerifiedAt = &at
+	account.ReauthRequiredAt = nil
+	account.ReauthReason = ""
+	if err := s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
 // RecordThreadState stores the provider's lifecycle view of the thread.
 //
 // updated_at is deliberately not bumped by the statement this runs: thread status

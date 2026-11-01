@@ -3995,6 +3995,44 @@ func (q *Queries) SelectConversationUserMessageByTurn(ctx context.Context, arg S
 	return i, err
 }
 
+const selectConversationsAwaitingLogin = `-- name: SelectConversationsAwaitingLogin :many
+SELECT conversations.id AS conversation_id, sessions.id AS session_id, sessions.harness
+FROM conversations
+JOIN sessions ON sessions.id = conversations.current_session_id
+WHERE json_extract(conversations.account_json, '$.reauthRequiredAt') IS NOT NULL
+`
+
+type SelectConversationsAwaitingLoginRow struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+}
+
+// Session conversations still waiting for the user to sign in again, with the
+// harness each session runs, so a confirmed login can be matched to them.
+func (q *Queries) SelectConversationsAwaitingLogin(ctx context.Context) ([]SelectConversationsAwaitingLoginRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationsAwaitingLogin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationsAwaitingLoginRow{}
+	for rows.Next() {
+		var i SelectConversationsAwaitingLoginRow
+		if err := rows.Scan(&i.ConversationID, &i.SessionID, &i.Harness); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectFirstHumanTurnOnBranch = `-- name: SelectFirstHumanTurnOnBranch :one
 SELECT conversation_turns.id
 FROM conversation_turns

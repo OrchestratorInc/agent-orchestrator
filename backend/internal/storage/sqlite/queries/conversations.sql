@@ -1994,6 +1994,14 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
   AND t.completed_at > sqlc.arg(after_at)
 ORDER BY t.completed_at DESC LIMIT 1;
 
+-- Session conversations still waiting for the user to sign in again, with the
+-- harness each session runs, so a confirmed login can be matched to them.
+-- name: SelectConversationsAwaitingLogin :many
+SELECT conversations.id AS conversation_id, sessions.id AS session_id, sessions.harness
+FROM conversations
+JOIN sessions ON sessions.id = conversations.current_session_id
+WHERE json_extract(conversations.account_json, '$.reauthRequiredAt') IS NOT NULL;
+
 
 -- Queued work stays held behind a failed source until its retry succeeds.
 -- name: SelectLatestAutoResumeConversationTurn :one
