@@ -2985,6 +2985,7 @@
 	"pr.merge.reasonComments": "Unresolved review comments must be resolved before this PR can merge.",
 	"pr.merge.reasonReady": "No merge conflict, checks are passing, and the review requirement is satisfied.",
 	"pr.review.requirementSatisfied": "PR approved",
+	"pr.review.unresolvedComments": "未解决的审查评论",
 	"pr.review.viewDetails": "View review details",
 	"inspector.usage.agent": "代理",
 	"inspector.usage.inputTokens": "总输入",

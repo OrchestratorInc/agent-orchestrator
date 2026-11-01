@@ -276,6 +276,17 @@ describe("prCardPresentation", () => {
 		expect(presentation.statusRows?.find((status) => status.key === "review")?.detail).toBe("No review required");
 	});
 
+	it("names unresolved comments on a PR that needs no review, which its warning stands for", () => {
+		const presentation = prCardPresentation(
+			summary({ review: { decision: "none", hasUnresolvedHumanComments: true, unresolvedBy: [] } }),
+		);
+
+		expect(presentation.statusRows?.find((status) => status.key === "review")).toMatchObject({
+			detail: "Unresolved review comments",
+			tone: "warning",
+		});
+	});
+
 	it.each(["review_required", "changes_requested"] as const)("does not call a %s PR mergeable", (decision) => {
 		const presentation = prCardPresentation(
 			summary({ review: { decision, hasUnresolvedHumanComments: false, unresolvedBy: [] } }),

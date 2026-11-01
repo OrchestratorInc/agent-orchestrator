@@ -1262,6 +1262,7 @@
 	"pr.review.pending": "Ревью ожидается",
 	"pr.review.requiredNotSubmitted": "Обязательное ревью не отправлено",
 	"pr.review.requirementSatisfied": "PR одобрен",
+	"pr.review.unresolvedComments": "Нерешённые комментарии ревью",
 	"pr.review.viewDetails": "Показать подробности ревью",
 	"pr.section.ci": "CI",
 	"pr.section.merge": "Слияние",

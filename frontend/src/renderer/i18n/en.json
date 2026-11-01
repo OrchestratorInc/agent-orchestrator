@@ -1220,6 +1220,7 @@
 	"pr.review.pending": "Review pending",
 	"pr.review.requiredNotSubmitted": "Required review not submitted",
 	"pr.review.requirementSatisfied": "PR approved",
+	"pr.review.unresolvedComments": "Unresolved review comments",
 	"pr.review.viewDetails": "View review details",
 	"pr.section.ci": "CI",
 	"pr.section.merge": "Merge",
