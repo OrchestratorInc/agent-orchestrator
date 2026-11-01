@@ -5834,6 +5834,51 @@ func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {
 	}
 }
 
+func TestRefreshDefaultBranchesSkipsFetchInsideTheWindow(t *testing.T) {
+	m, _, _, ws := newManager()
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	project := domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	fetchesAfter := func(want int, step string) {
+		t.Helper()
+		if got := len(ws.fetches); got != want {
+			t.Fatalf("%s: fetch calls = %d, want %d", step, got, want)
+		}
+	}
+
+	m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	fetchesAfter(1, "first refresh")
+
+	now = now.Add(defaultBranchFetchWindow - time.Nanosecond)
+	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	fetchesAfter(1, "same repo and base ref just inside the window")
+	if got, want := baseRefs["/repo/mer"], "refs/remotes/origin/main"; got != want {
+		t.Fatalf("skipped fetch dropped the resolved base ref: got %q, want %q", got, want)
+	}
+
+	// A different repository fetches even though another one was just fetched.
+	other := domain.ProjectRecord{ID: "other", Path: "/repo/other", Config: testRoleAgents()}
+	m.refreshDefaultBranchesBestEffort(context.Background(), other)
+	fetchesAfter(2, "different repo")
+
+	// A different base ref of the same repository fetches too.
+	cfg := testRoleAgents()
+	cfg.DefaultBranch = "develop"
+	m.refreshDefaultBranchesBestEffort(context.Background(), domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: cfg})
+	fetchesAfter(3, "different base ref")
+	if got, want := ws.fetches[2].baseRef, "refs/remotes/origin/develop"; got != want {
+		t.Fatalf("third fetch base ref = %q, want %q", got, want)
+	}
+
+	// The window is measured from the fetch, not extended by the skipped call.
+	now = now.Add(time.Nanosecond)
+	m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	fetchesAfter(4, "same repo and base ref once the window has elapsed")
+
+	m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	fetchesAfter(4, "same repo right after the refetch")
+}
+
 func TestSpawn_FetchesQualifiedDefaultBranchRemote(t *testing.T) {
 	m, st, _, ws := newManager()
 	cfg := testRoleAgents()
