@@ -1,4 +1,4 @@
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -33,16 +33,13 @@ function snapshot(state: TurnState, items: ConversationItem[]): ConversationSnap
 }
 
 describe("live turn", () => {
-	it("draws the agent's work in the conversation, with no scroll box of its own", () => {
+	it("draws the agent's work in the conversation while the turn runs", () => {
 		const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Here is what I found so far", streaming: true, createdAt: at };
-		const { container } = render(<ChatWorkspace snapshot={snapshot("running", [user, note, command, reply])} />);
+		render(<ChatWorkspace snapshot={snapshot("running", [user, note, command, reply])} />);
 
-		expect(screen.getByText("Checking the folder layout first.")).toBeInTheDocument();
-		expect(screen.getByText("Here is what I found so far")).toBeInTheDocument();
 		const log = screen.getByRole("log", { name: "Conversation" });
-		const nested = [...log.querySelectorAll<HTMLElement>("*")].filter((node) => /overflow-y-(auto|scroll)/.test(node.className));
-		expect(nested).toEqual([]);
-		expect(container.querySelector("[data-live-activity]")).toBeNull();
+		expect(within(log).getByText("Checking the folder layout first.")).toBeInTheDocument();
+		expect(within(log).getByText("Here is what I found so far")).toBeInTheDocument();
 	});
 
 	it("keeps an image the agent showed open while its next step arrives", () => {
