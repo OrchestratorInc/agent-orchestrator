@@ -83,6 +83,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				computerUse: data?.computerUse ?? false,
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
+				// A daemon that predates the setting never asks for card summaries.
+				cardSummaries: data?.cardSummaries ?? false,
 			};
 		},
 	});

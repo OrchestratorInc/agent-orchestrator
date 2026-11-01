@@ -30,6 +30,13 @@ func TestExtractAOSummary(t *testing.T) {
 		{"only a redirect", `ao summary > /dev/null`, "", false},
 		{"final summary", `ao summary --done "Fixed the login redirect"`, "Fixed the login redirect", true},
 		{"final summary flag last", `ao summary "Fixed the login redirect" --done`, "Fixed the login redirect", true},
+		{"help flag", `ao summary --help`, "", false},
+		{"other flag beside the text", `ao summary -v "Fixing the login"`, "", false},
+		{"variable in double quotes", `ao summary "Fixing $TARGET"`, "", false},
+		{"unquoted variable", `ao summary Fixing $TARGET`, "", false},
+		{"backticks in double quotes", "ao summary \"Fixing the `render` path\"", "", false},
+		{"variable in single quotes", `ao summary 'Fixing $TARGET'`, "Fixing $TARGET", false},
+		{"escaped dollar", `ao summary "Saving \$5 a month"`, "Saving $5 a month", false},
 		{"different command", `ao summarize "Fixing the login"`, "", false},
 		{"not ao", `echo ao summary "Fixing the login"`, "", false},
 	}

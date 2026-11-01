@@ -13,6 +13,10 @@ import (
 // quotes are removed and anything after the first control operator (`&&`, `;`,
 // `|`, a redirect) is not part of the summary. The text then goes through the
 // same normalizer as the CLI and the HTTP endpoint.
+//
+// Only the CLI sees what the shell finally runs, so commands whose text this
+// cannot know are left to it: any flag other than --done (`--help` sets no
+// summary), and text the shell would expand.
 func extractAOSummary(commandInput string) (string, bool) {
 	cmd := strings.TrimSpace(commandInput)
 	rest, ok := strings.CutPrefix(cmd, "ao summary")
@@ -30,13 +34,17 @@ func extractAOSummary(commandInput string) (string, bool) {
 			done = true
 			continue
 		}
+		if strings.HasPrefix(word, "-") {
+			return "", false
+		}
 		text = append(text, word)
 	}
 	return domain.NormalizeCardSummary(strings.Join(text, " ")), done
 }
 
 // shellWords splits the arguments of one simple command. It stops at the first
-// unquoted control operator and reports false for an unterminated quote.
+// unquoted control operator. It reports false for an unterminated quote and for
+// a `$` or backtick outside single quotes, whose text the shell would replace.
 func shellWords(s string) ([]string, bool) {
 	var (
 		words   []string
@@ -89,12 +97,17 @@ func shellWords(s string) ([]string, bool) {
 					closed = true
 					break
 				}
+				if c == '$' || c == '`' {
+					return nil, false
+				}
 				word.WriteRune(c)
 			}
 			if !closed {
 				return nil, false
 			}
 			inWord, digitsO = true, false
+		case r == '$' || r == '`':
+			return nil, false
 		case r == '\\' && i+1 < len(runes):
 			i++
 			word.WriteRune(runes[i])

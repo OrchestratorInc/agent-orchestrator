@@ -210,6 +210,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateCardSummariesRequest":                "UpdateCardSummariesRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
+	"ControllersUpdateSummaryRequest":                      "UpdateSummaryRequest",
+	"ControllersUpdateSummaryResponse":                     "UpdateSummaryResponse",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",

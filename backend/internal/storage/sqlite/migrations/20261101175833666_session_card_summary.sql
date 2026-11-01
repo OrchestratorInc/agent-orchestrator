@@ -6,10 +6,6 @@
 -- overwrite it.
 ALTER TABLE sessions ADD COLUMN card_summary TEXT NOT NULL DEFAULT '';
 
--- An earlier revision of this change put the trigger on latest_assistant_update
--- under the same name; databases that ran it must not keep it.
-DROP TRIGGER IF EXISTS sessions_card_summary_cdc;
-
 -- A summary-only write must still invalidate the board.
 -- +goose StatementBegin
 CREATE TRIGGER sessions_card_summary_cdc
