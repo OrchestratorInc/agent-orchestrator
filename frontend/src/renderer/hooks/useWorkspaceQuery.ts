@@ -31,6 +31,7 @@ import {
 	attentionZone,
 	workerSessions,
 	type WorkspaceSession,
+	type WorkspaceShare,
 	type WorkspaceSummary,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -700,6 +701,27 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
  * person, as workspaces beside their own. A project shared both whole and
  * one session at a time shows once.
  */
+/** Who shared a project and its sessions, and through which team. */
+export function workspaceShareOf(items: CloudCpSharedProject[]): WorkspaceShare {
+	const source = (item: CloudCpSharedProject) => ({
+		byName: item.sharedByName || undefined,
+		viaTeamName: item.viaTeamName || undefined,
+		grantId: item.grant.id,
+	});
+	const whole = items.find((item) => !item.sessionId);
+	const sessions: Record<string, ReturnType<typeof source>> = {};
+	for (const item of items) {
+		if (item.sessionId) sessions[item.sessionId] = source(item);
+	}
+	const first = whole ?? items[0]!;
+	return {
+		byName: first.sharedByName || undefined,
+		viaTeamName: first.viaTeamName || undefined,
+		...(whole ? { wholeProject: source(whole) } : {}),
+		sessions,
+	};
+}
+
 export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	return useQuery({
@@ -710,18 +732,24 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 		refetchInterval: 15_000,
 		queryFn: async (): Promise<WorkspaceSummary[]> => {
 			const { shared } = await client.listSharedProjects();
-			const byProject = new Map<string, CloudCpSharedProject>();
+			const byProject = new Map<string, CloudCpSharedProject[]>();
 			for (const item of shared) {
 				const key = `${item.project.orgId}/${item.project.id}`;
-				if (!byProject.has(key)) byProject.set(key, item);
+				byProject.set(key, [...(byProject.get(key) ?? []), item]);
 			}
-			return Promise.all([...byProject.values()].map(async (item) => {
+			return Promise.all([...byProject.values()].map(async (items) => {
+				const item = items[0]!;
 				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
 				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
+				const share = workspaceShareOf(items);
 				return {
 					...workspace,
-					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
-					shared: { byName: item.sharedByName || undefined },
+					sessions: workspace.sessions.map((session) => {
+						if (!session.cloud) return session;
+						const via = share.sessions?.[session.id]?.viaTeamName ?? share.wholeProject?.viaTeamName;
+						return { ...session, cloud: { ...session.cloud, shared: true, ...(via ? { sharedVia: via } : {}) } };
+					}),
+					shared: share,
 				};
 			}));
 		},

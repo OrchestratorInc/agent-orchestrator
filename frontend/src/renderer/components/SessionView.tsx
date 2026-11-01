@@ -107,6 +107,7 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type Sessio
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
+import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
@@ -1543,6 +1544,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
+			{/* On a session shared with this person: what they can do in it, and through which team. */}
+			{session ? <SessionAccessTag session={session} /> : null}
 			{/* Who else is here, or Share; only the session's own organization can share it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
