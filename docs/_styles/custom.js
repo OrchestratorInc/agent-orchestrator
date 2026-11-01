@@ -593,10 +593,10 @@ function aoCurLangName() {
     /* Start from the fork URL, which is verified to exist while the PR is open,
        so an early middle-click/copy is never broken. Swap to canonical upstream
        only after the probe positively verifies the file exists on main. On a
-       probe network error (one retry), fall back by host: Mintlify serves
-       branch previews on *.mintlify.app subdomains, where the fork is the live
-       source; a custom domain means the production deployment, whose source is
-       upstream main. */
+       probe network error (after one retry) keep the last known-good fork URL:
+       no host-based guessing. Residual: if the fork branch is deleted after
+       merge AND the upstream probe errors, the link can 404 until a reload
+       succeeds. */
     var ghTarget = ghFallbackUrl, ghResolved = false;
     gh.href = ghFallbackUrl;
     var ghProbe = function (retried) {
@@ -605,9 +605,6 @@ function aoCurLangName() {
         ghResolved = true;
       }, function () {
         if (!retried) { ghProbe(true); return; }
-        if (!/\.mintlify\.app$/.test(location.hostname)) {
-          ghTarget = ghUpstreamUrl; gh.href = ghUpstreamUrl;
-        }
         ghResolved = true;
       });
     };
