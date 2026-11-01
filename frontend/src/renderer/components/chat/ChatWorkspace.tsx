@@ -1,6 +1,7 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
+import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -2591,6 +2592,8 @@ const WELCOME_FADE_MS = 150;
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
+/** A settled turn holds the reader's row still this long, while "Worked for" opens (240ms). */
+const SETTLE_HOLD_MS = 400;
 /**
  * A reader who nudges the view up a little and then stops has paused, not left.
  * After this long with no further input, while the turn is still live and they are
@@ -3877,6 +3880,69 @@ export function Timeline({
 		updateScrollbar();
 	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
+	// Keeps a settled turn's row still under the reader while "Worked for" opens.
+	const settleHold = useRef<{ observer: ResizeObserver; timer: number } | undefined>(undefined);
+	const releaseSettleHold = useCallback(() => {
+		const hold = settleHold.current;
+		if (!hold) return;
+		hold.observer.disconnect();
+		window.clearTimeout(hold.timer);
+		settleHold.current = undefined;
+	}, []);
+	useEffect(() => releaseSettleHold, [releaseSettleHold]);
+	// A settling turn folds all of its steps under "Worked for" in one commit. Following
+	// the end, syncStreamedGrowth puts the view back; a reader who scrolled up into the
+	// turn would instead see what they were reading vanish and the reply slide up under
+	// them. So note the turn's row at the top of their view just before the fold...
+	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
+		const node = scroller.current;
+		if (!node || pinnedRef.current || !initialLayoutDone.current) return undefined;
+		if (!groups.some((group) => group.key === key && !group.live)) return undefined;
+		const wrapper = Array.from(virtualContent.current?.children ?? [])
+			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
+		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
+		if (!turn) return undefined;
+		const top = node.getBoundingClientRect().top;
+		const rows = Array.from(turn.children) as HTMLElement[];
+		const index = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
+		if (index < 0) return undefined;
+		return { turn, rows, index, offset: rows[index]!.getBoundingClientRect().top - top };
+	}, [groups]);
+	// ...and put it back right after, before paint. A row still in the turn (the prompt,
+	// a steer, the reply) holds its place. A step that folded away hands its place to
+	// "Worked for", which lands at the top of the view with the reply under it.
+	const restoreSettle = useCallback(({ turn, rows, index, offset }: SettleAnchor) => {
+		const node = scroller.current;
+		if (!node) return;
+		// The fold changed what the end can reach, so size the spacer before moving.
+		syncPromptSpacer();
+		const anchor = rows[index]!;
+		const kept = anchor.isConnected && !anchor.hasAttribute("data-turn-live-row");
+		const target = kept
+			? anchor
+			: Array.from(turn.children).find((child) => child.hasAttribute("data-turn-worked"))
+				?? rows.slice(index + 1).find((row) => row.isConnected);
+		if (!target) return;
+		const landing = kept ? offset : 0;
+		const place = () => {
+			const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
+			if (Math.abs(delta) < 0.5) return;
+			node.scrollTop += delta;
+			markWritten(node.scrollTop);
+			lastScrollTop.current = node.scrollTop;
+		};
+		place();
+		updateScrollbar();
+		// "Worked for" then opens from zero height above a row the reader kept, and the
+		// log has no scroll anchoring of its own: re-place the row after each layout
+		// step until it has opened, or until the reader scrolls.
+		releaseSettleHold();
+		if (typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(place);
+		observer.observe(turn);
+		settleHold.current = { observer, timer: window.setTimeout(releaseSettleHold, SETTLE_HOLD_MS) };
+	}, [syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
 	// that during a height animation makes the whole chat jump under the reader.
@@ -3975,6 +4041,8 @@ export function Timeline({
 		// releases the follow once it is away from the end, or whenever it moves up
 		// (so a small nudge up is not pulled straight back). A scroll that only clamps
 		// to the end after content shrank is not the reader leaving.
+		// Any scroll of the reader's own ends a settled turn's hold on their row.
+		if (!isOwnScroll(top)) releaseSettleHold();
 		if (isOwnScroll(top)) {
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
@@ -4180,6 +4248,7 @@ export function Timeline({
 				aria-label="Conversation"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
+				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
 				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
@@ -4234,6 +4303,7 @@ export function Timeline({
 									transform: `translateY(${row.start - virtualScrollMargin}px)`,
 								} : undefined}
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
+								data-chat-turn={group.key}
 							>
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
@@ -4732,6 +4802,7 @@ const TurnGroup = memo(function TurnGroup({
 					animate={{ height: "auto", opacity: 1 }}
 					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
 					className="-mx-1 overflow-hidden px-1"
+					data-turn-worked=""
 				>
 					<TurnWorkSummary
 						durationMs={outcome.durationMs}
@@ -4800,6 +4871,8 @@ const TurnGroup = memo(function TurnGroup({
 						// Under a reply, sit where that reply's action row will (its 4px
 						// gap, not the turn's 10px).
 						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
+						// Kept in the DOM while it fades, but it never outlasts the turn.
+						data-turn-live-row=""
 					>
 						{workingRow}
 					</motion.div>
@@ -5187,6 +5260,9 @@ function useStableValue<T>(value: T): T {
 	if (!sameContent(previous.current, value)) previous.current = value;
 	return previous.current;
 }
+
+/** A settling turn's rows from just before the fold, and the one at the top of the view. */
+type SettleAnchor = { turn: HTMLElement; rows: HTMLElement[]; index: number; offset: number };
 
 type TimelineGroup = {
 	key: string;

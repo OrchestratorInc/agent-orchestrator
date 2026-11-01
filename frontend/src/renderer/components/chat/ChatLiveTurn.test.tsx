@@ -1,6 +1,6 @@
 import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot, TurnState } from "../../types/conversation";
@@ -61,5 +61,73 @@ describe("live turn", () => {
 		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
 		expect(screen.queryByText("Checking the folder layout first.")).toBeNull();
 		expect(screen.getByText("Here is what I found so far")).toBeInTheDocument();
+	});
+});
+
+// A reader who scrolled up into a running turn keeps their place when it settles
+// and its steps fold under "Worked for" all at once.
+describe("settling under a reader who scrolled up", () => {
+	const secondNote: ConversationItem = { kind: "message", id: "note-2", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Now the tests.", streaming: false, createdAt: at };
+	const testRun: ConversationItem = { kind: "activity", id: "cmd-2", turnId: "t", sequence: 5, revision: 0, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at };
+	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
+	const items = [user, note, command, secondNote, testRun, reply];
+	let restoreLayout: (() => void) | undefined;
+	afterEach(() => {
+		restoreLayout?.();
+		restoreLayout = undefined;
+	});
+
+	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" is 28px) under a scrollable log. */
+	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const height = (row: Element) => (row.hasAttribute("data-turn-worked") ? 28 : 100);
+		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
+			const turn = this.parentElement;
+			if (!turn?.parentElement?.hasAttribute("data-chat-turn")) return bounds.call(this);
+			let top = 20 - log.scrollTop;
+			for (const row of turn.children) {
+				if (row === this) break;
+				top += height(row);
+			}
+			return { ...bounds.call(this), top, bottom: top + height(this), height: height(this) } as DOMRect;
+		});
+		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
+		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: scrollTop });
+		restoreLayout = () => spy.mockRestore();
+		// Reading back up the turn releases the follow.
+		fireEvent.wheel(log, { deltaY: -120 });
+		fireEvent.scroll(log);
+	}
+
+	function settle(rerender: (ui: ReactElement) => void) {
+		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", items)} /></TooltipProvider>);
+	}
+
+	it("lands Worked for at the top of the view when the reader was among the steps", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// Rows: prompt 20, note 120, ls 220, second note 320, npm test 420, reply 520.
+		// At 350 the second note sits across the top edge.
+		stubTurnLayout(log, 350);
+
+		settle(rerender);
+
+		// Folded: prompt 20, "Worked for" 120, reply 148.
+		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(120);
+	});
+
+	it("holds the reply still when the reader was already on it", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// The reply starts at 520, 40px above the top edge.
+		stubTurnLayout(log, 560);
+
+		settle(rerender);
+
+		// Folded, the reply starts at 148: still 40px above the top edge.
+		expect(log.scrollTop).toBe(188);
 	});
 });
