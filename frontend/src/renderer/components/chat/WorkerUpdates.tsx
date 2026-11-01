@@ -9,7 +9,7 @@
  * as the user's conversation rather than a log of worker traffic.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, Split, Tag, Undo2 } from "lucide-react";
+import { ArrowUpRight, Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
@@ -18,7 +18,8 @@ import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces, useOpenSessionLink } from "./ChatMarkdown";
 import { formatDuration, formatTime, humanVisibleText, QueuedNote, ResponseSpinner, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
 
@@ -200,6 +201,8 @@ export interface WorkerUpdateIndex {
 	latestKeys: ReadonlySet<string>;
 	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
+	/** Workers whose spawn the daemon recorded, so their box draws where that record is. */
+	spawnRecorded: ReadonlySet<string>;
 }
 
 export const WorkerUpdateIndexContext = createContext<WorkerUpdateIndex | null>(null);
@@ -211,8 +214,14 @@ export function indexWorkerUpdates(items: readonly ConversationItem[]): WorkerUp
 			latest.set(update.sessionId ?? update.key, update);
 		}
 	}
-	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)) };
+	return {
+		latest,
+		latestKeys: new Set([...latest.values()].map((update) => update.key)),
+		spawnRecorded: new Set(items.flatMap((item) => spawnedBy(item) ?? [])),
+	};
 }
+
+const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((key) => b.has(key));
 
 /**
  * The index for a timeline, keeping the same object until some worker's newest
@@ -223,8 +232,7 @@ export function useWorkerUpdateIndex(items: readonly ConversationItem[] | undefi
 	return useMemo(() => {
 		const next = items ? indexWorkerUpdates(items) : null;
 		const before = previous.current;
-		const unchanged = before && next && before.latestKeys.size === next.latestKeys.size
-			&& [...next.latestKeys].every((key) => before.latestKeys.has(key));
+		const unchanged = before && next && sameSet(before.latestKeys, next.latestKeys) && sameSet(before.spawnRecorded, next.spawnRecorded);
 		previous.current = unchanged ? before : next;
 		return previous.current;
 	}, [items]);
@@ -310,10 +318,11 @@ function WorkerMessage({ update }: { update: WorkerUpdate }) {
 			) : (
 				<Bot aria-hidden="true" className="absolute left-0 top-[3px] size-4 text-muted-foreground" />
 			)}
-			{/* A worker's name is its task title, often long, so it heads the message on its own line and truncates. */}
-			<div className="flex min-w-0 items-baseline gap-3">
+			{/* A worker's name is its task title, often long, so it heads the message on its own line and truncates,
+			    with its state and time beside it rather than across the chat. */}
+			<div className="flex h-[22px] min-w-0 items-baseline gap-2">
 				<span
-					className="min-w-0 flex-1 truncate text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground"
+					className="min-w-0 truncate text-[length:var(--font-size-base)] font-medium leading-[22px] text-foreground"
 					title={name}
 				>
 					{href ? (
@@ -561,12 +570,16 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
-export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
-	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
-		&& item.detail?.action === "session.spawned"
-		&& typeof item.detail.targetSessionId === "string"
-		&& item.detail.operationId === item.detail.targetSessionId
-		&& spawnedIds.has(item.detail.targetSessionId);
+/**
+ * The worker a spawn the daemon recorded started. The daemon writes it the moment
+ * the session exists, well before the provider reports `ao spawn` finished, and
+ * outside any turn, so it lands just after the turn that spawned the worker.
+ */
+export function spawnedBy(item: ConversationItem): string | undefined {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || item.status !== "completed") return undefined;
+	if (item.detail?.action !== "session.spawned") return undefined;
+	const target = item.detail.targetSessionId;
+	return typeof target === "string" && target !== "" ? target : undefined;
 }
 
 /**
@@ -574,9 +587,13 @@ export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: Reado
  * reads as the worker's own message where it arrived, so the box would only
  * repeat it.
  */
-export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const latest = useContext(WorkerUpdateIndexContext)?.latest;
-	const waiting = sessionIds.filter((id) => !latest?.has(id));
+export function SpawnedAgents({ sessionIds, fromCommand = false }: {
+	sessionIds: readonly string[];
+	/** Read from `ao spawn` output at the end of the turn: only a daemon too old to record the spawn needs these. */
+	fromCommand?: boolean;
+}) {
+	const index = useContext(WorkerUpdateIndexContext);
+	const waiting = sessionIds.filter((id) => !index?.latest.has(id) && !(fromCommand && index?.spawnRecorded.has(id)));
 	if (waiting.length === 0) return null;
 	return (
 		<div className="flex min-w-0 flex-col gap-2">
@@ -622,6 +639,8 @@ function useElapsed(startedAt: string | undefined): string | undefined {
 }
 
 function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
+	const { t } = useTranslation();
+	const openSession = useOpenSessionLink();
 	const session = useWorkerSession(sessionId);
 	const state = waitingState(session);
 	const working = state.tone === "working";
@@ -654,6 +673,21 @@ function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
 						<span className={cn(state.tone === "attention" && "text-status-needs-you")}>{state.label}</span>
 						{elapsed ? <span className="tabular-nums">· {elapsed}</span> : null}
 					</span>
+					{href && openSession ? (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={() => openSession(href)}
+									aria-label={t("chat.action.openSession")}
+									className="-my-1 -mr-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									<ArrowUpRight aria-hidden="true" className="size-3.5" />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{t("chat.action.openSession")}</TooltipContent>
+						</Tooltip>
+					) : null}
 				</div>
 				{phase ? <p className="mt-0.5 truncate text-xs text-muted-foreground" title={phase}>{phase}</p> : null}
 			</div>

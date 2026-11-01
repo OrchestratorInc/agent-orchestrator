@@ -139,13 +139,13 @@ import {
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
 	TaskNamedLine,
 	useWorkerUpdateIndex,
@@ -3634,13 +3634,8 @@ export function Timeline({
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
-		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return groups;
-		return groups
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
-			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
+		return groups;
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -4903,6 +4898,16 @@ const TurnGroup = memo(function TurnGroup({
 	// report batch, or reports folded into the user's message) draws in full under
 	// the worker's name, and AO's task-naming prompt as the name it produced.
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
+		// A spawn the daemon recorded draws as the worker's box, from the moment the
+		// worker exists rather than once the turn that spawned it settles.
+		const recorded = workerUpdates && run.kind === "activities" ? run.items.flatMap((entry) => spawnedBy(entry) ?? []) : [];
+		if (recorded.length > 0) {
+			const rest = run.items.filter((entry) => !spawnedBy(entry));
+			return [
+				...(rest.length > 0 ? [renderRun({ kind: "activities", key: run.key, items: rest })] : []),
+				<SpawnedAgents key={`${run.key}:spawned`} sessionIds={recorded} />,
+			];
+		}
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
@@ -4988,7 +4993,7 @@ const TurnGroup = memo(function TurnGroup({
 		body.push(renderRun(finalRun));
 	}
 	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
+	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} fromCommand />);
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
 			{body}

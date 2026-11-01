@@ -59,13 +59,13 @@ function snapshot(items: ConversationItem[], turnState: "completed" | "running" 
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed") {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed", onSessionLinkOpen?: (url: string) => void) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} onSessionLinkOpen={onSessionLinkOpen} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -73,7 +73,7 @@ function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), wor
 }
 
 describe("orchestrator worker updates", () => {
-	it("shows one box for a spawned worker when the daemon also recorded the spawn", () => {
+	it("shows one box for a spawned worker when the daemon also recorded the spawn", async () => {
 		const workspaces = [{
 			id: "proj", name: "proj", path: "/tmp/proj",
 			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
@@ -87,9 +87,12 @@ describe("orchestrator worker updates", () => {
 			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
 			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
 		};
-		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
+		const openSession = vi.fn();
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces, "orchestrator", "completed", openSession);
 
 		const box = screen.getByTestId("spawned-agent");
+		// The box sits under the reply that started the worker.
+		expect(screen.getByText("Worker started.").compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		// The fork icon leads, then the agent that runs the worker.
 		const fork = box.querySelector("svg.lucide-split");
 		const avatar = box.querySelector("img");
@@ -100,22 +103,40 @@ describe("orchestrator worker updates", () => {
 		expect(within(box).getByRole("link", { name: "Audit usage" })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
 		const idle = within(box).getByText("Idle");
 		expect(idle.parentElement?.querySelector('[data-testid="lattice-loader"]')).toBeNull();
+		await userEvent.click(within(box).getByRole("button", { name: "Open session" }));
+		expect(openSession).toHaveBeenCalledWith("ao://sessions/proj/proj-288");
 	});
 
-	it("keeps a structured spawn action when no command group represents it", () => {
+	it("offers no open arrow where the chat cannot open a session", () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
+		}] as unknown as WorkspaceSummary[];
+		const action: ConversationActivity = {
+			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), action], vi.fn(), workspaces);
+		expect(within(screen.getByTestId("spawned-agent")).queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
+	});
+
+	it("draws a recorded spawn as the worker's box with no spawn command to read", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
 			status: "completed", summary: "Spawned an agent", createdAt: at(1),
 			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
 		};
 		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("proj-288");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("hides the matching action as soon as the command completes during a running turn", () => {
+	it("shows the box as soon as the daemon records the spawn, while the turn and its command still run", () => {
 		const spawn = {
 			...command("t1", 1, "ao spawn --project proj"),
-			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+			status: "running" as const,
+			detail: { command: "ao spawn --project proj" },
 		};
 		const action: ConversationActivity = {
 			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
@@ -123,10 +144,22 @@ describe("orchestrator worker updates", () => {
 			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
 		};
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, action], vi.fn(), [], "orchestrator", "running");
+		expect(screen.getByTestId("spawned-agent")).toBeInTheDocument();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("keeps a distinct structured spawn next to the command spawn's box", () => {
+	it("keeps a failed spawn as the action row that says so", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "failed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "failed:req-1", error: "project not found" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("draws a box for a spawn only its command output names, beside a recorded one", () => {
 		const spawn = {
 			...command("t1", 1, "ao spawn --project proj"),
 			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
@@ -137,8 +170,11 @@ describe("orchestrator worker updates", () => {
 			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
 		};
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
-		expect(screen.getByTestId("spawned-agent")).toBeInTheDocument();
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+		expect(screen.getAllByTestId("spawned-agent").map((box) => box.textContent)).toEqual([
+			expect.stringContaining("proj-288"),
+			expect.stringContaining("proj-289"),
+		]);
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
 	it.each([
