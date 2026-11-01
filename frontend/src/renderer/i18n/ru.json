@@ -2985,6 +2985,8 @@
 	"newTask.phoneConnected_few": "Подключено {{count}} телефона",
 	"newTask.phoneConnected_many": "Подключено {{count}} телефонов",
 	"newTask.phoneConnected_other": "Подключено {{count}} телефона",
+	"newTask.modelNotice.missingCLI": "CLI {{agent}} не установлен. AO требуется инструмент командной строки для загрузки моделей и выполнения локальных задач.",
+	"newTask.modelNotice.install": "Установить {{agent}}",
 	"newTask.modelNotice.signedOut": "Вход в {{agent}} на этом компьютере не выполнен, поэтому не удалось загрузить его модели.",
 	"newTask.modelNotice.expired": "Срок действия сохранённого входа в {{agent}} истёк. Он обновится при следующем запуске {{agent}}, или вы можете войти снова сейчас.",
 	"newTask.modelNotice.login": "Войти",
