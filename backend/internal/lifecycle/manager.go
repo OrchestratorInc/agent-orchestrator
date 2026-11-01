@@ -1048,7 +1048,7 @@ retryProjection:
 			SessionDisplayName: next.DisplayName,
 		}
 	}
-	completed := agentCompletedIntent(prevState, next)
+	completed := agentCompletedIntent(prevState, next, s.Event)
 	// Leaving the needs-input family is the user answering: the notification
 	// that pinged them has nothing left to resolve.
 	resolutions := needsInputResolutions(rec, next, now)
@@ -1073,14 +1073,32 @@ retryProjection:
 	return nil
 }
 
-// agentCompletedIntent pings the user when a worker agent ends a working turn
-// (active -> idle), so they can come back to its result. Orchestrator turns
-// are coordination chatter, and a session leaving needs-input or exit for idle
-// did no new work. The turn's end time keys the row so each finished turn
-// notifies once, even across hook retries.
-func agentCompletedIntent(prev domain.ActivityState, next domain.SessionRecord) *ports.NotificationIntent {
+// unfinishedTurnEvents end a turn without a result: the provider failed it
+// (rate limit, API error), the user interrupted it, or the agent process or
+// controller went away. Their idle is not a finished agent, so they never
+// notify "finished".
+var unfinishedTurnEvents = map[string]bool{
+	"stop-failure":                 true,
+	"interrupt":                    true,
+	"chat.turn.failed":             true,
+	"chat.turn.interrupted":        true,
+	"chat.interrupt.reconciled":    true,
+	"chat.controller.stopped":      true,
+	"chat.controller.disconnected": true,
+	"process-exited":               true,
+	"session-end":                  true,
+	"liveness-probe":               true,
+}
+
+// agentCompletedIntent pings the user when a worker agent finishes a working
+// turn (active -> idle on a successful turn end), so they can come back to its
+// result. Orchestrator turns are coordination chatter, a session leaving
+// needs-input or exit for idle did no new work, and a failed, interrupted or
+// abandoned turn has no result to review. The turn's end time keys the row so
+// each finished turn notifies once, even across hook retries.
+func agentCompletedIntent(prev domain.ActivityState, next domain.SessionRecord, event string) *ports.NotificationIntent {
 	if prev != domain.ActivityActive || next.Activity.State != domain.ActivityIdle ||
-		next.IsTerminated || next.Kind == domain.KindOrchestrator {
+		next.IsTerminated || next.Kind == domain.KindOrchestrator || unfinishedTurnEvents[event] {
 		return nil
 	}
 	return &ports.NotificationIntent{

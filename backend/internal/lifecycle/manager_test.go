@@ -4994,3 +4994,46 @@ func TestActivity_AgentCompletedSkipsOrchestratorsAndNonWorkTransitions(t *testi
 		})
 	}
 }
+
+// Only a turn that ended with a result is "finished". A provider failure, an
+// interrupt or a lost process also idles the session, but has nothing to review.
+func TestActivity_AgentCompletedOnlyForSuccessfulTurnEnds(t *testing.T) {
+	now := time.Date(2026, 10, 31, 10, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		event  string
+		notify bool
+	}{
+		{event: "", notify: true},
+		{event: "stop", notify: true},
+		{event: "chat.turn.completed", notify: true},
+		{event: "stop-failure"},
+		{event: "interrupt"},
+		{event: "chat.turn.failed"},
+		{event: "chat.turn.interrupted"},
+		{event: "chat.interrupt.reconciled"},
+		{event: "chat.controller.stopped"},
+		{event: "process-exited"},
+		{event: "session-end"},
+	} {
+		t.Run(tt.event, func(t *testing.T) {
+			st := newFakeStore()
+			sink := &fakeNotificationSink{}
+			m := New(st, nil, WithNotificationSink(sink))
+			m.clock = func() time.Time { return now }
+			st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Minute)}, FirstSignalAt: now.Add(-time.Minute)}
+			if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Timestamp: now, Event: tt.event}); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.sessions["mer-1"].Activity.State; got != domain.ActivityIdle {
+				t.Fatalf("activity = %q, want idle (the signal must land for this case to mean anything)", got)
+			}
+			notified := false
+			for _, intent := range sink.intents {
+				notified = notified || intent.Type == domain.NotificationAgentCompleted
+			}
+			if notified != tt.notify {
+				t.Fatalf("agent_completed notified = %v, want %v (intents %+v)", notified, tt.notify, sink.intents)
+			}
+		})
+	}
+}
