@@ -345,7 +345,8 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 	}
 	projectID := modelCatalogScope(scope)
 	if !refresh {
-		if _, ok := s.agent(agentID); !ok {
+		item, ok := s.agent(agentID)
+		if !ok {
 			return ports.AgentModelCatalog{}, apierr.NotFound("AGENT_NOT_FOUND", "Unknown agent adapter")
 		}
 		cached, ok, err := s.cachedCatalog(ctx, agentID, projectID)
@@ -374,6 +375,9 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			}
 			if inputsChecking && cached.Catalog.RefreshState == "" {
 				cached.Catalog.RefreshState = "refreshing"
+			}
+			if !s.readyForModelUpdate(agentID) {
+				cached.Catalog = missingAgentModelCatalog(cached.Catalog, item.Manifest.Name)
 			}
 			return cached.Catalog, nil
 		}
@@ -770,10 +774,12 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, policy)
 	}
 	var binary string
+	var binaryResolveErr error
 	if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
 		lock := s.resolverMu[agentID]
 		lock.Lock()
 		resolved, err := resolver.ResolveBinary(ctx)
+		binaryResolveErr = err
 		lock.Unlock()
 		if err == nil {
 			binary = resolved
@@ -809,15 +815,20 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		cached.Catalog.RefreshRecommended = true
 		return cached.Catalog, nil
 	}
-	if !s.readyForModelUpdate(agentID) {
-		// Readiness found nothing to discover with: keep serving the saved catalog
-		// rather than recording a failure over it.
-		if hasCached {
-			return cached.Catalog, nil
+	if mode == modelLoadRefresh && !s.readyForModelUpdate(agentID) {
+		// A user may have installed the CLI outside AO since the last check.
+		if _, err := s.readiness.Force(ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay); err != nil {
+			return ports.AgentModelCatalog{}, err
 		}
+	}
+	if !s.readyForModelUpdate(agentID) {
+		// Keep saved models, but explain why discovery cannot run on this host.
 		fallback := policy
+		if hasCached {
+			fallback = cached.Catalog
+		}
 		fallback.BinaryVersion = version
-		return fallback, nil
+		return missingAgentModelCatalog(fallback, item.Manifest.Name), nil
 	}
 	if mode == modelLoadRefresh || inputsChanged || explicitlyInvalidated {
 		cached.RetryCount = 0
@@ -832,6 +843,11 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
+	if discoverErr != nil && errors.Is(binaryResolveErr, ports.ErrAgentBinaryNotFound) && !errors.Is(discoverErr, ports.ErrAgentBinaryNotFound) {
+		// Some discovery adapters report an empty executable as an untyped error.
+		// Retain the resolver's definitive cause even after readiness expires.
+		discoverErr = errors.Join(binaryResolveErr, discoverErr)
+	}
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	persistCtx := s.ctx
@@ -955,10 +971,24 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 	return catalog
 }
 
+// missingAgentModelCatalog keeps saved model choices while explaining why they
+// cannot currently be discovered or used on this host. This is a read overlay:
+// readiness recovery must not leave a persisted missing-install warning behind.
+func missingAgentModelCatalog(catalog ports.AgentModelCatalog, agentName string) ports.AgentModelCatalog {
+	catalog.Stale = true
+	if catalog.WarningCode != ports.ModelCatalogWarningNotInstalled || catalog.Warning == "" {
+		catalog.Warning = agentName + ": installation check did not find the CLI on this host."
+	}
+	catalog.WarningCode = ports.ModelCatalogWarningNotInstalled
+	return catalog
+}
+
 // modelCatalogWarningCode classifies a discovery failure that clients can
-// resolve with the agent's own login.
+// resolve by installing the agent or using its own login.
 func modelCatalogWarningCode(err error) string {
 	switch {
+	case errors.Is(err, ports.ErrAgentBinaryNotFound):
+		return ports.ModelCatalogWarningNotInstalled
 	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialExpired):
 		return ports.ModelCatalogWarningAuthExpired
 	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected),

@@ -19,6 +19,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse } from "../lib/cloud-cp";
 import {
 	cacheAgentReadiness,
+	agentReadinessQueryKeyForHost,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
 } from "../hooks/useAgentReadinessQuery";
@@ -47,7 +48,7 @@ import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQue
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
-	modelCatalogAuthIssue,
+	modelCatalogIssue,
 	refreshAgentModels,
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
@@ -560,10 +561,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				? localModelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
-	// A login problem behind the catalog warning gets a plain-language notice
+	// An installation or login problem gets a plain-language catalog notice
 	// with the fix in place. A cloud task never runs on this computer's login,
 	// so its composer never asks for it.
-	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
+	const modelIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogIssue(localCatalog) : undefined;
+	const modelNotInstalled = modelIssue === "not_installed";
+	const modelAuthIssue = modelNotInstalled ? undefined : modelIssue;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
 	const { models: offeredModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
@@ -797,7 +800,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		}
 		const refreshed = await refreshAgentModels(selectedAgent, modelScope, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelScope, hostId), refreshed);
-	}, [cloudCatalogAgent, cloudModelCatalogQuery.refetch, cloudOrg?.id, hostId, isCloudProject, modelScope, queryClient, selectedAgent]);
+		if (modelNotInstalled) {
+			await queryClient.invalidateQueries({ queryKey: agentReadinessQueryKeyForHost(hostId) });
+		}
+	}, [cloudCatalogAgent, cloudModelCatalogQuery.refetch, cloudOrg?.id, hostId, isCloudProject, modelNotInstalled, modelScope, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
 		openGlobalSettings("harness", {
@@ -809,14 +815,22 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	const startAgentInstall = useCallback(() => {
+		openGlobalSettings("harness", {
+			focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
+			harnessView: "local", preserveProject: true,
+		});
+	}, [hostId, openGlobalSettings, selectedAgent]);
+	const noticeAction = modelIssue === "not_installed"
+		? { issue: modelIssue, onInstall: startAgentInstall }
+		: modelIssue ? { issue: modelIssue, onLogin: startAgentLogin } : undefined;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelAuthIssue ? (
+		: noticeAction ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelAuthIssue}
+			{...noticeAction}
 			detail={modelWarningText}
-			onLogin={startAgentLogin}
 			onRetry={refreshSelectedModels}
 		/>
 	) : modelWarningText;

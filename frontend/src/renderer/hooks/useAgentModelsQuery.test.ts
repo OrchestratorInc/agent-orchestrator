@@ -2,7 +2,7 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../lib/api-client";
 import { cacheAgentModels, readCachedAgentModels } from "../lib/agent-model-cache";
-import { agentModelsQueryOptions, invalidateAgentModelCatalogs, modelCatalogAuthIssue, type AgentModelCatalog } from "./useAgentModelsQuery";
+import { agentModelsQueryOptions, invalidateAgentModelCatalogs, modelCatalogIssue, modelCatalogAuthIssue, type AgentModelCatalog } from "./useAgentModelsQuery";
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: vi.fn() },
@@ -361,5 +361,14 @@ describe("invalidateAgentModelCatalogs", () => {
 		await invalidateAgentModelCatalogs(client, "claude-code", "box-a");
 		expect(invalidated(keys.remote) && invalidated(keys.remoteRevalidation)).toBe(true);
 		expect([keys.local, keys.composerRevalidation, keys.otherRevalidation].some(invalidated)).toBe(false);
+	});
+});
+
+describe("modelCatalogIssue", () => {
+	it("classifies installation and login wire codes together", () => {
+		expect(modelCatalogIssue({ warningCode: "not_installed" })).toBe("not_installed");
+		expect(modelCatalogIssue({ warningCode: "auth_required" })).toBe("required");
+		expect(modelCatalogIssue({ warningCode: "auth_expired" })).toBe("expired");
+		expect(modelCatalogAuthIssue({ warningCode: "not_installed" })).toBeUndefined();
 	});
 });

@@ -75,6 +75,7 @@ func TestModelCatalogClassifiesAuthFailuresForClients(t *testing.T) {
 	}{
 		{"rejected credential", fmt.Errorf("claude-code model discovery: %w", wrapAuthError(ports.ErrAgentModelDiscoveryCredentialRejected, "Anthropic rejected the credential")), ports.ModelCatalogWarningAuthRequired},
 		{"expired stored login", fmt.Errorf("claude-code model discovery: %w", wrapAuthError(ports.ErrAgentModelDiscoveryCredentialExpired, "login token expired")), ports.ModelCatalogWarningAuthExpired},
+		{"missing CLI", fmt.Errorf("model discovery: %w: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentBinaryNotFound), ports.ModelCatalogWarningNotInstalled},
 		{"ordinary failure", errors.New("provider offline"), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
