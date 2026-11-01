@@ -664,8 +664,7 @@ func doctorContext(t *testing.T, paths map[string]string, commandOutput func(con
 			}
 			return path, nil
 		},
-		// The codex launch-flag canary resolves the binary like a spawn does;
-		// see checkCodexLaunchFlags.
+		// Resolve like a spawn; see checkCodexLaunchFlags.
 		DoctorResolveCodexBinary: func(context.Context) (string, error) {
 			path, ok := paths["codex"]
 			if !ok || path == "" {
@@ -822,9 +821,7 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 	}
 }
 
-// TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary pins the regression in
-// #6443: the canary must probe via the DoctorResolveCodexBinary seam, not
-// deps.LookPath (see checkCodexLaunchFlags).
+// Regression #6443: resolve via the spawn seam; see checkCodexLaunchFlags.
 func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 	setConfigEnv(t)
 	dir := t.TempDir()

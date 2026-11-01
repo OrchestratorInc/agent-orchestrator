@@ -74,8 +74,7 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
-	// DoctorResolveCodexBinary resolves the codex binary like a spawn does;
-	// see checkCodexLaunchFlags for why LookPath is not equivalent.
+	// DoctorResolveCodexBinary resolves like a spawn; see checkCodexLaunchFlags.
 	DoctorResolveCodexBinary func(ctx context.Context) (string, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
