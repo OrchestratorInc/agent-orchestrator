@@ -188,7 +188,7 @@ func TestManager_AddListGetRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if proj.ID != "ao" || proj.Name != "Agent Orchestrator" || proj.Path != repo || proj.DefaultBranch != domain.DefaultBranchAuto {
+	if proj.ID != "ao" || proj.Name != "Agent Orchestrator" || proj.Path != repo || proj.DefaultBranch != "main" {
 		t.Fatalf("Add returned %#v", proj)
 	}
 
@@ -755,8 +755,8 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// A remoteless project stays in automatic mode instead of deriving a default
-	// from its current checkout. The empty config remains unpersisted.
+	// A committed remoteless project reports its current branch as a safe fallback.
+	// The empty config remains unpersisted.
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -764,8 +764,8 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 	if got.Project == nil {
 		t.Fatalf("Get returned no project: %#v", got)
 	}
-	if got.Project.DefaultBranch != domain.DefaultBranchAuto {
-		t.Fatalf("default branch = %q, want %q", got.Project.DefaultBranch, domain.DefaultBranchAuto)
+	if got.Project.DefaultBranch != "main" {
+		t.Fatalf("default branch = %q, want main", got.Project.DefaultBranch)
 	}
 	if got.Project.Agent != "claude-code" {
 		t.Fatalf("default agent = %q, want claude-code", got.Project.Agent)
@@ -809,7 +809,7 @@ func TestManager_GetUsesConfiguredDefaultHarness(t *testing.T) {
 	}
 }
 
-func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
+func TestManager_AddUsesCommittedCurrentBranchWithoutRemote(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
 	repo := gitRepoOnBranch(t, "master")
@@ -818,9 +818,9 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// A lone local branch is not authoritative default-branch metadata.
-	if proj.DefaultBranch != domain.DefaultBranchAuto {
-		t.Fatalf("DefaultBranch = %q, want auto", proj.DefaultBranch)
+	// A committed local branch is a fallback only when remote metadata is absent.
+	if proj.DefaultBranch != "master" {
+		t.Fatalf("DefaultBranch = %q, want master", proj.DefaultBranch)
 	}
 	if proj.Config != nil {
 		t.Fatalf("automatic branch selection should not pin config, got %#v", proj.Config)
@@ -830,8 +830,8 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Project == nil || got.Project.DefaultBranch != domain.DefaultBranchAuto {
-		t.Fatalf("Get DefaultBranch = %#v, want auto", got.Project)
+	if got.Project == nil || got.Project.DefaultBranch != "master" {
+		t.Fatalf("Get DefaultBranch = %#v, want master", got.Project)
 	}
 
 	// An explicit config wins over detection.
