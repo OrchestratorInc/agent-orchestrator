@@ -475,6 +475,24 @@ describe("packaged shell reload guard", () => {
 		[true, { key: "R", meta: true, shift: true }],
 		[false, { key: "r", control: true }],
 		[false, { key: "R", control: true, shift: true }],
+		[false, { key: "F5", control: true }],
+	] as const)("allows recording reload chords and resumes blocking afterwards on isMac=%s with %j", (isMac, input) => {
+		const source = fakeSource();
+		let recording = false;
+		attachShellReloadGuard(source, isMac, () => false, () => recording);
+
+		expect(source.emit(input).preventDefault).toHaveBeenCalledOnce();
+		recording = true;
+		expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
+		recording = false;
+		expect(source.emit(input).preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		[true, { key: "r", meta: true }],
+		[true, { key: "R", meta: true, shift: true }],
+		[false, { key: "r", control: true }],
+		[false, { key: "R", control: true, shift: true }],
 		[false, { key: "F5" }],
 		[false, { key: "F5", control: true }],
 		[true, { key: "F5", shift: true }],

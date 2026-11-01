@@ -1030,7 +1030,12 @@ async function createWindowInternal(): Promise<void> {
 	// browser-preview view (wired per-view in the browser host).
 	const isMac = process.platform === "darwin";
 	if (!isDev) {
-		attachShellReloadGuard(shellWebContents, isMac, () => Boolean(browserViewHost?.getLastFocusedPanelContents()));
+		attachShellReloadGuard(
+			shellWebContents,
+			isMac,
+			() => Boolean(browserViewHost?.getLastFocusedPanelContents()),
+			() => keybindingRecordingActive,
+		);
 	}
 	attachAppShortcuts(
 		shellWebContents,

@@ -49,9 +49,10 @@ export function attachShellReloadGuard(
 	contents: BeforeInputContents,
 	isMac: boolean,
 	hasBrowserTarget: () => boolean = () => false,
+	isRecording: () => boolean = () => false,
 ): void {
 	contents.on("before-input-event", (event, input) => {
-		if (input.type !== "keyDown" || input.alt) return;
+		if (input.type !== "keyDown" || input.alt || isRecording()) return;
 		const key = input.key.toLowerCase();
 		const primary = isMac ? input.meta && !input.control : input.control && !input.meta;
 		if ((key === "r" && primary && !hasBrowserTarget()) || (key === "f5" && !input.meta)) {
