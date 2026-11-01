@@ -1850,6 +1850,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
+			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {
 				resetsAt: turn.usageLimit.resetsAt ?? undefined,
 				autoResume: turn.usageLimit.autoResume,
