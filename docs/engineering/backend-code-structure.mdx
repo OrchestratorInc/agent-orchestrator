@@ -23,7 +23,7 @@ The backend is a **layered hybrid** architecture with clear separation between c
 ```mermaid
 graph TB
     subgraph CLI["CLI Layer"]
-        CLI[internal/cli]
+        CLIDir[internal/cli]
     end
 
     subgraph HTTP["HTTP Layer"]
@@ -57,7 +57,7 @@ graph TB
         Config[internal/config]
     end
 
-    CLI -->|calls| HTTPD
+    CLIDir -->|calls| HTTPD
     HTTPD -->|calls| Services
     Services -->|calls| Core
     Services -->|uses| Data
@@ -657,8 +657,8 @@ graph TD
     Responsibilities --> Shutdown[Shutdown Sequencing]
     Responsibilities --> Cross[Cross-component Wiring]
 
-    Responsibilities -->|NOT| Business[Business Logic<br/>(put in service/lifecycle)]
-    Responsibilities -->|NOT| Adapter[Adapter Implementation<br/>(put in adapters/*)]
+    Responsibilities -->|NOT| Business["Business Logic<br/>(put in service/lifecycle)"]
+    Responsibilities -->|NOT| Adapter["Adapter Implementation<br/>(put in adapters/*)"]
 
 ```
 
