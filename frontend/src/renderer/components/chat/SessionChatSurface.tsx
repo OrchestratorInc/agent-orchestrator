@@ -1,3 +1,5 @@
+import { cloneExcerptReference, excerptRequest, excerptSourceIdentity, type ChatExcerptActivation } from "../../../shared/chat-excerpt";
+import type { ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -15,7 +17,7 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  */
 
 import { AlertTriangle, Loader2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
@@ -431,7 +433,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
+	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<ChatAnnotationSummaryItem & { id: string }>();
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
@@ -453,55 +455,53 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
 	// A pending action owns its destination; an unanswered creation owns only its
 	// request identity. Reselecting text must not turn a lost reply into a new fork.
-	const selectionSideScope = useMemo(() => ({ active: true,
-		processing: new Map<string, Promise<void>>(),
-		receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
-	}), [uiSessionId, snapshot?.conversationId]);
-	const selectionSideScopeRef = useRef(selectionSideScope);
-	selectionSideScopeRef.current = selectionSideScope;
+	const selectionSideScopeRef = useRef<{ active: boolean; processing: Map<string, Promise<void>>; receipts: Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }> } | null>(null);
 	const selectionSideChatsRef = useRef(sideChats);
-	selectionSideChatsRef.current = sideChats;
-	useEffect(() => {
-		selectionSideScope.active = true;
-		return () => {
-			selectionSideScope.active = false;
-			selectionSideScope.processing.clear(); selectionSideScope.receipts.clear();
-		};
-	}, [selectionSideScope]);
-	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
-		if (!current()) throw new Error("Side chat is no longer active.");
-		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+	useLayoutEffect(() => { selectionSideChatsRef.current = sideChats; });
+	useLayoutEffect(() => {
+		const scope = { active: true, processing: new Map<string, Promise<void>>(), receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>() };
+		selectionSideScopeRef.current = scope;
+		return () => { scope.active = false; scope.processing.clear(); scope.receipts.clear(); };
+	}, [uiSessionId, snapshot?.conversationId]);
+	const attachToSide = async (excerpt: ChatDraftExcerptReference, options?: ChatExcerptActivation) => {
+		const selectionSideScope = selectionSideScopeRef.current;
+		if (!selectionSideScope) throw new Error(t("sideChat.inactive"));
+		excerpt = cloneExcerptReference(excerpt);
+		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope && (options?.isCurrent?.() ?? true);
+		if (!current()) throw new Error(t("sideChat.inactive"));
+		const identity = JSON.stringify([uiSessionId, excerptSourceIdentity(excerpt)]);
 		const pending = selectionSideScope.processing.get(identity);
 		if (pending) return pending;
 		const destination = selectionSideChatsRef.current;
 		const destinationId = destination.activeId;
 		// Reserve before any UI update or synchronous failure can trigger activation.
 		const action = Promise.resolve().then(async () => {
-			if (!current()) throw new Error("Side chat is no longer active.");
-			openSideInspector();
+			if (!current()) throw new Error(t("sideChat.inactive"));
 			if (destinationId) {
-				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
+				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error(t("sideChat.inactive"));
 				destination.addReference(destinationId, excerpt);
 				destination.show(destinationId);
+				openSideInspector();
 			} else {
 				let receipt = selectionSideScope.receipts.get(identity);
 				if (!receipt) {
-					receipt = { creationKey: crypto.randomUUID(), excerpt: { ...excerpt } };
+					receipt = { creationKey: crypto.randomUUID(), excerpt: cloneExcerptReference(excerpt) };
 					selectionSideScope.receipts.set(identity, receipt);
 				}
 				try {
-					await destination.create(receipt.excerpt, false, receipt.creationKey, {
+					const result = await destination.create(receipt.excerpt, false, receipt.creationKey, {
 						isCurrent: current,
-						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
+						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId && (options?.shouldActivate() ?? true),
 					});
+					// Creation owns the activation decision; its own focus update may clear the native selection.
+					if (result.activated && current()) openSideInspector();
 				} catch (error) {
 					// A confirmed close is terminal, not an unanswered creation. Do not retry
 					// automatically; the next deliberate Add may allocate a fresh request.
 					if (apiErrorCode(error) === "CHAT_SIDE_CLOSED") selectionSideScope.receipts.delete(identity);
 					throw error;
 				}
-				if (!current()) throw new Error("Side chat is no longer active.");
+				if (!current()) throw new Error(t("sideChat.inactive"));
 				selectionSideScope.receipts.delete(identity);
 			}
 		});
@@ -772,6 +772,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
 							text: excerpt.text,
+						...(excerpt.segments ? { segments: excerptRequest(excerpt).segments } : {}),
 						})),
 					};
 					// A new message replaces an earlier switch's failure.

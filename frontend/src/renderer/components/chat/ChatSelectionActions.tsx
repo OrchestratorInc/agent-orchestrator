@@ -1,7 +1,7 @@
 import { isMacPlatform } from "../../lib/platform";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, useId, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -10,6 +10,8 @@ import {
 	selectionRangesEqual,
 	selectionToolbarClass,
 } from "../../lib/selection-toolbar";
+import { type ChatExcerptSelection } from "../../lib/chat-excerpt-selection";
+import { cloneExcerptReference, type ChatExcerptActivation } from "../../../shared/chat-excerpt";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 
 /** Geometry state stays here: scrolling must not render the conversation. */
@@ -18,17 +20,21 @@ export function ChatSelectionActions({
 	viewportRef,
 	onInvalid,
 	onAdd,
+	onValidate,
 	onSide,
 	checkingSide,
 }: {
-	selection: { excerpt: ChatDraftExcerptReference; range: Range };
+	selection: ChatExcerptSelection & { range: Range };
 	viewportRef: RefObject<HTMLDivElement | null>;
 	onInvalid: () => void;
 	onAdd: () => void | Promise<void>;
-	onSide?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	onValidate?: () => void;
+	onSide?: (excerpt: ChatDraftExcerptReference, options?: ChatExcerptActivation) => void | Promise<void>;
 	checkingSide?: boolean;
 }) {
 	const { t } = useTranslation();
+	const reasonId = useId();
+	const reason = selection.kind === "unsupported" ? t(`sideChat.excerpt.${selection.reason}`) : undefined;
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const position = useChatSelectionPosition(
 		selection.range,
@@ -47,13 +53,14 @@ export function ChatSelectionActions({
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string>();
 	const activate = useLatestCallback(async (side: boolean) => {
-		if (locked.current || (side && (!onSide || checkingSide))) return;
+		if (selection.kind !== "supported" || locked.current || (side && (!onSide || checkingSide))) return;
 		locked.current = true;
 		setPending(true);
 		setError(undefined);
 		try {
+			onValidate?.();
 			if (side) {
-				await onSide!(selection.excerpt);
+				await onSide!(cloneExcerptReference(selection.excerpt), { isCurrent: () => alive.current, shouldActivate: () => { const current = window.getSelection(); return alive.current && Boolean(current?.rangeCount && !current.isCollapsed && selectionRangesEqual(current.getRangeAt(0), selection.range)); } });
 				if (!alive.current) return;
 				onInvalid();
 				const current = window.getSelection();
@@ -62,7 +69,7 @@ export function ChatSelectionActions({
 					current?.removeAllRanges();
 			} else await onAdd();
 		} catch (failure) {
-			if (alive.current) setError(apiErrorMessage(failure));
+			if (alive.current) setError(apiErrorMessage(failure) || t("sideChat.attachFailed"));
 		} finally {
 			locked.current = false;
 			if (alive.current) setPending(false);
@@ -132,7 +139,8 @@ export function ChatSelectionActions({
 				type="button"
 				title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
 				className={selectionActionClass}
-				disabled={pending}
+				disabled={pending || Boolean(reason)}
+				aria-describedby={reason ? reasonId : undefined}
 				onClick={() => void activate(false)}
 			>
 				{t("sideChat.addToChat")}
@@ -141,12 +149,14 @@ export function ChatSelectionActions({
 				<button
 					type="button"
 					className={selectionActionClass}
-					disabled={pending || checkingSide}
+					disabled={pending || checkingSide || Boolean(reason)}
+					aria-describedby={reason ? reasonId : undefined}
 					onClick={() => void activate(true)}
 				>
 					{t("sideChat.addToSideChat")}
 				</button>
 			) : null}
+			{reason ? <span id={reasonId} className="max-w-xs px-2 text-xs text-muted-foreground">{reason}</span> : null}
 			{error ? (
 				<span
 					role="alert"

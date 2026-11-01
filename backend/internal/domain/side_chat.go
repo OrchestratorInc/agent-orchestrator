@@ -8,42 +8,43 @@ import (
 // SideConversation is one launch-scoped /btw provider conversation. Its
 // provider host and transcript are independent of the main conversation.
 type SideConversation struct {
-	PolicyVersion      int             `json:"-"`
-	BoundaryTurnID     string          `json:"-"`
-	BoundaryState      string          `json:"-"`
-	HasWork            bool            `json:"hasWork"`
-	ID                 string          `json:"id"`
-	SessionID          SessionID       `json:"sessionId"`
-	SourceProviderID   string          `json:"-"`
-	MainConversationID string          `json:"mainConversationId"`
-	AppRunID           string          `json:"-"`
-	ForceNew           bool            `json:"-"`
-	LaunchConfig       json.RawMessage `json:"-"`
-	ManualLabel        bool            `json:"manualLabel,omitempty"`
-	CreateKey          string          `json:"-"`
-	ProviderHostID     string          `json:"-"`
-	ProviderForkID     string          `json:"-"`
-	AnchorTurnID       string          `json:"anchorTurnId,omitempty"`
-	ContextMode        string          `json:"contextMode"`
-	NativeAnchorID     string          `json:"-"`
-	SourceMessageID    string          `json:"sourceMessageId,omitempty"`
-	SourceRevision     int64           `json:"sourceRevision,omitempty"`
-	SelectedText       string          `json:"selectedText,omitempty"`
-	ReferencePending   bool            `json:"-"`
-	ReferenceContext   string          `json:"-"`
-	SeedHistory        string          `json:"-"`
-	Harness            AgentHarness    `json:"-"`
-	Model              string          `json:"model,omitempty"`
-	Effort             string          `json:"effort,omitempty"`
-	Generation         string          `json:"-"`
-	Label              string          `json:"label"`
-	State              string          `json:"state"`
-	ErrorMessage       string          `json:"errorMessage,omitempty"`
-	RecreateRequired   bool            `json:"recreateRequired,omitempty"`
-	CleanupPending     bool            `json:"cleanupPending,omitempty"`
-	CreatedAt          time.Time       `json:"createdAt"`
-	UpdatedAt          time.Time       `json:"updatedAt"`
-	ClosedAt           *time.Time      `json:"-"`
+	PolicyVersion      int              `json:"-"`
+	BoundaryTurnID     string           `json:"-"`
+	BoundaryState      string           `json:"-"`
+	HasWork            bool             `json:"hasWork"`
+	ID                 string           `json:"id"`
+	SessionID          SessionID        `json:"sessionId"`
+	SourceProviderID   string           `json:"-"`
+	MainConversationID string           `json:"mainConversationId"`
+	AppRunID           string           `json:"-"`
+	ForceNew           bool             `json:"-"`
+	LaunchConfig       json.RawMessage  `json:"-"`
+	ManualLabel        bool             `json:"manualLabel,omitempty"`
+	CreateKey          string           `json:"-"`
+	ProviderHostID     string           `json:"-"`
+	ProviderForkID     string           `json:"-"`
+	AnchorTurnID       string           `json:"anchorTurnId,omitempty"`
+	ContextMode        string           `json:"contextMode"`
+	NativeAnchorID     string           `json:"-"`
+	SourceMessageID    string           `json:"sourceMessageId,omitempty"`
+	SourceRevision     int64            `json:"sourceRevision,omitempty"`
+	SourceSegments     []ExcerptSegment `json:"sourceSegments,omitempty"`
+	SelectedText       string           `json:"selectedText,omitempty"`
+	ReferencePending   bool             `json:"-"`
+	ReferenceContext   string           `json:"-"`
+	SeedHistory        string           `json:"-"`
+	Harness            AgentHarness     `json:"-"`
+	Model              string           `json:"model,omitempty"`
+	Effort             string           `json:"effort,omitempty"`
+	Generation         string           `json:"-"`
+	Label              string           `json:"label"`
+	State              string           `json:"state"`
+	ErrorMessage       string           `json:"errorMessage,omitempty"`
+	RecreateRequired   bool             `json:"recreateRequired,omitempty"`
+	CleanupPending     bool             `json:"cleanupPending,omitempty"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	UpdatedAt          time.Time        `json:"updatedAt"`
+	ClosedAt           *time.Time       `json:"-"`
 }
 
 // SideTurn records one question and its execution state in a side conversation.
@@ -68,12 +69,13 @@ type SideTurn struct {
 
 // SideReference is verified and frozen when its question is accepted.
 type SideReference struct {
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Selection      string `json:"selection"`
-	SourceRole     string `json:"sourceRole"`
-	Context        string `json:"-"`
+	Segments       []ExcerptSegment `json:"segments,omitempty"`
+	ConversationID string           `json:"conversationId"`
+	MessageID      string           `json:"messageId"`
+	Revision       int64            `json:"revision"`
+	Selection      string           `json:"selection"`
+	SourceRole     string           `json:"sourceRole"`
+	Context        string           `json:"-"`
 }
 
 // SideContent records structured input attached to a side turn.
@@ -120,6 +122,7 @@ type SideDecision struct {
 
 // SideActivity records a side turn activity such as a command or approval.
 type SideActivity struct {
+	Revision       int64           `json:"revision,omitempty"`
 	ID             string          `json:"id"`
 	SideID         string          `json:"sideId"`
 	TurnID         string          `json:"turnId"`

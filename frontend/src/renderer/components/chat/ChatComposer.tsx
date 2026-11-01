@@ -1,6 +1,3 @@
-import { hasCodeSelection } from "../diffs/SelectionStableContent";
-import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
-import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
  *
@@ -28,6 +25,10 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
  * when a caller supplied somewhere to put the bytes — a control that cannot do what
  * it says should not be drawn.
  */
+import type { ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
+import { hasCodeSelection } from "../diffs/SelectionStableContent";
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 
 import {
 	cloneElement,
@@ -253,7 +254,7 @@ export const ChatComposer = memo(function ChatComposer({
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
 }: {
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: ChatAnnotationSummaryItem) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
 	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */

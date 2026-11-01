@@ -10,6 +10,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
  * in bounded pages only when the reader asks for it.
  */
 
+import { cloneExcerptReference } from "../../shared/chat-excerpt";
 import {
 	type InfiniteData,
 	type QueryClient,
@@ -167,7 +168,7 @@ export type ConversationLocalEcho = {
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
 	fileReferences?: ChatFileReference[];
-	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order"> & { id?: string; conversationId?: string })[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order" | "segments"> & { id?: string; conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
@@ -612,6 +613,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					text: excerpt.text,
 					messageId: excerpt.messageId,
 					revision: excerpt.revision,
+						...(excerpt.segments ? { segments: excerpt.segments.map(part => ({ ...part })) } : {}),
 				})),
 				createdAt: new Date().toISOString(),
 				backgroundWake,
@@ -1160,6 +1162,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				? { text: input }
 				: {
 					...input,
+					...(input.excerpts ? { excerpts: input.excerpts.map(cloneExcerptReference) } : {}),
 					text: input.text.trim() || (input.excerpts?.length
 						? `Use the attached ${input.excerpts.length} chat excerpt(s) as context`
 						: input.text),
@@ -1980,6 +1983,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			fileReference: item.fileReference as ChatFileReference | undefined, annotationId: item.annotationId, annotationOrder: item.annotationOrder,
 			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,
+			sourceSegments: item.sourceSegments,
 			sourceRevision: item.sourceRevision ?? undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,

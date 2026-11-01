@@ -183,6 +183,26 @@ describe("optimistic composer drafts", () => {
 });
 
 describe("Chat draft storage", () => {
+	it("round-trips mixed source provenance and freezes the delivery snapshot", () => {
+		const storage = new MemoryStorage(); const scope = "mixed-roundtrip";
+		const ref = {id:"mixed",conversationId:"main",messageId:"",revision:0,text:"Code ✓",role:"assistant" as const,
+			segments:[{kind:"command" as const,sourceId:"command",revision:4,field:"output" as const,text:"Code ✓"}]};
+		expect(writeChatExcerptReferences(scope,[ref],storage).ok).toBe(true);
+		expect(readChatSessionDraft(scope,storage).composer.excerpts).toEqual([ref]);
+		const prepared=prepareChatComposerDelivery(scope,{kind:"send",composerText:"Explain",attachments:[],excerpts:[ref],requestText:"Explain",clientMessageId:"mixed-send"},storage);
+		expect(prepared.ok).toBe(true); if(!prepared.ok)return;
+		ref.segments[0].text="mutated after preparation";
+		expect(prepared.mutation.excerpts?.[0].segments?.[0].text).toBe("Code ✓");
+		expect(readChatSessionDraft(scope,storage).composer.delivery?.excerpts?.[0].segments?.[0].text).toBe("Code ✓");
+	});
+
+	it("rejects malformed saved excerpt text without throwing during restoration", () => {
+		const storage=new MemoryStorage(); const scope="malformed-excerpt";
+		writeChatExcerptReferences(scope,[{id:"old",conversationId:"main",messageId:"source",revision:1,text:"valid",role:"assistant"}],storage);
+		for(const [key,raw] of storage.values){const draft=JSON.parse(raw); if(draft.composer?.excerpts?.length){draft.composer.excerpts[0].text=123;storage.values.set(key,JSON.stringify(draft));}}
+		expect(()=>readChatSessionDraft(scope,storage)).not.toThrow();
+		expect(readChatSessionDraft(scope,storage).composer.excerpts??[]).toEqual([]);
+	});
 	it("persists transcript excerpts and journals the exact references for retry", () => {
 		const storage = new MemoryStorage();
 		const scope: ChatDraftScope = { sessionId: "excerpt-session", incarnation: "excerpt-session" };

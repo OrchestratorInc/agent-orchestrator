@@ -5617,6 +5617,7 @@ export interface components {
             sourceMessageId?: string;
             /** Format: int64 */
             sourceRevision?: number;
+            sourceSegments?: components["schemas"]["ConversationExcerptSegment"][];
             text?: string;
             type: string;
             uri?: string;
@@ -5638,6 +5639,17 @@ export interface components {
             order?: number;
             /** Format: int64 */
             revision: number;
+            segments?: components["schemas"]["ConversationExcerptSegment"][];
+            text: string;
+        };
+        ConversationExcerptSegment: {
+            /** @enum {string} */
+            field?: "command" | "output" | "terminalInput" | "explanation";
+            /** @enum {string} */
+            kind: "message" | "command";
+            /** Format: int64 */
+            revision: number;
+            sourceId: string;
             text: string;
         };
         ConversationFileReferenceRequest: {
@@ -6011,6 +6023,7 @@ export interface components {
             messageId: string;
             /** Format: int64 */
             revision: number;
+            segments?: components["schemas"]["ConversationExcerptSegment"][];
             selection: string;
             sourceRole: string;
         };
@@ -7369,6 +7382,8 @@ export interface components {
             input?: components["schemas"]["SideInput"];
             kind: string;
             requestId?: string;
+            /** Format: int64 */
+            revision?: number;
             sideId: string;
             status: string;
             summary: string;
@@ -7419,6 +7434,7 @@ export interface components {
             sourceMessageId?: string;
             /** Format: int64 */
             sourceRevision?: number;
+            sourceSegments?: components["schemas"]["ConversationExcerptSegment"][];
             state: string;
             /** Format: date-time */
             updatedAt: string;

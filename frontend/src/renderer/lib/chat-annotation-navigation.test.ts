@@ -23,6 +23,18 @@ describe("annotation navigation highlights", () => {
 		cleanup();
 		expect(body).not.toHaveClass("chat-annotation-target");
 	});
+	it("highlights segments across sibling visual groups of one logical turn", () => {
+		const root = document.createElement("div");
+		root.innerHTML = '<section data-chat-turn-source="turn"><div data-chat-message-id="reply" data-chat-message-revision="1"><p data-chat-message-body>Before</p></div></section><section data-chat-turn-source="turn"><div data-chat-activity-id="command" data-chat-activity-revision="2"><pre data-chat-command-field="output">After</pre></div></section>';
+		const source = root.querySelector<HTMLElement>("[data-chat-message-id]")!;
+		const cleanup = highlightChatAnnotation(source, "Before", 1, [
+			{ kind: "message", sourceId: "reply", revision: 1, text: "Before" },
+			{ kind: "command", sourceId: "command", revision: 2, field: "output", text: "After" },
+		], root);
+		expect(root.querySelectorAll(".chat-annotation-target")).toHaveLength(2);
+		cleanup();
+		expect(root.querySelectorAll(".chat-annotation-target")).toHaveLength(0);
+	});
 });
 
 describe("renderedSnippetText", () => {

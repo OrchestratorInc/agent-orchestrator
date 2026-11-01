@@ -201,3 +201,24 @@ describe("selection creation activation", () => {
 		expect(hook.result.current.error).toBeUndefined();
 	});
 });
+
+it("preserves distinct segmented references with identical text and snapshots a pending create", async () => {
+	const hook = await mount();
+	const first: ChatDraftExcerptReference = {...excerpt, messageId:"",revision:0,text:"same",segments:[{kind:"command",sourceId:"one",revision:2,field:"output",text:"same"}]};
+	const second = {...first,id:"second",segments:[{...first.segments![0],sourceId:"two"}]};
+	act(() => { hook.result.current.addReference("B",first); hook.result.current.addReference("B",second); hook.result.current.addReference("B",first); });
+	let finish!: (value: {data:{side:ReturnType<typeof side>}}) => void;
+	post.mockImplementationOnce(() => new Promise(resolve => {finish=resolve;}));
+	let request!: ReturnType<typeof hook.result.current.create>;
+	act(() => { request = hook.result.current.create(first,false,"segments",{shouldActivate:()=>false}); });
+	first.segments![0].sourceId = "mutated";
+	await act(async () => { finish({data:{side:side("created")}}); await request; });
+	const created = put.mock.calls.find(([, options]) => options.params.path.sideId === "created");
+	expect(JSON.parse(created![1].body.contentJson).references[0].segments[0].sourceId).toBe("one");
+	
+	await waitFor(() => {
+		const saved = put.mock.calls.filter(([, options]) => options.params.path.sideId === "B").at(-1);
+		expect(saved).toBeDefined();
+		expect(JSON.parse(saved![1].body.contentJson).references.map((ref:ChatDraftExcerptReference) => ref.segments![0].sourceId)).toEqual(["one","two"]);
+	});
+});

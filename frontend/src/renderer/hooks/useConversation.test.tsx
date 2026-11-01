@@ -174,6 +174,20 @@ it("renders a retained-history boundary between exchanges from the daemon snapsh
 });
 
 describe("accepted conversation sends", () => {
+	it("retains cloned mixed-source provenance in a pending local echo", async () => {
+		const response=deferred<{data:{turnId:string};error:undefined}>();postMock.mockReturnValue(response.promise);
+		const queryClient=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}});
+		const HookWrapper=({children}:{children:ReactNode})=><QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const hook=renderHook(()=>useConversationCommands("mixed-echo"),{wrapper:HookWrapper});
+		const ref={id:"selection",conversationId:"main",messageId:"",revision:0,text:"Copy",role:"assistant" as const,
+			segments:[{kind:"command" as const,sourceId:"command",revision:2,field:"output" as const,text:"Copy"}]};
+		let sending!:Promise<unknown>;act(()=>{sending=hook.result.current.send({text:"Explain this",excerpts:[ref]});});
+		await waitFor(()=>expect(hook.result.current.localEchos).toHaveLength(1));
+		expect(hook.result.current.localEchos[0].excerpts?.[0].segments).toEqual(ref.segments);
+		ref.segments[0].text="changed outside send";
+		expect(hook.result.current.localEchos[0].excerpts?.[0].segments?.[0].text).toBe("Copy");
+		response.resolve({data:{turnId:"accepted-mixed"},error:undefined});await act(async()=>{await sending;});
+	});
 	it("keeps a local echo through acceptance until its durable turn is observed", async () => {
 		const response = deferred<{ data: { turnId: string }; error: undefined }>();
 		postMock.mockReturnValue(response.promise);
