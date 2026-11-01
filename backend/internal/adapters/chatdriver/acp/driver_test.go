@@ -5806,8 +5806,8 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 			defer conv.Close()
 			agent.mu.Lock()
 			defer agent.mu.Unlock()
-			if agent.currentModel != "auto:model" {
-				t.Fatalf("Hermes selected %q, want auto:model", agent.currentModel)
+			if agent.model != "auto:model" {
+				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
 			}
 		})
 	}
