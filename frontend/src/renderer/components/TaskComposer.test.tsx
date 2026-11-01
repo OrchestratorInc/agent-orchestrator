@@ -279,6 +279,40 @@ describe("TaskComposer", () => {
 		expect(h.post).toHaveBeenCalledTimes(1);
 		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Available");
 	});
+	it("offers the agent default after a stale saved effort is rejected without another spawn", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }], allowCustom: true } }
+			: { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { model: "gpt-test", effort: "retired" } } } } } });
+		h.post.mockResolvedValueOnce({ error: { code: "UNSUPPORTED_EFFORT", message: "unsupported" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByRole("button", { name: "Effort" });
+		fireEvent.click(startTask());
+		expect(await screen.findByText("The saved effort is unavailable. The agent default is selected. Review it and start again.")).toBeInTheDocument();
+		expect(h.post).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
+	});
+	it("keeps an explicit effort choice when the daemon rejects it", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }], allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		h.post.mockResolvedValueOnce({ error: { code: "UNSUPPORTED_EFFORT", message: "unsupported" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		fireEvent.click(startTask());
+		expect(await screen.findByText("The selected effort is unavailable. Choose another level before starting.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		expect(h.post).toHaveBeenCalledTimes(1);
+	});
+	it("explains how to resolve a missing base branch", async () => {
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/orchestrators/delegate"
+			? { error: { code: "DEFAULT_BRANCH_UNRESOLVED", message: "unresolved" } }
+			: { data: {} });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		expect(await screen.findByText("Choose a base branch in project settings, then start again.")).toBeInTheDocument();
+	});
 	it("does not launch a remote project task without a ready agent", async () => {
 		h.agentCatalog = { agents: [] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
