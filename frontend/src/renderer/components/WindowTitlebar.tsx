@@ -263,15 +263,19 @@ export function WindowTitlebar() {
           openMenu={openMenu}
           setOpenMenu={setOpenMenu}
         >
-          <DropdownMenuItem onSelect={act("view.reload")}>
-            {t("titlebar.reload")}
-            <DropdownMenuShortcut>Ctrl+R</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={act("view.devtools")}>
-            {t("titlebar.devtools")}
-            <DropdownMenuShortcut>Ctrl+Shift+I</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
+          {import.meta.env.DEV && (
+            <>
+              <DropdownMenuItem onSelect={act("view.reload")}>
+                {t("titlebar.reload")}
+                <DropdownMenuShortcut>Ctrl+R</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={act("view.devtools")}>
+                {t("titlebar.devtools")}
+                <DropdownMenuShortcut>Ctrl+Shift+I</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem onSelect={act("view.zoomIn")}>
             {t("titlebar.zoomIn")}
           </DropdownMenuItem>
