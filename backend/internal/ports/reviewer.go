@@ -81,6 +81,11 @@ type ReviewerPromptReadinessProvider interface {
 	ReviewPromptReadinessHints(ctx context.Context) (PromptReadinessHints, error)
 }
 
+// ReviewSubmitHeredocDelimiter is the quoted here-document delimiter the review
+// prompt uses to pass review text to the GitHub review POST and to
+// `ao review submit`. Reviewer permission rules match commands ending in it.
+const ReviewSubmitHeredocDelimiter = "AO_REVIEW_EOF"
+
 // ReviewInvocation describes one review pass for a reviewer to act on. All ids
 // the reviewer needs are passed explicitly here (and embedded in the prompt /
 // message), never through environment variables.
