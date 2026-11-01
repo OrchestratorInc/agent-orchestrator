@@ -112,16 +112,30 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 		m.agentOpMu.Lock()
 		if m.agentOperationActiveLocked(id) {
 			current := m.agentOperations[id]
+			if kind == agentOperationKill && current == agentOperationReconcile {
+				// A startup health probe that has not started yet must not make
+				// archive fail; the worker skips sessions it no longer owns.
+				if _, queued := m.queuedReconciles[id]; queued {
+					delete(m.queuedReconciles, id)
+					m.agentOperations[id] = kind
+					drained = m.inputDrained[id]
+					m.agentOpMu.Unlock()
+					break
+				}
+			}
 			m.agentOpMu.Unlock()
-			if current != agentOperationHibernate || kind == agentOperationHibernate {
+			yields := current == agentOperationHibernate ||
+				(current == agentOperationReconcile && kind == agentOperationKill)
+			if !yields || kind == agentOperationHibernate {
 				return errAgentOperationInProgress
 			}
 			// Background cleanup yields to every explicit operation once its
-			// bounded shutdown completes; it must not make Kill/Switch fail.
+			// bounded shutdown completes; it must not make Kill/Switch fail. A
+			// running startup probe is bounded the same way for Kill.
 			select {
 			case <-ctx.Done():
-				m.agentWaitLogger().Warn("agent operation gave up waiting for hibernation to finish",
-					"sessionID", id, "operation", kind, "error", ctx.Err())
+				m.agentWaitLogger().Warn("agent operation gave up waiting for a background operation to finish",
+					"sessionID", id, "operation", kind, "blockedBy", current, "error", ctx.Err())
 				return ctx.Err()
 			case <-time.After(20 * time.Millisecond):
 				continue
@@ -186,6 +200,12 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 			continue
 		}
 		m.agentOperations[id] = kind
+		if kind == agentOperationReconcile {
+			if m.queuedReconciles == nil {
+				m.queuedReconciles = make(map[domain.SessionID]struct{})
+			}
+			m.queuedReconciles[id] = struct{}{}
+		}
 		reservations = append(reservations, reservation{id: id, drained: m.inputDrained[id]})
 	}
 	m.agentOpMu.Unlock()
@@ -213,10 +233,23 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind) {
 	m.agentOpMu.Lock()
 	defer m.agentOpMu.Unlock()
+	if kind == agentOperationReconcile {
+		delete(m.queuedReconciles, id)
+	}
 	if current, ok := m.agentOperations[id]; ok && current == kind {
 		delete(m.agentOperations, id)
 		m.resumeDeferredInterfaceRecoveryLocked(id)
 	}
+}
+
+// claimQueuedReconcile starts a reserved startup probe. It reports false when
+// Kill took the reservation over while the session waited for a worker.
+func (m *Manager) claimQueuedReconcile(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	_, queued := m.queuedReconciles[id]
+	delete(m.queuedReconciles, id)
+	return queued && m.agentOperations[id] == agentOperationReconcile
 }
 
 // The deferred fence survives the foreign operation's release. Recovery, not

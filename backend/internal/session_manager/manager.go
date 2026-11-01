@@ -488,8 +488,11 @@ type Manager struct {
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
-	inputLeases               map[domain.SessionID]int
-	inputDrained              map[domain.SessionID]chan struct{}
+	// queuedReconciles marks startup reconcile reservations whose health probe
+	// has not started yet. Kill may take these over instead of failing.
+	queuedReconciles map[domain.SessionID]struct{}
+	inputLeases      map[domain.SessionID]int
+	inputDrained     map[domain.SessionID]chan struct{}
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
@@ -4344,6 +4347,10 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 		go func() {
 			defer wg.Done()
 			for rec := range jobs {
+				if !m.claimQueuedReconcile(rec.ID) {
+					m.finishStatusRecovery(ctx, rec, nil)
+					continue
+				}
 				m.beginStatusRecovery(rec.ID)
 				err := func() error {
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
