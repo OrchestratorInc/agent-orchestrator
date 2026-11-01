@@ -148,6 +148,37 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
+	it("drops the termination of a worker its box already shows", () => {
+		const recorded = (id: string, sequence: number, action: string, status: ConversationActivity["status"] = "completed"): ConversationActivity => ({
+			kind: "activity", id: `ao-action:${action}:${id}:${sequence}`, sequence, revision: 0, activityKind: "ao_action",
+			status, summary: action === "session.spawned" ? "Spawned an agent" : "Terminated an agent", createdAt: at(1),
+			detail: { action, operationId: `${id}:${sequence}`, targetSessionId: id },
+		});
+		renderOrchestrator([
+			automation("t1", 1, "Check usage."),
+			recorded("proj-288", 2, "session.spawned"),
+			recorded("proj-288", 3, "session.terminated"),
+		]);
+		expect(screen.getByTestId("spawned-agent")).toBeInTheDocument();
+		expect(screen.queryByText("Terminated an agent")).not.toBeInTheDocument();
+	});
+
+	it("keeps a termination of a worker this chat did not spawn, and a failed one", () => {
+		const terminated = (id: string, sequence: number, status: ConversationActivity["status"]): ConversationActivity => ({
+			kind: "activity", id: `ao-action:session.terminated:${id}`, sequence, revision: 0, activityKind: "ao_action",
+			status, summary: "Terminated an agent", createdAt: at(1),
+			detail: { action: "session.terminated", operationId: `${id}:generation:0`, targetSessionId: id },
+		});
+		const spawned: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawned, terminated("proj-288", 3, "failed"), terminated("proj-300", 4, "completed")]);
+		// The failed one says it failed; the other worker has no box to say it ended.
+		expect(screen.getByText("Terminated 2 agents")).toBeInTheDocument();
+	});
+
 	it("keeps a failed spawn as the action row that says so", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",

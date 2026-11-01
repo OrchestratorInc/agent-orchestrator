@@ -148,6 +148,7 @@ import {
 	spawnedBy,
 	spawnedSessionIds,
 	TaskNamedLine,
+	terminatedBy,
 	useWorkerUpdateIndex,
 	WorkerMessages,
 	WorkerUpdateIndexContext,
@@ -3634,8 +3635,25 @@ export function Timeline({
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
-		return groups;
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
+		if (!workerUpdates) return groups;
+		// A worker this chat spawned is drawn by its box and then by its own messages, so
+		// the daemon's records of it would only repeat them: its termination, and its
+		// spawn once it has answered and the box is gone. Dropped here, before they can
+		// leave an empty group behind.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		const answered = new Set(snapshot.items.flatMap((item) =>
+			[...piggybackedUpdates(item), ...workerUpdatesOf(item)].flatMap((update) => update.sessionId ?? [])));
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended);
+		};
+		if (!timelineItems.some(repeats)) return groups;
+		return groups
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
+			.filter((group) => group.items.length > 0);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.

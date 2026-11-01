@@ -570,16 +570,25 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
+function completedActionTarget(item: ConversationItem, action: string): string | undefined {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || item.status !== "completed") return undefined;
+	if (item.detail?.action !== action) return undefined;
+	const target = item.detail.targetSessionId;
+	return typeof target === "string" && target !== "" ? target : undefined;
+}
+
 /**
  * The worker a spawn the daemon recorded started. The daemon writes it the moment
  * the session exists, well before the provider reports `ao spawn` finished, and
  * outside any turn, so it lands just after the turn that spawned the worker.
  */
 export function spawnedBy(item: ConversationItem): string | undefined {
-	if (item.kind !== "activity" || item.activityKind !== "ao_action" || item.status !== "completed") return undefined;
-	if (item.detail?.action !== "session.spawned") return undefined;
-	const target = item.detail.targetSessionId;
-	return typeof target === "string" && target !== "" ? target : undefined;
+	return completedActionTarget(item, "session.spawned");
+}
+
+/** The worker a termination the daemon recorded ended. */
+export function terminatedBy(item: ConversationItem): string | undefined {
+	return completedActionTarget(item, "session.terminated");
 }
 
 /**
