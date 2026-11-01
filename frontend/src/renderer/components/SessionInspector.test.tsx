@@ -5167,6 +5167,48 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
   });
 
+  it("shows the PR's labels and the people asked to review it", async () => {
+    const labelled = prSummary(7, "open", {
+      labels: [{ name: "bug", color: "d73a4a" }, { name: "docs" }],
+      requestedReviewers: [{ login: "lin" }, { login: "core-team", isTeam: true }],
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [labelled] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [labelled]));
+
+    const details = within(await screen.findByTestId("pr-labels-reviewers"));
+    expect(details.getByRole("list", { name: "Labels" })).toHaveTextContent("bugdocs");
+    expect(details.getByText("Review requested from lin, core-team")).toBeInTheDocument();
+  });
+
+  it("lists the checks under merge readiness, failures first, and links the rest to the provider", async () => {
+    const checked = prSummary(7, "open", {
+      ci: {
+        autoInjectCI: true,
+        state: "failing",
+        failingChecks: [{ name: "lint", status: "failed", conclusion: "failure" }],
+        checks: [
+          { name: "build", status: "passed" },
+          { name: "e2e", status: "in_progress" },
+          { name: "lint", status: "failed", url: "https://github.com/acme/repo/runs/1" },
+          { name: "test-a", status: "passed" },
+          { name: "test-b", status: "passed" },
+          { name: "test-c", status: "passed" },
+          { name: "docs", status: "skipped" },
+        ],
+      },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [checked] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [checked]));
+
+    const readiness = await screen.findByRole("button", { name: /Not mergeable yet|Checking merge readiness|Mergeable/ });
+    await userEvent.click(readiness);
+    const checks = within(await screen.findByTestId("pr-checks"));
+    const names = checks.getAllByRole("listitem").map((item) => item.textContent);
+    expect(names).toEqual(["lint failed", "e2e running", "build passed", "test-a passed", "test-b passed", "+2 more"]);
+    expect(checks.getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
+    expect(checks.getByRole("link", { name: /\+2 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
+  });
+
   it("leaves the loading state once the PR appears", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
     const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([], { branchState: pushed(2) })} />);

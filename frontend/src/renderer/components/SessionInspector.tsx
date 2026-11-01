@@ -66,6 +66,7 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { PRLineage } from "./SessionLineage";
+import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -1100,6 +1101,8 @@ export function PRSummaryCard({
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
+			details={<PRLabelsAndReviewers pr={pr} />}
+			readinessDetails={{ ci: <PRChecksList pr={pr} /> }}
 		/>
 	);
 	if (layout === "card") return cardView;

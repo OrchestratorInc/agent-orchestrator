@@ -169,6 +169,7 @@ export function PRCardStatusSummary({
 	externalLink,
 	omit,
 	presentation,
+	readinessDetails,
 	reviewDetailsAction,
 }: {
 	action?: ReactNode;
@@ -181,6 +182,8 @@ export function PRCardStatusSummary({
 	externalLink: ExternalLinkComponent;
 	omit?: PRSummaryPartKey[];
 	presentation: PRCardPresentation;
+	/** More under a readiness row once it opens, keyed by the row (such as the check list under "ci"). */
+	readinessDetails?: Partial<Record<string, ReactNode>>;
 	reviewDetailsAction?: ReactNode;
 }) {
 	const omitted = omit ? new Set(omit) : undefined;
@@ -193,6 +196,7 @@ export function PRCardStatusSummary({
 			<CollapsibleReadiness
 				action={action}
 				className={className}
+				details={readinessDetails}
 				externalLink={externalLink}
 				readiness={presentation.readiness}
 				reviewDetailsAction={reviewDetailsAction}
@@ -295,10 +299,12 @@ export function PRCardStatusSummary({
 
 
 function StatusRow({
+	details,
 	externalLink,
 	reviewDetailsAction,
 	status,
 }: {
+	details?: ReactNode;
 	externalLink: ExternalLinkComponent;
 	reviewDetailsAction?: ReactNode;
 	status: PRCardStatus;
@@ -315,6 +321,7 @@ function StatusRow({
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
 			) : null}
+			{details ? <div className="mt-1 min-w-0 pl-4">{details}</div> : null}
 		</div>
 	);
 }
@@ -323,6 +330,7 @@ function StatusRow({
 function CollapsibleReadiness({
 	action,
 	className,
+	details,
 	externalLink,
 	readiness,
 	reviewDetailsAction,
@@ -330,6 +338,7 @@ function CollapsibleReadiness({
 }: {
 	action?: ReactNode;
 	className?: string;
+	details?: Partial<Record<string, ReactNode>>;
 	externalLink: ExternalLinkComponent;
 	readiness: NonNullable<PRCardPresentation["readiness"]>;
 	reviewDetailsAction?: ReactNode;
@@ -358,7 +367,7 @@ function CollapsibleReadiness({
 					>
 						<div className="grid min-w-0 grid-cols-1 gap-y-1.5 pb-2">
 							{rows.map((status) => (
-								<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
+								<StatusRow details={details?.[status.key]} externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
 							))}
 						</div>
 					</motion.div>

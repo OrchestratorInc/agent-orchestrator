@@ -348,6 +348,7 @@ const prStateTone: Record<InspectorPullRequestState, string> = {
 export function InspectorPullRequestCardView({
 	countNounLabel,
 	description,
+	details,
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
@@ -357,11 +358,14 @@ export function InspectorPullRequestCardView({
 	openedViaLabel,
 	pr,
 	pullRequestIcon,
+	readinessDetails,
 	statusNotice,
 }: {
 	countNounLabel: CountNounLabel;
 	/** The PR body, shown under the number and state, before the branches. */
 	description?: ReactNode;
+	/** Shown under the author and diff stats, such as labels and requested reviewers. */
+	details?: ReactNode;
 	externalIcon?: ReactNode;
 	externalLink: ExternalLinkComponent;
 	/**
@@ -375,6 +379,8 @@ export function InspectorPullRequestCardView({
 	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
+	/** More under a merge-readiness row once it opens, keyed by the row. */
+	readinessDetails?: Partial<Record<string, ReactNode>>;
 	statusNotice?: ReactNode;
 }) {
 	const Frame = headerless ? "div" : "article";
@@ -422,6 +428,7 @@ export function InspectorPullRequestCardView({
 				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
+			{details}
 			{pr.state !== "merged" ? (
 				<>
 					<PRCardStatusSummary
@@ -430,6 +437,7 @@ export function InspectorPullRequestCardView({
 						collapsibleReadiness
 						externalLink={ExternalLink}
 						presentation={pr.card}
+						readinessDetails={readinessDetails}
 						reviewDetailsAction={pr.reviewDetailsAction}
 					/>
 					{statusNotice}
