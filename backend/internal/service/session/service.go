@@ -828,11 +828,27 @@ func (s *Service) activeOrchestrators(ctx context.Context, projectID domain.Proj
 
 const orchestratorRetireNotice = "AO is replacing this project orchestrator. Stop coordinating new work now; a fresh orchestrator will take over in a new workspace."
 
+// retireNoticeBudget bounds the courtesy notice. The retiring orchestrator may
+// be out of quota or wedged; its answer must not hold up the replacement.
+var retireNoticeBudget = 10 * time.Second
+
 func (s *Service) sendRetireNotice(ctx context.Context, id domain.SessionID) error {
-	if err := s.manager.Send(ctx, id, orchestratorRetireNotice, nil); err != nil {
-		return fmt.Errorf("send retire notice to %s: %w", id, err)
+	ctx, cancel := context.WithTimeout(ctx, retireNoticeBudget)
+	defer cancel()
+	// A Chat send can block in the provider call past its context when the
+	// provider has stopped answering, so the wait is bounded here rather than
+	// inside Send. The abandoned call ends once the provider call returns.
+	done := make(chan error, 1)
+	go func() { done <- s.manager.Send(ctx, id, orchestratorRetireNotice, nil) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("send retire notice to %s: %w", id, err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("send retire notice to %s: %w", id, ctx.Err())
 	}
-	return nil
 }
 
 func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, sess domain.Session) error {

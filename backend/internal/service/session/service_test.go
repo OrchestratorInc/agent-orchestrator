@@ -2697,6 +2697,8 @@ type fakeCommander struct {
 	retireErr         error
 	retireFunc        func(context.Context, domain.SessionID) error
 	sendErr           error
+	sendBlocksOnCtx   bool
+	sendRelease       chan struct{}
 	sendFunc          func(domain.SessionID, string) error
 	cleanupErr        error
 	spawnErr          error
@@ -2806,7 +2808,12 @@ func (f *fakeCommander) WaitForMessageDeliveryReady(_ context.Context, id domain
 	f.ready = append(f.ready, id)
 	return f.readyErr
 }
-func (f *fakeCommander) Send(_ context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment) error {
+func (f *fakeCommander) Send(ctx context.Context, id domain.SessionID, message string, _ *ports.SpawnAttachment) error {
+	if f.sendBlocksOnCtx {
+		// Ignores ctx, like a provider call that has stopped answering.
+		<-f.sendRelease
+		return ctx.Err()
+	}
 	if f.sendFunc != nil {
 		return f.sendFunc(id, message)
 	}
@@ -2965,6 +2972,37 @@ func TestTeardownProjectStopsOnKillError(t *testing.T) {
 	}
 	if len(fc.cleanupProjects) != 0 {
 		t.Fatalf("cleanup projects = %#v, want none after kill failure", fc.cleanupProjects)
+	}
+}
+
+// An unresponsive orchestrator (out of quota, wedged) must not hold up its own
+// replacement: the retire notice is bounded and its failure ignored (#6449).
+func TestSpawnOrchestratorCleanDoesNotWaitForUnresponsiveOrchestrator(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	prev := retireNoticeBudget
+	retireNoticeBudget = 50 * time.Millisecond
+	t.Cleanup(func() { retireNoticeBudget = prev })
+	fc := &fakeCommander{sendBlocksOnCtx: true, sendRelease: make(chan struct{})}
+	t.Cleanup(func() { close(fc.sendRelease) })
+	svc := &Service{manager: fc, store: st}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.SpawnOrchestrator(context.Background(), "mer", true, "", "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SpawnOrchestrator: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("replacement waited on the unresponsive orchestrator's retire notice")
+	}
+	if len(fc.retired) != 1 || !fc.spawned {
+		t.Fatalf("retired=%v spawned=%v, want the orchestrator retired and a new one spawned", fc.retired, fc.spawned)
 	}
 }
 
