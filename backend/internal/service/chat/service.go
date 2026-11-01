@@ -619,6 +619,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ProviderItemID: domain.ConversationContextResetProviderItemID(cfg.SessionID),
 		}
 	}
+	var replacementNote string
+	if freshProjectContext {
+		replacementNote = s.replacementHandoffNote(ctx, cfg)
+	}
 	conversationID := s.newID()
 	var conversation domain.ConversationRecord
 	if owner.Kind == domain.ConversationOwnerReview {
@@ -807,6 +811,16 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	handoffNote := activeBranch.HandoffNote
 	if cfg.ProviderSwitch != nil {
 		handoffNote = cfg.ProviderSwitch.Bootstrap
+	}
+	// A replacement orchestrator's provider session is fresh over inherited
+	// project history, so it gets the previous owner's context. The note was
+	// saved when first built, so a restart still carries it.
+	if replacementNote == "" && scope == domain.ConversationScopeProject &&
+		cfg.ProviderSwitch == nil && conversation.SessionID == cfg.SessionID {
+		replacementNote = persistedReplacementHandoffNote(cfg)
+	}
+	if replacementNote != "" {
+		handoffNote = replacementNote
 	}
 	providerSystemPrompt := withHandoffNote(cfg.SystemPrompt, handoffNote)
 

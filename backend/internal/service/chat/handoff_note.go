@@ -134,6 +134,90 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 	return domain.BuildHandoffNote(input), nil
 }
 
+// replacementHandoffNote builds the note a replacement project orchestrator
+// starts with. The project conversation keeps its history across owners, but
+// the new provider session is fresh, so the note carries what the previous
+// owner's turns held. It must run before the conversation is rebound: after
+// that the previous owner no longer resolves to the conversation. It returns ""
+// for a project's first orchestrator and when the note cannot be built; a note
+// is never worth failing a spawn.
+func (s *Service) replacementHandoffNote(ctx context.Context, cfg StartConfig) string {
+	projects, ok := s.store.(interface {
+		ProjectConversation(context.Context, domain.ProjectID) (domain.ConversationRecord, error)
+	})
+	if !ok || s.sessions == nil {
+		return ""
+	}
+	conversation, err := projects.ProjectConversation(ctx, cfg.ProjectID)
+	if err != nil || conversation.SessionID == "" || conversation.SessionID == cfg.SessionID {
+		return ""
+	}
+	previous, found, err := s.sessions.GetSession(ctx, conversation.SessionID)
+	if err == nil && !found {
+		err = ports.ErrSessionNotFound
+	}
+	var note string
+	if err == nil {
+		note, err = s.HandoffNote(ctx, previous, cfg.Harness, "")
+	}
+	if err != nil {
+		s.log.Warn("build replacement orchestrator handoff note", "session", cfg.SessionID, "previous", conversation.SessionID, "error", err)
+		return ""
+	}
+	if err := writeReplacementHandoffNote(cfg, note); err != nil {
+		s.log.Warn("persist replacement orchestrator handoff note", "session", cfg.SessionID, "previous", conversation.SessionID, "error", err)
+	}
+	return note
+}
+
+// replacementHandoffNotePath is the AO-owned file keeping a replacement
+// orchestrator's note across restarts, under the data dir's handoffs folder.
+func replacementHandoffNotePath(cfg StartConfig) string {
+	if cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "handoffs", "orchestrator-replacement-"+filepath.Base(string(cfg.SessionID))+".md")
+}
+
+// writeReplacementHandoffNote writes the note atomically. An empty data dir
+// keeps the note in memory only.
+func writeReplacementHandoffNote(cfg StartConfig, note string) error {
+	path := replacementHandoffNotePath(cfg)
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".replacement-note-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(note); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// persistedReplacementHandoffNote reads back the note this session was given
+// when it replaced an orchestrator. Other sessions have no such file.
+func persistedReplacementHandoffNote(cfg StartConfig) string {
+	path := replacementHandoffNotePath(cfg)
+	if path == "" || !strings.HasPrefix(filepath.Clean(path), filepath.Join(cfg.DataDir, "handoffs")+string(filepath.Separator)) {
+		return ""
+	}
+	body, err := os.ReadFile(path) //nolint:gosec // checked to be under AO's handoffs folder
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
+}
+
 // handoffNoteInput is the note's input without the changed files, which need
 // git and can run while the outgoing provider stops.
 func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {
