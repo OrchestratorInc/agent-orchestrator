@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn() }));
+const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn(), showPrivacyGuide: vi.fn(), updatePrivacyGuide: vi.fn() }));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: apiMocks.get, POST: apiMocks.post },
@@ -12,7 +12,7 @@ vi.mock("../../lib/api-client", () => ({
 		typeof error === "object" && error && "message" in error ? String((error as { message: unknown }).message) : fallback,
 }));
 
-vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: bridgeMocks.openExternal } } }));
+vi.mock("../../lib/bridge", () => ({ aoBridge: { app: bridgeMocks } }));
 
 const settingsMocks = vi.hoisted(() => ({ computerUse: false, update: vi.fn(), error: undefined as string | undefined }));
 
@@ -63,6 +63,8 @@ beforeEach(() => {
 	apiMocks.get.mockReset();
 	apiMocks.post.mockReset();
 	bridgeMocks.openExternal.mockReset();
+	bridgeMocks.showPrivacyGuide.mockReset().mockResolvedValue(undefined);
+	bridgeMocks.updatePrivacyGuide.mockReset().mockResolvedValue(undefined);
 });
 
 describe("ComputerUseSection", () => {
@@ -157,16 +159,48 @@ describe("ComputerUseSection", () => {
 		await waitFor(() => expect(screen.queryByText("Background service")).not.toBeInTheDocument());
 	});
 
-	it("asks macOS for missing permissions and follows the request", async () => {
+	it("asks macOS for missing permissions from the gear and docks the guide on the missing pane", async () => {
 		daemon({ status: () => ({ ...installed, permissions: { accessibility: "granted", screenRecording: "missing", granting: false } }) });
 		apiMocks.post.mockResolvedValue({ data: { ...installed, permissions: { accessibility: "granted", screenRecording: "missing", granting: true } }, error: undefined });
 		renderSection();
 
 		expect(await screen.findByText("Accessibility: Granted · Screen Recording: Missing")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Grant" }));
+		await userEvent.click(screen.getByRole("button", { name: "Open in System Settings" }));
 
 		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/computer-use/permissions/grant");
-		expect(await screen.findByRole("status")).toHaveTextContent("Waiting for System Settings…");
+		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
+			pane: "screenRecording",
+			granted: { accessibility: true, screenRecording: false },
+			text: expect.objectContaining({ drag: "Drag CuaDriver into the list above", labels: { accessibility: "Accessibility", screenRecording: "Screen Recording" } }),
+		}));
+		// While macOS waits on the user, the gear spins and cannot be pressed again.
+		await waitFor(() => expect(screen.getByRole("button", { name: "Open in System Settings" })).toHaveAttribute("aria-busy", "true"));
+		expect(screen.getByRole("button", { name: "Open in System Settings" })).toBeDisabled();
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith({ accessibility: true, screenRecording: false }));
+	});
+
+	it("opens the guide from the gear when everything is granted", async () => {
+		daemon({ status: () => installed });
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in System Settings" }));
+
+		expect(apiMocks.post).not.toHaveBeenCalledWith("/api/v1/computer-use/permissions/grant");
+		expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalledWith(expect.objectContaining({
+			pane: "accessibility",
+			granted: { accessibility: true, screenRecording: true },
+		}));
+	});
+
+	it("shows a spinning gear for macOS permissions while status loads", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		apiMocks.get.mockReturnValue(new Promise(() => undefined));
+		renderSection();
+
+		const gear = await screen.findByRole("button", { name: "Open in System Settings" });
+		expect(gear).toHaveAttribute("aria-busy", "true");
+		expect(gear).toBeDisabled();
+		delete document.documentElement.dataset.aoPlatform;
 	});
 
 	it("hands over the command when AO cannot run the installer here", async () => {
