@@ -1,4 +1,4 @@
-# agent-orchestrator rewrite docs
+﻿# agent-orchestrator rewrite docs
 
 Agent Orchestrator runs as a long-running Go backend daemon
 (`backend/`) plus an Electron + TypeScript frontend (`frontend/`). The backend
@@ -30,12 +30,13 @@ in [gemini-cli.md](gemini-cli.md).
 | [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
 | [harnesses/deepseek-harness.md](harnesses/deepseek-harness.md) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
 | [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
+| [harnesses/zcode.md](harnesses/zcode.md)               | Deferred ZCode adapter, native-home preservation, retained auth/model staging, and qualification requirements.                                    |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
 
-See [startup-cues.md](startup-cues.md) for command cues that gate a new worktree�s opening turn.
+See [startup-cues.md](startup-cues.md) for command cues that gate a new worktreeï¿½s opening turn.
 
 ## Mental model
 

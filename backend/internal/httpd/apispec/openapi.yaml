@@ -17803,6 +17803,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - zcode
           - cloudflared
           - cua-driver
           type: string

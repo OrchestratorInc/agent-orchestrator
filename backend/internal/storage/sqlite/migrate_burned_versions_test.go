@@ -229,6 +229,7 @@ var shippedMigrations = map[int64]string{
 	20261024194546592: "20261024194546592_conversation_messages_search.sql",
 	20261026083409462: "20261026083409462_deepseek_chat_failure_code.sql",
 	20261026185532680: "20261026185532680_usage_telemetry_measurements.sql",
+	20261028122414418: "20261028122414418_allow_zcode_harness.sql",
 	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
 	20261029072736970: "20261029072736970_session_telemetry.sql",
 	20261030044053264: "20261030044053264_usage_telemetry_details.sql",

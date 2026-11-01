@@ -364,6 +364,14 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}
+	if agentID == "zcode" {
+		if _, ok := s.agent(agentID); !ok {
+			return ports.AgentModelCatalog{}, apierr.NotFound("AGENT_NOT_FOUND", "Unknown agent adapter")
+		}
+		// Older discovery published IDs that the launch adapter cannot apply.
+		// Do not serve those cached choices, including on an explicit refresh.
+		return s.discoverer.Manual(agentID), nil
+	}
 	projectID := modelCatalogScope(scope)
 	if !refresh {
 		if _, ok := s.agent(agentID); !ok {

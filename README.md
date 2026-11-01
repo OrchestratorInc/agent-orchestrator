@@ -126,6 +126,10 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
   </tr>
 </table>
 
+ZCode is not registered or selectable: private AO standing-instruction
+delivery must be implemented and qualified before enabling it. See the
+[ZCode integration limits](docs/harnesses/zcode.md).
+
 <br />
 
 ### Orchestrator for Mobile
