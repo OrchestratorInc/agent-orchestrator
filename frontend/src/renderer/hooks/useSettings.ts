@@ -73,6 +73,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				versionRefresh: data?.versionRefresh ?? false,
 				// A daemon that predates the setting never adds the instruction.
 				computerUse: data?.computerUse ?? false,
+				// A daemon that predates the setting never asks for card summaries.
+				cardSummaries: data?.cardSummaries ?? false,
 			};
 		},
 	});

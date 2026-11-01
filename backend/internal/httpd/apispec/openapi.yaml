@@ -12800,14 +12800,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ControllersUpdateSummaryRequest'
+              $ref: '#/components/schemas/UpdateSummaryRequest'
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ControllersUpdateSummaryResponse'
+                $ref: '#/components/schemas/UpdateSummaryResponse'
           description: OK
         "400":
           content:
@@ -16099,32 +16099,6 @@ components:
           - boolean
       required:
       - enabled
-      type: object
-    ControllersUpdateSummaryRequest:
-      properties:
-        done:
-          type: boolean
-        sessionId:
-          type: string
-        summary:
-          maxLength: 200
-          minLength: 1
-          type: string
-      required:
-      - sessionId
-      - summary
-      type: object
-    ControllersUpdateSummaryResponse:
-      properties:
-        ok:
-          type: boolean
-        retryAfterSeconds:
-          type: integer
-        updated:
-          type: boolean
-      required:
-      - ok
-      - updated
       type: object
     ConversationAccountPayload:
       properties:
@@ -22057,6 +22031,32 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateSummaryRequest:
+      properties:
+        done:
+          type: boolean
+        sessionId:
+          type: string
+        summary:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - sessionId
+      - summary
+      type: object
+    UpdateSummaryResponse:
+      properties:
+        ok:
+          type: boolean
+        retryAfterSeconds:
+          type: integer
+        updated:
+          type: boolean
+      required:
+      - ok
+      - updated
       type: object
     UpdateVersionRefreshRequest:
       properties:

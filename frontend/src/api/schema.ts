@@ -5573,16 +5573,6 @@ export interface components {
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
         };
-        ControllersUpdateSummaryRequest: {
-            done?: boolean;
-            sessionId: string;
-            summary: string;
-        };
-        ControllersUpdateSummaryResponse: {
-            ok: boolean;
-            retryAfterSeconds?: number;
-            updated: boolean;
-        };
         ConversationAccountPayload: {
             authFailureId?: string;
             authMode?: string;
@@ -7882,6 +7872,16 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSummaryRequest: {
+            done?: boolean;
+            sessionId: string;
+            summary: string;
+        };
+        UpdateSummaryResponse: {
+            ok: boolean;
+            retryAfterSeconds?: number;
+            updated: boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -23939,7 +23939,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ControllersUpdateSummaryRequest"];
+                "application/json": components["schemas"]["UpdateSummaryRequest"];
             };
         };
         responses: {
@@ -23949,7 +23949,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControllersUpdateSummaryResponse"];
+                    "application/json": components["schemas"]["UpdateSummaryResponse"];
                 };
             };
             /** @description Bad Request */

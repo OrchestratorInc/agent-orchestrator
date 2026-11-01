@@ -39,3 +39,17 @@ describe("useSettings tracker intake gate", () => {
 		expect(getMock).toHaveBeenCalledWith("/api/v1/settings");
 	});
 });
+
+describe("useSettings card summaries", () => {
+	it.each([
+		[true, true],
+		[false, false],
+		[undefined, false],
+	])("maps cardSummaries=%s to %s", async (cardSummaries, expected) => {
+		getMock.mockResolvedValue({ data: { cardSummaries }, error: undefined });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(() => useSettings(), { wrapper: wrapper(queryClient) });
+
+		await waitFor(() => expect(result.current.settings?.cardSummaries).toBe(expected));
+	});
+});

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
@@ -48,7 +49,7 @@ type UpdateSummaryResponse struct {
 
 func (c *SummaryController) update(w http.ResponseWriter, r *http.Request) {
 	if c.Summaries == nil {
-		envelope.WriteJSON(w, http.StatusNotImplemented, map[string]any{"ok": false})
+		apispec.NotImplemented(w, r, "POST", "/api/v1/summary")
 		return
 	}
 	var req UpdateSummaryRequest
