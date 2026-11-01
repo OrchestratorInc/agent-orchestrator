@@ -821,7 +821,7 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 	}
 }
 
-// Regression #6443: resolve via the spawn seam; see checkCodexLaunchFlags.
+// Regression #6443: use DoctorResolveCodexBinary, not deps.LookPath; see checkCodexLaunchFlags.
 func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 	setConfigEnv(t)
 	dir := t.TempDir()
@@ -841,7 +841,7 @@ func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 				return []byte("codex-cli 0.159.2\n"), nil
 			}
 			if name != resolved {
-				t.Fatalf("canary probed %q, want the spawn-resolved %q; a PATH lookup would reach the .cmd shim", name, resolved)
+				t.Fatalf("canary probed %q, want the spawn-resolved %q; deps.LookPath would reach the .cmd shim", name, resolved)
 			}
 			return []byte("ok\n"), nil
 		})
