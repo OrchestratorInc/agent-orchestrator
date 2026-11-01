@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
 	fallbackAction: undefined as string | undefined,
+	error: undefined as string | undefined,
+	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
 	workspace: undefined as ChatWorkspaceProps | undefined,
 }));
 
@@ -31,6 +33,8 @@ vi.mock("./TaskComposer", () => ({
 		launchFallback: h.launchFallback,
 		fallbackAction: h.fallbackAction,
 		fallbackLabel: "Create as Terminal UI",
+		error: h.error,
+		errorAction: h.errorAction,
 		submitMode: undefined,
 		isCloudProject: false,
 		canSubmit: true,
@@ -61,7 +65,7 @@ function renderPage() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const page = (projectId: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={projectId} /></QueryClientProvider>;
 	const { rerender } = render(page("proj-1"));
-	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)) });
+	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)), refresh: () => rerender(page("proj-1")) });
 }
 
 beforeEach(() => {
@@ -70,6 +74,8 @@ beforeEach(() => {
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
+	h.error = undefined;
+	h.errorAction = undefined;
 	h.workspace = undefined;
 	window.localStorage.clear();
 });
@@ -137,6 +143,51 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.localEchos).toBeUndefined();
 		expect(h.workspace?.draftSettings).toBeTruthy();
 		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("shows the new branch input after a primary send conflict", async () => {
+		h.launch.mockRejectedValue(new Error("Branch is in use"));
+		const page = renderPage();
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined);
+		});
+		const chooseBranch = vi.fn();
+		h.error = "That branch is open in another worktree.";
+		h.errorAction = {
+			label: "Choose new branch",
+			onClick: chooseBranch,
+			input: {
+				label: "New branch name",
+				value: "",
+				onChange: (value) => {
+					if (h.errorAction?.input) h.errorAction.input.value = value;
+					page.refresh();
+				},
+			},
+		};
+		act(() => page.refresh());
+		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		const button = screen.getByRole("button", { name: "Choose new branch" });
+		expect(button).toBeDisabled();
+		fireEvent.change(screen.getByRole("textbox", { name: "New branch name" }), { target: { value: "fix/new-branch" } });
+		expect(button).toBeEnabled();
+		fireEvent.click(button);
+		expect(chooseBranch).toHaveBeenCalledOnce();
+	});
+
+	it("shows the install action after a primary send reports a missing agent", async () => {
+		h.launch.mockRejectedValue(new Error("Agent binary not found"));
+		const page = renderPage();
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined);
+		});
+		const openSettings = vi.fn();
+		h.error = "This agent is not installed.";
+		h.errorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		act(() => page.refresh());
+		expect(screen.getByRole("alert")).toHaveTextContent(h.error);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
 	});
 
 	it("leaves a lost response uncertain so the composer retries with the same request id", async () => {
