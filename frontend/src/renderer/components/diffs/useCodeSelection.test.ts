@@ -139,6 +139,49 @@ describe("restoreCodeSelection", () => {
 		host.remove();
 		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
 	});
+
+	it("does not move the selection onto other code when the rebuild inserted rows before it", () => {
+		const host = surface([{ rows: [[1, "context", "original();", 1], [2, "context", "selected();", 2], [3, "context", "after();", 3]] }]);
+		const placed: Array<[Node, number, Node, number]> = [];
+		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
+		select(host, rowAt(host, 0, 1), rowAt(host, 0, 2), 5, recordPlacement);
+		const selection = readCodeSelection(host)!;
+		// A refresh adds a row up top: the captured indexes now name other rows.
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			const inserted = column.children[0].cloneNode(true) as Element;
+			inserted.setAttribute("data-line", "0");
+			inserted.textContent = "inserted();";
+			column.prepend(inserted);
+			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+		}
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
+		expect(placed).toEqual([]);
+	});
+
+	it("does not restore when the rebuild removed a row before the selection", () => {
+		const host = surface([{ rows: [[1, "context", "first();", 1], [2, "context", "selected();", 2], [3, "context", "after();", 3]] }]);
+		select(host, rowAt(host, 0, 1), rowAt(host, 0, 2), 5);
+		const selection = readCodeSelection(host)!;
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			const kept = [...column.children].slice(1).map((child) => child.cloneNode(true));
+			column.replaceChildren(...kept);
+		}
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
+	});
+
+	it("does not restore when the rebuild changed a selected row's text", () => {
+		const host = surface([{ rows: [[1, "context", "before();", 1], [2, "context", "selected();", 2]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 9);
+		const selection = readCodeSelection(host)!;
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			column.replaceChildren(...[...column.children].map((child) => {
+				const copy = child.cloneNode(true) as Element;
+				if (copy.textContent === "selected();") copy.textContent = "edited();";
+				return copy;
+			}));
+		}
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
+	});
 });
 
 describe("codeReference", () => {

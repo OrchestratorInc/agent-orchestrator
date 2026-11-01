@@ -21,10 +21,11 @@ export type CodeSelection = {
 };
 
 /**
- * One end of a selection: the row it sits on (by index in its column), and how
- * many characters of that row's text are behind it.
+ * One end of a selection: the row it sits on (by index in its column), how
+ * many characters of that row's text are behind it, and the row text and
+ * column row count a rebuild must still match for the end to resolve there.
  */
-export type SelectionEnd = { column: Element; row: Element; rowIndex: number; offset: number };
+export type SelectionEnd = { column: Element; row: Element; rowIndex: number; offset: number; text: string; rowCount: number };
 
 /** Both ends of a selection, in row-relative coordinates a rebuild can resolve. */
 export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd };
@@ -113,7 +114,7 @@ function selectionEnd(node: Node, offset: number): SelectionEnd | null {
 	const column = row?.parentElement;
 	if (!row || !column) return null;
 	const rows = [...column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
-	return { column, row, rowIndex: rows.indexOf(row), offset: textOffsetIn(row, node, offset) };
+	return { column, row, rowIndex: rows.indexOf(row), offset: textOffsetIn(row, node, offset), text: normalizeCodeRowText(row.textContent ?? ""), rowCount: rows.length };
 }
 
 /**
@@ -122,6 +123,11 @@ function selectionEnd(node: Node, offset: number): SelectionEnd | null {
  * selection and with it the drag or shift+click anchor. Only a rebuild
  * restores: ends whose rows are still connected mean the selection was cleared
  * on purpose (Escape, a click elsewhere) and must stay cleared.
+ *
+ * A rebuild is only trusted while the column still has the captured rows: row
+ * counts and row text must match, so a refresh that inserted, removed, or
+ * changed rows refuses to resolve the snapshot onto other code and the
+ * selection stays cleared instead.
  */
 export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnapshot): boolean {
 	if (snapshot.anchor.row.isConnected || snapshot.focus.row.isConnected) return false;
@@ -130,8 +136,10 @@ export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnaps
 	const place = (end: SelectionEnd) => {
 		if (!end.column.isConnected) return null;
 		const rows = [...end.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+		if (rows.length !== end.rowCount) return null;
 		const row = rows[end.rowIndex];
-		return row ? locateText(row, end.offset) : null;
+		if (!row || normalizeCodeRowText(row.textContent ?? "") !== end.text) return null;
+		return locateText(row, end.offset);
 	};
 	const anchor = place(snapshot.anchor);
 	const focus = place(snapshot.focus);
