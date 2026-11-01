@@ -213,12 +213,14 @@ let macRestartRequested = false;
 let restartFailureHandler: (() => void) | undefined;
 let macRestartProgress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
 let nativeReadyVersion: string | undefined;
+let nativeReadyAtMs: number | undefined;
 let nativePreparationError: Error | undefined;
 // Squirrel.Mac staging has no progress event and no cancel API, so a fixed
 // deadline punished slow disks (#5170). Watch the staging dir for growth and
 // give up only after a stretch of no progress; fall back to a fixed cap when the
 // growth signal can't be read.
 const STAGE_POLL_INTERVAL_MS = 10_000;
+const NATIVE_STAGE_FILE_GRACE_MS = 2_000;
 // Power events can be missed (including during DarkWake). A delayed JS timer
 // is a fallback sleep signal, not evidence that staging worked for that gap.
 const STAGE_TIMER_GAP_MS = 3 * STAGE_POLL_INTERVAL_MS;
@@ -358,6 +360,18 @@ function reprobeStagingDisk(): void {
 // deterministically. A fresh module import restores the defaults.
 let readStagingBytes: (dir: string | undefined) => number | undefined = shipItStagingBytes;
 let stagingDiskIsFull: (requiredBytes: number) => boolean = insufficientDiskForStaging;
+function nativeStagingFilesPresent(): boolean {
+  // Test and unpackaged processes have no Squirrel staging area.
+  const bundle = path.resolve(process.execPath, "..", "..", "..");
+  if (!app.isPackaged || !bundle.endsWith(".app")) return true;
+  const directory = macShipItDir();
+  if (!directory || !existsSync(path.join(directory, "ShipItState.plist"))) return false;
+  try {
+    return readdirSync(directory).some(name =>
+      /^update\.[^/]+$/.test(name) &&
+      existsSync(path.join(directory, name, path.basename(bundle), "Contents", "Info.plist")));
+  } catch { return false; }
+}
 export function __setStagingProbesForTesting(probes: {
   readStagingBytes?: (dir: string | undefined) => number | undefined;
   stagingDiskIsFull?: (requiredBytes: number) => boolean;
@@ -419,7 +433,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
         nativeReadyVersion = undefined;
         rejectNativeOperation?.(error);
         reject(error);
-      } else { nativeReadyVersion = version; resolve(); }
+      } else { nativeReadyVersion = version; nativeReadyAtMs = Date.now(); resolve(); }
     },
   };
   // Squirrel creates the .ShipIt dir only after electron-updater has already
@@ -506,6 +520,21 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
 
 function isNativeInstallReady(): boolean {
   return process.platform !== "darwin" || (stagedInCurrentProcess && nativeReadyVersion !== undefined && nativeReadyVersion === stagedVersion);
+}
+
+function nativeStagingWasLost(): boolean {
+  return process.platform === "darwin" && isNativeInstallReady() &&
+    nativeReadyAtMs !== undefined && Date.now() - nativeReadyAtMs >= NATIVE_STAGE_FILE_GRACE_MS &&
+    !nativeStagingFilesPresent();
+}
+
+function discardLostNativeStaging(): boolean {
+  if (!nativeStagingWasLost()) return false;
+  recordUpdateDiagnostic("native-staging-lost", { version: stagedVersion });
+  discardStagedBuild();
+  applyInstallOnQuitPolicy();
+  broadcastUpdaterStatus({ state: "checking" });
+  return true;
 }
 // Sanitized release notes for the build currently on offer.
 let offeredReleaseNotes: string | undefined;
@@ -1036,7 +1065,7 @@ function stagedStamp(): Pick<UpdateStatus, "staged"> {
       ...(stagedVersion === undefined ? {} : { version: stagedVersion }),
       stagedAt: stagedAtMs,
       escalated: stagedEscalated,
-      ...(isNativeInstallReady() ? {} : { ready: false }),
+      ...(isNativeInstallReady() && !nativeStagingWasLost() ? {} : { ready: false }),
       ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
     },
   };
@@ -1987,6 +2016,7 @@ function wireUpdaterEvents(): void {
         timedOutNativePreparation = undefined;
         nativePreparationError = undefined;
         nativeReadyVersion = timedOut.version;
+        nativeReadyAtMs = Date.now();
         stagedInCurrentProcess = true;
         applyInstallOnQuitPolicy();
         recordUpdateDiagnostic("native-preparation-recovered", { version: timedOut.version });
@@ -2444,6 +2474,7 @@ async function runAutomaticUpdateCheck(
       // downloading is off, or quitting installs the build they moved away from.
       const staleStaged = stagedBuildIsStale(settings);
       if (staleStaged) discardStagedBuild();
+      else discardLostNativeStaging();
       // automaticRecoveryExhausted() breaks the re-download loop: without it a
       // build that keeps failing verification is fetched and re-prepared on
       // every check, forever. A stale staged build still overrides, because
@@ -3001,6 +3032,16 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     return;
   }
   if (macRestartPreparation) return macRestartPreparation;
+  // The native ready event can precede ShipIt's final plist write. Give that
+  // short handoff window time to finish before treating missing files as loss.
+  if (isNativeInstallReady() && !nativeStagingFilesPresent()) {
+    const remaining = NATIVE_STAGE_FILE_GRACE_MS - (Date.now() - (nativeReadyAtMs ?? 0));
+    if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
+  }
+  if (discardLostNativeStaging()) {
+    if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
+    throw new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  }
   let confirmation: UpdateInstallResult;
   // Promise.race releases the queue on a native timeout, but the underlying
   // cache transfer has no cancellation guarantee. Never let its late resolution

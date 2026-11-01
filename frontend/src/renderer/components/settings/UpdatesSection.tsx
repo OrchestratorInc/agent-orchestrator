@@ -561,7 +561,7 @@ function UpdateActions({
 							{downloadLabel}
 						</Button>
 					)}
-					{(!downloading && (status.state === "downloaded" || (status.staged && status.staged.ready !== false))) && (
+					{(!downloading && status.staged?.ready !== false && (status.state === "downloaded" || Boolean(status.staged))) && (
 						// Opens the restart confirmation rather than installing outright:
 						// installing quits the app, which costs a turn on any chat session
 						// running a daemon-owned driver.
@@ -677,6 +677,12 @@ function UpdateStatusLine({
 			detail = status.version ? t("settings.updates.targetVersion", { version: status.version }) : null;
 			break;
 		case "downloaded":
+			if (status.staged?.ready === false) {
+				icon = <Info className="size-icon-sm shrink-0" aria-hidden="true" />;
+				label = t("settings.updates.check");
+				detail = status.version ? t("settings.updates.targetVersion", { version: status.version }) : null;
+				break;
+			}
 			className = "text-success";
 			icon = <CheckCircle2 className="size-icon-sm shrink-0" aria-hidden="true" />;
 			label = t("settings.updates.downloaded");
