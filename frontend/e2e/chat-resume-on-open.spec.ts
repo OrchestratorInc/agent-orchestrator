@@ -159,7 +159,9 @@ test("renderer: automatic recovery stops for permanent errors and after three tr
 	for (const id of ["auth-required", "incompatible-driver"]) {
 		await openChat(page, id);
 		await expect(page.getByRole("button", { name: "Resume agent", exact: true })).toBeVisible();
-		await expect(page.getByText(id === "auth-required" ? auth.message : incompatible.message, { exact: true })).toBeVisible();
+		await expect(page.getByText(id === "auth-required"
+			? "The agent needs sign-in. Open Harness Settings, sign in, then try again."
+			: incompatible.message, { exact: true })).toBeVisible();
 		await page.waitForTimeout(2300); // Beyond the first retry delay: permanent failures stay stopped.
 		expect(attempts[id]).toHaveLength(1);
 	}
