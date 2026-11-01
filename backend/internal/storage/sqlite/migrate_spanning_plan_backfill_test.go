@@ -58,6 +58,23 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
     ('switched-codex', 'switched', NULL, 15, 'plan', 'completed', '', '{"event":"plan","steps":`+steps+`}', '', ?, ?, 'switched:root');`,
 		at(1), at(1), at(3), at(3), at(4), at(4))
 
+	// A Claude chat on its root branch, with an edited branch it left that holds a
+	// newer copy. Only the active path is settled: the root's copy stays current.
+	mustExec(t, db, `
+INSERT INTO sessions (id, project_id, num, harness, session_mode, activity_last_at, created_at, updated_at)
+VALUES ('forked-1', 'p', 4, 'claude-code', 'chat', ?, ?, ?);`, at(0), at(0), at(0))
+	mustExec(t, db, `
+INSERT INTO conversations (id, scope, project_id, session_id, current_session_id, active_branch_id, created_at, updated_at)
+VALUES ('forked', 'session', 'p', 'forked-1', 'forked-1', 'forked:root', ?, ?);`, at(0), at(0))
+	mustExec(t, db, `
+INSERT INTO conversation_branches (id, conversation_id, session_id, provider_conversation_id, parent_branch_id, fork_after_sequence, created_at)
+VALUES ('forked:edit', 'forked', 'forked-1', 'thread-edit', 'forked:root', 1, ?);`, at(0))
+	mustExec(t, db, `
+INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kind, status, summary, detail_json, provider_item_id, created_at, updated_at, branch_id) VALUES
+    ('forked-root', 'forked', NULL, 2, 'plan', 'completed', '', '{"event":"plan","steps":`+steps+`}', '', ?, ?, 'forked:root'),
+    ('forked-edit', 'forked', NULL, 3, 'plan', 'completed', '', '{"event":"plan","steps":`+done+`}', '', ?, ?, 'forked:edit');`,
+		at(5), at(5), at(6), at(6))
+
 	upTo(t, db, 20261101004244943)
 
 	type flags struct{ spans, superseded bool }
@@ -81,6 +98,8 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
 		"codex late rows":        {row("codex-late-1"), flags{}},
 		"switched claude row":    {row("switched-claude"), flags{spans: true}},
 		"switched codex row":     {row("switched-codex"), flags{}},
+		"forked active root row": {row("forked-root"), flags{spans: true}},
+		"forked inactive edit":   {row("forked-edit"), flags{spans: true}},
 	} {
 		if test.got != test.want {
 			t.Errorf("%s: spansTurns=%v superseded=%v, want spansTurns=%v superseded=%v",
