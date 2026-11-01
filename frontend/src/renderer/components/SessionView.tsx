@@ -494,7 +494,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const [subagentContainer, setSubagentContainer] = useState<HTMLDivElement | null>(null);
+	// The chat reports this while it lists any subagents; it clears it when it unmounts.
+	const subagentsAvailable = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.subagentsAvailable));
+	// The orchestrator's inspector is its Browser, and its toggle says so, until the
+	// Subagents tab joins it; then the Browser is one of its tabs and the toggle is the
+	// ordinary inspector toggle, so the Browser's mark is not shown twice.
+	const inspectorIsBrowser = browserOnly && !subagentsAvailable;
+	const inspectorView = useUiStore((state) => {
+		const view = state.inspectorSessions[uiSessionId]?.view ?? "summary";
+		// The orchestrator's inspector is its Browser, plus its chat's Subagents panel.
+		return browserOnly && view !== "subagents" ? "browser" : view;
+	});
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -1441,7 +1452,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (browserOnly) {
 			const current = useUiStore.getState().inspectorSessions[uiSessionId];
 			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
+			if (current?.view !== "browser" && current?.view !== "subagents") setInspectorViewForSession(uiSessionId, "browser");
 			return;
 		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
@@ -1748,6 +1759,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 	]);
 
+	// A subagent row opens its tab like any tab switch, so leaving the Browser canvas
+	// resizes the inspector to the utility width instead of snapping to it.
+	const revealSubagentsPanel = useCallback(() => {
+		transitionInspectorView("subagents");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
+
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
 		setBrowserUnseen(uiSessionId, false);
@@ -2032,6 +2050,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									subagentContainer={subagentContainer}
+									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -2205,6 +2225,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					>
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							browserOnly={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
@@ -2251,7 +2272,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<TooltipTrigger asChild>
 							<TopbarButton
 								aria-label={
-									browserOnly
+									inspectorIsBrowser
 										? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
 										: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
 								}
@@ -2262,7 +2283,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							>
 								{browserOnly ? (
 									<span className="relative inline-flex">
-										<BrowserIcon aria-hidden="true" className="size-icon-md" />
+										{inspectorIsBrowser
+											? <BrowserIcon aria-hidden="true" className="size-icon-md" />
+											: <PanelRight aria-hidden="true" className="size-icon-md" />}
 										{!isInspectorOpen && browserUnseen ? (
 											<span
 												aria-hidden="true"
@@ -2277,7 +2300,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							</TopbarButton>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">
-							{browserOnly
+							{inspectorIsBrowser
 								? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
 								: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
 						</TooltipContent>

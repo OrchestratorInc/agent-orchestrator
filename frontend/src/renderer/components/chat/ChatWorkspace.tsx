@@ -40,6 +40,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -165,6 +166,9 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
+import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
+import { isSubagentLaunch, partitionSubagentSteps, type SubagentRef } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -341,6 +345,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	/** The inspector tab that shows one subagent's conversation. Without it, a subagent opens inline. */
+	subagentPanel?: SubagentPanelHost;
 	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
@@ -684,6 +690,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	onAddToSideChat,
+	subagentPanel,
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	snapshot,
@@ -918,6 +925,9 @@ function ChatWorkspaceContent({
 			if (
 				newWorkDisabled ||
 				event.key !== "Escape" ||
+				// Portaled content (the Subagents panel in the inspector) still bubbles keys
+				// here; Escape over there must not stop this chat's turn and its children.
+				!(event.target instanceof Node && event.currentTarget.contains(event.target)) ||
 				event.defaultPrevented ||
 				isDialogOrMenuOpen() ||
 				event.altKey ||
@@ -1898,6 +1908,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
@@ -2186,15 +2197,23 @@ function RolledBackNotice({ count }: { count: number }) {
  */
 type TimelineRun =
 	| { kind: "activities"; key: string; items: ConversationItem[] }
+	| { kind: "subagents"; key: string; items: ConversationActivity[] }
 	| { kind: "single"; key: string; items: [ConversationItem] };
 
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
+		const last = runs.at(-1);
+		// Subagents launched back to back are one team: the parent fanned the work
+		// out in one breath, so it reads as one block rather than one per child.
+		if (isSubagentLaunch(item)) {
+			if (last?.kind === "subagents") last.items.push(item);
+			else runs.push({ kind: "subagents", key: `subagents-${item.sequence}`, items: [item] });
+			continue;
+		}
 		// Approvals, user input, errors, reasoning, and stamped system events stay
 		// boundaries. Confirmed AO actions have no event stamp, so they batch.
 		const runnable = isOrdinaryActivity(item);
-		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);
 			continue;
@@ -2224,6 +2243,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     header meter instead.
  *   - reasoning. Providers can emit one per tool call and they usually carry no
  *     readable body, so they are internal signal rather than conversation chrome.
+ *     A subagent launch is the exception: ACP files Claude's `Agent` tool as
+ *     reasoning, and it is the row the child's steps hang from.
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2246,7 +2267,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
-		if (item.activityKind === "reasoning") return false;
+		if (item.activityKind === "reasoning" && !isSubagentLaunch(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -2631,6 +2652,7 @@ const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
  */
 export function Timeline({
 	onAddToSideChat,
+	subagentPanel,
 	checkingSideChatAvailability,
 	onAddToChat,
 	onForeignAnnotation,
@@ -2667,6 +2689,7 @@ export function Timeline({
 	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	subagentPanel?: SubagentPanelHost;
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
@@ -3619,6 +3642,32 @@ export function Timeline({
 			.filter((group) => group.items.length > 0);
 	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// Read from every group, not the mounted ones: the timeline is virtualized, and the
+	// panel lists a child whose turn has scrolled far out of view.
+	const subagentPanelEnabled = subagentPanel !== undefined;
+	const subagents = useMemo(
+		() => (subagentPanelEnabled ? conversationSubagents(groups) : NO_SUBAGENTS),
+		[groups, subagentPanelEnabled],
+	);
+	const [openSubagentId, setOpenSubagentId] = useState<string>();
+	const closeSubagent = useCallback(() => setOpenSubagentId(undefined), []);
+	const hasSubagents = subagents.length > 0;
+	const reportSubagents = subagentPanel?.onAvailableChange;
+	useEffect(() => {
+		if (!reportSubagents) return;
+		reportSubagents(hasSubagents);
+		return () => reportSubagents(false);
+	}, [hasSubagents, reportSubagents]);
+	const revealSubagents = subagentPanel?.reveal;
+	const openSubagent = useMemo(
+		() => revealSubagents
+			? (launchId: string) => {
+				setOpenSubagentId(launchId);
+				revealSubagents();
+			}
+			: undefined,
+		[revealSubagents],
+	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
@@ -4282,6 +4331,19 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<OpenSubagentContext.Provider value={openSubagent}>
+		{subagentPanel?.container ? createPortal(
+			<SubagentPanel
+				subagents={subagents}
+				openId={openSubagentId}
+				onOpen={setOpenSubagentId}
+				onBack={closeSubagent}
+				harness={snapshot.harness}
+				disclosureOverrides={activityDisclosureOverrides}
+				onDisclosureChange={onActivityDisclosureChange}
+			/>,
+			subagentPanel.container,
+		) : null}
 		<div
 			className="relative min-h-0 flex-1"
 			data-testid="chat-timeline"
@@ -4579,6 +4641,7 @@ export function Timeline({
 				</Button>
 			) : null}
 		</div>
+		</OpenSubagentContext.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -4675,10 +4738,14 @@ const TurnGroup = memo(function TurnGroup({
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	const { steps: subagentSteps, live: subagentsLive } = groupSubagents(group);
 	const runs = useMemo(
 		() =>
 			runsOf(
 				group.items.filter((item) => {
+					// A subagent's steps leave the turn's flow and hang under its launch, so
+					// the child's commands stop reading as the parent's own.
+					if (group.subagents?.stepIds.has(item.id)) return false;
 					if (item.id === group.liveProviderFailure?.id) return false;
 					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
 					return !(
@@ -4689,7 +4756,7 @@ const TurnGroup = memo(function TurnGroup({
 					);
 				}),
 			),
-		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
 	);
 	const lastAssistantId = [...group.items]
 		.reverse()
@@ -4734,8 +4801,11 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles, and
 	// so does anything the user said mid-turn: folding a steer away would leave the
 	// reply under the Worked row answering a message the reader can no longer see.
+	// So does a subagent team, working or settled: its outcomes are the turn's result,
+	// and staying in this flat list keeps the card, and any report the reader has
+	// open, mounted through the handoff instead of vanishing into "Worked for".
 	const noticeRuns = group.outcome
-		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || run.kind === "subagents")
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
@@ -4745,7 +4815,8 @@ const TurnGroup = memo(function TurnGroup({
 	// still says how long it took.
 	const unfoldedDurationMs = group.outcome && foldedRuns.length === 0 && !onlyRead ? group.outcome.durationMs : undefined;
 	// What the live row names: the step the agent is on right now. Items the user acts
-	// on (approvals, questions) are not work, and a provider retry has its own slot.
+	// on (approvals, questions) are not work, and a provider retry has its own slot. A
+	// subagent's step is the child's work, named in its own row and panel instead.
 	const currentTask = group.live
 		? [...group.items]
 				.reverse()
@@ -4753,6 +4824,7 @@ const TurnGroup = memo(function TurnGroup({
 					(item): item is ConversationActivity =>
 						item.kind === "activity" &&
 						item.status === "running" &&
+						!group.subagents?.stepIds.has(item.id) &&
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
@@ -4763,7 +4835,18 @@ const TurnGroup = memo(function TurnGroup({
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
 	const renderRun = (run: TimelineRun) =>
-		run.kind === "activities" ? (
+		run.kind === "subagents" ? (
+			<SubagentTeam
+				key={run.key}
+				launches={run.items}
+				steps={subagentSteps}
+				live={subagentsLive}
+				harness={harness}
+				disclosureKey={`${group.key}:${run.key}`}
+				disclosureOverrides={activityDisclosureOverrides}
+				onDisclosureChange={onActivityDisclosureChange}
+			/>
+		) : run.kind === "activities" ? (
 			<ActivityRun
 				key={run.key}
 				disclosureKey={`${group.key}:${run.key}`}
@@ -5303,11 +5386,28 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
 		sameContent(a.plan, b.plan) &&
+		sameSubagents(a.subagents, b.subagents) &&
 		a.items.length === b.items.length &&
 		// The items are already identity-stable by the time a group is compared, so a
 		// reference check here is exact and avoids walking their contents twice.
 		a.items.every((item, index) => item === b.items[index])
 	);
+}
+
+/**
+ * A child's steps can sit in a later group than its launch, so the launch's group
+ * changes when they do even though its own items stay as they were.
+ */
+function sameSubagents(a: GroupSubagents | undefined, b: GroupSubagents | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.live.size !== b.live.size || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	for (const id of a.live) if (!b.live.has(id)) return false;
+	for (const id of a.stepIds) if (!b.stepIds.has(id)) return false;
+	for (const [launchId, steps] of a.steps) {
+		const other = b.steps.get(launchId);
+		if (other?.length !== steps.length || steps.some((step, index) => step !== other[index])) return false;
+	}
+	return true;
 }
 
 /**
@@ -5366,7 +5466,47 @@ type TimelineGroup = {
 	rollbackable?: boolean;
 	/** An account switch stopped this turn; its notice replaces the outcome. */
 	accountSwitched?: boolean;
+	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
+	subagents?: GroupSubagents;
 };
+
+type GroupSubagents = {
+	/** Each of this group's launches, with every step its child took, in any turn. */
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	/** This group's items that are a child's steps, wherever the child's launch is. */
+	stepIds: ReadonlySet<string>;
+	/**
+	 * This group's launches whose child can still be working: an AO turn holding the
+	 * launch or one of its steps is still running, even when this group is a settled
+	 * part before a steer.
+	 */
+	live: ReadonlySet<string>;
+};
+
+const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
+const NO_LIVE_SUBAGENTS: ReadonlySet<string> = new Set();
+const NO_STEPS: readonly ConversationActivity[] = [];
+const NO_SUBAGENTS: readonly SubagentRef[] = [];
+
+/** The steps a group's launches read, and which of them can still be working. */
+function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: ReadonlySet<string> } {
+	return { steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS, live: group.subagents?.live ?? NO_LIVE_SUBAGENTS };
+}
+
+/**
+ * Every subagent the chat shows, in launch order. A launch nested under another is one
+ * of that child's steps, so only the outermost ones are listed.
+ */
+function conversationSubagents(groups: readonly TimelineGroup[]): SubagentRef[] {
+	return groups.flatMap((group) => {
+		const { steps, live } = groupSubagents(group);
+		return group.items.flatMap((item) =>
+			isSubagentLaunch(item) && !group.subagents?.stepIds.has(item.id)
+				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live: live.has(item.id) }]
+				: [],
+		);
+	});
+}
 
 type GroupPreview = { title: string; detail?: string };
 
@@ -5580,7 +5720,67 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups.flatMap(splitAtSteers);
+	const conversation = subagentsOfConversation(snapshot.items, groups);
+	if (!conversation) return groups.flatMap(splitAtSteers);
+	return groups.flatMap((group) =>
+		splitAtSteers(group)
+			.map((segment) => withSubagentSteps(segment, conversation))
+			// A part made only of steps that moved under a launch elsewhere has nothing
+			// left to draw. A live one keeps its Working row.
+			.filter((segment) => segment.live || segment.items.some((item) => !conversation.stepIds.has(item.id))),
+	);
+}
+
+type ConversationSubagents = {
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	stepIds: ReadonlySet<string>;
+	live: ReadonlySet<string>;
+};
+
+/**
+ * Every launch's steps, read from the whole conversation before any turn is split.
+ *
+ * A child's records do not always land in its launch's AO turn. It keeps working while
+ * the user steers, so its later steps and its hand-back land after the steer; and a
+ * child that outlives its turn, or that the parent picks up again later, records into
+ * a later turn or into none. Read one turn or one segment at a time, the team would
+ * never get its report and the child's steps would read as loose parent work.
+ *
+ * `items` is the whole conversation in sequence order, so each child's steps keep the
+ * order they happened in even when they span turns.
+ *
+ * A child can still be working while any AO turn holding its launch or one of its
+ * steps runs. That is the real turn's state, so a launch before a steer, or a child
+ * that has not recorded a step yet, does not read as finished with no report.
+ */
+function subagentsOfConversation(items: ConversationItem[], groups: readonly TimelineGroup[]): ConversationSubagents | undefined {
+	const launches = items.filter(isSubagentLaunch);
+	if (launches.length === 0) return undefined;
+	const { steps } = partitionSubagentSteps(items);
+	const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
+	const liveItems = new Set(groups.flatMap((group) => (group.live ? group.items.map((item) => item.id) : [])));
+	const live = new Set(
+		launches
+			.filter((launch) => liveItems.has(launch.id) || steps.get(launch.id)?.some((step) => liveItems.has(step.id)))
+			.map((launch) => launch.id),
+	);
+	return { steps, stepIds, live };
+}
+
+/** Give one segment its own launches' steps and live state, and mark the steps it holds. */
+function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSubagents): TimelineGroup {
+	const steps = new Map<string, ConversationActivity[]>();
+	const stepIds = new Set<string>();
+	const live = new Set<string>();
+	for (const item of segment.items) {
+		if (conversation.stepIds.has(item.id)) stepIds.add(item.id);
+		else if (isSubagentLaunch(item)) {
+			steps.set(item.id, conversation.steps.get(item.id) ?? []);
+			if (conversation.live.has(item.id)) live.add(item.id);
+		}
+	}
+	if (steps.size === 0 && stepIds.size === 0) return segment;
+	return { ...segment, subagents: { steps, stepIds, live } };
 }
 
 /**
@@ -5672,6 +5872,7 @@ function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
 			&& !group.diff
 			&& quietWorkerReply(group.items) !== undefined
 			&& !group.items.some(isNoticeItem)
+			&& !group.items.some(isSubagentLaunch)
 			&& spawnedSessionIds(group.items).length === 0;
 		quietWorkerGroups.set(group, quiet);
 	}

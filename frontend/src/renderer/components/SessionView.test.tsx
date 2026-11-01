@@ -311,6 +311,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange,
 		auxiliaryTabOrder,
 		onAuxiliaryTabOrderChange,
+		onRevealSubagents,
 	}: {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
@@ -336,6 +337,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
+		onRevealSubagents?: () => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
 		annotationOpen.current=onOpenFileAnnotation;
@@ -429,6 +431,9 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			</button>
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>
 				report chat work
+			</button>
+			<button type="button" onClick={onRevealSubagents}>
+				open a subagent
 			</button>
 		</div>
 		);
@@ -5373,6 +5378,44 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-orch")).toBe(true);
 		expect(screen.getByRole("button", { name: "Close Browser" })).toHaveAttribute("aria-pressed", "true");
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+	});
+
+	it("gives the orchestrator the ordinary inspector toggle once its chat has subagents", () => {
+		render(<SessionView sessionId="sess-orch" />);
+		expect(screen.getByRole("button", { name: "Open Browser" })).toBeInTheDocument();
+
+		act(() => useUiStore.getState().setSubagentsAvailable("sess-orch", true));
+
+		// Browser is now one of the inspector's tabs, so the toggle no longer wears its mark.
+		expect(screen.queryByRole("button", { name: "Open Browser" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
+		expect(inspectorOpen("sess-orch")).toBe(true);
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("resizes the orchestrator's inspector from Browser to Subagents when a subagent opens", () => {
+		vi.useFakeTimers();
+		try {
+			workerSession("sess-orch").mode = "chat";
+			render(<SessionView sessionId="sess-orch" />);
+			act(() => {
+				useUiStore.getState().setSubagentsAvailable("sess-orch", true);
+				useUiStore.getState().setInspectorOpen("sess-orch", true);
+			});
+			const split = screen.getByTestId("panel-group");
+			expect(split).toHaveAttribute("data-workspace-mode", "browser");
+			act(() => vi.advanceTimersByTime(300));
+
+			fireEvent.click(screen.getByRole("button", { name: "open a subagent" }));
+
+			// The same spring a tab click runs, not a snap from the canvas width.
+			expect(split).toHaveAttribute("data-workspace-resizing", "true");
+			expect(split).toHaveAttribute("data-workspace-mode", "utility");
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("subagents");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
