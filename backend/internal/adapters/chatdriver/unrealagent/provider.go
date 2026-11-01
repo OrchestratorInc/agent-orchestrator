@@ -38,6 +38,7 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
 	"github.com/unreallabsai/unreal-agent/harness/tool/viewimage"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -61,12 +62,13 @@ type activeTurnState struct {
 }
 
 type providerRuntime struct {
-	ctx     context.Context
-	cfg     providerConfig
-	store   *localfile.Store
-	client  providerClient
-	model   string
-	journal *eventJournal
+	backgroundTasks backgroundtasks.Tracker
+	ctx             context.Context
+	cfg             providerConfig
+	store           *localfile.Store
+	client          providerClient
+	model           string
+	journal         *eventJournal
 
 	mu           sync.Mutex
 	active       activeTurnState
@@ -188,6 +190,9 @@ func (runtime *providerRuntime) handleCommand(cmd command) error {
 		return runtime.interrupt(cmd.ProviderTurnID)
 	case "ack":
 		return runtime.journal.ack(cmd.EventID)
+	case "background_tasks":
+		tasks := runtime.backgroundTasks.Snapshot(time.Now())
+		return runtime.journal.writeControl(frame{Version: protocolVersion, Type: "background_tasks", RequestID: cmd.RequestID, BackgroundTasks: &tasks})
 	case "replay":
 		return runtime.journal.replay()
 	default:
@@ -441,6 +446,14 @@ func (runtime *providerRuntime) observeModelResponse(turnID string, stored sessi
 			if call.Name == tool.BashName {
 				kind = domain.ActivityKindCommand
 			}
+			if kind == domain.ActivityKindCommand {
+				var arguments struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal([]byte(call.Arguments), &arguments)
+				runtime.backgroundTasks.Update(ports.ChatBackgroundTask{ID: call.CallID, RunID: turnID, Kind: "shell", Description: arguments.Command, State: "running"}, time.Now())
+			}
+
 			runtime.mu.Lock()
 			runtime.pendingTools[call.CallID] = kind
 			runtime.mu.Unlock()
@@ -480,6 +493,7 @@ func (runtime *providerRuntime) observeToolStatus(turnID string, status sessions
 	if kind == "" {
 		kind = domain.ActivityKindMCPTool
 	}
+	runtime.backgroundTasks.Finish(status.CallID, string(state), time.Now())
 	detail, _ := json.Marshal(map[string]string{"error": status.Status.Error})
 	_ = runtime.emit(wireEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID, ProviderItemID: status.CallID, ActivityKind: kind, ActivityStatus: state, Detail: detail})
 }

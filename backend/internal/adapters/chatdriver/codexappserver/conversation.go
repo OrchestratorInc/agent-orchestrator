@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -45,9 +46,10 @@ var approvalMethods = map[string]domain.ActivityKind{
 
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
-	conn *conn
-	proc *process
-	log  *slog.Logger
+	backgroundObserved backgroundtasks.Tracker
+	conn               *conn
+	proc               *process
+	log                *slog.Logger
 
 	threadID        string
 	historyParentID string
@@ -181,6 +183,7 @@ func (c *conversation) pump() {
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		c.observeBackgroundNotification(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native

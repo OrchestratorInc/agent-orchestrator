@@ -10,6 +10,10 @@ import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
+// Background-task queries have their own hook/component and browser coverage.
+// Keep model-picker API fixtures scoped to the model-picker behavior here.
+vi.mock("../BackgroundTasks", () => ({ SessionBackgroundTasks: () => null }));
+
 const LINK = "http://localhost:5173";
 const REPORT_LINK = "reports/new-report.html";
 

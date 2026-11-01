@@ -159,6 +159,9 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersBackgroundTaskResponse":                    "BackgroundTaskResponse",
+	"ControllersBackgroundTasksResponse":                   "BackgroundTasksResponse",
+	"ControllersListBackgroundTasksResponse":               "ListBackgroundTasksResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -1213,6 +1216,18 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/background-tasks", id: "listBackgroundTasks", tag: "conversations",
+			summary:    "List native background work for attached session controllers",
+			pathParams: []any{controllers.ListUsageSessionsQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListBackgroundTasksResponse{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks", id: "getBackgroundTasks", tag: "conversations",
+			summary:    "Inspect native background work without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTasksResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",

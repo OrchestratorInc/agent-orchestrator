@@ -382,3 +382,11 @@ func checkpointContent(raw json.RawMessage) (string, error) {
 	}
 	return strings.Join(texts, "\n"), nil
 }
+
+// Embedding ChatDriver otherwise hides the wrapped driver's reporting contract.
+func (d *checkpointDriver) BackgroundTaskReporting() string {
+	if reporter, ok := d.ChatDriver.(ports.ChatBackgroundTaskDriver); ok {
+		return reporter.BackgroundTaskReporting()
+	}
+	return ""
+}

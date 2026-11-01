@@ -58,3 +58,20 @@ func TestShippedChatDrivers(t *testing.T) {
 		}
 	}
 }
+
+// Iterate the real registry rather than maintaining another harness allowlist.
+// A wrapper or new transport that drops reporting must fail this release check.
+func TestEveryShippedChatDriverProvidesBackgroundTaskReporting(t *testing.T) {
+	r := Build(nil, nil)
+	for harness, driver := range r.drivers {
+		reporter, ok := driver.(ports.ChatBackgroundTaskDriver)
+		if !ok {
+			t.Errorf("%s Chat driver drops background-task reporting", harness)
+			continue
+		}
+		mode := reporter.BackgroundTaskReporting()
+		if mode != "native" && mode != "reported" {
+			t.Errorf("%s reporting mode = %q", harness, mode)
+		}
+	}
+}

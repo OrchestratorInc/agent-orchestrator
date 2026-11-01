@@ -28,6 +28,8 @@ import {
 } from "../lib/session-presentation";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useBackgroundTaskReadings } from "../hooks/useBackgroundTasks";
+import { BackgroundTasksButton } from "./BackgroundTasks";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -113,6 +115,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// Only this machine's cloud projects start in place: a remote host's board
 	// never reads this machine's cloud settings (as useCloudCp below).
 	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
+	const backgroundTasks = useBackgroundTaskReadings(!hostId && !localCloudBoard);
 	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
 	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
@@ -363,6 +366,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						labels={boardLabels}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
+								backgroundTasks={!hostId && !localCloudBoard ? <BackgroundTasksButton session={session} reading={backgroundTasks.data?.get(session.id)} stale={backgroundTasks.isError} /> : undefined}
 								participants={participantsBySession.get(session.id)}
 								me={cloudUserId}
 								memory={memoryBySession?.get(session.id)}

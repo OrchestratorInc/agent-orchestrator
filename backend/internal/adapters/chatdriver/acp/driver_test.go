@@ -3385,12 +3385,8 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	capability := ""
-	if len(capabilities) == 1 {
-		capability, _ = capabilities[0].(string)
-	}
-	if !versionOK || version != 1 || capability != "sessionFailure" {
-		t.Fatalf("session failure capability = %#v", air)
+	if !versionOK || version != 1 || len(capabilities) != 2 || capabilities[0] != "sessionFailure" || capabilities[1] != "asyncTasks" {
+		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
