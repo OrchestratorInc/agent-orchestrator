@@ -368,11 +368,23 @@ func mergeKimiHooksConfig(existing string) string {
 	return joinKimiConfigParts(existing[:start], block, existing[end:])
 }
 
+// kimiHooksConfigBlock lists the hooks AO installs into the AO-managed Kimi
+// config. The tool-use trio keeps the activity state active mid-turn: without
+// it the Stop of a prior step parks the session on idle for the rest of the
+// turn even while the agent keeps executing tools. Kimi's PermissionResult is
+// installed as AO's canonical permission-resolved event so the shared deriver
+// reports active and lifecycle clears waiting_input as soon as the approval
+// dialog resolves; permission-request keeps the session on waiting_input until
+// then, and lifecycle's sticky suppression stops the trio from clearing it.
 func kimiHooksConfigBlock() string {
 	return kimiHooksSentinelStart + "\n\n" +
 		kimiHookEntry("SessionStart", "startup", "ao hooks kimi session-start") +
 		kimiHookEntry("UserPromptSubmit", "", "ao hooks kimi user-prompt-submit") +
+		kimiHookEntry("PreToolUse", "", "ao hooks kimi pre-tool-use") +
+		kimiHookEntry("PostToolUse", "", "ao hooks kimi post-tool-use") +
+		kimiHookEntry("PostToolUseFailure", "", "ao hooks kimi post-tool-use-failure") +
 		kimiHookEntry("PermissionRequest", "", "ao hooks kimi permission-request") +
+		kimiHookEntry("PermissionResult", "", "ao hooks kimi permission-resolved") +
 		kimiHookEntry("Stop", "", "ao hooks kimi stop") +
 		kimiHooksSentinelEnd + "\n"
 }
