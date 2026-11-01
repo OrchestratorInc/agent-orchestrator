@@ -1801,6 +1801,8 @@ func mapSessionError(err error) error {
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
 		return apierr.Conflict("BRANCH_CHECKED_OUT_ELSEWHERE", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists):
+		return apierr.Conflict("BRANCH_ALREADY_EXISTS", "Choose a branch name that does not already exist locally or on a remote", nil)
 	case errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved):
 		return apierr.Invalid("DEFAULT_BRANCH_UNRESOLVED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchNotFetched):

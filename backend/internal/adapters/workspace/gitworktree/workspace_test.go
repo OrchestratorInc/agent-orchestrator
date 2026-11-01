@@ -496,7 +496,7 @@ func TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale(t *testi
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err != nil {
 		t.Fatalf("createWorkspaceProjectRepo: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err != nil {
 		t.Fatalf("createWorkspaceProjectRepo: %v", err)
 	}
@@ -647,7 +647,7 @@ func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err == nil {
 		t.Fatal("createWorkspaceProjectRepo: want error when recovery fails, got nil")
 	}

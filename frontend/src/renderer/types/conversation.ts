@@ -130,6 +130,7 @@ export interface ConversationTurn {
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
 	errorMessage?: string;
+	failureCode?: "provider_key_missing";
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
@@ -201,6 +202,8 @@ export interface ConversationMessage {
 	editAvailable?: boolean;
 	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
 	continuation?: boolean;
+	/** User-written content AO delivered as automation, e.g. Browser-panel annotations. */
+	authoredByUser?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
@@ -705,6 +708,8 @@ export interface ChatModel {
 	defaultEffort?: string;
 	/** The model can run on the provider's faster tier. */
 	supportsFast?: boolean;
+	/** Why the model cannot be chosen now (the installed agent CLI is too old), from the agent's catalog. */
+	unavailableReason?: string;
 }
 
 /** One provider-owned setting advertised for this live chat session. */
@@ -730,6 +735,8 @@ export interface ChatConfigChoice {
 	/** Provider grouping is presentation data, not part of the value sent back. */
 	group?: string;
 	groupName?: string;
+	/** Why the choice cannot be picked now; AO adds it from the agent's catalog, the provider never sends it. */
+	unavailableReason?: string;
 }
 
 /** The two value shapes ACP session config supports. */
@@ -977,21 +984,25 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 /**
- * Turn ids whose human prompt is represented in the queue dock instead.
+ * A prompt the user owns in the queue dock: their typed message, or their own
+ * words AO relayed as automation, such as Browser-panel annotations.
+ */
+export function isUserQueuePrompt(item: ConversationItem): item is ConversationMessage {
+	return item.kind === "message" && item.role === "user" &&
+		(item.origin === "human" || (item.origin === "automation" && Boolean(item.authoredByUser)));
+}
+
+/**
+ * Turn ids whose user prompt is represented in the queue dock instead.
  *
- * Human prompts for queued turns live in the dock until dispatch. Automation
- * messages have no dock row, so their queued feedback stays visible in the
- * timeline. Human turns cancelled from the dock must not reappear after refresh.
+ * The user's prompts for queued turns live in the dock until dispatch. Other
+ * automation messages have no dock row, so their queued feedback stays visible
+ * in the timeline. Turns cancelled from the dock must not reappear after refresh.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
 	for (const item of snapshot.items) {
-		if (
-			item.kind === "message" &&
-			item.role === "user" &&
-			item.origin === "human" &&
-			item.turnId
-		) {
+		if (isUserQueuePrompt(item) && item.turnId) {
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
@@ -1004,6 +1015,23 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 			)
 			.map((turn) => turn.id),
 	);
+}
+
+/**
+ * The daemon reorders the whole queue, but the dock shows only the user's own
+ * prompts. Keep every other queued turn in its slot and fill the dock's slots
+ * with its new order.
+ */
+export function fullQueuedTurnOrder(snapshot: ConversationSnapshot, dockOrder: readonly string[]): string[] {
+	const queue = snapshot.turns
+		.map((turn, index) => ({ turn, index }))
+		.filter(({ turn }) => turn.state === "queued")
+		.sort((a, b) => a.turn.requestedAt.localeCompare(b.turn.requestedAt) || a.index - b.index)
+		.map(({ turn }) => turn.id);
+	const docked = new Set(dockOrder);
+	if (!dockOrder.every((turnId) => queue.includes(turnId))) return [...dockOrder];
+	let next = 0;
+	return queue.map((turnId) => (docked.has(turnId) ? dockOrder[next++]! : turnId));
 }
 
 /**

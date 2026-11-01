@@ -31,7 +31,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
-import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import { isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
@@ -74,6 +74,7 @@ type CreateTaskInput = {
 	clientRequestId?: string;
 	projectId: string;
 	brief: string;
+	branch?: string;
 	agent?: DelegateAgent;
 	model?: string;
 	effort?: string;
@@ -172,6 +173,16 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
+	const [status, setStatus] = useState<string | undefined>();
+	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
+	const [branchOverride, setBranchOverride] = useState("");
+	const [branchDraft, setBranchDraft] = useState("");
+	useEffect(() => {
+		setBranchOverride("");
+		setBranchDraft("");
+		setErrorAction(undefined);
+		setStatus(undefined);
+	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
 	// The preparation a send in flight will claim. Leaving the page or project does not
@@ -252,6 +263,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 						clientRequestId: input.clientRequestId,
 						projectId: input.projectId,
 						brief: input.brief,
+						...(input.branch ? { branch: input.branch } : {}),
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
@@ -403,19 +415,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// (the single source), with readiness derived from the user's provider connections.
 	const cloudConnectionsQuery = useProviderConnections();
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
-	const standaloneDefaultAgent = useMemo(() => {
-		if (!isStandalone || !agentCatalog) return "";
-		return (
-			buildRankedAgentOptions({
-				agents: agentCatalog.agents,
-				priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
-				fallbackAgents: [],
-			}).find(isReadyAgent)?.id ?? ""
-		);
-	}, [agentCatalog, isStandalone]);
-	const configuredDefaultAgent = isStandalone
-		? standaloneDefaultAgent
-		: configuredProjectAgent;
+	const readyFallbackAgent = agentCatalog && (isStandalone || projectQuery.data) ? buildRankedAgentOptions({
+		agents: agentCatalog.agents,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: [],
+	}).find(isReadyAgent)?.id ?? "" : "";
+	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
+		: configuredProjectAgent || (isCloudProject ? "" : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
@@ -566,11 +572,17 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
-	const { models: offeredModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
+	const { models: localOfferedModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 		skip: isCloudProject,
 	});
+	// The daemon marks models this computer's agent CLI is too old for. A cloud task
+	// runs on the worker's own CLI, so those marks say nothing about it.
+	const offeredModels = useMemo(
+		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
+		[isCloudProject, localOfferedModels],
+	);
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
 				allowCustom: localCatalog.allowCustom,
@@ -612,22 +624,25 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		: localModelCatalog;
 	// An unmarked first row is not evidence of what the provider will run.
 	const catalogModels = (isCloudProject ? cloudModels : offeredModels).filter((item) => isConcreteModelID(item.id));
+	// Automatic choices never land on a model the picker shows as unavailable.
+	const selectableModels = catalogModels.filter(isModelSelectable);
 	const catalogDefaultOption =
-		isCloudProject ? "" : catalogModels.find((item) => item.isDefault)?.id ?? "";
+		isCloudProject ? "" : selectableModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalog?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption = isCloudProject
 		? ""
-		: catalogModels
+		: selectableModels
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
 	const claudeFallbackOption =
 		!isCloudProject && selectedAgent === "claude-code" && !catalogUsesModes
-			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			? (splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
 			: "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
+		!catalogModels.some((item) => item.id === rememberedModel && !isModelSelectable(item)) &&
 		Boolean(
 			modelCatalog &&
 				(modelCatalog.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
@@ -636,7 +651,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	// A model is always selected: the provider's default, else the first one listed.
 	// A cloud task starts on the project's or the agent's default unless one is chosen.
-	const catalogPick = isCloudProject ? "" : catalogDefaultOption || catalogModels[0]?.id || "";
+	const catalogPick = isCloudProject ? "" : catalogDefaultOption || selectableModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
@@ -770,6 +785,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
 		(!isStandalone || selectedAgent !== "") &&
+		(isCloudProject || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
@@ -778,7 +794,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// a cloud project must not linger as its error.
 	// Scratchpad has no project agent to fall back to: with no ready agent, or no agent
 	// list at all, a send could never start, so it says why at once.
-	const standaloneAgentError = isStandalone && !isCloudProject && selectedAgent === ""
+	const standaloneAgentError = !isCloudProject && selectedAgent === ""
 		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
 		: undefined;
 	// Scratchpad never reads a project, but its disabled query still sees an entry
@@ -786,7 +802,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const projectError = isCloudProject || isStandalone ? undefined : projectQuery.error;
 	const remoteLoadError = !hostId ? (projectError instanceof Error ? projectError.message : standaloneAgentError) : !hostConnected ? t("remote.hostOffline") :
 		[projectError, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
-			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
+			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : standaloneAgentError);
 	const refreshSelectedModels = useCallback(async () => {
 		if (isCloudProject) {
 			// A cloud task's catalog is the control plane's: ask it again, and this
@@ -841,6 +857,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 
 		setIsSubmitting(true);
 		setError(undefined);
+		setStatus(undefined);
+		setErrorAction(undefined);
 		setFallbackAction(undefined);
 		const heldPreparation = taskPreparationRef.current;
 		launchingPreparationRef.current = heldPreparation;
@@ -863,6 +881,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			const request: CreateTaskInput = {
 				projectId,
 				brief,
+				...(branchOverride && !isCloudProject && !isStandalone ? { branch: branchOverride } : {}),
 				...(replay ? {
 					agent: replay.agent as CreateTaskInput["agent"],
 					model: replay.model,
@@ -946,9 +965,40 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			);
 			// A page that has since left this preparation no longer offers it for a retry.
 			if (submittedPreparation && taskPreparationRef.current !== submittedPreparation) cancelTaskPreparation(submittedPreparation, hostId);
-			const message = err instanceof Error ? err.message : t("newTask.unableToStart");
+			let message = err instanceof Error ? err.message : t("newTask.unableToStart");
+			if (err instanceof TaskCreateError) {
+				if (err.code === "UNSUPPORTED_MODEL") {
+					if (!modelTouched && catalogDefaultOption) {
+						if (catalogUsesModes) setMode(catalogDefaultOption);
+						else setModel(catalogDefaultOption);
+						setModelTouched(true);
+						message = t("newTask.savedModelUnsupported", { defaultValue: "The saved model is unavailable. The agent default is selected. Review it and start again." });
+					} else message = t("newTask.selectedModelUnsupported", { defaultValue: "The selected model is unavailable. Choose another model before starting." });
+				} else if (err.code === "UNSUPPORTED_EFFORT") {
+					if (!effortTouched) {
+						setEffort(effortModel?.defaultEffort ?? "");
+						setEffortTouched(true);
+						message = t("newTask.savedEffortUnsupported", { defaultValue: "The saved effort is unavailable. The agent default is selected. Review it and start again." });
+					} else message = t("newTask.selectedEffortUnsupported", { defaultValue: "The selected effort is unavailable. Choose another level before starting." });
+				} else if (err.code === "AGENT_BINARY_NOT_FOUND") {
+					setErrorAction("install-agent");
+					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
+				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
+					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
+				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
+					setErrorAction("choose-branch");
+					message = err.message;
+				} else if (err.code === "BRANCH_CHECKED_OUT_ELSEWHERE") {
+					if (!isCloudProject && !isStandalone) {
+						setErrorAction("choose-branch");
+						message = t("newTask.branchInUse", { defaultValue: "That branch is open in another worktree. Choose a new branch to start this task." });
+					} else message = t("newTask.branchInUseElsewhere", { defaultValue: "That branch is open elsewhere. Choose another project or try again later." });
+				}
+			}
 			setError(message);
-			throw err instanceof Error ? err : new Error(message);
+			throw err instanceof TaskCreateError
+				? new TaskCreateError(message, err.code, err.details)
+				: err instanceof Error ? err : new Error(message);
 		} finally {
 			launchingPreparationRef.current = "";
 			setIsSubmitting(false);
@@ -962,6 +1012,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
+		setError(undefined);
+		setStatus(undefined);
+		setErrorAction(undefined);
+		setBranchOverride("");
 		if (selectedAgent) {
 			agentDrafts[selectedAgent] = {
 				model: selectedModel ? requestedModel ?? "" : "",
@@ -1071,6 +1125,25 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
 		error,
+		status,
+		errorAction: errorAction === "install-agent" ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
+		} : errorAction === "choose-branch" ? {
+			label: t("newTask.chooseNewBranch", { defaultValue: "Choose new branch" }),
+			input: {
+				label: t("newTask.newBranchPrompt", { defaultValue: "New branch name" }),
+				value: branchDraft,
+				onChange: setBranchDraft,
+			},
+			onClick: () => {
+				if (!branchDraft.trim()) return;
+				setBranchOverride(branchDraft.trim());
+				setErrorAction(undefined);
+				setError(undefined);
+				setStatus(t("newTask.newBranchReady", { branch: branchDraft.trim(), defaultValue: "Branch {{branch}} selected for your next task." }));
+			},
+		} : undefined,
 		remoteLoadError,
 		modelWarning,
 		fallbackAction,
@@ -1253,6 +1326,8 @@ export function TaskComposer({
 			submission={{
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
+				status: task.status,
+				errorAction: task.errorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),
