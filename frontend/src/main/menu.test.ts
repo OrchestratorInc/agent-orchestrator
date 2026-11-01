@@ -50,7 +50,7 @@ describe("buildLinuxAppMenuTemplate", () => {
 
 	it("uses a guarded click handler for DevTools when provided", () => {
 		const onToggleDevTools = vi.fn();
-		const template = buildLinuxAppMenuTemplate(onToggleDevTools);
+		const template = buildLinuxAppMenuTemplate(onToggleDevTools, { allowShellDebugging: true });
 		const devtoolsItem = viewSubmenu(template).find(
 			(item) => item.label === "Toggle DevTools",
 		);
@@ -69,7 +69,7 @@ describe("buildMacAppMenuTemplate", () => {
 	const quit = { appName: "Agent Orchestrator", onQuit: () => undefined };
 
 	function macViewSubmenu(onToggleDevTools = () => undefined): readonly SubmenuItem[] {
-		const viewMenu = buildMacAppMenuTemplate(onToggleDevTools, quit).find(
+		const viewMenu = buildMacAppMenuTemplate(onToggleDevTools, quit, { allowShellDebugging: true }).find(
 			(item) => item.label === "View",
 		);
 		if (!viewMenu || !Array.isArray(viewMenu.submenu)) {
@@ -136,5 +136,34 @@ describe("buildMacAppMenuTemplate", () => {
 		quitItem?.click?.(undefined as never, undefined as never, { triggeredByAccelerator: true } as never);
 		quitItem?.click?.(undefined as never, undefined as never, {} as never);
 		expect(onQuit.mock.calls).toEqual([[true], [false]]);
+	});
+});
+
+
+describe("packaged application menus", () => {
+	it.each(["darwin", "win32", "linux"])("never registers shell reload or built-in DevTools roles on %s", (platform) => {
+		const toggle = vi.fn();
+		const template = platform === "darwin"
+			? buildMacAppMenuTemplate(toggle, { appName: "AO", onQuit: vi.fn() })
+			: platform === "win32" ? buildWindowsAppMenuTemplate(toggle) : buildLinuxAppMenuTemplate(toggle);
+		const submenu = viewSubmenu(template);
+		expect(submenu.filter((item) => ["reload", "forceReload", "toggleDevTools"].includes(item.role ?? ""))).toEqual([]);
+		expect(submenu.find((item) => item.label === "Toggle Browser Developer Tools")).toBeDefined();
+	});
+
+	it.each(["darwin", "win32", "linux"])("routes browser reload menu actions through guarded callbacks on %s", (platform) => {
+		const onReload = vi.fn();
+		const options = { onReload };
+		const toggle = vi.fn();
+		const template = platform === "darwin"
+			? buildMacAppMenuTemplate(toggle, { appName: "AO", onQuit: vi.fn() }, options)
+			: platform === "win32" ? buildWindowsAppMenuTemplate(toggle, options) : buildLinuxAppMenuTemplate(toggle, options);
+		const submenu = viewSubmenu(template);
+		for (const label of ["Reload Browser", "Force Reload Browser"]) {
+			const item = submenu.find((item) => item.label === label);
+			expect(item?.role).toBeUndefined();
+			item?.click?.(undefined as never, undefined as never, undefined as never);
+		}
+		expect(onReload.mock.calls).toEqual([[false], [true]]);
 	});
 });

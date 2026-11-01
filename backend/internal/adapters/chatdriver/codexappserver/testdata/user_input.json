@@ -1,0 +1,36 @@
+{
+  "params": {
+    "threadId": "thread-1",
+    "turnId": "turn-1",
+    "itemId": "tool-1",
+    "questions": [{
+      "id": "first_value",
+      "header": "Direction",
+      "question": "Which direction should we take?",
+      "options": [
+        { "label": "Native", "description": "Use the native protocol" },
+        { "label": "Bridge", "description": "Keep the bridge" }
+      ]
+    }]
+  },
+  "detail": {
+    "inputMode": "form",
+    "message": "Which direction should we take?",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "first_value": {
+          "type": "string",
+          "title": "Direction",
+          "description": "Which direction should we take?",
+          "oneOf": [
+            { "const": "Native", "title": "Native", "description": "Use the native protocol" },
+            { "const": "Bridge", "title": "Bridge", "description": "Keep the bridge" }
+          ]
+        }
+      },
+      "required": ["first_value"],
+      "additionalProperties": false
+    }
+  }
+}

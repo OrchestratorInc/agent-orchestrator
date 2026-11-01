@@ -63,6 +63,53 @@ func TestWorkspaceIntegrationCreateRestoreDestroy(t *testing.T) {
 	}
 }
 
+func TestWorkspaceIntegrationExplicitNewBranchRejectsExistingName(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "repo"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fresh := range []bool{false, true} {
+		_, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "task", Branch: "main", FreshBranch: fresh, RequireNewBranch: true})
+		if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+			t.Fatalf("fresh=%v, err=%v, want existing branch conflict", fresh, err)
+		}
+	}
+	runGit(t, git, repo, "update-ref", "refs/remotes/origin/remote-only", "refs/heads/main")
+	_, err = ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "task", Branch: "remote-only", RequireNewBranch: true})
+	if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+		t.Fatalf("remote branch conflict = %v, want existing branch conflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "managed", "proj", "task")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected task worktree stat = %v, want absent", err)
+	}
+}
+
+func TestWorkspaceIntegrationExplicitNewBranchRejectsChildCollision(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	runGit(t, git, childRepo, "branch", "fix/login")
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "task", Kind: domain.KindWorker, Branch: "fix/login",
+		FreshBranch: true, RequireNewBranch: true, RootRepoPath: rootRepo, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{{Name: "api", RelativePath: "api", RepoPath: childRepo}},
+	})
+	if !errors.Is(err, ports.ErrWorkspaceBranchAlreadyExists) {
+		t.Fatalf("child branch conflict = %v, want existing branch conflict", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "managed", "proj", "task")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected workspace stat = %v, want absent", err)
+	}
+}
+
 func TestWorkspaceIntegrationCancelledPreparedAddLeavesNoWorktreeOrBranch(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
