@@ -495,7 +495,7 @@ export function SessionArtifactsView({
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
 					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
-						{selectedFile.data?.binary || fileMediaKind(selected.path) ? null : (
+						{selectedFile.data?.binary || (session.cloud && fileMediaKind(selected.path)) ? null : (
 							<ArtifactHistoryMenu cloud={cloudVersions} fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 						)}
 					</ArtifactActionsMenu>

@@ -139,7 +139,7 @@ export function ArtifactActionsMenu({
 		try {
 			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl ?? cloudFileUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
 			// A cloud file is known to be text only once it is read.
-			if (detail.binary) throw new Error(t("artifacts.notText"));
+			if (session.cloud && detail.binary) throw new Error(t("artifacts.notText"));
 			await aoBridge.clipboard.writeText(detail.content);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));

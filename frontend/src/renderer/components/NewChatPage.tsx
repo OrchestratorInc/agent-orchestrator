@@ -536,8 +536,12 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
+	// A Cloud project's page lists Cloud projects beside local ones; a local
+	// project's page lists local projects only, as it always has.
+	const onCloudProject = workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND);
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND &&
+			(onCloudProject || workspace.kind !== CLOUD_PROJECT_KIND),
 	);
 	const cloudProjectIds = new Set(projects.filter((project) => project.kind === CLOUD_PROJECT_KIND).map((project) => project.id));
 	const projectOptions = [
