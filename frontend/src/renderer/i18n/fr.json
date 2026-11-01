@@ -3238,6 +3238,7 @@
 	"chat.draft.clearRefusedSteerFailed": "L’envoi a été refusé, mais son enregistrement de récupération local n’a pas pu être effacé. Aucun renvoi automatique n’aura lieu.",
 	"chat.draft.steerUncertain": "AO ne peut pas déterminer si ce contenu a déjà été transmis à l’agent. Réessayez avec le même identifiant de livraison, ou abandonnez la récupération pour le modifier. Un nouvel envoi après abandon peut créer un doublon.",
 	"chat.draft.sendUncertain": "La livraison du message n’a pas été confirmée. Réessayez avec le même identifiant de livraison ; le brouillon reste verrouillé jusqu’à confirmation.",
+	"chat.draft.sendRetrying": "Connexion perdue avant la confirmation de livraison. Nouvelle tentative automatique avec le même identifiant de livraison.",
 	"chat.draft.storageUnavailable": "Les brouillons ne peuvent pas être enregistrés pour le moment. Vous pouvez continuer à discuter, mais le texte non envoyé sera perdu si vous quittez cette conversation.",
 	"chat.draft.queueSaveLocalFailed": "Le brouillon n’a pas pu être enregistré. Gardez cette conversation ouverte ou copiez-le avant de partir.",
 	"chat.draft.queueUnavailable": "La modification des messages en attente est indisponible pour le moment.",

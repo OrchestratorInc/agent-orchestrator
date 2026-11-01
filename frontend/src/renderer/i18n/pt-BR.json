@@ -3238,6 +3238,7 @@
 	"chat.draft.clearRefusedSteerFailed": "O envio foi recusado, mas não foi possível apagar seu registro local de recuperação. Nada será reenviado automaticamente.",
 	"chat.draft.steerUncertain": "O AO não consegue determinar se o agente já recebeu este conteúdo. Tente novamente com o mesmo ID de entrega ou abandone a recuperação para editá-lo. Enviar novamente após abandonar pode duplicá-lo.",
 	"chat.draft.sendUncertain": "A entrega da mensagem não foi confirmada. Tente novamente com o mesmo ID de entrega; o rascunho ficará bloqueado até a confirmação.",
+	"chat.draft.sendRetrying": "A conexão caiu antes da confirmação da entrega. Tentando novamente de forma automática com o mesmo ID de entrega.",
 	"chat.draft.storageUnavailable": "Não é possível salvar rascunhos agora. Você pode continuar conversando, mas o texto não enviado será perdido se sair deste chat.",
 	"chat.draft.queueSaveLocalFailed": "Não foi possível salvar o rascunho. Mantenha este chat aberto ou copie o rascunho antes de sair.",
 	"chat.draft.queueUnavailable": "A edição de mensagens na fila está indisponível no momento.",
