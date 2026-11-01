@@ -122,6 +122,7 @@ export function TurnSettingsBar({
 	beforePicker,
 	modelsLoading,
 	lastModel,
+	unsetModelLabel,
 	children,
 }: {
 	models: ChatModel[];
@@ -176,6 +177,8 @@ export function TurnSettingsBar({
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
 	lastModel?: string;
+	/** What no chosen model means here, such as a Cloud task's project or agent default, in place of "Choose a model". */
+	unsetModelLabel?: string;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -207,7 +210,7 @@ export function TurnSettingsBar({
 	// A catalog miss must not relabel an explicit choice or borrow another model's
 	// effort settings. Custom or newly available models may not be listed yet.
 	const chosenLabel =
-		selected?.displayName ?? settings.model ?? fallback?.displayName ?? "Choose a model";
+		selected?.displayName ?? settings.model ?? fallback?.displayName ?? unsetModelLabel ?? "Choose a model";
 	const rerouted = reroute
 		? displayModels.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
 		: undefined;

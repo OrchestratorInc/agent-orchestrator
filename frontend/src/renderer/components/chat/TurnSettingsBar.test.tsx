@@ -335,6 +335,18 @@ it("keeps the Claude model menu open when expanding Other models, without an age
 	expect(screen.getByRole("menuitem", { name: /Other models/ })).toBeInTheDocument();
 });
 
+describe("TurnSettingsBar unset model", () => {
+	it("names what no chosen model means instead of asking for one", () => {
+		const models = [{ id: "gpt-a", displayName: "GPT A", default: false }];
+		const { rerender } = render(<TurnSettingsBar models={models} settings={{}} onChange={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Choose a model");
+		rerender(<TurnSettingsBar models={models} settings={{}} onChange={vi.fn()} unsetModelLabel="Project or agent default" />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("Project or agent default");
+		rerender(<TurnSettingsBar models={models} settings={{ model: "gpt-a" }} onChange={vi.fn()} unsetModelLabel="Project or agent default" />);
+		expect(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" })).toHaveTextContent("GPT A");
+	});
+});
+
 describe("ACP session config options", () => {
 	it("hides a mode with only an implicit default choice", () => {
 		const mode: ChatConfigOption = {

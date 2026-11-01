@@ -130,6 +130,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			settings,
 			configOptions: providerOptions,
 			showApprovalMode: true,
+			// A Cloud task with no model picked runs the project's or the agent's
+			// default, as the New Task picker words it; it needs no choice.
+			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
@@ -379,6 +382,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							configOptions={providerOptions}
 							onChangeConfigOption={providerOptions ? chooseProviderOption : undefined}
 							showApprovalMode={barSettings.showApprovalMode}
+							unsetModelLabel={barSettings.unsetModelLabel}
 							// The session's own picker, so the bar is the one the chat keeps. With no
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
