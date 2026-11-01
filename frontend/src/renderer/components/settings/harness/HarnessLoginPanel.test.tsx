@@ -106,6 +106,29 @@ describe("HarnessLoginPanel", () => {
 		expect(document.body).not.toHaveTextContent("test-secret");
 	});
 
+	it("saves a masked Claude setup token and verifies it like other sign-ins", async () => {
+		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "claude-code", method: "setup_token", loginUrl: undefined, deviceCode: undefined, status: "succeeded" });
+		const onVerify = vi.fn().mockResolvedValue(true);
+		render(<HarnessLoginPanel agentId="claude-code" methods={[
+			{ id: "browser", label: "Claude subscription", secret: false },
+			{ id: "setup_token", label: "Setup token", secret: true },
+		]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		const user = userEvent.setup();
+		const method = screen.getByRole("button", { name: "Setup token" });
+		expect(method).toHaveAccessibleDescription("Paste a token from claude setup-token.");
+		await user.click(method);
+		expect(startAgentUILogin).not.toHaveBeenCalled();
+		const input = screen.getByPlaceholderText("sk-ant-oat01-…");
+		expect(input).toHaveAttribute("type", "password");
+		expect(input).toHaveAccessibleName("Setup token");
+		await user.type(input, "sk-ant-oat01-test-setup-token");
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(startAgentUILogin).toHaveBeenCalledWith("claude-code", "setup_token", "sk-ant-oat01-test-setup-token", undefined);
+		await waitFor(() => expect(onVerify).toHaveBeenCalledTimes(1));
+		expect(await screen.findByText("Connected")).toBeVisible();
+		expect(document.body).not.toHaveTextContent("sk-ant-oat01-test-setup-token");
+	});
+
 	it.each([
 		["browser", "ChatGPT in browser"],
 		["device_code", "Device code"],

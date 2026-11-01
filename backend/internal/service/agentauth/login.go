@@ -12,11 +12,19 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const loginLifetime = 15 * time.Minute
+
+// claudeSetupTokenMethod saves a token from `claude setup-token` for local
+// sessions instead of running a native login command. It matches option 4 of
+// AO's terminal Claude login menu.
+const claudeSetupTokenMethod = "setup_token"
+
+var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
 
 // LoginMethod describes a reviewed native login method, never a command.
 type LoginMethod struct {
@@ -28,7 +36,7 @@ type LoginMethod struct {
 func loginMethods(agentID string) []LoginMethod {
 	switch agentID {
 	case "claude-code":
-		return []LoginMethod{{"browser", "Claude subscription", false}, {"console", "Anthropic Console", false}, {"sso", "Organization SSO", false}}
+		return []LoginMethod{{"browser", "Claude subscription", false}, {"console", "Anthropic Console", false}, {"sso", "Organization SSO", false}, {claudeSetupTokenMethod, "Setup token", true}}
 	case "codex":
 		return []LoginMethod{{"browser", "ChatGPT in browser", false}, {"device_code", "Device code", false}, {"api_key", "OpenAI API key", true}, {"access_token", "Access token", true}}
 	default:
@@ -78,6 +86,13 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 	if err := ctx.Err(); err != nil {
 		return LoginSnapshot{}, err
 	}
+	setupToken := agentID == "claude-code" && method == claudeSetupTokenMethod
+	if setupToken && !claudeSetupTokenPattern.MatchString(secret) {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "A setup token starts with sk-ant-oat and contains no spaces.", nil)
+	}
+	if setupToken && strings.TrimSpace(s.dataDir) == "" {
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "AO cannot save a setup token without a data directory.")
+	}
 	release, err := s.reserveLogin(ctx, agentID)
 	if err != nil {
 		return LoginSnapshot{}, err
@@ -96,6 +111,9 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 		}
 	}
 	expires := time.Now().Add(s.loginTimeout)
+	if setupToken {
+		return s.saveClaudeSetupToken(secret, expires)
+	}
 	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
 	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{})}
 	cmd := s.commandContext(loginCtx, plan.command[0], args...)
@@ -146,6 +164,12 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 				op.snapshot.Status = "failed"
 			default:
 				op.snapshot.Status = "succeeded"
+				// The newest sign-in wins, as in the terminal login menu: an
+				// earlier setup token would otherwise keep signing sessions in.
+				// The native login already succeeded, so cleanup is best effort.
+				if agentID == "claude-code" && s.dataDir != "" {
+					_ = claudecode.RemoveLocalOAuthToken(s.dataDir)
+				}
 			}
 		}
 		op.snapshot.LoginURL, op.snapshot.DeviceCode = "", ""
@@ -154,6 +178,20 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 		cancel()
 		close(op.done)
 	}()
+	return op.snapshot, nil
+}
+
+// saveClaudeSetupToken records the token as a finished operation so the
+// renderer verifies it through the same authentication probe as other logins.
+// The caller holds s.mu. The token never enters the snapshot.
+func (s *Service) saveClaudeSetupToken(token string, expires time.Time) (LoginSnapshot, error) {
+	if err := claudecode.SaveLocalOAuthToken(s.dataDir, []byte(token)); err != nil {
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "The setup token could not be saved.")
+	}
+	done := make(chan struct{})
+	close(done)
+	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: "claude-code", Method: claudeSetupTokenMethod, Status: "succeeded", ExpiresAt: expires}, cancel: func() {}, done: done}
+	s.operations[op.snapshot.ID] = op
 	return op.snapshot, nil
 }
 
@@ -222,6 +260,9 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 			return []string{"auth", "login", "--console"}, false, nil
 		case "sso":
 			return []string{"auth", "login", "--sso"}, false, nil
+		case claudeSetupTokenMethod:
+			// Saved by AO itself; no native command runs.
+			return nil, true, nil
 		}
 	}
 	if agentID == "codex" {

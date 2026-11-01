@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -32,6 +33,7 @@ func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 		{"claude-code", "browser", []string{"auth", "login", "--claudeai"}, false},
 		{"claude-code", "console", []string{"auth", "login", "--console"}, false},
 		{"claude-code", "sso", []string{"auth", "login", "--sso"}, false},
+		{"claude-code", "setup_token", nil, true},
 	} {
 		t.Run(tc.agent+"/"+tc.method, func(t *testing.T) {
 			args, secret, err := loginArgs(tc.agent, tc.method)
@@ -472,5 +474,81 @@ func TestTerminalLoginExcludesBackgroundUntilConfirmedExit(t *testing.T) {
 	}
 	if launches != 1 {
 		t.Fatalf("background launches after confirmed terminal exit = %d, want 1", launches)
+	}
+}
+
+func TestUILoginSavesClaudeSetupTokenWithoutNativeCommand(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd {
+		t.Fatal("setup token launched a native command")
+		return nil
+	}
+	t.Cleanup(svc.Close)
+	for _, invalid := range []string{"", "sk-ant-api03-not-a-setup-token", "sk-ant-oat01 has spaces", "sk-ant-oat"} {
+		_, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", invalid)
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindInvalid {
+			t.Fatalf("accepted invalid setup token %q: %v", invalid, err)
+		}
+	}
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid token was saved: %v", err)
+	}
+	const token = "sk-ant-oat01-ui-setup-token"
+	started, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "  "+token+"  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Status != "succeeded" || started.Method != "setup_token" {
+		t.Fatalf("started=%+v", started)
+	}
+	data, _ := json.Marshal(started)
+	if strings.Contains(string(data), token) {
+		t.Fatalf("token leaked into snapshot: %s", data)
+	}
+	saved, err := os.ReadFile(claudecode.LocalOAuthTokenPath(dataDir))
+	if err != nil || string(saved) != token {
+		t.Fatalf("saved=%q err=%v", saved, err)
+	}
+	// A finished save does not block a later sign-in or cancellation.
+	if _, err := svc.CancelLogin(t.Context(), "claude-code", started.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", token); err != nil {
+		t.Fatalf("replacing the setup token: %v", err)
+	}
+}
+
+func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
+	svc := loginTestService(t, "succeed")
+	svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+	svc.dataDir = t.TempDir()
+	if err := claudecode.SaveLocalOAuthToken(svc.dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
+		t.Fatal(err)
+	}
+	started, err := svc.StartLogin(t.Context(), "claude-code", "browser", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snapshot, pollErr := svc.Login(t.Context(), "claude-code", started.ID)
+		if pollErr != nil {
+			t.Fatal(pollErr)
+		}
+		if snapshot.Status != "running" {
+			if snapshot.Status != "succeeded" {
+				t.Fatalf("snapshot=%+v", snapshot)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("native login did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
 	}
 }
