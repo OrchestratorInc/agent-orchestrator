@@ -5671,6 +5671,7 @@ export interface components {
             status: string;
         };
         ConversationMessageResponse: {
+            authoredByUser?: boolean;
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
             continuation?: boolean;
@@ -5822,6 +5823,8 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            /** @enum {string} */
+            failureCode?: "provider_key_missing";
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;

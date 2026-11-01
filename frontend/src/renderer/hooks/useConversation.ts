@@ -1859,6 +1859,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			hasRetryAttempt: turn.hasRetryAttempt,
 			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
+			failureCode: turn.failureCode,
 			usageLimit: turn.usageLimit ? {
 				resetsAt: turn.usageLimit.resetsAt ?? undefined,
 				autoResume: turn.usageLimit.autoResume,
@@ -1992,6 +1993,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		continuation: wire.continuation || undefined,
+		authoredByUser: wire.authoredByUser || undefined,
 		streaming: wire.streaming,
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,

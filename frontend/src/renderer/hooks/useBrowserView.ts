@@ -233,8 +233,8 @@ const RESIZE_HANDLE_RESERVE_PX = 6;
 
 // The native WebContentsView is a window-level overlay, so DOM `overflow:
 // hidden` never clips it — it paints wherever the slot's bounding box lands.
-// During inspector open/close the column slides on a transform (the slot box
-// moves without a ResizeObserver size change), so also clip to `.session-split`.
+// Keep the inspector's full viewport width while it slides beyond the right
+// window edge. The native window clips that edge without reflowing the page.
 function visibleSlotRect(node: HTMLElement): BrowserRect {
 	const rect = node.getBoundingClientRect();
 	let { left, top, right, bottom } = rect;
@@ -251,7 +251,7 @@ function visibleSlotRect(node: HTMLElement): BrowserRect {
 		const bounds = split.getBoundingClientRect();
 		left = Math.max(left, bounds.left);
 		top = Math.max(top, bounds.top);
-		right = Math.min(right, bounds.right);
+		if (panel?.dataset.slot !== "inspector-container") right = Math.min(right, bounds.right);
 		bottom = Math.min(bottom, bounds.bottom);
 	}
 	return {

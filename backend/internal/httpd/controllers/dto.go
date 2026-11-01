@@ -3131,6 +3131,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -3233,8 +3234,11 @@ type ConversationMessageResponse struct {
 	Streaming bool `json:"streaming"`
 	// Continuation is the user's one-click "continue" after stopping a turn,
 	// shown as a marker instead of a message bubble.
-	Continuation bool   `json:"continuation,omitempty"`
-	CreatedAt    string `json:"createdAt"`
+	Continuation bool `json:"continuation,omitempty"`
+	// AuthoredByUser marks user-written content AO delivered as automation, such
+	// as Browser-panel annotations. Its queued turn can be steered or cancelled.
+	AuthoredByUser bool   `json:"authoredByUser,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
