@@ -1,0 +1,48 @@
+---
+title: "agent-orchestrator rewrite docs"
+---
+
+Agent Orchestrator runs as a long-running Go backend daemon
+(`backend/`) plus an Electron + TypeScript frontend (`frontend/`). The backend
+supervises coding-agent sessions and exposes daemon control, project/session
+state, terminal streaming, and CDC/event infrastructure.
+
+Start with [architecture.md](/engineering/architecture) for the current backend model and
+[cli/README.md](/engineering/cli) for the CLI surface.
+
+## Reference docs
+
+Gemini CLI setup, permission mapping, and current capability limits are documented
+in [gemini-cli.md](/engineering/gemini-cli).
+
+| Doc                                                    | What it covers                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| [documentation-map.md](/engineering/documentation-map)           | Human-facing docs vs the machine-readable contract layer, source of truth per concern, and the CI gates that hold it. |
+| [documentation-coverage.md](/engineering/documentation-coverage) | Stable-release baseline, covered user paths, and hands-on verification still needed. |
+| [Public manual sources](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/frontend/src/docs/content/index.mdx) | Existing user guides, configuration, capability catalog, CLI reference, and mobile access pages. |
+| [architecture.md](/engineering/architecture)                     | Current backend model, package layout, status derivation, persistence/CDC, and load-bearing rules.                    |
+| [scm-observer.md](/engineering/scm-observer)                     | SCM subsystem: polling pipeline, durable-state invariants, PR identity model, and the rename/transfer design.         |
+| [backend-code-structure.md](/engineering/backend-code-structure) | Package ownership rules for the Go backend: domain, services, ports, adapters, storage, HTTP, CLI, and daemon wiring. |
+| [cli/README.md](/engineering/cli)                         | CLI commands and daemon control surface.                                                                              |
+| `cloud-development.md`           | Current public Cloud sources, local stack, tests, and hosted-environment boundaries. |
+| `cloud-refactor.md`                 | Historical split design for shared Cloud contracts and UI; not the current setup guide. |
+| [self-hosted-remote.md](/engineering/self-hosted-remote)         | Experimental multi-host setup, client workflow, security boundary, and current limits.                                  |
+| [development.md](/engineering/development)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
+| [harnesses/unreal-agent.md](/engineering/harnesses/unreal-agent) | Built-in Unreal Agent Chat setup, provider environment, persistence, and current limits.                              |
+| [harnesses/mimo-code.md](/engineering/harnesses/mimo-code)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
+| [harnesses/deepseek-harness.md](/engineering/harnesses/deepseek-harness) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
+| [harnesses/command-code.md](/engineering/harnesses/command-code)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
+| [STATUS.md](/engineering/status)                                 | What is shipped on `main` today and what is still in flight.                                                          |
+| [stack.md](/engineering/stack)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
+| [telemetry.md](/engineering/telemetry)                           | User-facing overview of product telemetry, privacy safeguards, and opt-out controls.                                    |
+| [posthog-cost-controls.md](/engineering/posthog-cost-controls)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
+
+See [startup-cues.md](/engineering/startup-cues) for command cues that gate a new worktree’s opening turn.
+
+## Mental model
+
+Persist durable facts, derive display status:
+
+- session table: `activity_state`, `is_terminated`, identity, metadata
+- PR tables: PR/CI/review facts
+- derived read model: `service.Session` computes display status from session + PR facts
