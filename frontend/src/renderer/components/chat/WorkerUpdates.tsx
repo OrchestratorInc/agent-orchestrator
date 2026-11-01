@@ -633,8 +633,13 @@ function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
 	const phase = phrase && !["working", state.label.toLowerCase()].includes(phrase.toLowerCase()) ? phrase : undefined;
 	return (
 		<div data-testid="spawned-agent" className="cursor-chat-explore-box flex min-w-0 items-start gap-2.5 rounded-lg border px-3 py-2.5">
-			{/* The spawn's own mark, as the turn's "Spawned" row had; the worker's avatar heads its answer. */}
+			{/* The spawn's own mark, as the turn's "Spawned" row had, then the agent that runs the worker. */}
 			<Split aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
+			{session?.provider ? (
+				<AgentAvatar provider={session.provider} decorative className="mt-px size-4 shrink-0" />
+			) : (
+				<Bot aria-hidden="true" className="mt-px size-4 shrink-0 text-muted-foreground" />
+			)}
 			<div className="min-w-0 flex-1">
 				<div className="flex min-w-0 items-center gap-3">
 					<span className="min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium text-foreground">

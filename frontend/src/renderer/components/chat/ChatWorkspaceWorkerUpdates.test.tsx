@@ -90,7 +90,12 @@ describe("orchestrator worker updates", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
 
 		const box = screen.getByTestId("spawned-agent");
-		expect(box.querySelector("svg.lucide-split")).not.toBeNull();
+		// The fork icon leads, then the agent that runs the worker.
+		const fork = box.querySelector("svg.lucide-split");
+		const avatar = box.querySelector("img");
+		expect(fork).not.toBeNull();
+		expect(avatar).not.toBeNull();
+		expect(fork!.compareDocumentPosition(avatar!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 		expect(within(box).getByRole("link", { name: "Audit usage" })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
 		const idle = within(box).getByText("Idle");
