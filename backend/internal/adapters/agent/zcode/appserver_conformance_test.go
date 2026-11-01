@@ -60,7 +60,7 @@ func TestSourceBuiltZCodeAppServerConformance(t *testing.T) {
 	personal := filepath.Join(fixtureHome, "provider", "personal.json")
 	writeConformanceFile(t, personal, fmt.Sprintf(`{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[{"providerId":"ao-local","providerName":"AO synthetic provider","enabled":true,"config":{"group":"standard-personal","access":{"type":"api-key","apiKey":"synthetic-only"},"api":{"type":"openai-chat-completions","baseUrl":%q},"personalModelIds":["ao-test"]}}]},"modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[]},"defaultModelSelection":{"providerId":"ao-local","modelId":"ao-test","options":{"reasoningLevel":"disabled"}}}}`, server.URL+"/v1"))
 	// CI fixtures have no real user credentials/rules. No production HOME/config
-	// is changed by the adapter or by the VPS provider qualification.
+	// is changed by the adapter or by the remote qualification environment.
 	writeConformanceFile(t, filepath.Join(fixtureHome, ".zcode", "cli", "config.json"), `{"plugins":{"enabled":false},"features":{"mcp":false,"memory":false}}`)
 	writeConformanceFile(t, filepath.Join(fixtureHome, ".zcode", "AGENTS.md"), "AO_USER_RULE_PRESERVED")
 	project := "AO_PROJECT_RULE_PRESERVED"

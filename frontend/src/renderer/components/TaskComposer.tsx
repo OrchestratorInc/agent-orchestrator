@@ -90,6 +90,9 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+/** Agents whose plain submit opens Chat; a TUI fallback is the only alternative. */
+const CHAT_ONLY_AGENTS = new Set(["unreal-agent", "zcode"]);
+
 const READINESS_RECONCILE_CODES = new Set(["AGENT_BINARY_NOT_FOUND", "AGENT_AUTH_REQUIRED", "CHAT_AUTH_REQUIRED"]);
 
 function cancelTaskPreparation(token: string, hostId?: string): void {
@@ -938,7 +941,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && selectedAgent !== "zcode" && interfaceMode !== "tui" &&
+					: !CHAT_ONLY_AGENTS.has(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -955,10 +958,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = (selectedAgent === "unreal-agent" || selectedAgent === "zcode") ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = CHAT_ONLY_AGENTS.has(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: (selectedAgent === "unreal-agent" || selectedAgent === "zcode") ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			? launch(brief, { interfaceMode: CHAT_ONLY_AGENTS.has(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {

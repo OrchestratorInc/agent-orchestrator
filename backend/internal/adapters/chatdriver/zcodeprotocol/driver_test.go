@@ -72,6 +72,40 @@ func TestModelOverrideShape(t *testing.T) {
 	}
 }
 
+func TestResumeParamsNeverCarryTheModelOverride(t *testing.T) {
+	// The pinned native resume schema is a strict object without a model
+	// field; replaying the create-time override there fails the whole resume.
+	mcp, err := nativeMCP(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sessionResumeParams("sess_cold", t.TempDir(), mcp)
+	ws := got["workspace"].(map[string]string)
+	want := map[string]any{"sessionId": "sess_cold", "workspace": map[string]string{"workspacePath": ws["workspacePath"], "workspaceKey": ws["workspaceKey"]}, "mcpServers": mcp}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resume params = %#v, want %#v", got, want)
+	}
+	if _, has := got["model"]; has {
+		t.Fatal("resume params carried a model override")
+	}
+	if _, has := got["mode"]; has {
+		t.Fatal("resume params carried the create-only mode field")
+	}
+	if _, has := got["titleGenerationEnabled"]; has {
+		t.Fatal("resume params carried the create-only titleGenerationEnabled field")
+	}
+	cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: "example-zai/glm-4.7", Effort: "low"}
+	created := sessionCreateParams(cfg, "build", mcp)
+	if _, has := created["model"]; !has {
+		t.Fatal("create params lost the model override")
+	}
+	// The same config resumed cold must render without model or effort.
+	resumed := sessionResumeParams("sess_cold", cfg.WorkspacePath, mcp)
+	if _, has := resumed["model"]; has {
+		t.Fatal("cold resume replayed the model override")
+	}
+}
+
 func TestSnapshotModelsSurfaceThroughListModels(t *testing.T) {
 	c := &conversation{transport: &persistenthost.Transport{}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), pending: make(map[string]chan frame), turns: make(map[string]string), sent: make(map[string]string), events: make(chan ports.ChatEvent, 4), done: make(chan struct{})}
 	note := func(t *testing.T, payload string) nativeSnapshot {

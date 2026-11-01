@@ -33,7 +33,7 @@ Expose a `zcode` wrapper on PATH that runs the stock bundle with Node. Native OA
 - The historical positive TUI fixture remains available behind `AO_ZCODE_REQUIRE_TUI` for a future supported upstream surface; the shipped Chat-only surface instead has an explicit stock-parser negative control and independent app-server/provider-role conformance. No hidden-context assertion was weakened into a TUI pass.
 - The first authenticated protocol attempt selected disabled thinking; the provider refused that setting. A separate `low` reasoning control passed. The failed receipt remains distinct.
 
-Routine suites run only in PR CI for this audit. No local routine tests, lint, typechecks, vet, race or workflows were executed on the VPS.
+Routine suites run only in PR CI for this audit. No local routine tests, lint, typechecks, vet, race or workflows were executed in the remote qualification environment.
 
 The first registered AO admission attempt at implementation head `7c210eb1` failed before session creation because AO requires Chat streaming and the driver initially reported settled prose only. The retained 409 receipt prompted native `model.streaming/text_delta` mapping plus a pinned upstream streaming assertion, rather than weakening AO admission.
 

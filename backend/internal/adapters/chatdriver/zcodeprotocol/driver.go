@@ -109,6 +109,24 @@ func parseModelOverride(model string) (nativeModelRef, error) {
 	return nativeModelRef{ProviderID: strings.TrimSpace(provider), ModelID: strings.TrimSpace(id)}, nil
 }
 
+// sessionCreateParams renders session/create params. The model override and
+// its reasoning effort ride only on create.
+func sessionCreateParams(cfg ports.ChatStartConfig, mode string, mcp []map[string]any) map[string]any {
+	params := map[string]any{"workspace": map[string]string{"workspacePath": cfg.WorkspacePath, "workspaceKey": cfg.WorkspacePath}, "mode": mode, "titleGenerationEnabled": false, "mcpServers": mcp}
+	if override := createModelParams(cfg.Model, cfg.Effort); override != nil {
+		params["model"] = override
+	}
+	return params
+}
+
+// sessionResumeParams renders session/resume params. The pinned native resume
+// schema is a strict object without a model field, so the override chosen at
+// create time is never replayed; native resume restores the session's own
+// persisted model selection.
+func sessionResumeParams(nativeID, workspacePath string, mcp []map[string]any) map[string]any {
+	return map[string]any{"sessionId": nativeID, "workspace": map[string]string{"workspacePath": workspacePath, "workspaceKey": workspacePath}, "mcpServers": mcp}
+}
+
 // createModelParams renders the session/create model selection for an override,
 // or nil when the launch defers to the native profile's configured model.
 func createModelParams(model, effort string) map[string]any {
@@ -255,16 +273,13 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 			return fail(err)
 		}
 	} else {
-		method := "session/create"
-		params := map[string]any{"workspace": map[string]string{"workspacePath": cfg.WorkspacePath, "workspaceKey": cfg.WorkspacePath}, "mode": mode, "titleGenerationEnabled": false, "mcpServers": mcp}
-		if override := createModelParams(cfg.Model, cfg.Effort); override != nil {
-			params["model"] = override
-		}
+		method, params := "session/create", sessionCreateParams(cfg, mode, mcp)
 		if nativeID != "" {
+			// session/resume takes a strict param set with no model field; the
+			// native session store already persists the model selection made at
+			// create time, so the override must not be replayed here.
 			method = "session/resume"
-			delete(params, "mode")
-			delete(params, "titleGenerationEnabled")
-			params["sessionId"] = nativeID
+			params = sessionResumeParams(nativeID, cfg.WorkspacePath, mcp)
 		}
 		var snapshot nativeSnapshot
 		if err := c.call(ctx, method, params, &snapshot); err != nil {
