@@ -22,7 +22,7 @@ function team(live = true) {
 			],
 		],
 	]);
-	return render(<SubagentTeam launches={[pages, tests]} steps={steps} live={live} harness="claude-code" />);
+	return render(<SubagentTeam launches={[pages, tests]} steps={steps} live={new Set(live ? ["pages", "tests"] : [])} harness="claude-code" />);
 }
 
 describe("SubagentTeam", () => {
@@ -56,7 +56,7 @@ describe("SubagentTeam", () => {
 			...readme.detail,
 			input: { description: "README audit", prompt: "Read-only. README audit.", subagent_type: "general-purpose" },
 		} as ConversationActivity["detail"];
-		render(<SubagentTeam launches={[readme, launch("pages", "Audit: info pages")]} steps={new Map()} live harness="claude-code" />);
+		render(<SubagentTeam launches={[readme, launch("pages", "Audit: info pages")]} steps={new Map()} live={new Set(["readme", "pages"])} harness="claude-code" />);
 
 		expect(within(screen.getByRole("button", { name: /README audit/ })).queryByText("general-purpose")).not.toBeInTheDocument();
 		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("Explore")).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe("SubagentTeam", () => {
 		const openSubagent = vi.fn();
 		render(
 			<OpenSubagentContext.Provider value={openSubagent}>
-				<SubagentTeam launches={[launch("tests", "Audit: testing gaps")]} steps={new Map()} live harness="claude-code" />
+				<SubagentTeam launches={[launch("tests", "Audit: testing gaps")]} steps={new Map()} live={new Set(["tests"])} harness="claude-code" />
 			</OpenSubagentContext.Provider>,
 		);
 
@@ -119,7 +119,7 @@ describe("SubagentTeam", () => {
 			<SubagentTeam
 				launches={[launch("over", "Audit: cart", "failed")]}
 				steps={new Map()}
-				live
+				live={new Set(["over"])}
 				harness="claude-code"
 			/>,
 		);
@@ -141,13 +141,30 @@ describe("SubagentTeam", () => {
 			<SubagentTeam
 				launches={[quiet]}
 				steps={new Map([["quiet", [command("q1", "tool-quiet", "ls")]]])}
-				live={false}
+				live={new Set()}
 				harness="claude-code"
 			/>,
 		);
 		const row = screen.getByRole("button", { name: /Audit: admin/ });
 		expect(within(row).getByText("No report")).toBeInTheDocument();
 		expect(within(row).queryByLabelText("Working")).not.toBeInTheDocument();
+	});
+
+	it("reads each child's live state on its own, and counts every state in the header", () => {
+		// The parent picked one child up again in a running turn; the other one's turns have all ended.
+		render(
+			<SubagentTeam
+				launches={[launch("again", "Audit: checkout"), launch("quiet", "Audit: admin")]}
+				steps={new Map()}
+				live={new Set(["again"])}
+				harness="claude-code"
+			/>,
+		);
+		expect(within(screen.getByRole("button", { name: /Audit: checkout/ })).getByLabelText("Working")).toBeInTheDocument();
+		expect(within(screen.getByRole("button", { name: /Audit: admin/ })).getByText("No report")).toBeInTheDocument();
+		const header = screen.getByRole("button", { name: /2 subagents/ });
+		expect(within(header).getByText("1 working")).toBeInTheDocument();
+		expect(within(header).getByText("1 no report")).toBeInTheDocument();
 	});
 
 	it("keeps a disclosure choice in the caller's overrides", async () => {
@@ -158,7 +175,7 @@ describe("SubagentTeam", () => {
 			<SubagentTeam
 				launches={[pages]}
 				steps={new Map()}
-				live
+				live={new Set(["pages"])}
 				harness="claude-code"
 				disclosureKey="turn:subagents-1"
 				disclosureOverrides={overrides}

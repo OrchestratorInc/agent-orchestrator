@@ -2952,6 +2952,8 @@
 	"chat.subagent.summary.failed_other": "{{count}} fehlgeschlagen",
 	"chat.subagent.summary.stopped_one": "{{count}} gestoppt",
 	"chat.subagent.summary.stopped_other": "{{count}} gestoppt",
+	"chat.subagent.summary.unknown_one": "{{count}} ohne Bericht",
+	"chat.subagent.summary.unknown_other": "{{count}} ohne Bericht",
 	"chat.subagent.state.working": "Läuft",
 	"chat.subagent.state.done": "Fertig",
 	"chat.subagent.state.failed": "Fehlgeschlagen",

@@ -922,6 +922,9 @@ function ChatWorkspaceContent({
 			if (
 				newWorkDisabled ||
 				event.key !== "Escape" ||
+				// Portaled content (the Subagents panel in the inspector) still bubbles keys
+				// here; Escape over there must not stop this chat's turn and its children.
+				!(event.target instanceof Node && event.currentTarget.contains(event.target)) ||
 				event.defaultPrevented ||
 				isDialogOrMenuOpen() ||
 				event.altKey ||
@@ -5334,7 +5337,8 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
  */
 function sameSubagents(a: GroupSubagents | undefined, b: GroupSubagents | undefined): boolean {
 	if (a === b) return true;
-	if (!a || !b || a.live !== b.live || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	if (!a || !b || a.live.size !== b.live.size || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	for (const id of a.live) if (!b.live.has(id)) return false;
 	for (const id of a.stepIds) if (!b.stepIds.has(id)) return false;
 	for (const [launchId, steps] of a.steps) {
 		const other = b.steps.get(launchId);
@@ -5398,26 +5402,31 @@ type TimelineGroup = {
 	rollbackable?: boolean;
 	/** An account switch stopped this turn; its notice replaces the outcome. */
 	accountSwitched?: boolean;
-	/** Subagents' steps, read from the whole AO turn. See `withSubagentSteps`. */
+	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
 };
 
 type GroupSubagents = {
-	/** Each of this group's launches, with every step its child took in the turn. */
+	/** Each of this group's launches, with every step its child took, in any turn. */
 	steps: ReadonlyMap<string, ConversationActivity[]>;
 	/** This group's items that are a child's steps, wherever the child's launch is. */
 	stepIds: ReadonlySet<string>;
-	/** The AO turn is still running, even when this group is a settled part before a steer. */
-	live: boolean;
+	/**
+	 * This group's launches whose child can still be working: an AO turn holding the
+	 * launch or one of its steps is still running, even when this group is a settled
+	 * part before a steer.
+	 */
+	live: ReadonlySet<string>;
 };
 
 const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
+const NO_LIVE_SUBAGENTS: ReadonlySet<string> = new Set();
 const NO_STEPS: readonly ConversationActivity[] = [];
 const NO_SUBAGENTS: readonly SubagentRef[] = [];
 
-/** The steps a group's launches read, and whether their AO turn still runs. */
-function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: boolean } {
-	return { steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS, live: group.subagents?.live ?? Boolean(group.live) };
+/** The steps a group's launches read, and which of them can still be working. */
+function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: ReadonlySet<string> } {
+	return { steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS, live: group.subagents?.live ?? NO_LIVE_SUBAGENTS };
 }
 
 /**
@@ -5429,7 +5438,7 @@ function conversationSubagents(groups: readonly TimelineGroup[]): SubagentRef[] 
 		const { steps, live } = groupSubagents(group);
 		return group.items.flatMap((item) =>
 			isSubagentLaunch(item) && !group.subagents?.stepIds.has(item.id)
-				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live }]
+				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live: live.has(item.id) }]
 				: [],
 		);
 	});
@@ -5646,37 +5655,64 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups.flatMap((group) => {
-		const { steps } = partitionSubagentSteps(group.items);
-		const segments = splitAtSteers(group);
-		if (steps.size === 0 && !group.items.some(isSubagentLaunch)) return segments;
-		const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
-		return segments.map((segment) => withSubagentSteps(segment, steps, stepIds, Boolean(group.live)));
-	});
+	const conversation = subagentsOfConversation(snapshot.items, groups);
+	if (!conversation) return groups.flatMap(splitAtSteers);
+	return groups.flatMap((group) =>
+		splitAtSteers(group)
+			.map((segment) => withSubagentSteps(segment, conversation))
+			// A part made only of steps that moved under a launch elsewhere has nothing
+			// left to draw. A live one keeps its Working row.
+			.filter((segment) => segment.live || segment.items.some((item) => !conversation.stepIds.has(item.id))),
+	);
 }
 
+type ConversationSubagents = {
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	stepIds: ReadonlySet<string>;
+	live: ReadonlySet<string>;
+};
+
 /**
- * Give a group the subagent steps read from its whole AO turn.
+ * Every launch's steps, read from the whole conversation before any turn is split.
  *
- * A child keeps working while the user steers, so its later steps and its hand-back
- * land after the steer while its launch stays before it. Read one segment at a time,
- * the team would never get its report and the child's steps would read as the
- * parent's. So the turn is partitioned before the split, and each segment takes its
- * own launches' steps and the real turn's live state. A launch whose child has not
- * recorded a step yet still takes the live state, or the steer would leave it
- * reading as finished with no report until its first step arrived.
+ * A child's records do not always land in its launch's AO turn. It keeps working while
+ * the user steers, so its later steps and its hand-back land after the steer; and a
+ * child that outlives its turn, or that the parent picks up again later, records into
+ * a later turn or into none. Read one turn or one segment at a time, the team would
+ * never get its report and the child's steps would read as loose parent work.
+ *
+ * `items` is the whole conversation in sequence order, so each child's steps keep the
+ * order they happened in even when they span turns.
+ *
+ * A child can still be working while any AO turn holding its launch or one of its
+ * steps runs. That is the real turn's state, so a launch before a steer, or a child
+ * that has not recorded a step yet, does not read as finished with no report.
  */
-function withSubagentSteps(
-	segment: TimelineGroup,
-	turnSteps: ReadonlyMap<string, ConversationActivity[]>,
-	turnStepIds: ReadonlySet<string>,
-	live: boolean,
-): TimelineGroup {
+function subagentsOfConversation(items: ConversationItem[], groups: readonly TimelineGroup[]): ConversationSubagents | undefined {
+	const launches = items.filter(isSubagentLaunch);
+	if (launches.length === 0) return undefined;
+	const { steps } = partitionSubagentSteps(items);
+	const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
+	const liveItems = new Set(groups.flatMap((group) => (group.live ? group.items.map((item) => item.id) : [])));
+	const live = new Set(
+		launches
+			.filter((launch) => liveItems.has(launch.id) || steps.get(launch.id)?.some((step) => liveItems.has(step.id)))
+			.map((launch) => launch.id),
+	);
+	return { steps, stepIds, live };
+}
+
+/** Give one segment its own launches' steps and live state, and mark the steps it holds. */
+function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSubagents): TimelineGroup {
 	const steps = new Map<string, ConversationActivity[]>();
 	const stepIds = new Set<string>();
+	const live = new Set<string>();
 	for (const item of segment.items) {
-		if (turnStepIds.has(item.id)) stepIds.add(item.id);
-		else if (isSubagentLaunch(item)) steps.set(item.id, turnSteps.get(item.id) ?? []);
+		if (conversation.stepIds.has(item.id)) stepIds.add(item.id);
+		else if (isSubagentLaunch(item)) {
+			steps.set(item.id, conversation.steps.get(item.id) ?? []);
+			if (conversation.live.has(item.id)) live.add(item.id);
+		}
 	}
 	if (steps.size === 0 && stepIds.size === 0) return segment;
 	return { ...segment, subagents: { steps, stepIds, live } };

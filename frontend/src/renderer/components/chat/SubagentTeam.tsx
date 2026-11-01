@@ -57,8 +57,8 @@ export function SubagentTeam({
 }: {
 	launches: ConversationActivity[];
 	steps: ReadonlyMap<string, ConversationActivity[]>;
-	/** The turn that launched the team is still running. */
-	live: boolean;
+	/** The launches whose child can still be working: a turn holding it is still running. */
+	live: ReadonlySet<string>;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
 	disclosureKey?: string;
@@ -69,7 +69,7 @@ export function SubagentTeam({
 	const reducedMotion = useReducedMotion();
 	const openSubagent = useContext(OpenSubagentContext);
 	const agents = useMemo(
-		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live)),
+		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live.has(launch.id))),
 		[launches, steps, live],
 	);
 	const working = agents.some((agent) => agent.state === "working");
@@ -188,7 +188,7 @@ function countStates(agents: readonly Subagent[]): StateCounts {
 	return counts;
 }
 
-/** "2 working · 1 done": only the states someone is in, working first. */
+/** "2 working · 1 done": only the states someone is in, working first, adding up to the team. */
 function TeamSummary({ counts }: { counts: StateCounts }) {
 	const { t } = useTranslation();
 	const parts: { key: string; text: string; className: string }[] = [];
@@ -203,6 +203,9 @@ function TeamSummary({ counts }: { counts: StateCounts }) {
 	}
 	if (counts.stopped) {
 		parts.push({ key: "stopped", text: t("chat.subagent.summary.stopped", { count: counts.stopped }), className: "text-muted-foreground/70" });
+	}
+	if (counts.unknown) {
+		parts.push({ key: "unknown", text: t("chat.subagent.summary.unknown", { count: counts.unknown }), className: "text-muted-foreground/70" });
 	}
 	if (parts.length === 0) return null;
 	return (

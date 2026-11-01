@@ -2961,6 +2961,8 @@
 	"chat.subagent.summary.failed_other": "{{count}} failed",
 	"chat.subagent.summary.stopped_one": "{{count}} stopped",
 	"chat.subagent.summary.stopped_other": "{{count}} stopped",
+	"chat.subagent.summary.unknown_one": "{{count}} no report",
+	"chat.subagent.summary.unknown_other": "{{count}} no report",
 	"chat.subagent.state.working": "Working",
 	"chat.subagent.state.done": "Done",
 	"chat.subagent.state.failed": "Failed",

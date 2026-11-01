@@ -1759,6 +1759,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 	]);
 
+	// A subagent row opens its tab like any tab switch, so leaving the Browser canvas
+	// resizes the inspector to the utility width instead of snapping to it.
+	const revealSubagentsPanel = useCallback(() => {
+		transitionInspectorView("subagents");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
+
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
 		setBrowserUnseen(uiSessionId, false);
@@ -2044,6 +2051,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
 									subagentContainer={subagentContainer}
+									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}

@@ -99,6 +99,7 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
 	subagentContainer,
+	onRevealSubagents,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -148,6 +149,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer?: HTMLDivElement | null;
 	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
 	subagentContainer?: HTMLDivElement | null;
+	/** Brings the Subagents tab up the way the host switches any inspector tab, resizing it on the way. */
+	onRevealSubagents?: () => void;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -454,20 +457,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
-	const revealSubagents = useCallback(() => {
-		const ui = useUiStore.getState();
-		ui.setInspectorView(uiSessionId, "subagents");
-		ui.setInspectorOpen(uiSessionId, true);
-	}, [uiSessionId]);
 	const reportSubagents = useCallback(
 		(available: boolean) => useUiStore.getState().setSubagentsAvailable(uiSessionId, available),
 		[uiSessionId],
 	);
 	const subagentPanel = useMemo(
-		() => subagentContainer === undefined
+		() => subagentContainer === undefined || !onRevealSubagents
 			? undefined
-			: { container: subagentContainer, reveal: revealSubagents, onAvailableChange: reportSubagents },
-		[reportSubagents, revealSubagents, subagentContainer],
+			: { container: subagentContainer, reveal: onRevealSubagents, onAvailableChange: reportSubagents },
+		[onRevealSubagents, reportSubagents, subagentContainer],
 	);
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
 		openSideInspector();

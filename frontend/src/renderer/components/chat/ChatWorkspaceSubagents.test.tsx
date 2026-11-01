@@ -8,7 +8,7 @@
  * and none of the provider's internal notes.
  */
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -79,6 +79,12 @@ function steer(id: string, sequence: number, body: string): ConversationActivity
 	};
 }
 
+/** The same record filed under another AO turn, or under none. */
+function inTurn<T extends ConversationItem>(item: T, turn: string | undefined): T {
+	const { turnId: _turnId, ...rest } = item;
+	return (turn === undefined ? rest : { ...rest, turnId: turn }) as T;
+}
+
 function snapshot(state: "running" | "completed", later: ConversationItem[] = []): ConversationSnapshot {
 	const items: ConversationItem[] = [
 		text("prompt", 1, "user", "Audit the storefront with subagents"),
@@ -144,8 +150,10 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.getByText("Both audits are summarized above.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Worked for/ })).toHaveAttribute("aria-expanded", "false");
 		const header = screen.getByRole("button", { name: /2 subagents/ });
-		// The background child never handed back, so its outcome is unknown, not done.
+		// The background child never handed back, so its outcome is unknown, not done,
+		// and the header's counts still add up to the team.
 		expect(within(header).getByText("1 done")).toBeInTheDocument();
+		expect(within(header).getByText("1 no report")).toBeInTheDocument();
 		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
 	});
 
@@ -160,8 +168,8 @@ describe("ChatWorkspace subagents", () => {
 
 		rerender(<ChatWorkspace snapshot={snapshot("completed")} />);
 
-		// The live window that held the turn's work folds away under "Worked for"; the
-		// team stays in view outside it, and the reader's disclosure choice comes along.
+		// The turn's work folds away under "Worked for"; the team stays in view outside
+		// it, and the reader's disclosure choice comes along.
 		expect(await screen.findByRole("button", { name: /Worked for/ })).toBeInTheDocument();
 		await waitFor(() => expect(screen.getAllByTestId("subagent-team")).toHaveLength(1));
 		expect(screen.getByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
@@ -209,6 +217,75 @@ describe("ChatWorkspace subagents", () => {
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
+	});
+
+	it("keeps a child's steps and report with its launch when they land in a later turn or in none", () => {
+		// The launch's turn has ended, and the parent picked the child up again in the
+		// next one: the child's records land there, and its report after every turn.
+		const later = "turn-later";
+		const pickedUp = (laterState: "running" | "completed", items: ConversationItem[]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			harness: "claude-code",
+			controller: { state: laterState === "running" ? "busy" : "ready" },
+			latestSequence: 5 + items.length,
+			turns: [
+				{ id: turnId, state: "completed", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
+				{
+					id: later, state: laterState, requestedAt: at(4), startedAt: at(4),
+					...(laterState === "completed" ? { completedAt: at(9) } : {}),
+				},
+			],
+			items: [
+				text("prompt", 1, "user", "Audit the storefront in the background"),
+				launch("pages", 2, "Audit: info pages"),
+				text("started", 3, "assistant", "Started one background agent."),
+				inTurn(text("again", 4, "user", "Keep going with that agent"), later),
+				...items,
+			],
+		});
+		const command = inTurn(child("p1", 5, "tool-pages", "cd /repo; cat src/app/faq/page.tsx"), later);
+		const { rerender } = render(<ChatWorkspace snapshot={pickedUp("running", [command])} />);
+
+		// Working: the turn holding its step still runs, though its launch's turn ended.
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 working")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("cat src/app/faq/page.tsx");
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+
+		const report = inTurn(handback("p2", 10, "tool-pages", "The FAQ never mentions shipping."), undefined);
+		rerender(<ChatWorkspace snapshot={pickedUp("completed", [command, report])} />);
+
+		// Done, with the report that arrived outside any turn, and nothing loose left behind.
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
+		expect(screen.queryByText("No report")).not.toBeInTheDocument();
+		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+	});
+
+	it("does not stop the parent turn when Escape is pressed in the Subagents panel", async () => {
+		const user = userEvent.setup();
+		const tabBody = document.createElement("div");
+		document.body.append(tabBody);
+		const onInterrupt = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={snapshot("running")}
+				onInterrupt={onInterrupt}
+				subagentPanel={{ container: tabBody, reveal: vi.fn(), onAvailableChange: vi.fn() }}
+			/>,
+		);
+
+		await user.click(within(screen.getByTestId("subagent-team")).getByRole("button", { name: /Audit: info pages/ }));
+		// Toggling a command run leaves focus on its button, inside the portaled panel.
+		await user.click(within(tabBody).getByRole("button", { name: /Ran 2 tool calls/ }));
+		expect(tabBody).toContainElement(document.activeElement as HTMLElement);
+		await user.keyboard("{Escape}");
+		expect(onInterrupt).not.toHaveBeenCalled();
+
+		// Escape in the chat itself still stops the turn.
+		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Escape" });
+		expect(onInterrupt).toHaveBeenCalledOnce();
+		tabBody.remove();
 	});
 
 	it("opens a child in the Subagents panel and keeps it current as the child works", async () => {

@@ -2952,6 +2952,8 @@
 	"chat.subagent.summary.failed_other": "{{count}}개 실패",
 	"chat.subagent.summary.stopped_one": "{{count}}개 중지됨",
 	"chat.subagent.summary.stopped_other": "{{count}}개 중지됨",
+	"chat.subagent.summary.unknown_one": "{{count}}개 보고서 없음",
+	"chat.subagent.summary.unknown_other": "{{count}}개 보고서 없음",
 	"chat.subagent.state.working": "작업 중",
 	"chat.subagent.state.done": "완료",
 	"chat.subagent.state.failed": "실패",

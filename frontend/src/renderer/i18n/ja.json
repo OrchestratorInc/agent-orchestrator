@@ -2952,6 +2952,8 @@
 	"chat.subagent.summary.failed_other": "{{count}} 件失敗",
 	"chat.subagent.summary.stopped_one": "{{count}} 件停止",
 	"chat.subagent.summary.stopped_other": "{{count}} 件停止",
+	"chat.subagent.summary.unknown_one": "{{count}} 件レポートなし",
+	"chat.subagent.summary.unknown_other": "{{count}} 件レポートなし",
 	"chat.subagent.state.working": "実行中",
 	"chat.subagent.state.done": "完了",
 	"chat.subagent.state.failed": "失敗",
