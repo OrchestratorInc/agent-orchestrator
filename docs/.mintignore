@@ -1,3 +1,16 @@
 *.ja.mdx
 *.zh-CN.mdx
 **/meta.json
+
+# Internal engineering documentation - excluded from the website build
+*.md
+adr/
+assets/
+cli/
+harnesses/
+performance/
+plans/
+pr-evidence/
+research/
+screenshots/
+superpowers/
