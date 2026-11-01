@@ -345,6 +345,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	};
 	const secretLabel = (id: string) => t(id === "setup_token" ? "settings.harness.loginUi.setupToken" : id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey");
 	const fieldLabelClass = "block text-xs leading-4 font-medium text-settings-label";
+	// The chosen catalog provider, so its key variable can show beside the key field.
+	const chosenProvider = catalog?.find((provider) => provider.id === catalogProvider);
 	// While a key form is open its errors show inside it, next to the field.
 	const errorInForm = Boolean(method?.secret) && !connected && !running && !verifying;
 
@@ -388,12 +390,23 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 								searchable
 								searchPlaceholder={t("settings.harness.loginUi.catalogSearch")}
 								emptyLabel={t("settings.harness.loginUi.catalogEmpty")}
+								// The model count tells look-alike providers apart ("Z.AI" and "Z.AI Coding Plan").
+								renderMenuItem={(option) => {
+									const models = catalog?.find((provider) => provider.id === option.value)?.models ?? 0;
+									return <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
+										<span className="truncate">{option.label}</span>
+										{models > 0 ? <span className="shrink-0 text-xs tabular-nums text-settings-muted">{t("settings.harness.loginUi.catalogModels", { count: models })}</span> : null}
+									</span>;
+								}}
 								disabled={locked || !catalog}
 								triggerClassName="h-8 w-full justify-between"
 							/>
 						</div>}
 						<div className="space-y-1.5">
-							<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
+							<div className="flex items-baseline justify-between gap-2">
+								<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
+								{item.id === CATALOG_METHOD && chosenProvider?.env ? <code className="truncate font-mono text-xs text-settings-muted">{chosenProvider.env}</code> : null}
+							</div>
 							<Input id={titleId + "-secret"} className="border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); setError(""); }} />
 						</div>
 						{needsModel && <div className="space-y-1.5">

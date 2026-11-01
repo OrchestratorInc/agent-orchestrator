@@ -3788,6 +3788,7 @@
 	"settings.harness.loginUi.catalogChoose": "选择提供商",
 	"settings.harness.loginUi.catalogSearch": "搜索提供商",
 	"settings.harness.loginUi.catalogEmpty": "没有匹配的提供商",
+	"settings.harness.loginUi.catalogModels_other": "{{count}} 个模型",
 	"settings.apiKeys": "API 密钥",
 	"settings.apiKeys.loading": "正在加载 API 密钥…",
 	"settings.apiKeys.usedBy": "由 {{names}} 使用",

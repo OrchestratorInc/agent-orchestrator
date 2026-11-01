@@ -3806,6 +3806,7 @@
 	"settings.harness.loginUi.catalogChoose": "プロバイダーを選択",
 	"settings.harness.loginUi.catalogSearch": "プロバイダーを検索",
 	"settings.harness.loginUi.catalogEmpty": "一致するプロバイダーはありません",
+	"settings.harness.loginUi.catalogModels_other": "{{count}} 個のモデル",
 	"settings.apiKeys": "API キー",
 	"settings.apiKeys.loading": "API キーを読み込み中…",
 	"settings.apiKeys.usedBy": "{{names}} が使用",

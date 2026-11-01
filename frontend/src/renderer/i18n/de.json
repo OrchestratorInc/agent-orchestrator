@@ -3806,6 +3806,8 @@
 	"settings.harness.loginUi.catalogChoose": "Anbieter wählen",
 	"settings.harness.loginUi.catalogSearch": "Anbieter suchen",
 	"settings.harness.loginUi.catalogEmpty": "Keine passenden Anbieter",
+	"settings.harness.loginUi.catalogModels_one": "{{count}} Modell",
+	"settings.harness.loginUi.catalogModels_other": "{{count}} Modelle",
 	"settings.apiKeys": "API-Schlüssel",
 	"settings.apiKeys.loading": "API-Schlüssel werden geladen…",
 	"settings.apiKeys.usedBy": "Verwendet von {{names}}",

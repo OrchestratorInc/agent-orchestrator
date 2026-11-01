@@ -3806,6 +3806,7 @@
 	"settings.harness.loginUi.catalogChoose": "제공업체 선택",
 	"settings.harness.loginUi.catalogSearch": "제공업체 검색",
 	"settings.harness.loginUi.catalogEmpty": "일치하는 제공업체가 없습니다",
+	"settings.harness.loginUi.catalogModels_other": "모델 {{count}}개",
 	"settings.apiKeys": "API 키",
 	"settings.apiKeys.loading": "API 키를 불러오는 중…",
 	"settings.apiKeys.usedBy": "{{names}}에서 사용",
