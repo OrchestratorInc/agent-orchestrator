@@ -13,7 +13,7 @@ import {
 } from "./ChatTimelineItems";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -505,6 +505,118 @@ describe("AssistantMessage streaming", () => {
 });
 
 describe("ActivityRow", () => {
+	const png = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR4nO3OMQ0AMAwDwcApxGIKpnBJGcRDFXn5wePLF1nd086tcb99AAAAwA7YPlA9AAAA/IDtA9UDAADAD9g+UD0AAADsgAePf/6mCWRFdQAAAABJRU5ErkJggg==";
+	function tool(content: unknown) {
+		return <ActivityRow activity={{
+			kind: "activity", id: "read-image", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool",
+			status: "completed", summary: "Read",
+			// Historical provider wire shapes are wider than the typed message-content intersection.
+			detail: { toolName: "Read", content: content as NonNullable<ConversationActivity["detail"]>["content"] },
+		}} />;
+	}
+
+	it("expands a direct MCP image without a base64 pre block", () => {
+		const { container } = render(tool({ type: "image", data: png, mimeType: "image/png" }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		expect(container.querySelector("pre")).toBeNull();
+		expect(container.textContent).not.toContain("iVBOR");
+	});
+
+	it("expands mixed MCP content as a chat image and text without binary DOM text", () => {
+		const { container } = render(tool({ text: "Synthetic PNG", content: { type: "image", data: png, mimeType: "image/png" } }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toHaveAttribute("src", `data:image/png;base64,${png}`);
+		expect(screen.getByText("Synthetic PNG")).toBeInTheDocument();
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(container.querySelector("pre")?.textContent).toBe("Synthetic PNG");
+	});
+
+	it.each([
+		{ type: "image", data: png, mimeType: "image/png" },
+		{ type: "image", mimeType: "image/png", bytes: 1800 },
+	])("preserves wrapped ACP resources beside detail.content images or placeholders", (image) => {
+		const content = [
+			{ type: "content", content: image },
+			{ type: "content", content: { type: "resource", resource: { uri: "fixture:///report", text: "report body" } } },
+			{ type: "content", content: { type: "resource_link", uri: "https://example.test/report", name: "Report link" } },
+		];
+		const { container } = render(tool(content));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		for (const text of ["fixture:///report", "report body", "https://example.test/report", "Report link"]) {
+			expect(container).toHaveTextContent(text);
+		}
+		if ("data" in image) expect(screen.getByRole("img")).toBeInTheDocument();
+		else expect(container).toHaveTextContent("Tool image (image/png, 1800 bytes)");
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(content[0].content).toEqual(image);
+	});
+
+	it("renders a Codex MCP result image without sending its data to JSON text", () => {
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "codex-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result: { content: [{ type: "image", data: png, mimeType: "image/png" }, { type: "text", text: "Codex caption" }] } },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		expect(container.querySelector("pre")).toHaveTextContent("Codex caption");
+		expect(container.textContent).not.toContain("iVBOR");
+	});
+
+	it("preserves structured content and resource blocks beside MCP result images", () => {
+		const result = {
+			content: [
+				{ type: "image", data: png, mimeType: "image/png" },
+				{ type: "resource", resource: { uri: "fixture:///report", mimeType: "text/plain", text: "embedded body" } },
+				{ type: "resource_link", uri: "https://example.test/report", name: "Report link" },
+			],
+			structuredContent: { answer: 42 }, _meta: { trace: "retained" },
+		};
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "mixed-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		const json = container.querySelector("pre");
+		for (const text of ['"answer": 42', "embedded body", "Report link", "fixture:///report", "retained"]) {
+			expect(json).toHaveTextContent(text);
+		}
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(result.content[0]).toHaveProperty("data", png);
+	});
+
+	it("keeps non-image structured source text in the original result JSON", () => {
+		const result = { content: [{ type: "text", text: "loaded" }], structuredContent: { source: { data: "CSV source text", media_type: "text/plain" }, rows: 2 } };
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "text-source-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.queryByRole("img")).toBeNull();
+		expect(container.querySelector("pre")).toHaveTextContent("CSV source text");
+		expect(container.querySelector("pre")).toHaveTextContent("text/plain");
+		expect(container.textContent).not.toContain("Tool image");
+	});
+
+	it("keeps text-only MCP output in its existing code block", () => {
+		const { container } = render(tool({ type: "text", text: "plain result" }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(container.querySelector("pre code")).toHaveTextContent("plain result");
+		expect(screen.queryByRole("img")).toBeNull();
+	});
+
+	it("retains unified diff rows alongside images", () => {
+		const { container } = render(tool([{ type: "text", text: "-old\n+new" }, { type: "image", data: png, mimeType: "image/png" }]));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(container.querySelectorAll("[data-tool-diff-row]")).toHaveLength(2);
+		expect(screen.getByRole("img")).toBeInTheDocument();
+	});
+
 	it("renders inline code in provider activity titles without literal backticks", () => {
 		const path = "/Users/sachin/.ao/worktrees/murdock/docs/system-design.html";
 		const { container } = render(
