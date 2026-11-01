@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
 vi.mock("./useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
-vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor"] } }) }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor", "hermes"] } }) }));
 vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("./useSessionInterfaceTransition")>(),
 	useSessionInterfaceTransition: (sessionId: string, context: unknown) => {
@@ -80,6 +80,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 	});
 
 	it.each(["chat", "tui"] as const)("asks before an idle Hermes %s switch can reset context", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
 		const { cloud: _cloud, ...localSession } = cloudSession;
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider: "hermes", mode }));
 		requestSwitch(result.current.switchControl as SwitchControl);
