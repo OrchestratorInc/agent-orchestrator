@@ -76,6 +76,46 @@ describe("useLinkPreview", () => {
 		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 
+	it("suppresses repeated 502 responses for one URL and keeps other URLs available", async () => {
+		const failed = "https://bad-gateway.example.test/";
+		const good = "https://good-gateway.example.test/";
+		getMock.mockImplementation(async (_path: string, opts: { params: { query: { url: string } } }) =>
+			opts.params.query.url === failed
+				? { error: { message: "upstream failed" }, response: { status: 502 } }
+				: { data: { url: good, title: "Good" } },
+		);
+		const { result, rerender } = renderHook(({ url, enabled }) => useLinkPreview(url, enabled), {
+			initialProps: { url: failed, enabled: true },
+		});
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		rerender({ url: failed, enabled: false });
+		rerender({ url: failed, enabled: true });
+		expect(result.current.isError).toBe(true);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		rerender({ url: good, enabled: true });
+		await waitFor(() => expect(result.current.data?.url).toBe(good));
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries a 502 after the negative cache expires", async () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000_000);
+		const url = "https://recovering-gateway.example.test/";
+		getMock.mockResolvedValueOnce({ error: { message: "upstream failed" }, response: { status: 502 } })
+			.mockResolvedValueOnce({ data: { url, title: "Recovered" } });
+		try {
+			const { result, rerender } = renderHook(({ enabled }) => useLinkPreview(url, enabled), { initialProps: { enabled: true } });
+			await waitFor(() => expect(result.current.isError).toBe(true));
+			rerender({ enabled: false });
+			now.mockReturnValue(1_000_000 + 2 * 60_000 + 1);
+			rerender({ enabled: true });
+			await waitFor(() => expect(result.current.data?.title).toBe("Recovered"));
+			expect(getMock).toHaveBeenCalledTimes(2);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	it("serves a succeeded URL from cache when re-enabled without refetching", async () => {
 		const url = "https://cached-hit.example.test/";
 		getMock.mockResolvedValue({ data: { url, title: "Cached" }, error: undefined });

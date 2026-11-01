@@ -456,6 +456,18 @@ describe("SessionChatSurface prompt suggestions", () => {
 		expect(postMock).toHaveBeenCalledOnce();
 	});
 
+	it("waits for the target controller to become ready even when its last turn is completed", async () => {
+		settleConversation();
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [], controller: { state: "connecting" } };
+		const client = new QueryClient();
+		const tree = () => <Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>;
+		const view = render(tree());
+		expect(postMock).not.toHaveBeenCalled();
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [], controller: { state: "ready" } };
+		view.rerender(tree());
+		await waitFor(() => expect(postMock).toHaveBeenCalledOnce());
+	});
+
 	it("keeps an in-flight suggestion while a file pane temporarily hides the composer", async () => {
 		settleConversation();
 		let signal: AbortSignal | undefined;
