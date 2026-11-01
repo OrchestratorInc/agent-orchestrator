@@ -11,13 +11,25 @@ import (
 )
 
 const getPRDetails = `-- name: GetPRDetails :one
-SELECT pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, observed_at
+SELECT pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, conversation, observed_at
 FROM pr_details WHERE pr_url = ?
 `
 
-func (q *Queries) GetPRDetails(ctx context.Context, prUrl string) (PRDetail, error) {
+type GetPRDetailsRow struct {
+	PRURL                string
+	Description          string
+	DescriptionTruncated int64
+	Labels               string
+	RequestedReviewers   string
+	Commits              string
+	CommitCount          int64
+	Conversation         string
+	ObservedAt           time.Time
+}
+
+func (q *Queries) GetPRDetails(ctx context.Context, prUrl string) (GetPRDetailsRow, error) {
 	row := q.db.QueryRowContext(ctx, getPRDetails, prUrl)
-	var i PRDetail
+	var i GetPRDetailsRow
 	err := row.Scan(
 		&i.PRURL,
 		&i.Description,
@@ -26,14 +38,32 @@ func (q *Queries) GetPRDetails(ctx context.Context, prUrl string) (PRDetail, err
 		&i.RequestedReviewers,
 		&i.Commits,
 		&i.CommitCount,
+		&i.Conversation,
 		&i.ObservedAt,
 	)
 	return i, err
 }
 
+const setPRDetailsConversation = `-- name: SetPRDetailsConversation :execrows
+UPDATE pr_details SET conversation = ? WHERE pr_url = ?
+`
+
+type SetPRDetailsConversationParams struct {
+	Conversation string
+	PRURL        string
+}
+
+func (q *Queries) SetPRDetailsConversation(ctx context.Context, arg SetPRDetailsConversationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPRDetailsConversation, arg.Conversation, arg.PRURL)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertPRDetails = `-- name: UpsertPRDetails :exec
-INSERT INTO pr_details (pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, observed_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO pr_details (pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, conversation, observed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (pr_url) DO UPDATE SET
     description = excluded.description,
     description_truncated = excluded.description_truncated,
@@ -41,6 +71,7 @@ ON CONFLICT (pr_url) DO UPDATE SET
     requested_reviewers = excluded.requested_reviewers,
     commits = excluded.commits,
     commit_count = excluded.commit_count,
+    conversation = excluded.conversation,
     observed_at = excluded.observed_at
 `
 
@@ -52,6 +83,7 @@ type UpsertPRDetailsParams struct {
 	RequestedReviewers   string
 	Commits              string
 	CommitCount          int64
+	Conversation         string
 	ObservedAt           time.Time
 }
 
@@ -64,6 +96,7 @@ func (q *Queries) UpsertPRDetails(ctx context.Context, arg UpsertPRDetailsParams
 		arg.RequestedReviewers,
 		arg.Commits,
 		arg.CommitCount,
+		arg.Conversation,
 		arg.ObservedAt,
 	)
 	return err

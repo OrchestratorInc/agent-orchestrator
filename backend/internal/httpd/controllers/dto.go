@@ -1392,6 +1392,31 @@ type SessionPRSummary struct {
 	Commits           []SessionPRCommit `json:"commits"`
 	CommitCount       int               `json:"commitCount"`
 	DetailsObservedAt *time.Time        `json:"detailsObservedAt,omitempty"`
+	// Threads are the stored review threads with their comments, threads and
+	// comments oldest first. Bodies are untrusted provider markdown.
+	Threads []SessionPRThread `json:"threads,omitempty"`
+	// Conversation is the newest top-level conversation comments, oldest
+	// first; empty until DetailsObservedAt is present.
+	Conversation []SessionPRComment `json:"conversation,omitempty"`
+}
+
+// SessionPRThread is one review thread on a session PR.
+type SessionPRThread struct {
+	ID       string             `json:"id"`
+	Path     string             `json:"path,omitempty"`
+	Line     int                `json:"line,omitempty"`
+	Resolved bool               `json:"resolved"`
+	Comments []SessionPRComment `json:"comments"`
+}
+
+// SessionPRComment is one review-thread or conversation comment on a session PR.
+type SessionPRComment struct {
+	ID        string     `json:"id"`
+	Author    string     `json:"author"`
+	IsBot     bool       `json:"isBot"`
+	Body      string     `json:"body"`
+	URL       string     `json:"url,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
 }
 
 // SessionPRLabel is one label on a session PR.
@@ -1545,7 +1570,35 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		Commits:              newSessionPRCommits(in.Commits),
 		CommitCount:          in.CommitCount,
 		DetailsObservedAt:    optionalTime(in.DetailsObservedAt),
+		Threads:              newSessionPRThreads(in.Threads),
+		Conversation:         newSessionPRComments(in.Conversation),
 	}
+}
+
+func newSessionPRThreads(in []contract.PullRequestThread) []SessionPRThread {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRThread, 0, len(in))
+	for _, th := range in {
+		comments := newSessionPRComments(th.Comments)
+		if comments == nil {
+			comments = []SessionPRComment{}
+		}
+		out = append(out, SessionPRThread{ID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, Comments: comments})
+	}
+	return out
+}
+
+func newSessionPRComments(in []contract.PullRequestCommentEntry) []SessionPRComment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SessionPRComment, 0, len(in))
+	for _, c := range in {
+		out = append(out, SessionPRComment{ID: c.ID, Author: c.Author, IsBot: c.IsBot, Body: c.Body, URL: c.URL, CreatedAt: optionalTime(c.CreatedAt)})
+	}
+	return out
 }
 
 func newSessionPRLabels(in []contract.PullRequestLabel) []SessionPRLabel {
@@ -2601,6 +2654,8 @@ type PRIDParam struct {
 type MergePRRequest struct {
 	PRURL           string `json:"prUrl" minLength:"1"`
 	ExpectedHeadSHA string `json:"expectedHeadSha" minLength:"40"`
+	// Method is the merge strategy; squash when omitted.
+	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
 }
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
@@ -2610,6 +2665,37 @@ type MergePRResponse struct {
 	Method         string         `json:"method"`
 	State          domain.PRState `json:"state" enum:"merged"`
 	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// ChangePRStateRequest is the body of POST /api/v1/prs/{id}/state.
+type ChangePRStateRequest struct {
+	PRURL  string `json:"prUrl" minLength:"1"`
+	Action string `json:"action" enum:"close,reopen,ready,draft"`
+}
+
+// ChangePRStateResponse is the body of POST /api/v1/prs/{id}/state (200).
+type ChangePRStateResponse struct {
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	State          domain.PRState `json:"state" enum:"open,draft,closed"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
+}
+
+// PostPRCommentRequest is the body of POST /api/v1/prs/{id}/comments. Without
+// threadId it posts a top-level conversation comment; with it, a reply in that
+// review thread.
+type PostPRCommentRequest struct {
+	PRURL    string `json:"prUrl" minLength:"1"`
+	Body     string `json:"body" minLength:"1"`
+	ThreadID string `json:"threadId,omitempty"`
+}
+
+// PostPRCommentResponse is the body of POST /api/v1/prs/{id}/comments (200).
+type PostPRCommentResponse struct {
+	OK        bool      `json:"ok"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.

@@ -293,6 +293,8 @@ type SCMReviewCommentObservation struct {
 	URL string
 	// IsBot is true when the provider identifies the author as a bot.
 	IsBot bool
+	// CreatedAt is the provider's comment creation time; zero when unknown.
+	CreatedAt time.Time
 }
 
 // SCMMergeabilityObservation is the normalized mergeability verdict.

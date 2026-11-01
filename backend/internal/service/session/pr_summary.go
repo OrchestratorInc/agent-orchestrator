@@ -92,6 +92,7 @@ func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]P
 			}
 		}
 		summary := summarizePR(group.primary, checks, reviews, threads, comments, threadsExact)
+		summary.Threads = summarizeThreads(threads, comments)
 		if err := s.addPRDetails(ctx, &summary, group.primary.URL); err != nil {
 			return nil, err
 		}
@@ -181,7 +182,80 @@ func (s *Service) addPRDetails(ctx context.Context, summary *PRSummary, prURL st
 	}
 	summary.CommitCount = details.CommitCount
 	summary.DetailsObservedAt = details.ObservedAt
+	for _, comment := range details.Conversation {
+		summary.Conversation = append(summary.Conversation, contract.PullRequestCommentEntry{
+			ID: comment.ID, Author: comment.Author, IsBot: comment.IsBot, Body: comment.Body, URL: comment.URL, CreatedAt: comment.CreatedAt,
+		})
+	}
+	sort.SliceStable(summary.Conversation, func(i, j int) bool {
+		return summary.Conversation[i].CreatedAt.Before(summary.Conversation[j].CreatedAt)
+	})
 	return nil
+}
+
+// summarizeThreads groups stored review comments by provider thread, each
+// thread's comments oldest first and threads by their first comment. Thread
+// rows supply the anchor and resolution; a thread without stored comments has
+// nothing to show and is left out, as are legacy comments with no thread id.
+// Comments repeated across URL aliases appear once.
+func summarizeThreads(threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment) []contract.PullRequestThread {
+	rows := map[string]domain.PullRequestReviewThread{}
+	for _, th := range dedupeReviewThreads(threads) {
+		if th.ThreadID != "" {
+			rows[th.ThreadID] = th
+		}
+	}
+	byThread := map[string]*contract.PullRequestThread{}
+	allResolved := map[string]bool{}
+	order := []string{}
+	seen := map[string]bool{}
+	for _, c := range comments {
+		threadID := strings.TrimSpace(c.ThreadID)
+		if threadID == "" {
+			continue
+		}
+		if c.ID != "" {
+			key := threadID + "\x00" + c.ID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
+		th, ok := byThread[threadID]
+		if !ok {
+			th = &contract.PullRequestThread{ID: threadID, Path: c.File, Line: c.Line, Comments: []contract.PullRequestCommentEntry{}}
+			byThread[threadID] = th
+			allResolved[threadID] = true
+			order = append(order, threadID)
+		}
+		allResolved[threadID] = allResolved[threadID] && c.Resolved
+		th.Comments = append(th.Comments, contract.PullRequestCommentEntry{
+			ID: c.ID, Author: c.Author, IsBot: c.IsBot, Body: c.Body, URL: c.URL, CreatedAt: c.CreatedAt,
+		})
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]contract.PullRequestThread, 0, len(order))
+	for _, id := range order {
+		th := byThread[id]
+		th.Resolved = allResolved[id]
+		if row, ok := rows[id]; ok {
+			th.Path, th.Line, th.Resolved = row.Path, row.Line, row.Resolved
+		}
+		sort.SliceStable(th.Comments, func(i, j int) bool {
+			return th.Comments[i].CreatedAt.Before(th.Comments[j].CreatedAt)
+		})
+		out = append(out, *th)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ai, aj := out[i].Comments[0].CreatedAt, out[j].Comments[0].CreatedAt
+		if !ai.Equal(aj) {
+			return ai.Before(aj)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 func summarizePR(pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, threadsExact bool) PRSummary {

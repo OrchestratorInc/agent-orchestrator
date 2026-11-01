@@ -1859,6 +1859,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prs/{id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post a pull request conversation comment or review-thread reply */
+        post: operations["postPRComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/prs/{id}/merge": {
         parameters: {
             query?: never;
@@ -1868,7 +1885,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Squash-merge a pull request */
+        /** Merge a pull request (squash, merge commit, or rebase) */
         post: operations["mergePR"];
         delete?: never;
         options?: never;
@@ -1887,6 +1904,23 @@ export interface paths {
         put?: never;
         /** Resolve review threads on a pull request */
         post: operations["resolveComments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close, reopen, mark ready, or convert a pull request to draft */
+        post: operations["changePRState"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4905,6 +4939,19 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        ChangePRStateRequest: {
+            /** @enum {string} */
+            action: "close" | "reopen" | "ready" | "draft";
+            prUrl: string;
+        };
+        ChangePRStateResponse: {
+            ok: boolean;
+            prNumber: number;
+            /** @enum {string} */
+            state: "open" | "draft" | "closed";
+            /** Format: date-time */
+            stateChangedAt: string;
+        };
         ChatAgentPermissionModes: {
             agent: string;
             modes: string[];
@@ -6190,6 +6237,8 @@ export interface components {
         };
         MergePRRequest: {
             expectedHeadSha: string;
+            /** @enum {string} */
+            method?: "squash" | "merge" | "rebase";
             prUrl: string;
         };
         MergePRResponse: {
@@ -6308,6 +6357,18 @@ export interface components {
             status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
             targetSha: string;
             title: string;
+        };
+        PostPRCommentRequest: {
+            body: string;
+            prUrl: string;
+            threadId?: string;
+        };
+        PostPRCommentResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            ok: boolean;
+            url: string;
         };
         PrepareTaskResponse: {
             ok: boolean;
@@ -6820,6 +6881,15 @@ export interface components {
             status: "unknown" | "queued" | "in_progress" | "passed" | "failed" | "skipped" | "cancelled";
             url?: string;
         };
+        SessionPRComment: {
+            author: string;
+            body: string;
+            /** Format: date-time */
+            createdAt?: null | string;
+            id: string;
+            isBot: boolean;
+            url?: string;
+        };
         SessionPRCommit: {
             author?: string;
             /** Format: date-time */
@@ -6915,6 +6985,7 @@ export interface components {
             ciObservedAt?: string;
             commitCount: number;
             commits: components["schemas"]["SessionPRCommit"][];
+            conversation?: components["schemas"]["SessionPRComment"][];
             /** Format: date-time */
             createdAt?: null | string;
             deletions: number;
@@ -6942,10 +7013,18 @@ export interface components {
             /** Format: date-time */
             stateChangedAt?: null | string;
             targetBranch: string;
+            threads?: components["schemas"]["SessionPRThread"][];
             title: string;
             /** Format: date-time */
             updatedAt: string;
             url: string;
+        };
+        SessionPRThread: {
+            comments: components["schemas"]["SessionPRComment"][];
+            id: string;
+            line?: number;
+            path?: string;
+            resolved: boolean;
         };
         SessionPRUnresolvedReviewer: {
             count: number;
@@ -14143,6 +14222,69 @@ export interface operations {
             };
         };
     };
+    postPRComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostPRCommentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostPRCommentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     mergePR: {
         parameters: {
             query?: never;
@@ -14234,6 +14376,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolveCommentsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    changePRState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePRStateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePRStateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

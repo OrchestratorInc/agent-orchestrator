@@ -397,6 +397,7 @@ func scmPRFields() string {
 		"LABEL_LIMIT", strconv.Itoa(scmDetailsLabelLimit),
 		"REVIEWER_LIMIT", strconv.Itoa(scmDetailsReviewerLimit),
 		"COMMIT_LIMIT", strconv.Itoa(scmDetailsCommitLimit),
+		"CONVERSATION_LIMIT", strconv.Itoa(domain.MaxPullRequestConversationComments),
 	).Replace(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
@@ -411,6 +412,7 @@ reviewRequests(first:REVIEWER_LIMIT){ nodes{ requestedReviewer{
   ... on Team { name }
 } } }
 commitList: commits(last:COMMIT_LIMIT){ totalCount nodes{ commit{ oid messageHeadline committedDate author{ name user{ login } } } } }
+conversation: comments(last:CONVERSATION_LIMIT){ nodes{ id body url createdAt author{ login __typename } } }
 author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
@@ -727,7 +729,7 @@ func buildReviewThreadsQuery(ref ports.SCMPRRef, beforeCursor string, includeRev
 	return fmt.Sprintf(`query{
 repo: repository(owner:%s,name:%s){ pullRequest(number:%d){ reviewDecision%s reviewThreads(last:%d, before:%s){ nodes{
   id isResolved path line
-  comments(first:%d){ nodes{ id body url pullRequestReview{ databaseId } author{ login __typename } } }
+  comments(first:%d){ nodes{ id body url createdAt pullRequestReview{ databaseId } author{ login __typename } } }
 } pageInfo{ hasPreviousPage startCursor } } } }
 }`, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, reviewSelection, githubReviewThreadPageSize, before, githubReviewCommentLimitPerThread)
 }
@@ -778,12 +780,13 @@ func scmThreadFromGraphQL(th map[string]any) ports.SCMReviewThreadObservation {
 			allCommentsBot = false
 		}
 		out.Comments = append(out.Comments, ports.SCMReviewCommentObservation{
-			ID:       str(cn["id"]),
-			ReviewID: decimalID(parentReview["databaseId"]),
-			Author:   str(author["login"]),
-			Body:     str(cn["body"]),
-			URL:      str(cn["url"]),
-			IsBot:    isBot,
+			ID:        str(cn["id"]),
+			ReviewID:  decimalID(parentReview["databaseId"]),
+			Author:    str(author["login"]),
+			Body:      str(cn["body"]),
+			URL:       str(cn["url"]),
+			IsBot:     isBot,
+			CreatedAt: parseGitHubTime(str(cn["createdAt"])),
 		})
 	}
 	out.IsBot = allCommentsBot

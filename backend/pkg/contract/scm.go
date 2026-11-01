@@ -215,6 +215,33 @@ type PullRequestSummary struct {
 	CommitCount int                 `json:"commitCount"`
 	// DetailsObservedAt is zero until an observation has carried the details.
 	DetailsObservedAt time.Time `json:"detailsObservedAt,omitempty"`
+
+	// Threads are the stored review threads with their comments, oldest first.
+	Threads []PullRequestThread `json:"threads,omitempty"`
+	// Conversation is the newest top-level conversation comments, oldest
+	// first. It is empty until DetailsObservedAt is set.
+	Conversation []PullRequestCommentEntry `json:"conversation,omitempty"`
+}
+
+// PullRequestThread is one review thread with its stored comments, oldest
+// first.
+type PullRequestThread struct {
+	ID       string                    `json:"id"`
+	Path     string                    `json:"path,omitempty"`
+	Line     int                       `json:"line,omitempty"`
+	Resolved bool                      `json:"resolved"`
+	Comments []PullRequestCommentEntry `json:"comments"`
+}
+
+// PullRequestCommentEntry is one review-thread or conversation comment. Body
+// is untrusted provider markdown.
+type PullRequestCommentEntry struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	IsBot     bool      `json:"isBot"`
+	Body      string    `json:"body"`
+	URL       string    `json:"url,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
 }
 
 // AOReviewRun is one transport-neutral AO review pass.

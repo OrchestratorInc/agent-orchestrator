@@ -30,6 +30,10 @@ var (
 	ErrNotFound    = ports.ErrSCMNotFound
 	ErrAuthFailed  = errors.New("github scm: authentication failed")
 	ErrRateLimited = errors.New("github scm: rate limited")
+	// errGraphQL marks a GraphQL error payload that is not an auth, rate-limit,
+	// or not-found failure. For a mutation it is the provider refusing the
+	// request.
+	errGraphQL = errors.New("github scm: graphql error")
 )
 
 // RateLimitError carries the structured backoff hints from a rate-limit
@@ -322,7 +326,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		case strings.Contains(low, "could not resolve") || strings.Contains(low, "not found"):
 			return decoded.Data, fmt.Errorf("%w: %s", ErrNotFound, msg)
 		default:
-			return decoded.Data, fmt.Errorf("github scm: graphql error: %s", msg)
+			return decoded.Data, fmt.Errorf("%w: %s", errGraphQL, msg)
 		}
 	}
 	return decoded.Data, nil

@@ -71,6 +71,46 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 	return nil
 }
 
+// MarkPRState records the authoritative result of a provider close, reopen,
+// ready-for-review, or convert-to-draft mutation without replacing
+// concurrently refreshed CI or review facts. A merged PR is never rewritten.
+// The pr_cdc_update trigger emits the corresponding pr_updated event.
+func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRState, changedAt time.Time) error {
+	switch state {
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateClosed:
+	default:
+		return fmt.Errorf("mark pr state %s: unsupported state %q", prURL, state)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.MarkPRState(ctx, gen.MarkPRStateParams{
+		PRState:        state,
+		IsDraft:        boolInt(state == domain.PRStateDraft),
+		IsClosed:       boolInt(state == domain.PRStateClosed),
+		StateChangedAt: sql.NullTime{Time: changedAt, Valid: true},
+		UpdatedAt:      changedAt,
+		URL:            prURL,
+	})
+	if err != nil {
+		return fmt.Errorf("mark pr state %s: %w", prURL, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("mark pr state %s: updated %d rows", prURL, rows)
+	}
+	return nil
+}
+
+// UpsertPRReviewComment stores one just-posted review-thread reply so the view
+// shows it before the next review observation, which reconciles it.
+func (s *Store) UpsertPRReviewComment(ctx context.Context, prURL string, comment domain.PullRequestComment) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertPRComment(ctx, genCommentParams(prURL, comment)); err != nil {
+		return fmt.Errorf("upsert pr review comment %s/%s: %w", prURL, comment.ID, err)
+	}
+	return nil
+}
+
 // ClaimPR moves (or creates) a PR row to pr.SessionID and applies the live SCM
 // observation in the same transaction. The session_id update is what fires the
 // pr_session_changed CDC trigger added in migration 0005.

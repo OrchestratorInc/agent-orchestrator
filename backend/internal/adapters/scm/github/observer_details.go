@@ -17,7 +17,7 @@ const (
 )
 
 // pullRequestDetailsFromGraphQL normalizes the description, labels, requested
-// reviewers and commits of one batch-query PR node.
+// reviewers, commits and conversation comments of one batch-query PR node.
 func pullRequestDetailsFromGraphQL(pr map[string]any) *domain.PullRequestDetails {
 	description, truncated := truncateDescription(str(pr["body"]))
 	details := &domain.PullRequestDetails{
@@ -26,6 +26,7 @@ func pullRequestDetailsFromGraphQL(pr map[string]any) *domain.PullRequestDetails
 		Labels:               []domain.PullRequestLabel{},
 		RequestedReviewers:   []domain.PullRequestRequestedReviewer{},
 		Commits:              []domain.PullRequestCommit{},
+		Conversation:         []domain.PullRequestConversationComment{},
 	}
 	if labels, _ := pr["labels"].(map[string]any); labels != nil {
 		for _, node := range nodes(labels["nodes"]) {
@@ -69,6 +70,27 @@ func pullRequestDetailsFromGraphQL(pr map[string]any) *domain.PullRequestDetails
 			details.CommitCount = len(details.Commits)
 		}
 	}
+	if conversation, _ := pr["conversation"].(map[string]any); conversation != nil {
+		for _, node := range nodes(conversation["nodes"]) {
+			id := strings.TrimSpace(str(node["id"]))
+			if id == "" {
+				continue
+			}
+			author, _ := node["author"].(map[string]any)
+			body, _ := truncateUTF8(str(node["body"]), domain.MaxPullRequestCommentBodyBytes)
+			details.Conversation = append(details.Conversation, domain.PullRequestConversationComment{
+				ID:        id,
+				Author:    str(author["login"]),
+				IsBot:     isBotAuthor(author),
+				Body:      body,
+				URL:       str(node["url"]),
+				CreatedAt: parseGitHubTime(str(node["createdAt"])),
+			})
+		}
+		if extra := len(details.Conversation) - domain.MaxPullRequestConversationComments; extra > 0 {
+			details.Conversation = details.Conversation[extra:]
+		}
+	}
 	return details
 }
 
@@ -87,10 +109,16 @@ func commitAuthor(v any) string {
 // truncateDescription cuts a PR body to the stored cap without splitting a
 // UTF-8 character.
 func truncateDescription(body string) (string, bool) {
-	if len(body) <= domain.MaxPullRequestDescriptionBytes {
+	return truncateUTF8(body, domain.MaxPullRequestDescriptionBytes)
+}
+
+// truncateUTF8 cuts body to at most limit bytes without splitting a UTF-8
+// character.
+func truncateUTF8(body string, limit int) (string, bool) {
+	if len(body) <= limit {
 		return body, false
 	}
-	cut := domain.MaxPullRequestDescriptionBytes
+	cut := limit
 	for cut > 0 && !utf8.RuneStart(body[cut]) {
 		cut--
 	}

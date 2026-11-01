@@ -466,6 +466,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionPRLabel":                           "SessionPRLabel",
 	"ControllersSessionPRRequestedReviewer":               "SessionPRRequestedReviewer",
 	"ControllersSessionPRCommit":                          "SessionPRCommit",
+	"ControllersSessionPRThread":                          "SessionPRThread",
+	"ControllersSessionPRComment":                         "SessionPRComment",
 	"ControllersSessionPRReference":                       "SessionPRReference",
 	"ControllersSessionPRCISummary":                       "SessionPRCISummary",
 	"ControllersSessionPRFailingCheck":                    "SessionPRFailingCheck",
@@ -577,6 +579,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersMergePRResponse":         "MergePRResponse",
 	"ControllersResolveCommentsRequest":  "ResolveCommentsRequest",
 	"ControllersResolveCommentsResponse": "ResolveCommentsResponse",
+	"ControllersChangePRStateRequest":    "ChangePRStateRequest",
+	"ControllersChangePRStateResponse":   "ChangePRStateResponse",
+	"ControllersPostPRCommentRequest":    "PostPRCommentRequest",
+	"ControllersPostPRCommentResponse":   "PostPRCommentResponse",
 	// httpd/controllers — review wire envelopes
 	"ControllersListReviewsResponse":   "ListReviewsResponse",
 	"ControllersReviewRunResponse":     "ReviewRunResponse",
@@ -3704,7 +3710,7 @@ func prOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodPost, path: "/api/v1/prs/{id}/merge", id: "mergePR", tag: "prs",
-			summary:    "Squash-merge a pull request",
+			summary:    "Merge a pull request (squash, merge commit, or rebase)",
 			pathParams: []any{controllers.PRIDParam{}},
 			reqBody:    controllers.MergePRRequest{},
 			resps: []respUnit{
@@ -3723,6 +3729,32 @@ func prOperations() []operation {
 			reqBody:    nil, // body is optional: omitting it resolves all unresolved threads
 			resps: []respUnit{
 				{http.StatusOK, controllers.ResolveCommentsResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/state", id: "changePRState", tag: "prs",
+			summary:    "Close, reopen, mark ready, or convert a pull request to draft",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.ChangePRStateRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.ChangePRStateResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/prs/{id}/comments", id: "postPRComment", tag: "prs",
+			summary:    "Post a pull request conversation comment or review-thread reply",
+			pathParams: []any{controllers.PRIDParam{}},
+			reqBody:    controllers.PostPRCommentRequest{},
+			resps: []respUnit{
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusOK, controllers.PostPRCommentResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

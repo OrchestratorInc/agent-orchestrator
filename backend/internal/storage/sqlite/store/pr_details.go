@@ -29,6 +29,10 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, details *
 	if err != nil {
 		return fmt.Errorf("encode pr commits %s: %w", prURL, err)
 	}
+	conversation, err := json.Marshal(nonNilSlice(details.Conversation))
+	if err != nil {
+		return fmt.Errorf("encode pr conversation %s: %w", prURL, err)
+	}
 	if err := q.UpsertPRDetails(ctx, gen.UpsertPRDetailsParams{
 		PRURL:                prURL,
 		Description:          details.Description,
@@ -37,6 +41,7 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, details *
 		RequestedReviewers:   string(reviewers),
 		Commits:              string(commits),
 		CommitCount:          int64(details.CommitCount),
+		Conversation:         string(conversation),
 		ObservedAt:           details.ObservedAt,
 	}); err != nil {
 		return fmt.Errorf("write pr details %s: %w", prURL, err)
@@ -65,7 +70,50 @@ func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequ
 	_ = json.Unmarshal([]byte(row.Labels), &details.Labels)
 	_ = json.Unmarshal([]byte(row.RequestedReviewers), &details.RequestedReviewers)
 	_ = json.Unmarshal([]byte(row.Commits), &details.Commits)
+	_ = json.Unmarshal([]byte(row.Conversation), &details.Conversation)
 	return details, true, nil
+}
+
+// AppendPRConversationComment adds one just-posted conversation comment to a
+// PR's stored details so the view shows it before the next observation, which
+// rewrites the list from the provider. ok is false when the PR has no stored
+// details yet: the comment then waits for that observation instead of
+// fabricating a details row.
+func (s *Store) AppendPRConversationComment(ctx context.Context, prURL string, comment domain.PullRequestConversationComment) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	appended := false
+	err := s.inTx(ctx, "append pr conversation comment", func(q *gen.Queries) error {
+		row, err := q.GetPRDetails(ctx, prURL)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get pr details %s: %w", prURL, err)
+		}
+		var conversation []domain.PullRequestConversationComment
+		_ = json.Unmarshal([]byte(row.Conversation), &conversation)
+		for _, existing := range conversation {
+			if existing.ID == comment.ID {
+				appended = true
+				return nil
+			}
+		}
+		conversation = append(conversation, comment)
+		if extra := len(conversation) - domain.MaxPullRequestConversationComments; extra > 0 {
+			conversation = conversation[extra:]
+		}
+		encoded, err := json.Marshal(conversation)
+		if err != nil {
+			return fmt.Errorf("encode pr conversation %s: %w", prURL, err)
+		}
+		if _, err := q.SetPRDetailsConversation(ctx, gen.SetPRDetailsConversationParams{Conversation: string(encoded), PRURL: prURL}); err != nil {
+			return fmt.Errorf("write pr conversation %s: %w", prURL, err)
+		}
+		appended = true
+		return nil
+	})
+	return appended, err
 }
 
 // nonNilSlice keeps an empty list encoding as [] and not null.

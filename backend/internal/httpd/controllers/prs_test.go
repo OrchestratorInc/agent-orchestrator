@@ -21,6 +21,26 @@ type fakePRService struct {
 	mergeRequest  prsvc.MergeRequest
 	resolveResult prsvc.ResolveResult
 	resolveErr    error
+	stateResult   prsvc.StateResult
+	stateErr      error
+	stateRequest  prsvc.StateRequest
+	stateCalls    int
+	commentResult prsvc.CommentResult
+	commentErr    error
+	commentReq    prsvc.CommentRequest
+	commentCalls  int
+}
+
+func (f *fakePRService) ChangeState(_ context.Context, request prsvc.StateRequest) (prsvc.StateResult, error) {
+	f.stateCalls++
+	f.stateRequest = request
+	return f.stateResult, f.stateErr
+}
+
+func (f *fakePRService) PostComment(_ context.Context, request prsvc.CommentRequest) (prsvc.CommentResult, error) {
+	f.commentCalls++
+	f.commentReq = request
+	return f.commentResult, f.commentErr
 }
 
 func (f *fakePRService) Merge(_ context.Context, request prsvc.MergeRequest) (prsvc.MergeResult, error) {

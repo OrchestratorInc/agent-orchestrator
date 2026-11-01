@@ -4656,6 +4656,57 @@ paths:
       summary: Initialize a selected folder as a Git repository with an initial commit
       tags:
       - projects
+  /api/v1/prs/{id}/comments:
+    post:
+      operationId: postPRComment
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPRCommentRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPRCommentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Post a pull request conversation comment or review-thread reply
+      tags:
+      - prs
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -4710,7 +4761,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Squash-merge a pull request
+      summary: Merge a pull request (squash, merge commit, or rebase)
       tags:
       - prs
   /api/v1/prs/{id}/resolve-comments:
@@ -4750,6 +4801,57 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve review threads on a pull request
+      tags:
+      - prs
+  /api/v1/prs/{id}/state:
+    post:
+      operationId: changePRState
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePRStateRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePRStateResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Close, reopen, mark ready, or convert a pull request to draft
       tags:
       - prs
   /api/v1/push/devices:
@@ -14354,6 +14456,43 @@ components:
       - ok
       - sessionId
       type: object
+    ChangePRStateRequest:
+      properties:
+        action:
+          enum:
+          - close
+          - reopen
+          - ready
+          - draft
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - action
+      type: object
+    ChangePRStateResponse:
+      properties:
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        state:
+          enum:
+          - open
+          - draft
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type: string
+      required:
+      - ok
+      - prNumber
+      - state
+      - stateChangedAt
+      type: object
     ChatAgentPermissionModes:
       properties:
         agent:
@@ -17854,6 +17993,12 @@ components:
         expectedHeadSha:
           minLength: 40
           type: string
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
+          type: string
         prUrl:
           minLength: 1
           type: string
@@ -18160,6 +18305,37 @@ components:
       - title
       - targetSha
       - status
+      type: object
+    PostPRCommentRequest:
+      properties:
+        body:
+          minLength: 1
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+        threadId:
+          type: string
+      required:
+      - prUrl
+      - body
+      type: object
+    PostPRCommentResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        ok:
+          type: boolean
+        url:
+          type: string
+      required:
+      - ok
+      - id
+      - url
+      - createdAt
       type: object
     PrepareTaskResponse:
       properties:
@@ -19436,6 +19612,29 @@ components:
       - name
       - status
       type: object
+    SessionPRComment:
+      properties:
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        isBot:
+          type: boolean
+        url:
+          type: string
+      required:
+      - id
+      - author
+      - isBot
+      - body
+      type: object
     SessionPRCommit:
       properties:
         author:
@@ -19695,6 +19894,10 @@ components:
           items:
             $ref: '#/components/schemas/SessionPRCommit'
           type: array
+        conversation:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
         createdAt:
           format: date-time
           type:
@@ -19758,6 +19961,10 @@ components:
           - string
         targetBranch:
           type: string
+        threads:
+          items:
+            $ref: '#/components/schemas/SessionPRThread'
+          type: array
         title:
           type: string
         updatedAt:
@@ -19787,6 +19994,25 @@ components:
       - requestedReviewers
       - commits
       - commitCount
+      type: object
+    SessionPRThread:
+      properties:
+        comments:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
+        id:
+          type: string
+        line:
+          type: integer
+        path:
+          type: string
+        resolved:
+          type: boolean
+      required:
+      - id
+      - resolved
+      - comments
       type: object
     SessionPRUnresolvedReviewer:
       properties:

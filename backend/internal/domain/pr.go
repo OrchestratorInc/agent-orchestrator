@@ -137,6 +137,24 @@ type PullRequestCommit struct {
 	CommittedAt time.Time `json:"committedAt,omitempty"`
 }
 
+// MaxPullRequestConversationComments caps the stored top-level conversation
+// comments: the view shows the newest ones, not the PR's full history.
+const MaxPullRequestConversationComments = 50
+
+// MaxPullRequestCommentBodyBytes caps one stored conversation comment body.
+const MaxPullRequestCommentBodyBytes = 8 * 1024
+
+// PullRequestConversationComment is one top-level (non-review) comment on a
+// pull request's conversation.
+type PullRequestConversationComment struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	IsBot     bool      `json:"isBot,omitempty"`
+	Body      string    `json:"body"`
+	URL       string    `json:"url,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+}
+
 // PullRequestDetails is the slow-changing, view-only part of a pull request.
 type PullRequestDetails struct {
 	// Description is the PR body as markdown, cut to MaxPullRequestDescriptionBytes.
@@ -148,7 +166,10 @@ type PullRequestDetails struct {
 	// the branch's total, which exceeds len(Commits) when the list was capped.
 	Commits     []PullRequestCommit
 	CommitCount int
-	ObservedAt  time.Time
+	// Conversation is the newest top-level conversation comments, oldest
+	// first, capped at MaxPullRequestConversationComments.
+	Conversation []PullRequestConversationComment
+	ObservedAt   time.Time
 }
 
 // PullRequestCheck is one normalized CI check run for a pull request.

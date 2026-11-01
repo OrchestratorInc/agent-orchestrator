@@ -227,6 +227,40 @@ func (m *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMRev
 	return resolver.ResolveReviewThread(ctx, request)
 }
 
+// ChangePullRequestState delegates to the sub-provider matching
+// request.PR.Repo.Provider when that provider supports PR state mutations.
+func (m *Provider) ChangePullRequestState(ctx context.Context, request ports.SCMPRStateRequest) error {
+	if m == nil {
+		return fmt.Errorf("%w: pull request state provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return err
+	}
+	changer, ok := p.(ports.SCMPRStateChanger)
+	if !ok {
+		return fmt.Errorf("%w: pull request state changes for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return changer.ChangePullRequestState(ctx, request)
+}
+
+// PostComment delegates to the sub-provider matching request.PR.Repo.Provider
+// when that provider supports posting comments.
+func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {
+	if m == nil {
+		return ports.SCMCommentResult{}, fmt.Errorf("%w: comment provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMCommentResult{}, err
+	}
+	commenter, ok := p.(ports.SCMCommenter)
+	if !ok {
+		return ports.SCMCommentResult{}, fmt.Errorf("%w: comments for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return commenter.PostComment(ctx, request)
+}
+
 type credentialChecker interface {
 	SCMCredentialsAvailable(ctx context.Context) (bool, error)
 }

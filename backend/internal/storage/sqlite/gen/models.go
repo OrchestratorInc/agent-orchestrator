@@ -559,6 +559,7 @@ type PRDetail struct {
 	Commits              string
 	CommitCount          int64
 	ObservedAt           time.Time
+	Conversation         string
 }
 
 type PRReview struct {

@@ -877,11 +877,12 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 			}
 			if j < reviewCommentLimitPerThread {
 				comments = append(comments, ports.SCMReviewCommentObservation{
-					ID:     strconv.Itoa(n.ID),
-					Author: n.Author.Username,
-					Body:   n.Body,
-					URL:    n.noteURL(ref),
-					IsBot:  isBot,
+					ID:        strconv.Itoa(n.ID),
+					Author:    n.Author.Username,
+					Body:      n.Body,
+					URL:       n.noteURL(ref),
+					IsBot:     isBot,
+					CreatedAt: safeTime(n.CreatedAt),
 				})
 			}
 		}
@@ -957,7 +958,8 @@ type restNote struct {
 	Author     struct {
 		Username string `json:"username"`
 	} `json:"author"`
-	Position *restNotePosition `json:"position"`
+	Position  *restNotePosition `json:"position"`
+	CreatedAt *time.Time        `json:"created_at"`
 }
 
 type restNotePosition struct {
