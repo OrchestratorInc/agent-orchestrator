@@ -162,6 +162,11 @@ const config: ForgeConfig = {
 		appBundleId: "dev.agent-orchestrator.desktop",
 		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
+		// Match the Windows installer without changing the executable name.
+		win32metadata: {
+			FileDescription: "Orchestrator.inc",
+			ProductName: "Orchestrator.inc",
+		},
 		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",

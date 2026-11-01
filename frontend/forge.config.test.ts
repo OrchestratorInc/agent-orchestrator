@@ -326,6 +326,18 @@ describe("postMake artifact verification", () => {
 	});
 });
 
+describe("Windows app labels", () => {
+	it("matches the installer display name without renaming the executable or bundle", () => {
+		expect(config.packagerConfig?.win32metadata).toEqual({
+			FileDescription: "Orchestrator.inc",
+			ProductName: "Orchestrator.inc",
+		});
+		expect(config.packagerConfig?.executableName).toBe("agent-orchestrator");
+		expect(config.packagerConfig?.name).toBe("Agent Orchestrator");
+		expect(config.packagerConfig?.appBundleId).toBe("dev.agent-orchestrator.desktop");
+	});
+});
+
 describe("packaged authentication callback registration", () => {
 	it("declares ao-app in the macOS bundle and Linux package metadata", () => {
 		expect(config.packagerConfig?.protocols).toEqual([

@@ -38,10 +38,10 @@ export async function renderGuard({ version, architectures }, root = false) {
     .replace('@@ARCHS@@', architectures.join(' ')).replace('@@VERSION@@', version);
 }
 export function distribution(version, architectures) {
-  const message = 'Quit Agent Orchestrator before continuing. If its updater is still running, restart your Mac and run this installer before opening AO. Use the installer for this Mac architecture on the startup volume. Downgrades, unknown versions, unrelated applications and symbolic-link destinations are refused.';
+  const message = 'Quit Orchestrator before continuing. If its updater is still running, restart your Mac and run this installer before opening AO. Use the installer for this Mac architecture on the startup volume. Downgrades, unknown versions, unrelated applications and symbolic-link destinations are refused.';
   return `<?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-<title>Agent Orchestrator Repair</title>
+<title>Orchestrator Repair</title>
 <options customize="never" require-scripts="true" allow-external-scripts="yes" hostArchitectures="${architectures.join(',')}" rootVolumeOnly="true"/>
 <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
 <welcome file="welcome.html" mime-type="text/html"/><conclusion file="conclusion.html" mime-type="text/html"/>
@@ -58,7 +58,7 @@ function checkVolume() {
 }
 ]]></script>
 <choices-outline><line choice="repair"/></choices-outline>
-<choice id="repair" visible="false" title="Agent Orchestrator Repair"><pkg-ref id="${packageID}"/></choice>
+<choice id="repair" visible="false" title="Orchestrator Repair"><pkg-ref id="${packageID}"/></choice>
 <pkg-ref id="${packageID}" version="${xml(version)}" auth="root">repair-component.pkg</pkg-ref>
 <pkg-ref id="${packageID}"><must-close><app id="${bundleID}"/></must-close></pkg-ref>
 </installer-gui-script>\n`;
@@ -89,9 +89,9 @@ export async function buildRepairInstaller(options, execute = run) {
     await execute('/bin/bash', [verifier, path.join(root, appName)]);
     await writeFile(path.join(scripts, 'preinstall'), await renderGuard(metadata, true), { mode: 0o755 });
     await writeFile(path.join(resources, 'guard.sh'), await renderGuard(metadata), { mode: 0o755 });
-    const intro = `<h1>Repair Agent Orchestrator ${xml(version)}</h1><p>Quit Agent Orchestrator. If its updater is still running, restart your Mac and run this installer before opening AO.</p><p>This replaces the entire application at /Applications/Agent Orchestrator.app. Your AO data and caches are preserved. The same version can be repaired; downgrades are refused. Installer will request permission to check the destination and running processes.</p>`;
+    const intro = `<h1>Repair Orchestrator ${xml(version)}</h1><p>Quit Orchestrator. If its updater is still running, restart your Mac and run this installer before opening AO.</p><p>This replaces the entire application at /Applications/Agent Orchestrator.app. Your AO data and caches are preserved. The same version can be repaired; downgrades are refused. Installer will request permission to check the destination and running processes.</p>`;
     await writeFile(path.join(resources, 'welcome.html'), intro);
-    await writeFile(path.join(resources, 'conclusion.html'), '<h1>Repair complete</h1><p>Open Agent Orchestrator from Applications when you are ready.</p>');
+    await writeFile(path.join(resources, 'conclusion.html'), '<h1>Repair complete</h1><p>Open Orchestrator from Applications when you are ready.</p>');
     const component = path.join(work, 'component.plist');
     await writeFile(component, `<?xml version="1.0"?><plist version="1.0"><array><dict><key>RootRelativeBundlePath</key><string>${appName}</string><key>BundleIsRelocatable</key><false/><key>BundleIsVersionChecked</key><false/><key>BundleHasStrictIdentifier</key><true/><key>BundleOverwriteAction</key><string>upgrade</string></dict></array></plist>`);
     const componentPkg = path.join(work, 'repair-component.pkg');
