@@ -979,13 +979,6 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 /**
- * Turn ids whose human prompt is represented in the queue dock instead.
- *
- * Human prompts for queued turns live in the dock until dispatch. Automation
- * messages have no dock row, so their queued feedback stays visible in the
- * timeline. Human turns cancelled from the dock must not reappear after refresh.
- */
-/**
  * A prompt the user owns in the queue dock: their typed message, or their own
  * words AO relayed as automation, such as Browser-panel annotations.
  */
@@ -994,6 +987,13 @@ export function isUserQueuePrompt(item: ConversationItem): item is ConversationM
 		(item.origin === "human" || (item.origin === "automation" && Boolean(item.authoredByUser)));
 }
 
+/**
+ * Turn ids whose user prompt is represented in the queue dock instead.
+ *
+ * The user's prompts for queued turns live in the dock until dispatch. Other
+ * automation messages have no dock row, so their queued feedback stays visible
+ * in the timeline. Turns cancelled from the dock must not reappear after refresh.
+ */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
 	for (const item of snapshot.items) {
@@ -1013,12 +1013,6 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 }
 
 /**
- * Turn ids for messages recorded but not yet sent.
- *
- * The daemon holds a mid-turn message instead of pushing it at a busy agent, so
- * the timeline has to distinguish "waiting to be sent" from "sent".
- */
-/**
  * The daemon reorders the whole queue, but the dock shows only the user's own
  * prompts. Keep every other queued turn in its slot and fill the dock's slots
  * with its new order.
@@ -1035,6 +1029,12 @@ export function fullQueuedTurnOrder(snapshot: ConversationSnapshot, dockOrder: r
 	return queue.map((turnId) => (docked.has(turnId) ? dockOrder[next++]! : turnId));
 }
 
+/**
+ * Turn ids for messages recorded but not yet sent.
+ *
+ * The daemon holds a mid-turn message instead of pushing it at a busy agent, so
+ * the timeline has to distinguish "waiting to be sent" from "sent".
+ */
 export function queuedTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	return new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 }

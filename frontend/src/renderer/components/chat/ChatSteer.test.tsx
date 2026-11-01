@@ -547,7 +547,7 @@ describe("ChatWorkspace steering", () => {
 		);
 
 		const row = screen.getByTestId("queued-message-queued-annotation");
-		expect(within(row).getByText("Download page · 1 annotation")).toBeVisible();
+		expect(within(row).getByText("Rename this file · 1 annotation")).toBeVisible();
 		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
 		// The dock owns the queued annotation, as it does a typed message.
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
@@ -559,6 +559,54 @@ describe("ChatWorkspace steering", () => {
 			name: "Steer this queued message into the running turn",
 		})[0]!);
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-annotation"));
+	});
+
+	it("tells queued annotation batches from the same page apart and steers the one clicked", async () => {
+		const batch = (comment: string) => [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Untitled page",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			`Comment: ${comment}`,
+			"</browser_annotations>",
+		].join("\n");
+		const queued = (turnId: string, sequence: number, comment: string) => ({
+			turnId,
+			message: {
+				kind: "message" as const,
+				id: `${turnId}-message`,
+				turnId,
+				sequence,
+				revision: 0,
+				role: "user" as const,
+				origin: "automation" as const,
+				authoredByUser: true,
+				text: batch(comment),
+				streaming: false,
+				createdAt: `2026-08-11T10:0${sequence - 99}:00Z`,
+			},
+		});
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[queued("queued-older", 100, "Connect mobile from settings"), queued("queued-newer", 101, "Rename the download")]}
+				canSteer
+				canSteerNext
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		const older = screen.getByText("Connect mobile from settings · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		const newer = screen.getByText("Rename the download · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		expect(older).toHaveAttribute("data-testid", "queued-message-queued-older");
+		expect(newer).toHaveAttribute("data-testid", "queued-message-queued-newer");
+
+		await userEvent.click(within(newer).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-newer");
+		await userEvent.click(within(older).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-older");
 	});
 
 	it("deletes a queued browser annotation from the dock", async () => {
