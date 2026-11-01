@@ -25,8 +25,10 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
-	UsageFlush         func(context.Context)
-	Awake              controllers.AwakeService
+	UsageFlush func(context.Context)
+	Awake      controllers.AwakeService
+	// ReadyCheck is called by /readyz to verify durable dependencies.
+	ReadyCheck         func(context.Context) error
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
 	AgentAccounts      controllers.AgentAccountService

@@ -236,6 +236,10 @@ var shippedMigrations = map[int64]string{
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 }
 
+func init() {
+	shippedMigrations[216] = "0216_schema_app_version.sql"
+}
+
 // burnedVersion reports version numbers that must never be (re)used: they
 // shipped in a release and were then deleted, so real installs have them
 // recorded as applied while this repository ships no file with that number. A
