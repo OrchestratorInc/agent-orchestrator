@@ -1,7 +1,9 @@
 package telemetrymeta
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,6 +22,26 @@ func TestErrorKindAndCode(t *testing.T) {
 	kind, code = ErrorKindAndCode(errors.New("boom"))
 	if kind != "internal" || code != "" {
 		t.Fatalf("raw error = (%q, %q), want (internal, empty)", kind, code)
+	}
+}
+
+type diagnosticCodeError struct{}
+
+func (diagnosticCodeError) Error() string { return "private database path" }
+func (diagnosticCodeError) Code() int     { return 1 }
+
+func TestErrorTypeUsesOnlyFixedCauseTypes(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("private: %w", apierr.InternalCause("REPORT_CREATE_FAILED", "Report failed", diagnosticCodeError{})), "sqlite"},
+		{fmt.Errorf("private: %w", context.DeadlineExceeded), "context_deadline"},
+		{errors.New("private project"), "unknown"},
+	} {
+		if got := ErrorType(tc.err); got != tc.want {
+			t.Fatalf("ErrorType(%T) = %q, want %q", tc.err, got, tc.want)
+		}
 	}
 }
 

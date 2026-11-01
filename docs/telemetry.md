@@ -43,9 +43,12 @@ choice controls Electron and daemon Sentry there. Share usage analytics is a
 separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
-Error events can include a standard exception type and allowlisted in-app
-function names and line numbers. Stack paths and raw exception messages are
-removed before sending.
+Error events can include a standard exception type, bounded function names,
+line numbers, and a validated app relative JavaScript asset filename. The
+asset filename preserves the location needed for source map matching. Local
+filesystem paths, full URLs, and raw exception messages are removed before sending.
+Global renderer error handlers bind even if usage analytics is unavailable;
+Electron main still checks Share error events before sending.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
@@ -530,19 +533,30 @@ relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
 goroutine panics; and Electron main capture of process crashes, uncaught
 exceptions, unhandled rejections, and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by registered route and error code,
-while retaining the AO function that recorded the failure as the culprit.
+raw error messages. It groups HTTP faults by registered route and stable error
+code, or by a bounded cause type when no code exists. Ordinary Go errors carry
+no synthetic throw stack. Recovered panics retain the interrupted AO function.
 Agent relaunches group by operation and failure step, with a fixed step tag
 and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
-error provides evidence. It keeps stack function and line information, but
-removes stack paths, request data, project, session, repository and branch
-names, and panic text. Electron events use fixed titles and scrubbed exception
-values with the same installation ID as Sentry `user.id`.
+error provides evidence. Panic events keep function and line information, but
+remove stack paths, request data, project, session, repository and branch
+names, and panic text. Electron exception titles use a standard error type and
+fixed function name; renderer API titles use a fixed error code or category.
+Both have scrubbed exception values and the same
+installation ID as Sentry `user.id`.
 Canceled requests, transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
+Unknown renderer 503 responses remain reportable, while confirmed expected
+409 codes remain breadcrumbs. Renderer exception intake is capped per exception
+name at five per minute and 200 per day. The daemon admits the first five
+reportable errors per fingerprint each minute and at most 200 per day. Its
+in process budget tracks at most 1,024 distinct fingerprints per day, then
+uses one overflow group. It samples
+admitted errors at full rate. Project quota and spike protection still need
+verification before a stable release.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not

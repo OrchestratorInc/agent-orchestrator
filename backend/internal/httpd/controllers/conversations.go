@@ -263,7 +263,7 @@ func (c *ConversationsController) reviewSnapshot(w http.ResponseWriter, r *http.
 	}
 	snapshot, err := svc.SnapshotPageForReview(r.Context(), chi.URLParam(r, "reviewId"), before, limit)
 	if err != nil {
-		writeConversationError(w, r, err)
+		writeConversationError(w, r, err, "CONVERSATION_READ_FAILED")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, conversationSnapshotResponse(snapshot))
@@ -293,7 +293,7 @@ func (c *ConversationsController) reviewSend(w http.ResponseWriter, r *http.Requ
 	}
 	turn, err := svc.SendForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), ports.ChatUserMessage{Text: text, Content: content, ClientMessageID: req.ClientMessageID, Origin: domain.MessageOriginHuman})
 	if err != nil {
-		writeConversationError(w, r, err)
+		writeConversationError(w, r, err, "CHAT_DELIVERY_FAILED")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{TurnID: turn.ID, ProviderTurnID: turn.ProviderTurnID, State: turn.State, Duplicate: turn.ID == ""})
@@ -918,7 +918,7 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		snapshot, err = c.Svc.Snapshot(r.Context(), session)
 	}
 	if err != nil {
-		writeConversationError(w, r, err)
+		writeConversationError(w, r, err, "CONVERSATION_READ_FAILED")
 		return
 	}
 	response := conversationSnapshotResponse(snapshot)
@@ -956,7 +956,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), message)
 	if err != nil {
-		writeConversationError(w, r, err)
+		writeConversationError(w, r, err, "CHAT_DELIVERY_FAILED")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, sendConversationMessageResponse(turn))
@@ -1180,7 +1180,7 @@ func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into an
 
 // writeConversationError maps the Chat service's typed failures onto stable
 // codes, so a client can tell a permanent answer from a retryable one.
-func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
+func writeConversationError(w http.ResponseWriter, r *http.Request, err error, fallbackCode ...string) {
 	switch {
 	case errors.Is(err, chatsvc.ErrFileReferenceInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_FILE_REFERENCE_INVALID", err.Error(), nil)
@@ -1341,7 +1341,15 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"the stored provider conversation could not be resumed", nil)
 
 	default:
-		envelope.WriteError(w, r, err)
+		if len(fallbackCode) > 0 {
+			message := "Chat operation failed"
+			if fallbackCode[0] == "CHAT_DELIVERY_FAILED" {
+				message = "Chat delivery failed"
+			}
+			envelope.WriteErrorWithCode(w, r, err, fallbackCode[0], message)
+		} else {
+			envelope.WriteError(w, r, err)
+		}
 	}
 }
 

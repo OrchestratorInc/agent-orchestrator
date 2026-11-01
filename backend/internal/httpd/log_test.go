@@ -82,6 +82,9 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["error_kind"]; got != "internal" {
 				t.Fatalf("payload.error_kind = %#v, want internal", got)
 			}
+			if got := payload["error_type"]; got != "unknown" {
+				t.Fatalf("payload.error_type = %#v, want fixed unknown", got)
+			}
 			if got := payload["fingerprint"]; got == "" {
 				t.Fatalf("payload.fingerprint = %#v, want non-empty", got)
 			}
