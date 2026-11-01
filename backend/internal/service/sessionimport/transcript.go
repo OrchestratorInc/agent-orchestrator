@@ -347,6 +347,9 @@ type claudeNode struct {
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
+	if harness == domain.HarnessOMP {
+		return readOMPTranscript(ctx, root, paths...)
+	}
 	if harness == domain.HarnessPi {
 		return readPiTranscript(ctx, root, paths...)
 	}
