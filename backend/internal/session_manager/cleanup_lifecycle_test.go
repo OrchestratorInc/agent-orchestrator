@@ -235,6 +235,7 @@ func TestCleanupRefusalForClassifiesTeardownErrors(t *testing.T) {
 		{wrap(ports.ErrWorkspaceRepoUnavailable), domain.CleanupSkipMissingRepo, "project repository is missing; remove worktree manually"},
 		{wrap(ErrProjectNotResolvable), domain.CleanupSkipProjectUnresolvable, "project is archived or unregistered — remove worktree manually"},
 		{wrap(ports.ErrWorkspaceDeferred), domain.CleanupSkipWorktreeBusy, "worktree is in use; will retry on a later run"},
+		{wrap(ports.ErrWorkspaceUnsafePath), domain.CleanupSkipOutsideManagedRoot, "worktree is outside AO's managed folder; remove it manually"},
 		{wrap(&os.PathError{Op: "unlinkat", Path: "/ws/mer-1/f", Err: fs.ErrPermission}), domain.CleanupSkipPermissionDenied,
 			"permission denied removing the worktree; fix its file permissions, then retry cleanup"},
 		{&cleanupStepError{step: 2, cause: errors.New("boom")}, domain.CleanupSkipScriptFailed, "cleanup step 2 failed: command could not run"},

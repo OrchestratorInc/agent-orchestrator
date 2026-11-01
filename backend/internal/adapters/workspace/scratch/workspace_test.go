@@ -133,6 +133,23 @@ func TestWorkspaceRejectsUnsafeSessionIDs(t *testing.T) {
 	}
 }
 
+// A path outside the managed root is never removed, and the refusal names that
+// so cleanup can report it instead of a generic teardown failure.
+func TestWorkspaceDestroyRefusesPathOutsideManagedRoot(t *testing.T) {
+	ws, err := scratch.New(scratch.Options{ManagedRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	outside := t.TempDir()
+	err = ws.Destroy(context.Background(), ports.WorkspaceInfo{Path: outside, ProjectID: "scratch", SessionID: "scratch-1"})
+	if !errors.Is(err, ports.ErrWorkspaceUnsafePath) {
+		t.Fatalf("Destroy outside root err = %v, want ports.ErrWorkspaceUnsafePath", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside directory was touched: %v", err)
+	}
+}
+
 // TestWorkspaceDestroyReclaimReportsAlreadyAbsentDirectory covers the scratch
 // half of the cleanup accounting. os.Remove is deliberately tolerated on a
 // missing path, so a scratch directory that was already gone tears down without

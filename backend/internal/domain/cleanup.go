@@ -76,6 +76,9 @@ const (
 	// CleanupSkipAttachmentsFailed: the session's attachments could not be
 	// preserved first.
 	CleanupSkipAttachmentsFailed CleanupSkipCode = "attachment_preservation_failed"
+	// CleanupSkipOutsideManagedRoot: the workspace path is not inside AO's
+	// managed folder, so AO never removes it.
+	CleanupSkipOutsideManagedRoot CleanupSkipCode = "outside_managed_root"
 	// CleanupSkipTeardownFailed: any other failure; the daemon log has the cause.
 	CleanupSkipTeardownFailed CleanupSkipCode = "teardown_failed"
 )
@@ -94,7 +97,8 @@ func (c CleanupSkipCode) Retryable() bool {
 var CleanupSkipCodes = []CleanupSkipCode{
 	CleanupSkipDirty, CleanupSkipLockedWorktree, CleanupSkipMissingRepo, CleanupSkipProjectUnresolvable,
 	CleanupSkipPermissionDenied, CleanupSkipScriptFailed, CleanupSkipWorktreeBusy, CleanupSkipInUse,
-	CleanupSkipShellTerminalOpen, CleanupSkipAlreadyRunning, CleanupSkipAttachmentsFailed, CleanupSkipTeardownFailed,
+	CleanupSkipShellTerminalOpen, CleanupSkipAlreadyRunning, CleanupSkipAttachmentsFailed, CleanupSkipOutsideManagedRoot,
+	CleanupSkipTeardownFailed,
 }
 
 // ArchivedSession is an archived session whose workspace is released, with

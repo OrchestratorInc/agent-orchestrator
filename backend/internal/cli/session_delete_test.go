@@ -28,6 +28,9 @@ func deleteCommandServer(t *testing.T) (*httptest.Server, func() []string) {
 			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-old", "demo", "worker", "terminated", true)+`}`)
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/sessions/demo-old":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-old"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-gone":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"not_found","code":"SESSION_NOT_FOUND","message":"Unknown session"}`)
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/sessions/demo-dirty":
 			w.WriteHeader(http.StatusConflict)
 			_, _ = io.WriteString(w, `{"error":"conflict","code":"WORKSPACE_NOT_RELEASED","message":"The session's worktree has not been cleaned up yet. Run `+"`ao session cleanup`"+` first."}`)
@@ -79,8 +82,31 @@ func TestSessionDelete_DeclinedConfirmationDeletesNothing(t *testing.T) {
 	if !strings.Contains(out, "aborted") {
 		t.Fatalf("unexpected output:\n%s", out)
 	}
-	if got := requests(); len(got) != 0 {
-		t.Fatalf("requests = %#v, want none", got)
+	if got := requests(); !reflect.DeepEqual(got, []string{"GET /api/v1/sessions/demo-old"}) {
+		t.Fatalf("requests = %#v, want only the lookup", got)
+	}
+}
+
+func TestSessionDelete_UnknownIDFailsBeforePrompt(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := deleteCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader("yes\n"),
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "delete", "demo-gone")
+	if err == nil {
+		t.Fatal("delete of an unknown session must fail")
+	}
+	if !strings.Contains(err.Error()+errOut, "SESSION_NOT_FOUND") {
+		t.Fatalf("error does not name the missing session: %v\nstderr=%s", err, errOut)
+	}
+	if strings.Contains(out, "Type yes to confirm") {
+		t.Fatalf("prompted for an unknown session:\n%s", out)
+	}
+	if got := requests(); !reflect.DeepEqual(got, []string{"GET /api/v1/sessions/demo-gone"}) {
+		t.Fatalf("requests = %#v, want only the lookup", got)
 	}
 }
 

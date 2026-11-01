@@ -731,7 +731,9 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 }
 
 func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
-	if opts.project != "" {
+	// Look the session up before asking, so an unknown id fails without a
+	// prompt; with --yes the delete itself reports it.
+	if opts.project != "" || !opts.yes {
 		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
 			return err
 		}

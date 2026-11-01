@@ -5084,7 +5084,7 @@ export interface components {
         };
         CleanupSkippedSession: {
             /** @enum {string} */
-            code: "dirty" | "locked_worktree" | "missing_repo" | "archived_project_unresolvable" | "permission_error" | "cleanup_script_failed" | "worktree_busy" | "in_use_by_live_session" | "shell_terminal_open" | "cleanup_running" | "attachment_preservation_failed" | "teardown_failed";
+            code: "dirty" | "locked_worktree" | "missing_repo" | "archived_project_unresolvable" | "permission_error" | "cleanup_script_failed" | "worktree_busy" | "in_use_by_live_session" | "shell_terminal_open" | "cleanup_running" | "attachment_preservation_failed" | "outside_managed_root" | "teardown_failed";
             reason: string;
             sessionId: string;
         };

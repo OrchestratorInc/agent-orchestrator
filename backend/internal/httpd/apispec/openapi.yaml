@@ -14863,6 +14863,7 @@ components:
           - shell_terminal_open
           - cleanup_running
           - attachment_preservation_failed
+          - outside_managed_root
           - teardown_failed
           type: string
         reason:

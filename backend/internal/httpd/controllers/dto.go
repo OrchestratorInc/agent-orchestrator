@@ -1275,7 +1275,7 @@ type DeleteSessionResponse struct {
 // domain.CleanupSkipCodes.
 type CleanupSkippedSession struct {
 	SessionID domain.SessionID `json:"sessionId"`
-	Code      string           `json:"code" enum:"dirty,locked_worktree,missing_repo,archived_project_unresolvable,permission_error,cleanup_script_failed,worktree_busy,in_use_by_live_session,shell_terminal_open,cleanup_running,attachment_preservation_failed,teardown_failed"`
+	Code      string           `json:"code" enum:"dirty,locked_worktree,missing_repo,archived_project_unresolvable,permission_error,cleanup_script_failed,worktree_busy,in_use_by_live_session,shell_terminal_open,cleanup_running,attachment_preservation_failed,outside_managed_root,teardown_failed"`
 	Reason    string           `json:"reason"`
 }
 

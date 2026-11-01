@@ -5704,6 +5704,8 @@ func cleanupRefusalFor(err error) cleanupRefusal {
 		return cleanupRefusal{domain.CleanupSkipMissingRepo, "project repository is missing; remove worktree manually"}
 	case errors.Is(err, ErrProjectNotResolvable):
 		return cleanupRefusal{domain.CleanupSkipProjectUnresolvable, "project is archived or unregistered — remove worktree manually"}
+	case errors.Is(err, ports.ErrWorkspaceUnsafePath):
+		return cleanupRefusal{domain.CleanupSkipOutsideManagedRoot, "worktree is outside AO's managed folder; remove it manually"}
 	case errors.Is(err, fs.ErrPermission):
 		return cleanupRefusal{domain.CleanupSkipPermissionDenied, "permission denied removing the worktree; fix its file permissions, then retry cleanup"}
 	}

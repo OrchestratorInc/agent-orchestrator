@@ -25,9 +25,10 @@ const (
 )
 
 // ErrUnsafePath is returned when a resolved worktree path escapes the managed
-// root (path traversal guard).
+// root (path traversal guard). It is an adapter-local alias of
+// ports.ErrWorkspaceUnsafePath, so cleanup can report it by name.
 var (
-	ErrUnsafePath = errors.New("gitworktree: unsafe workspace path")
+	ErrUnsafePath = ports.ErrWorkspaceUnsafePath
 )
 
 // teardownLocks serializes the repo-touching git worktree teardown sequences
@@ -2474,7 +2475,11 @@ func movePathAside(path, suffix string) (string, error) {
 
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
-	cmd.Env = append(untranslatedGitEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd.Env = os.Environ()
+	if readsGitMessages(args) {
+		cmd.Env = untranslatedGitEnv(cmd.Env)
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, commandError{args: append([]string{binary}, args...), output: string(out), err: err}
@@ -2482,32 +2487,49 @@ func runCommand(ctx context.Context, binary string, args ...string) ([]byte, err
 	return out, nil
 }
 
-// untranslatedGitEnv keeps git's own messages in English. This adapter matches
-// git's error text, and `git worktree add` writes its add-time lock reason
-// ("initializing") through git's translations. Only the message language
-// changes: LANG=C with LC_ALL, LC_MESSAGES and LANGUAGE dropped selects it on
-// both glibc and macOS, and the user's character type is kept, so hooks git
-// runs still see their UTF-8 locale.
+// readsGitMessages reports a git command whose messages this adapter reads as
+// text, so it runs untranslated: `git worktree` (remove's and add's errors,
+// and the "initializing" lock reason add writes) and `git status` (the "not a
+// git repository" probe). Every other command, and any hook it runs, keeps the
+// user's locale.
+func readsGitMessages(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-C" || args[i] == "-c" {
+			i++
+			continue
+		}
+		return args[i] == "worktree" || args[i] == "status"
+	}
+	return false
+}
+
+// untranslatedGitEnv switches only the message language to English, so
+// sorting, dates and character type stay the user's, also for the
+// post-checkout hook `git worktree add` runs. With LC_MESSAGES=C gettext
+// ignores LANGUAGE. LC_ALL would override it, so its value moves to LANG,
+// where it still sets every other category; the LC_* values it overrode go
+// with it.
 func untranslatedGitEnv(environ []string) []string {
-	out := make([]string, 0, len(environ)+2)
-	locale := map[string]string{}
+	all := ""
 	for _, kv := range environ {
-		key, val, _ := strings.Cut(kv, "=")
-		switch key {
-		case "LC_ALL", "LC_CTYPE", "LANG":
-			locale[key] = val
-		case "LC_MESSAGES", "LANGUAGE":
+		if val, ok := strings.CutPrefix(kv, "LC_ALL="); ok {
+			all = val
+		}
+	}
+	out := make([]string, 0, len(environ)+2)
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		switch {
+		case key == "LC_ALL" || key == "LC_MESSAGES":
+		case all != "" && (key == "LANG" || strings.HasPrefix(key, "LC_")):
 		default:
 			out = append(out, kv)
 		}
 	}
-	out = append(out, "LANG=C")
-	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
-		if ctype := locale[key]; ctype != "" {
-			return append(out, "LC_CTYPE="+ctype)
-		}
+	if all != "" {
+		out = append(out, "LANG="+all)
 	}
-	return out
+	return append(out, "LC_MESSAGES=C")
 }
 
 type commandError struct {

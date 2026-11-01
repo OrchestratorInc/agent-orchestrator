@@ -501,6 +501,10 @@ var (
 	// leftover of one. The adapter never moves or deletes such a path; the
 	// user has to clear it before the workspace can be created.
 	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
+	// ErrWorkspaceUnsafePath reports a workspace path that is not a clean
+	// absolute path inside the adapter's managed root. Adapters never create,
+	// move or remove such a path, so teardown leaves it for the user.
+	ErrWorkspaceUnsafePath = errors.New("workspace: unsafe workspace path")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session

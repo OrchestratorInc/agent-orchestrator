@@ -119,24 +119,24 @@ func TestUntranslatedGitEnv(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "LC_ALL keeps its character type",
-			in:   []string{"HOME=/h", "LC_ALL=de_DE.UTF-8", "LANG=fr_FR.UTF-8", "LC_MESSAGES=de_DE.UTF-8", "LANGUAGE=de"},
-			want: []string{"HOME=/h", "LANG=C", "LC_CTYPE=de_DE.UTF-8"},
+			name: "LC_ALL moves to LANG",
+			in:   []string{"HOME=/h", "LC_ALL=de_DE.UTF-8", "LANG=fr_FR.UTF-8", "LC_COLLATE=C", "LC_MESSAGES=de_DE.UTF-8", "LANGUAGE=de"},
+			want: []string{"HOME=/h", "LANGUAGE=de", "LANG=de_DE.UTF-8", "LC_MESSAGES=C"},
 		},
 		{
-			name: "LC_CTYPE wins over LANG",
-			in:   []string{"LANG=de_DE.UTF-8", "LC_CTYPE=UTF-8"},
-			want: []string{"LANG=C", "LC_CTYPE=UTF-8"},
+			name: "other categories are kept",
+			in:   []string{"LANG=de_DE.UTF-8", "LC_COLLATE=fr_FR.UTF-8", "LC_MESSAGES=de_DE.UTF-8"},
+			want: []string{"LANG=de_DE.UTF-8", "LC_COLLATE=fr_FR.UTF-8", "LC_MESSAGES=C"},
 		},
 		{
-			name: "LANG alone",
-			in:   []string{"LANG=de_DE.UTF-8"},
-			want: []string{"LANG=C", "LC_CTYPE=de_DE.UTF-8"},
+			name: "empty LC_ALL is unset",
+			in:   []string{"LC_ALL=", "LANG=de_DE.UTF-8"},
+			want: []string{"LANG=de_DE.UTF-8", "LC_MESSAGES=C"},
 		},
 		{
 			name: "no locale",
 			in:   []string{"PATH=/bin"},
-			want: []string{"PATH=/bin", "LANG=C"},
+			want: []string{"PATH=/bin", "LC_MESSAGES=C"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,6 +144,28 @@ func TestUntranslatedGitEnv(t *testing.T) {
 				t.Fatalf("env = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Only the commands whose messages are matched run untranslated; fetch and
+// update-ref, which run reference-transaction hooks, keep the user's locale.
+func TestReadsGitMessages(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{worktreeRemoveArgs("/r", "/w"), true},
+		{worktreeAddBranchArgs("/r", "/w", "b", false), true},
+		{worktreeListPorcelainArgs("/r"), true},
+		{statusPorcelainArgs("/w"), true},
+		{fetchBranchArgs("/r", "origin", "b"), false},
+		{updateRefArgs("/w", "refs/ao/x", "abc"), false},
+		{revParseHeadArgs("/w"), false},
+		{[]string{"-c", "core.quotepath=off", "-C", "/w", "status"}, true},
+	} {
+		if got := readsGitMessages(tc.args); got != tc.want {
+			t.Errorf("readsGitMessages(%q) = %v, want %v", tc.args, got, tc.want)
+		}
 	}
 }
 
