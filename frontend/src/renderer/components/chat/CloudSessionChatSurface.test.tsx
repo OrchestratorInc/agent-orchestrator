@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -1465,6 +1465,17 @@ describe("CloudSessionChatSurface", () => {
 		const merged = appendCloudEvents(existing, [event(500), event(501)]);
 		expect(merged.map((item) => item.sequence)).toEqual([1, 500, 501]);
 		expect(merged.at(-1)?.sequence).toBe(501);
+	});
+
+	it("opens a file the agent linked by its sandbox path as the workspace file", async () => {
+		const search = vi.fn(async () => ["NOTES.md", "docs/NOTES.md", "src/app/page.tsx"]);
+		await expect(cloudWorkspaceFilePath("NOTES.md", search)).resolves.toBe("NOTES.md");
+		await expect(cloudWorkspaceFilePath("/workspace/repository/src/app/page.tsx", search)).resolves.toBe("src/app/page.tsx");
+		expect(search).not.toHaveBeenCalled();
+		// A Coder workspace's own directory: the longest workspace path the link ends with.
+		await expect(cloudWorkspaceFilePath("/home/coder/project/docs/NOTES.md", search)).resolves.toBe("docs/NOTES.md");
+		expect(search).toHaveBeenLastCalledWith("NOTES.md");
+		await expect(cloudWorkspaceFilePath("/etc/hosts", search)).resolves.toBeUndefined();
 	});
 
 	it("merges streamed and polled events in order without dropping either side's", () => {

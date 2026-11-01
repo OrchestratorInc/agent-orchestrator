@@ -912,6 +912,28 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	};
 }
 
+// Where a Freestyle (and Docker) sandbox checks the repository out.
+const SANDBOX_CHECKOUT_ROOT = "/workspace/repository/";
+
+/**
+ * The workspace-relative path a file link in a Cloud agent's reply names. An
+ * agent links files by their path in its sandbox, which the worker does not
+ * serve: a path in the usual checkout loses that root, and any other absolute
+ * one (a Coder workspace's own directory) is matched to a workspace file it
+ * ends with, via the worker's search. Undefined when none matches.
+ */
+export async function cloudWorkspaceFilePath(
+	path: string,
+	search: (query: string) => Promise<string[]>,
+): Promise<string | undefined> {
+	if (!path.startsWith("/")) return path;
+	if (path.startsWith(SANDBOX_CHECKOUT_ROOT)) return path.slice(SANDBOX_CHECKOUT_ROOT.length) || undefined;
+	const name = path.split("/").filter(Boolean).at(-1);
+	if (!name) return undefined;
+	const candidates = (await search(name).catch(() => [])).filter((candidate) => path.endsWith(`/${candidate}`));
+	return candidates.sort((a, b) => b.length - a.length)[0];
+}
+
 function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
 }
@@ -1457,6 +1479,18 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
+	// A file link in the transcript opens the file it names in the workspace, as
+	// the same file from the Files tab does (one tab for both).
+	const openFileFromChat = useCallback((path: string) => {
+		if (!onOpenFile) return;
+		if (!path.startsWith("/") || !cloud) {
+			onOpenFile(path);
+			return;
+		}
+		void cloudWorkspaceFilePath(path, async (query) =>
+			(await client.searchWorkspaceReview(cloud.orgId, session.id, { query, limit: 100 })).results.map((result) => result.path),
+		).then((relative) => onOpenFile(relative ?? path));
+	}, [client, cloud, onOpenFile, session.id]);
 	// "@" offers the workspace's files as a local chat does. A Cloud workspace is
 	// searched rather than listed, so what follows "@" is asked of the worker
 	// (shortly after typing stops), and an empty query lists its top level.
@@ -1575,7 +1609,7 @@ export function CloudSessionChatSurface({
 			onComposerInput={lease.noteDraft}
 			settingsLocked={settingsLocked}
 			onOpenFiles={onOpenFiles}
-			onOpenFile={onOpenFile}
+			onOpenFile={openFileFromChat}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
 				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
