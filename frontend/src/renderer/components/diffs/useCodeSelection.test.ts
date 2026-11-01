@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { codeReference, readCodeSelection } from "./useCodeSelection";
+import { act, fireEvent, renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { codeReference, readCodeSelection, useCodeSelection } from "./useCodeSelection";
 
 type Row = [line: number, type: string, text: string, alt?: number];
 
@@ -38,6 +39,7 @@ function select(host: HTMLElement, from: Element, to: Element, endOffset: number
 	Object.assign(host.shadowRoot!, {
 		getSelection: () => ({
 			isCollapsed: true,
+			removeAllRanges: vi.fn(),
 			rangeCount: 1,
 			anchorNode: from.firstChild,
 			anchorOffset: 0,
@@ -110,5 +112,74 @@ describe("codeReference", () => {
 		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 3);
 		expect(codeReference("README.md", readCodeSelection(host)!, false)).toMatchObject({ side: "file", line: 1, endLine: 2 });
+	});
+});
+
+describe("code selection capture scheduling", () => {
+	it("exposes an explicit toolbar dismissal without handling other surfaces' Escape", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 0), 3);
+		const native = (host.shadowRoot as ShadowRoot & { getSelection: () => Selection }).getSelection();
+		Object.assign(host.shadowRoot!, { getSelection: () => native });
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(next => { callback = next; return 1; });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const hook = renderHook(() => useCodeSelection({ current: container }, vi.fn()));
+		act(() => callback?.(0));
+		const input = document.createElement("input"); document.body.append(input);
+		expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(true);
+		expect(hook.result.current.source.get()).not.toBeNull();
+		act(() => hook.result.current.dismiss());
+		expect(native.removeAllRanges).toHaveBeenCalledOnce();
+		expect(hook.result.current.source.get()).toBeNull();
+		hook.unmount(); container.remove(); input.remove(); frame.mockRestore();
+	});
+	it("does not read rows or notify subscribers during sustained scrolling", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((next) => { callback = next; return 1; });
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const containerRef = { current: container };
+		const deliver = vi.fn();
+		const hook = renderHook(() => useCodeSelection(containerRef, deliver));
+		act(() => { const next = callback; callback = undefined; next?.(0); });
+		const captured = hook.result.current.source.get();
+		expect(captured?.rows).toHaveLength(2);
+		const listener = vi.fn();
+		const unsubscribe = hook.result.current.source.subscribe(listener);
+		const readRows = vi.spyOn(host.shadowRoot!, "querySelectorAll");
+		frame.mockClear();
+		for (let i = 0; i < 100; i++) fireEvent.scroll(document);
+		expect(readRows).not.toHaveBeenCalled();
+		expect(frame).not.toHaveBeenCalled();
+		expect(listener).not.toHaveBeenCalled();
+		expect(hook.result.current.source.get()).toBe(captured);
+		const originalSelection = (host.shadowRoot as ShadowRoot & { getSelection: () => unknown }).getSelection;
+		Object.assign(host.shadowRoot!, { getSelection: () => null });
+		expect(hook.result.current.ask()).toBe(false);
+		expect(deliver).not.toHaveBeenCalled();
+		Object.assign(host.shadowRoot!, { getSelection: originalSelection });
+		act(() => {
+			expect(hook.result.current.ask()).toBe(true);
+			expect(hook.result.current.ask()).toBe(false);
+		});
+		expect(deliver).toHaveBeenCalledExactlyOnceWith(captured);
+		unsubscribe(); hook.unmount(); container.remove(); frame.mockRestore();
+	});
+	it("refuses a detached capture before its observer callback runs", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 0), 3);
+		let callback: FrameRequestCallback | undefined;
+		const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((next) => { callback = next; return 1; });
+		const ask = vi.fn();
+		const container = document.createElement("div"); container.append(host); document.body.append(container);
+		const containerRef = { current: container };
+		const hook = renderHook(() => useCodeSelection(containerRef, ask));
+		act(() => callback?.(0));
+		host.remove();
+		expect(hook.result.current.ask()).toBe(false);
+		expect(ask).not.toHaveBeenCalled();
+		hook.unmount(); container.remove(); frame.mockRestore();
 	});
 });
