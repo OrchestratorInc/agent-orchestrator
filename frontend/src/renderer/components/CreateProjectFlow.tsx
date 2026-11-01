@@ -2150,7 +2150,7 @@ function ImportSourcePicker({
 		onCreateStandaloneAgent?.();
 	};
 	// Both steps use the same tile so they read as one family.
-	const tile = (key: string, icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
+	const tile = (key: string, icon: ReactNode, label: string, hint: string | null, onClick?: () => void) => (
 		<button
 			key={key}
 			type="button"
@@ -2162,28 +2162,25 @@ function ImportSourcePicker({
 			<span className="flex shrink-0 text-muted-foreground group-hover:text-foreground">{icon}</span>
 			<span className="min-w-0">
 				<span className="block text-[14px] font-medium text-foreground">{label}</span>
-				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
+				{hint ? <span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span> : null}
 			</span>
 		</button>
 	);
-	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
+	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string }> = [
 		{
 			source: "clone",
 			icon: <GitFork className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.cloneFromGit"),
-			description: t("createProject.cloneFromGitDesc"),
 		},
 		{
 			source: "local",
 			icon: <FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.openLocal"),
-			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",
 			icon: <Folders className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.addWorkspace"),
-			description: t("createProject.workspaceDesc"),
 		},
 	];
 	const title = hostLabel ? t("remote.addProjectOn", { label: hostLabel, defaultValue: "New project on {{label}}" }) : t("createProject.addCodeTitle");
@@ -2245,9 +2242,10 @@ function ImportSourcePicker({
 						</Select>
 					</div>}
 					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
-						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
+						{/* The source names say it all, so these tiles carry no detail line. */}
+						{localSources.map(({ source, icon, label }) => tile(source, icon, label, null, () => onSelect(source)))}
 						{onCreateStandaloneAgent
-							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), null, createStandaloneAgent)
 							: null}
 					</div>
 				</motion.div>
