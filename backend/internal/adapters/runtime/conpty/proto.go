@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 2
+	conPTYHostProtocolVersion         = 3
 	conPTYStyledOutputProtocolVersion = 2
 )
 
@@ -27,6 +27,7 @@ const (
 	MsgKillReq            byte = 0x08 // client -> host: empty
 	MsgGetStyledOutputReq byte = 0x09 // client -> host: JSON {lines}
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
+	MsgAttach             byte = 0x0b // client -> host: JSON {cols, rows, replay} — viewer hello
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -48,6 +49,17 @@ type StatusPayload struct {
 // GetOutputReq is the JSON body for MsgGetOutputReq.
 type GetOutputReq struct {
 	Lines int `json:"lines"`
+}
+
+// AttachPayload is the JSON body for MsgAttach, the viewer hello sent as a
+// connection's first frame. The host classifies the connection from that frame:
+// the hello declares a viewer (and whether it wants the scrollback replay);
+// anything else is a query that must not pay for one. Hosts older than the
+// hello ignore the unknown message and still replay on connect.
+type AttachPayload struct {
+	Cols   int  `json:"cols"`
+	Rows   int  `json:"rows"`
+	Replay bool `json:"replay"`
 }
 
 // EncodeMessage encodes a single frame into the binary protocol format.
