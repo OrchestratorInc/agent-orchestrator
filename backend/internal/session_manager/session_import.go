@@ -181,7 +181,7 @@ func pinnedImportLaunchPath(workspace, resumeCwd string) (string, error) {
 	if !pathWithin(workspace, resumeCwd) {
 		return "", importNotice("this chat's folder is no longer inside its AO workspace")
 	}
-	if err := os.MkdirAll(resumeCwd, 0o755); err != nil {
+	if err := os.MkdirAll(resumeCwd, 0o700); err != nil {
 		return "", err
 	}
 	return resumeCwd, nil

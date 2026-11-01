@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -996,6 +997,8 @@ func TestPinnedImportLaunchPathKeepsTheRelocatedFolder(t *testing.T) {
 	}
 	if info, err := os.Stat(pinned); err != nil || !info.IsDir() {
 		t.Fatalf("pinned folder was not recreated: %v", err)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("pinned folder is accessible to other users: mode %v", info.Mode().Perm())
 	}
 	if _, err := pinnedImportLaunchPath(workspace, filepath.Join(filepath.Dir(workspace), "elsewhere")); err == nil {
 		t.Fatal("a folder outside the workspace was accepted")
