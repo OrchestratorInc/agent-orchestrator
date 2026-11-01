@@ -379,6 +379,10 @@ type blockedAuthTerminal struct {
 	release chan struct{}
 }
 
+func (*blockedAuthTerminal) CommandTerminalHandles(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (*blockedAuthTerminal) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
 	return false, nil
 }
@@ -557,6 +561,7 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 // survivingAuthTerminals models shellterm after a daemon restart in the same
 // app launch: earlier command terminals are still listed and may still run.
 type survivingAuthTerminals struct {
+	owners    map[string]string
 	terminals []shellterm.ShellTerminal
 	alive     map[string]bool
 	probeErr  error
@@ -573,8 +578,17 @@ func (s *survivingAuthTerminals) IsShellTerminalChildAlive(_ context.Context, ha
 	return s.alive[handleID], s.probeErr
 }
 
-func (s *survivingAuthTerminals) ListCommandTerminalsForCurrentAppRun(context.Context) ([]shellterm.ShellTerminal, error) {
-	return s.terminals, s.listErr
+func (s *survivingAuthTerminals) CommandTerminalHandles(_ context.Context, owner string) ([]string, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	var handles []string
+	for _, terminal := range s.terminals {
+		if s.owners[terminal.HandleID] == owner || s.owners[terminal.HandleID] == "" {
+			handles = append(handles, terminal.HandleID)
+		}
+	}
+	return handles, nil
 }
 
 func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
@@ -585,9 +599,10 @@ func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
 			{HandleID: "claude", Title: "Log in to Claude Code"},
 			{HandleID: "codex", Title: "Log in to Codex"},
 		},
-		alive: map[string]bool{"github": true, "claude": true, "codex": true},
+		alive:  map[string]bool{"github": true, "claude": true, "codex": true},
+		owners: map[string]string{"github": "github-auth", "claude": "agentauth:claude-code", "codex": "agentauth:codex"},
 	}
-	// A fresh Service, as after a daemon restart: no terminalLogins yet.
+	// A fresh Service discovers ownership from the surviving terminal records.
 	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, terminals, dataDir)
 	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd {
 		t.Fatal("admitted a background login while the terminal login still runs")
@@ -616,7 +631,7 @@ func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
 	}
 }
 
-func TestLoginRecognizesRenamedTerminalByHarnessWorkspace(t *testing.T) {
+func TestLoginExcludesRenamedLegacyTerminal(t *testing.T) {
 	dataDir := t.TempDir()
 	terminals := &survivingAuthTerminals{
 		terminals: []shellterm.ShellTerminal{{HandleID: "claude-renamed", Title: "renamed tab", WorkingDir: filepath.Join(dataDir, "auth-workspace", "claude-code")}},

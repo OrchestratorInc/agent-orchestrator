@@ -102,6 +102,7 @@ type Plan struct {
 type TerminalOpener interface {
 	OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error)
 	IsShellTerminalChildAlive(context.Context, string) (bool, error)
+	CommandTerminalHandles(context.Context, string) ([]string, error)
 }
 
 // StartResult is the display-safe result of starting a native authentication
@@ -127,7 +128,6 @@ type Service struct {
 	mu             sync.Mutex
 	operations     map[string]*loginOperation
 	terminalStarts map[string]bool
-	terminalLogins map[string]string
 	closed         bool
 	commandContext func(context.Context, string, ...string) *exec.Cmd
 	loginTimeout   time.Duration
@@ -141,7 +141,7 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), terminalLogins: make(map[string]string), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.
@@ -195,69 +195,6 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	return s.start(ctx, plan)
 }
 
-// survivingTerminalLister finds trusted command terminals of this app launch.
-// A daemon restart keeps them running, but a new Service starts with an empty
-// terminalLogins, so reserveLogin reconciles them before admitting a login.
-type survivingTerminalLister interface {
-	ListCommandTerminalsForCurrentAppRun(context.Context) ([]shellterm.ShellTerminal, error)
-}
-
-var _ survivingTerminalLister = (*shellterm.Service)(nil)
-
-// ownsAuthTerminal recognizes this harness's native login or logout terminal by
-// the fixed title start gives it, or by the stable per-harness workspace of
-// plans that prepare one.
-func (s *Service) ownsAuthTerminal(agentID string, terminal shellterm.ShellTerminal) bool {
-	plan, ok := planByAgentID[agentID]
-	if !ok {
-		return false
-	}
-	title := strings.TrimSpace(terminal.Title)
-	if title != "" && (title == plan.title || title == strings.Replace(plan.title, "Log in to", "Log out of", 1)) {
-		return true
-	}
-	if strings.TrimSpace(s.dataDir) == "" || strings.TrimSpace(terminal.WorkingDir) == "" {
-		return false
-	}
-	return filepath.Clean(terminal.WorkingDir) == filepath.Join(s.dataDir, authWorkspaceRootName, agentID)
-}
-
-// checkSurvivingTerminalLogins excludes a login while a terminal login for the
-// same harness, opened before a daemon restart in this app launch, still runs.
-// Like the tracked-terminal probe, an inconclusive result never admits a login.
-func (s *Service) checkSurvivingTerminalLogins(ctx context.Context, agentID string) error {
-	lister, ok := s.terminals.(survivingTerminalLister)
-	if !ok {
-		return nil
-	}
-	terminals, err := lister.ListCommandTerminalsForCurrentAppRun(ctx)
-	if err != nil {
-		return apierr.Unavailable("AGENT_AUTH_TERMINAL_UNKNOWN", "The terminal login could not be checked. Close it and retry.")
-	}
-	s.mu.Lock()
-	tracked := s.terminalLogins[agentID]
-	s.mu.Unlock()
-	for _, terminal := range terminals {
-		if terminal.HandleID == "" || terminal.HandleID == tracked || !s.ownsAuthTerminal(agentID, terminal) {
-			continue
-		}
-		alive, err := s.terminals.IsShellTerminalChildAlive(ctx, terminal.HandleID)
-		if err != nil {
-			return apierr.Unavailable("AGENT_AUTH_TERMINAL_UNKNOWN", "The terminal login could not be checked. Close it and retry.")
-		}
-		if alive {
-			// Adopt it so later checks use the tracked-terminal probe.
-			s.mu.Lock()
-			if s.terminalLogins[agentID] == "" {
-				s.terminalLogins[agentID] = terminal.HandleID
-			}
-			s.mu.Unlock()
-			return apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Close the terminal login before starting another login.", nil)
-		}
-	}
-	return nil
-}
-
 // reserveLogin excludes both startup and live terminal commands. Runtime probes
 // run outside the registry lock; an inconclusive probe never releases exclusion.
 func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), error) {
@@ -284,14 +221,23 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 	// Reserve this harness's startup, but never hold the output/polling lock
 	// across binary resolution, workspace preparation, or terminal startup I/O.
 	s.terminalStarts[agentID] = true
-	handleID := s.terminalLogins[agentID]
 	s.mu.Unlock()
 	release := func() {
 		s.mu.Lock()
 		delete(s.terminalStarts, agentID)
 		s.mu.Unlock()
 	}
-	if handleID != "" {
+	if s.terminals == nil {
+		return release, nil
+	}
+	// Shellterm persists command ownership across same-app daemon restarts.
+	// Reconcile every retained handle, not just commands started by this service.
+	handles, err := s.terminals.CommandTerminalHandles(ctx, "agentauth:"+agentID)
+	if err != nil {
+		release()
+		return nil, apierr.Unavailable("AGENT_AUTH_TERMINAL_UNKNOWN", "The terminal logins could not be checked. Close them and retry.")
+	}
+	for _, handleID := range handles {
 		alive, err := s.terminals.IsShellTerminalChildAlive(ctx, handleID)
 		if err != nil {
 			release()
@@ -301,13 +247,6 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 			release()
 			return nil, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Close the terminal login before starting another login.", nil)
 		}
-		s.mu.Lock()
-		delete(s.terminalLogins, agentID)
-		s.mu.Unlock()
-	}
-	if err := s.checkSurvivingTerminalLogins(ctx, agentID); err != nil {
-		release()
-		return nil, err
 	}
 	return release, nil
 }
@@ -340,6 +279,7 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		argv = append([]string{self, plan.launcher, "--executable", plan.command[0]}, plan.launcherArgs...)
 	}
 	input := shellterm.OpenCommandTerminalInput{
+		Owner:                          "agentauth:" + plan.AgentID,
 		Argv:                           argv,
 		Title:                          plan.title,
 		InitialInput:                   plan.initialInput,
@@ -369,9 +309,6 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	if err != nil {
 		return StartResult{}, err
 	}
-	s.mu.Lock()
-	s.terminalLogins[plan.AgentID] = terminal.HandleID
-	s.mu.Unlock()
 	return StartResult{
 		AgentID:       plan.AgentID,
 		Action:        plan.Action,

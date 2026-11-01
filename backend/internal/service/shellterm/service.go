@@ -103,6 +103,24 @@ func (s *Service) IsShellTerminalChildAlive(ctx context.Context, handleID string
 	return s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: strings.TrimSpace(handleID)})
 }
 
+// CommandTerminalHandles returns this app launch's commands for a trusted
+// workflow. Commands predating ownership metadata are included conservatively:
+// their editable title cannot establish which credential store they use.
+// Child liveness must still be checked; retained scrollback is not a live command.
+func (s *Service) CommandTerminalHandles(ctx context.Context, owner string) ([]string, error) {
+	records, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list command terminals: %w", err)
+	}
+	var handles []string
+	for _, rec := range records {
+		if rec.Transient && (rec.CommandOwner == owner || rec.CommandOwner == "") {
+			handles = append(handles, rec.HandleID)
+		}
+	}
+	return handles, nil
+}
+
 // sessionGate is the admission/teardown barrier for one session's scoped
 // shell terminals. It is held for the ENTIRE span from BeginSessionTeardown
 // through the release function it returns on success — deliberately crossing
@@ -391,6 +409,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		workingDir:               workingDir,
 		title:                    in.Title,
 		transient:                true,
+		commandOwner:             in.Owner,
 		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
 	})
 	if err != nil {
@@ -633,6 +652,7 @@ type openTerminalConfig struct {
 	workingDir               string
 	title                    string
 	transient                bool
+	commandOwner             string
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
 	startOnAttach            bool
@@ -687,6 +707,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		Title:                     cfg.title,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
+		CommandOwner:              cfg.commandOwner,
 		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}

@@ -55,6 +55,7 @@ func TestStartOpensFXNativeLogin(t *testing.T) {
 		t.Fatalf("Start(fx): %v", err)
 	}
 	want := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:fx",
 		Argv:  []string{"/test/bin/fx", "login"},
 		Title: "Log in to fx",
 	}
@@ -74,6 +75,7 @@ func TestStartOpensDevinNativeLogin(t *testing.T) {
 		t.Fatalf("Start(devin): %v", err)
 	}
 	want := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:devin",
 		Argv:  []string{"/test/bin/devin", "auth", "login"},
 		Title: "Log in to Devin",
 	}
@@ -97,6 +99,7 @@ func TestStartOpensResolvedPlanAndReturnsSafeTerminal(t *testing.T) {
 		t.Fatalf("OpenCommandTerminal calls = %d, want 1", opener.calls)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:droid",
 		Argv:  []string{"/test/bin/droid"},
 		Title: "Log in to Droid",
 	}
@@ -126,6 +129,7 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 		t.Fatalf("Start(pi): %v", err)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner:        "agentauth:pi",
 		Argv:         []string{"/test/bin/pi"},
 		Title:        "Log in to Pi",
 		InitialInput: "/login",
@@ -154,6 +158,7 @@ func TestStartGeminiInjectsAuthWhenEditorIsReady(t *testing.T) {
 		t.Fatalf("Start(gemini): %v", err)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:gemini",
 		Argv:  []string{"/test/bin/gemini"},
 		Title: "Set up Gemini CLI",
 		InitialInputReadyStates: []shellterm.InitialInputReadyState{
@@ -207,6 +212,7 @@ func TestStartOMPOpensNativeProviderSetupWithoutInjectingInput(t *testing.T) {
 		t.Fatalf("Start(omp): %v", err)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:omp",
 		Argv:  []string{"/test/bin/omp", "setup"},
 		Title: "Log in to OMP",
 	}
@@ -278,6 +284,7 @@ func TestStartOpensKimchiPTYAndAutomaticallyRunsLogin(t *testing.T) {
 		{Text: "/ for commands"},
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner:                   "agentauth:kimchi",
 		Argv:                    []string{"/test/bin/kimchi"},
 		Title:                   "Log in to Kimchi",
 		InitialInput:            "/login",
@@ -464,6 +471,7 @@ type recordingTerminalOpener struct {
 	terminal shellterm.ShellTerminal
 	alive    bool
 	probeErr error
+	listErr  error
 }
 
 type managedExecutableResolver struct {
@@ -499,6 +507,16 @@ func (o *recordingTerminalOpener) OpenCommandTerminal(_ context.Context, in shel
 
 func (o *recordingTerminalOpener) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
 	return o.alive, o.probeErr
+}
+
+func (o *recordingTerminalOpener) CommandTerminalHandles(_ context.Context, owner string) ([]string, error) {
+	if o.listErr != nil {
+		return nil, o.listErr
+	}
+	if o.calls > 0 && o.input.Owner == owner && o.terminal.HandleID != "" {
+		return []string{o.terminal.HandleID}, nil
+	}
+	return nil, nil
 }
 
 func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
