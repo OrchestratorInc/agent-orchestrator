@@ -514,6 +514,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
 		mutationFn: resumeAgentOnOpen,
+		onError: (error) => {
+			showGlobalToast(t("inspector.resumeAgent"), error instanceof Error ? error.message : t("inspector.resumeFailed"), "error");
+		},
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),

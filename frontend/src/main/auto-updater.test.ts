@@ -1270,8 +1270,25 @@ describe("startAutoUpdates", () => {
     expect(dialog.showMessageBox).not.toHaveBeenCalled();
     expect(statusMessages()).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(delay);
+    await vi.advanceTimersByTimeAsync(delay * 2);
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps automatic retry delays and resets after a successful check", async () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockRejectedValue(new Error("offline"));
+    await module.startAutoUpdates(stateDir);
+    expect(latestInterval(intervals).delay).toBe(30 * 60 * 1000);
+    for (const expected of [60, 120, 240, 240]) {
+      await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+      expect(latestInterval(intervals).delay).toBe(expected * 60 * 1000);
+    }
+    autoUpdater.checkForUpdates.mockResolvedValue(undefined);
+    await vi.advanceTimersByTimeAsync(latestInterval(intervals).delay);
+    expect(latestInterval(intervals).delay).toBe(15 * 60 * 1000);
   });
 
   it("logs updater error events during automatic checks without broadcasting renderer errors", async () => {
@@ -2281,7 +2298,8 @@ describe("startAutoUpdates", () => {
     // Fire only the automatic-check tick, not the unrelated 30-minute retirement
     // poll, by selecting the timer armed at the automatic-check interval.
     const readsBeforeRetry = readUpdateSettings.mock.calls.length;
-    intervalWithDelay(setIntervalSpy, 15 * 60 * 1000)();
+    expect(latestInterval(setIntervalSpy).delay).toBe(30 * 60 * 1000);
+    latestInterval(setIntervalSpy).callback();
     await flushMicrotasks();
 
     expect(readUpdateSettings.mock.calls.length).toBe(readsBeforeRetry + 1);

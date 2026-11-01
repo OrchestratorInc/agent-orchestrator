@@ -1155,6 +1155,7 @@ describe("SessionView", () => {
 		const view = render(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		expect(useUiStore.getState().globalToast).toMatchObject({ title: "Resume agent", body: "provider unavailable" });
 		expect(chatSurfaceTransitionRenders[0]).toBe(true);
 		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);

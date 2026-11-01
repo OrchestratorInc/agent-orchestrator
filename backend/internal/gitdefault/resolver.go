@@ -38,6 +38,9 @@ const (
 	SourceCachedRemoteHead Source = "cached_remote_head"
 	// SourceAOInitialized means AO recorded the branch when it initialized the repository.
 	SourceAOInitialized Source = "ao_initialized"
+	// SourceCurrentBranch means a committed checked out branch supplied the base
+	// after authoritative default metadata was unavailable.
+	SourceCurrentBranch Source = "current_branch"
 )
 
 // Resolution is an authoritative branch plus the ref that can safely seed a
@@ -97,6 +100,12 @@ func (r *Resolver) Inspect(ctx context.Context, repo string) (Resolution, error)
 		return Resolution{}, err
 	}
 	if len(remotes) == 0 {
+		if initialized, err := r.resolveAOInitialized(ctx, repo); err == nil {
+			return initialized, nil
+		}
+		if current, ok := r.currentBranchFallback(ctx, repo, ""); ok {
+			return current, nil
+		}
 		return r.resolveAOInitialized(ctx, repo)
 	}
 	if cached, ok := r.cachedRemoteHead(ctx, repo, remote); ok {
@@ -142,6 +151,12 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 		return Resolution{}, err
 	}
 	if len(remotes) == 0 {
+		if initialized, err := r.resolveAOInitialized(ctx, repo); err == nil {
+			return initialized, nil
+		}
+		if current, ok := r.currentBranchFallback(ctx, repo, ""); ok {
+			return current, nil
+		}
 		return r.resolveAOInitialized(ctx, repo)
 	}
 	if remoteCtx == nil {
@@ -184,6 +199,9 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 		if initialized, ok := r.initializedBeforeFirstPush(ctx, repo, remote); ok {
 			return initialized, nil
 		}
+		if current, ok := r.currentBranchFallback(ctx, repo, remote); ok {
+			return current, nil
+		}
 	}
 	if liveErr == nil {
 		liveErr = errors.New("remote did not advertise a symbolic HEAD")
@@ -191,6 +209,39 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 	return Resolution{}, unresolvedf(
 		"could not resolve remote %q HEAD for repository %q (%v)", remote, repo, liveErr,
 	)
+}
+
+// currentBranchFallback never chooses a detached or unborn HEAD. With a remote,
+// the current branch must track its same named branch on the selected remote.
+// No Git metadata is changed by this fallback.
+func (r *Resolver) currentBranchFallback(ctx context.Context, repo, remote string) (Resolution, bool) {
+	if out, err := r.run(ctx, r.binary, "-C", repo, "config", "--local", "--get", ManagedDefaultConfigKey); err == nil && strings.TrimSpace(string(out)) != "" {
+		return Resolution{}, false
+	}
+	out, err := r.run(ctx, r.binary, "-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return Resolution{}, false
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" || r.validateBranch(ctx, repo, branch) != nil {
+		return Resolution{}, false
+	}
+	localRef := "refs/heads/" + branch
+	if !r.refExists(ctx, repo, localRef) {
+		return Resolution{}, false
+	}
+	if remote == "" {
+		return Resolution{Branch: branch, Ref: localRef, Source: SourceCurrentBranch}, true
+	}
+	upstream, err := r.run(ctx, r.binary, "-C", repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil || strings.TrimSpace(string(upstream)) != remote+"/"+branch {
+		return Resolution{}, false
+	}
+	remoteRef := remoteBranchRef(remote, branch)
+	if !r.refExists(ctx, repo, remoteRef) {
+		return Resolution{}, false
+	}
+	return Resolution{Branch: branch, Remote: remote, Ref: remoteRef, Source: SourceCurrentBranch}, true
 }
 
 // An empty clone can have an AO-created initial commit before its first push.

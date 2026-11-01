@@ -152,6 +152,40 @@ export function workspaceErrorCode(error: unknown): string | undefined {
 	return error instanceof WorkspaceRequestError ? error.code : undefined;
 }
 
+export function isMissingWorkspaceError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "PROJECT_FOLDER_MISSING" && error.status === 404;
+}
+
+export function isStaleWorkspaceSnapshotError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "WORKSPACE_SNAPSHOT_STALE" && error.status === 409;
+}
+
+const missingWorkspaces = new Map<string, WorkspaceRequestError>();
+const workspaceRecoveryEpochs = new Map<string, number>();
+const missingWorkspaceKey = (sessionId: string, hostId?: string) => sessionUiKey(sessionId, hostId);
+
+export function workspaceRecoveryEpoch(sessionId: string, hostId?: string): number {
+	return workspaceRecoveryEpochs.get(missingWorkspaceKey(sessionId, hostId)) ?? 0;
+}
+
+export function clearMissingWorkspace(sessionId: string, hostId?: string): void {
+	const key = missingWorkspaceKey(sessionId, hostId);
+	missingWorkspaces.delete(key);
+	workspaceRecoveryEpochs.set(key, workspaceRecoveryEpoch(sessionId, hostId) + 1);
+}
+
+export function knownMissingWorkspace(sessionId: string, hostId?: string): WorkspaceRequestError | undefined {
+	return missingWorkspaces.get(missingWorkspaceKey(sessionId, hostId));
+}
+
+export function recordWorkspaceResult(sessionId: string, hostId: string | undefined, error: unknown, response: Response | undefined, fallback: string, epoch = workspaceRecoveryEpoch(sessionId, hostId)): WorkspaceRequestError {
+	const typed = workspaceRequestError(error, response, fallback);
+	if (isMissingWorkspaceError(typed) && epoch === workspaceRecoveryEpoch(sessionId, hostId)) {
+		missingWorkspaces.set(missingWorkspaceKey(sessionId, hostId), typed);
+	}
+	return typed;
+}
+
 /**
  * Retries a failed read up to three times, except a 4xx answer: it comes back
  * the same every time, and the recovery keyed on its code (a moved tip, a gone
@@ -168,10 +202,13 @@ const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 const MAX_ARTIFACT_TEXT_BYTES = 256 * 1024;
 
 async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
+	const { data, error, response: httpResponse } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, httpResponse, errorMessage, epoch);
 	const response = (data ? { ...data, commits: [] } : {
 		sessionId,
 		files: [],
@@ -189,13 +226,16 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 }
 
 async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH): Promise<WorkspaceHistoryResponse> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const query = branch.kind === "branch" ? { branch: branch.name }
 		: branch.kind === "pull_request" ? { prNumber: branch.number, sourceUrl: branch.url || undefined }
 		: undefined;
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
 		params: query ? { path: { sessionId }, query } : { path: { sessionId } },
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return {
 		...data,
@@ -204,10 +244,13 @@ async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: str
 }
 
 async function fetchSessionWorkspaceBranches(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceBranches> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/branches", {
 		params: { path: { sessionId } },
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return { ...data, branches: data.branches ?? [] };
 }
@@ -738,6 +781,8 @@ export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessag
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
 		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
+		retry: retryWorkspaceRead,
+		refetchOnWindowFocus: false,
 	};
 }
 

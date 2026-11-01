@@ -325,7 +325,10 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
 		</div>
 	) : fallbackFailed && task.error ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
+		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
+			<span>{task.error}</span>
+			{task.errorAction ? <Button size="sm" variant="ghost" onClick={task.errorAction.onClick}>{task.errorAction.label}</Button> : null}
+		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
 	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (

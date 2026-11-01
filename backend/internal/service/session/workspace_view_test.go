@@ -139,28 +139,28 @@ func TestBranchViewOnDefaultBranchListsLatestFirstParentCommits(t *testing.T) {
 	}
 }
 
-func TestBranchViewWithoutDefaultBranchStartsAtTheRootCommit(t *testing.T) {
+func TestBranchViewUsesCurrentBranchWhenNoDefaultIsConfigured(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "branch", "-M", "main")
 	runGit(t, repo, "switch", "-c", "feature")
 	tip := commitWorkspaceFile(t, repo, "feature.txt", "feature\n", "add feature")
 	runGit(t, repo, "switch", "main")
-	// No project and no remote: nothing names a default branch to measure from.
+	// With no project or remote, the committed current branch is the base.
+	base := gitHead(t, repo)
 	svc := workspaceReviewService(t, repo)
 
 	history, err := svc.GetWorkspaceHistory(context.Background(), "ao-1", WorkspaceView{Branch: "feature"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if history.View.RangeMode != WorkspaceRangeRecent || history.View.TipSHA != tip || history.View.BaseSHA != "" {
-		t.Fatalf("view = %+v, want recent mode at the feature tip", history.View)
+	if history.View.RangeMode != WorkspaceRangeSinceBase || history.View.TipSHA != tip || history.View.BaseSHA != base {
+		t.Fatalf("view = %+v, want range from current branch", history.View)
 	}
-	if len(history.Commits) != 2 || history.CommitsTruncated {
-		t.Fatalf("commits = %+v, want the whole two-commit history", history.Commits)
+	if len(history.Commits) != 1 || history.CommitsTruncated {
+		t.Fatalf("commits = %+v, want the feature commit", history.Commits)
 	}
-	// The range starts from the empty tree, so the root commit's files count.
-	if history.RangeSummary == nil || *history.RangeSummary != (WorkspaceSummary{Files: 4, Additions: 4}) {
-		t.Fatalf("range summary = %+v, want every file from the root commit on", history.RangeSummary)
+	if history.RangeSummary == nil || *history.RangeSummary != (WorkspaceSummary{Files: 1, Additions: 1}) {
+		t.Fatalf("range summary = %+v, want the feature file", history.RangeSummary)
 	}
 }
 

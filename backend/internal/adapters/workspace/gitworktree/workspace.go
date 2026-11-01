@@ -2019,6 +2019,7 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 		return worktreeRefs{}, err
 	} else if exists {
 		seedRef := resolution.Ref
+		baseRef := resolution.Ref
 		if requestedExists {
 			slog.Debug("gitworktree: resolved requested remote branch",
 				"repo", repo,
@@ -2026,8 +2027,11 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 				"branch", branch,
 			)
 			seedRef = requestedRef
+			if resolution.Source == gitdefault.SourceCurrentBranch {
+				baseRef = requestedRef
+			}
 		}
-		return worktreeRefs{seedRef: seedRef, baseRef: resolution.Ref}, nil
+		return worktreeRefs{seedRef: seedRef, baseRef: baseRef}, nil
 	}
 	return worktreeRefs{}, fmt.Errorf("%w: resolved default branch %q from %q, but ref %q is unavailable", errNoBaseRef, resolution.Branch, resolution.Source, resolution.Ref)
 }

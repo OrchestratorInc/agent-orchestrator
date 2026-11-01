@@ -123,6 +123,19 @@ func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskUsesConfirmedBranchWithoutRenaming(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix login redirect", Branch: "ao/new-login-fix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.spawnedCfg.Branch != "ao/new-login-fix" || cmd.spawnedCfg.NameFromPrompt {
+		t.Fatalf("spawn config branch = %q, name from prompt = %v", cmd.spawnedCfg.Branch, cmd.spawnedCfg.NameFromPrompt)
+	}
+}
+
 func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	st := newFakeStore()
 	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}

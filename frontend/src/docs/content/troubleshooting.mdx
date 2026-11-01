@@ -34,6 +34,9 @@ ao doctor --json
 	<Accordion title="The UI looks stale after a daemon restart">
 		Leave the app open briefly so its SSE connection can reconnect and invalidate current queries. If it does not recover, restart the desktop app. The event stream supports replay, but a full app restart is the safest user-level recovery.
 	</Accordion>
+	<Accordion title="An automatic update check failed">
+		Orchestrator retries failed automatic checks with increasing delays, up to four hours. A manual check remains available from the update menu. A failed check does not turn off update checks.
+	</Accordion>
 </Accordions>
 
 ## Agents and sessions
@@ -57,6 +60,12 @@ ao doctor --json
 	<Accordion title="A session will not restore">
 		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the harness remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
 	</Accordion>
+	<Accordion title="A session says its workspace no longer exists">
+		The Files pane stops refreshing that session after the daemon confirms its project folder is missing. Restore the folder, then use Retry in Files. Other sessions and hosts continue refreshing normally.
+	</Accordion>
+	<Accordion title="A new task cannot start">
+		Choose an installed, signed-in agent in Harness Settings. If a saved model or effort is no longer supported, review the selected agent default and press Start again. If a branch is checked out elsewhere, enter a new branch name and press Start to confirm it. If the base branch cannot be resolved, set it in Project Settings.
+	</Accordion>
 </Accordions>
 
 ## GitHub and pull requests
@@ -77,6 +86,8 @@ ao doctor --json
 </Accordions>
 
 ## Browser preview
+
+A failed external link preview shows the plain link. Orchestrator waits briefly before trying that same URL again; previews for other URLs still load.
 
 <Accordions>
 	<Accordion title="The Browser tab is blank">

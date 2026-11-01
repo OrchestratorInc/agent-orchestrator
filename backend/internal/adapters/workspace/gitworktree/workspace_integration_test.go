@@ -401,9 +401,9 @@ func TestWorkspaceIntegrationRestoreExistingBranchDoesNotResolveDefault(t *testi
 	// only needs to reattach it and must not attempt automatic default
 	// resolution again.
 	runGit(t, git, repo, "remote", "remove", "origin")
-	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "probe", Branch: "feature/new"})
-	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
-		t.Fatalf("Create without remote metadata error = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
+	probe, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "probe", Branch: "feature/new"})
+	if err != nil || probe.BaseRef != "refs/heads/main" {
+		t.Fatalf("Create from committed current branch = %#v, %v", probe, err)
 	}
 
 	cfg.Path = created.Path
@@ -834,15 +834,9 @@ func TestWorkspaceIntegrationAutoRejectsUnmarkedRemotelessRepo(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 	ctx := context.Background()
-	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/proj-1"})
-	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
-		t.Fatalf("Create error = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
-	}
-	if !strings.Contains(err.Error(), "remote set-head") || !strings.Contains(err.Error(), repo) {
-		t.Fatalf("Create error = %v, want repository-specific remote HEAD remediation", err)
-	}
-	if out, err := exec.Command(git, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/ao/proj-1").CombinedOutput(); err == nil {
-		t.Fatalf("unresolved auto selection leaked a session branch: %s", out)
+	created, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/proj-1"})
+	if err != nil || created.BaseRef != "refs/heads/feature/temporary" {
+		t.Fatalf("Create from committed current branch = %#v, %v", created, err)
 	}
 }
 

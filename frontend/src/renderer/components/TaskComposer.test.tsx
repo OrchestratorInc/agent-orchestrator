@@ -112,6 +112,7 @@ vi.mock("../hooks/useCloudOffering", () => ({
 import { TaskComposer, useTaskLaunch } from "./TaskComposer";
 import { CloudCpError } from "../lib/cloud-cp";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
+import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { cacheAgentModels, clearCachedAgentModels } from "../lib/agent-model-cache";
@@ -168,6 +169,7 @@ async function waitForTaskReady() {
 
 beforeEach(() => {
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
+	h.agentCatalog = { agents: AGENT_OPTIONS.map((id) => agentReadiness(id, agentLabel(id))) };
 	// An older control plane, unless a test says otherwise.
 	h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
 	h.cloudListProviderConnections.mockRejectedValue(new CloudCpError("Signed out", { status: 401 }));
@@ -216,6 +218,67 @@ afterEach(() => {
 });
 
 describe("TaskComposer", () => {
+	it("requires a named branch and a second Start before retrying a checked out branch", async () => {
+		let delegates = 0;
+		h.post.mockImplementation(async (path: string) => {
+			if (path !== "/api/v1/orchestrators/delegate") return { data: {} };
+			delegates += 1;
+			return delegates === 1
+				? { error: { code: "BRANCH_CHECKED_OUT_ELSEWHERE", message: "Branch is in use" } }
+				: { data: { workerId: "new-task" } };
+		});
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Fix branch conflict" } });
+		fireEvent.click(startTask());
+		const choose = await screen.findByRole("button", { name: "Choose new branch" });
+		expect(choose).toBeDisabled();
+		fireEvent.change(screen.getByRole("textbox", { name: "New branch name" }), { target: { value: "ao/new-task" } });
+		fireEvent.click(choose);
+		expect(await screen.findByText("Branch ao/new-task selected. Press Start task to confirm.")).toBeInTheDocument();
+		expect(delegates).toBe(1);
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-task"));
+		const requests = h.post.mock.calls.filter(([path]) => path === "/api/v1/orchestrators/delegate");
+		expect(requests[1][1].body.branch).toBe("ao/new-task");
+		expect(requests[1][1].body.clientRequestId).not.toBe(requests[0][1].body.clientRequestId);
+	});
+
+	it("chooses a ready installed agent when the project has no agent", async () => {
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" }),
+			agentReadiness("codex", "Codex"),
+		] };
+		h.post.mockResolvedValue({ data: { workerId: "ready-worker" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ agent: "codex" }),
+		})));
+	});
+
+	it("explains why a project without a ready agent cannot start", async () => {
+		h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
+		expect(startTask()).toBeDisabled();
+		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
+	});
+
+	it("offers the agent default after a stale saved model is rejected without retrying the spawn", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "available", label: "Available", isDefault: true }], allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "codex", config: { worker: { agentConfig: { model: "retired" } } } } } });
+		h.post.mockResolvedValueOnce({ error: { code: "UNSUPPORTED_MODEL", message: "unsupported" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("retired"));
+		fireEvent.click(startTask());
+		expect(await screen.findByText("The saved model is unavailable. The agent default is selected. Review it and start again.")).toBeInTheDocument();
+		expect(h.post).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Available");
+	});
 	it("does not launch a remote project task without a ready agent", async () => {
 		h.agentCatalog = { agents: [] };
 		h.remoteGet.mockImplementation(async (path: string) => path === "/api/v1/settings"
@@ -965,10 +1028,17 @@ describe("TaskComposer", () => {
 
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
-		expect(screen.queryByText("Codex is not ready")).not.toBeInTheDocument();
+		const expectedError = errorCode === "AGENT_BINARY_NOT_FOUND"
+			? "This agent is not installed. Open Agent Harnesses settings to install it, then try again."
+			: "Codex is not ready";
+		expect(screen.queryByText(expectedError)).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
-		expect(await screen.findByText("Codex is not ready")).toBeInTheDocument();
+		expect(await screen.findByText(expectedError)).toBeInTheDocument();
+		if (errorCode === "AGENT_BINARY_NOT_FOUND") {
+			fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
+		}
 		expect(queryClient.getQueryData(agentReadinessQueryKey)).toEqual({ agents: [completed] });
 	});
 
@@ -2117,8 +2187,9 @@ describe("TaskComposer", () => {
 
 		const picker = await screen.findByRole("button", { name: "Model" });
 		expect(screen.queryByRole("textbox", { name: "Model" })).not.toBeInTheDocument();
+		await waitFor(() => expect(localModelReads().length).toBeGreaterThan(0));
 		await userEvent.click(picker);
-		expect(screen.getByText("Configure the model in opencode, then refresh.")).toBeInTheDocument();
+		expect(await screen.findByText("Configure the model in OpenCode, then refresh.")).toBeInTheDocument();
 	});
 
 	it("uses the project worker model as the new task model default", async () => {
