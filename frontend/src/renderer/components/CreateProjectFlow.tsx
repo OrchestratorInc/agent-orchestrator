@@ -2156,19 +2156,19 @@ function ImportSourcePicker({
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
 		{
 			source: "clone",
-			icon: <GitFork className="size-5" aria-hidden="true" strokeWidth={1.8} />,
+			icon: <GitFork className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.cloneFromGit"),
 			description: t("createProject.cloneFromGitDesc"),
 		},
 		{
 			source: "local",
-			icon: <FolderClosed className="size-5" aria-hidden="true" strokeWidth={1.8} />,
+			icon: <FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.openLocal"),
 			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",
-			icon: <Folders className="size-5" aria-hidden="true" strokeWidth={1.8} />,
+			icon: <Folders className="size-6" aria-hidden="true" strokeWidth={1.6} />,
 			label: t("createProject.addWorkspace"),
 			description: t("createProject.workspaceDesc"),
 		},
@@ -2209,8 +2209,8 @@ function ImportSourcePicker({
 			<AnimatePresence mode="popLayout" initial={false}>
 			{!gateKnown ? null : askPlacement ? (
 				<motion.div key="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
-					{tile("local", <Laptop className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("createProject.placementLocal"), t("createProject.placementLocalDesc"), () => onLocalChosenChange(true))}
-					{tile("cloud", <Cloud className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
+					{tile("local", <Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementLocal"), t("createProject.placementLocalDesc"), () => onLocalChosenChange(true))}
+					{tile("cloud", <Cloud className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
 				<motion.div key="sources" {...fade}>
@@ -2227,7 +2227,7 @@ function ImportSourcePicker({
 					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
 						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
 						{onCreateStandaloneAgent
-							? tile("standalone", <MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
 							: null}
 					</div>
 				</motion.div>
