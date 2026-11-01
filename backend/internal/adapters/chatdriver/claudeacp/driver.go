@@ -162,9 +162,13 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 				Env:     env,
 			}, nil
 		},
+		ServedModel:    claudeServedModel,
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
+		ValidateModel: func(ctx context.Context, _ acpdriver.LaunchConfig, model string) error {
+			return claudeValidateModel(ctx, plugin, model)
+		},
 	}, log)}
 }
 
@@ -218,7 +222,7 @@ func claudeAuthRejected(notifyDaemon func()) func() {
 	}
 }
 
-func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
+func claudePromptResponseFailure(response acpsdk.PromptResponse, model string) error {
 	if response.StopReason != acpsdk.StopReasonEndTurn {
 		return nil
 	}
@@ -231,6 +235,9 @@ func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
 		return nil
 	}
 	details, _ := failure["details"].(string)
+	if tooOld := claudeVersionTooOldFailure(title, details, model); tooOld != nil {
+		return tooOld
+	}
 	var cause error
 	if actions, ok := failure["actions"].([]any); ok {
 		for _, action := range actions {
@@ -241,6 +248,68 @@ func claudePromptResponseFailure(response acpsdk.PromptResponse) error {
 		}
 	}
 	return ports.NewChatProviderFailure(strings.TrimSpace(title), strings.TrimSpace(details), cause)
+}
+
+// claudeVersionTooOldFailure recognizes the API rejecting a model the installed
+// Claude Code predates. It records the reported minimum for the model so the
+// catalog marks it unavailable from now on, and replaces the raw
+// "API Error: 400 {json}" with the remedy.
+func claudeVersionTooOldFailure(title, details, model string) error {
+	text := title + "\n" + details
+	parsed, ok := claudecode.ParseVersionTooOld(text)
+	if !ok {
+		if !claudecode.IsVersionTooOld(text) {
+			return nil
+		}
+		return ports.NewChatProviderFailure(
+			"The installed Claude Code is too old for this model. Run `claude update`, then try again.",
+			"", ports.ErrAgentVersionTooOld)
+	}
+	model = strings.TrimSpace(model)
+	if model != "" && !isClaudeNativeModelAlias(model) {
+		// Aliases resolve differently per CLI version, so only a concrete model
+		// ID carries a stable requirement.
+		_ = claudecode.DefaultModelVersionRequirements().Record(model, parsed.Required)
+	}
+	subject := "this model"
+	if model != "" {
+		subject = model
+	}
+	return ports.NewChatProviderFailure(
+		fmt.Sprintf("Claude Code %s does not support %s; version %s or newer is required.",
+			parsed.Installed, subject, parsed.Required),
+		"Run `claude update` (or update the Claude desktop app), then try again.",
+		ports.ErrAgentVersionTooOld)
+}
+
+// claudeValidateModel refuses a model the installed Claude Code is known to be
+// too old for, so a running chat cannot switch to what its next turn would
+// fail on. An alias always passes: each CLI resolves it to a model it supports.
+func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string) error {
+	if isClaudeNativeModelAlias(model) {
+		return nil
+	}
+	// A binary AO cannot resolve has no known version, so the model may be tried.
+	if binary, err := plugin.ResolveBinary(ctx); err == nil {
+		if reason := claudecode.UnsupportedModelReason(ctx, binary, model); reason != "" {
+			return fmt.Errorf("%w: model %q: %s", ports.ErrAgentVersionTooOld, model, reason)
+		}
+	}
+	return nil
+}
+
+// claudeServedModel reports what a Claude alias actually resolved to. The ACP
+// adapter does not surface the answering model, but Claude's own transcript
+// records it on every assistant message.
+func claudeServedModel(ctx context.Context, cfg acpdriver.LaunchConfig, sessionID, selected string) (string, string) {
+	if !isClaudeNativeModelAlias(selected) {
+		return "", ""
+	}
+	served, err := claudecode.LastAssistantModel(ctx, cfg.Env, sessionID)
+	if err != nil || served == "" {
+		return "", ""
+	}
+	return served, fmt.Sprintf("The installed Claude Code resolves %q to %s", selected, served)
 }
 
 func claudeNestedMap(meta map[string]any, key string) map[string]any {

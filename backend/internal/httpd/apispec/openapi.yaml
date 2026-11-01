@@ -13776,8 +13776,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -16435,6 +16439,8 @@ components:
       type: object
     ConversationMessageResponse:
       properties:
+        authoredByUser:
+          type: boolean
         clientMessageId:
           type: string
         content:
@@ -16831,6 +16837,10 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failureCode:
+          enum:
+          - provider_key_missing
+          type: string
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -17166,6 +17176,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        branch:
+          maxLength: 255
+          type: string
         brief:
           maxLength: 16384
           type: string

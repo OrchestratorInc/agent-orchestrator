@@ -1,3 +1,4 @@
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -90,14 +91,16 @@ const sideMocks = vi.hoisted(() => ({
 	send: vi.fn(),
 	show: vi.fn(),
 	addReference: vi.fn(),
-	sides: [] as { hasWork: boolean }[],
+	sides: [] as { id: string; hasWork: boolean }[],
+	activeId: "existing-side" as string | undefined,
+	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
 }));
 vi.mock("./IndependentSideChats", () => ({
-	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
+	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
 
 vi.mock("../../lib/api-client", () => ({
@@ -106,6 +109,7 @@ vi.mock("../../lib/api-client", () => ({
 	hasTrustedApiBaseUrl: () => true,
 	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 }));
 
 // Every agent's permission modes are known, as once the daemon has answered, unless a test says not.
@@ -165,10 +169,12 @@ vi.mock("./ChatWorkspace", async () => {
 			promptSuggestion,
 			snapshot,
 			shellTarget,
+			onAddToSideChat,
 			onSend,
 			composerNotice,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
 			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
@@ -187,6 +193,7 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
@@ -261,6 +268,8 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {}, error: undefined });
 	providerSwitchMock.mockReset().mockResolvedValue({});
 	sideMocks.agentSwitch = undefined;
+	sideMocks.activeId = "existing-side";
+	sideMocks.attach = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -445,6 +454,18 @@ describe("SessionChatSurface prompt suggestions", () => {
 		view.rerender(tree());
 		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent("Explain the fix.");
 		expect(postMock).toHaveBeenCalledOnce();
+	});
+
+	it("waits for the target controller to become ready even when its last turn is completed", async () => {
+		settleConversation();
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [], controller: { state: "connecting" } };
+		const client = new QueryClient();
+		const tree = () => <Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>;
+		const view = render(tree());
+		expect(postMock).not.toHaveBeenCalled();
+		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [], controller: { state: "ready" } };
+		view.rerender(tree());
+		await waitFor(() => expect(postMock).toHaveBeenCalledOnce());
 	});
 
 	it("keeps an in-flight suggestion while a file pane temporarily hides the composer", async () => {
@@ -1187,17 +1208,23 @@ describe("controller catalogs during an interface handoff", () => {
 		}
 	});
 
-	it("keeps catalogs through a resume, except for an imported chat never opened", () => {
+	it("waits for a ready controller during native and imported resumes", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "connecting" } };
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
 		}
 
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
 			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+		}
+
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
+		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
+		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
+			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
 		}
 	});
 
@@ -1297,9 +1324,9 @@ describe("side command routing", () => {
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
 	});
 
-	it.each(["btw", "side"])(
-		"/%s creates a new side for every new submission and reuses a retry key",
-		async (command) => {
+	it(
+		"/btw creates a new side for every new submission and reuses a retry key",
+		async () => {
 			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
 			sideMocks.send.mockReset().mockResolvedValue(undefined);
 			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1309,9 +1336,9 @@ describe("side command routing", () => {
 				</Wrapper>,
 			);
 			await act(async () => {
-				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw first", undefined, "submission-1");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
 			});
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
@@ -1338,6 +1365,16 @@ describe("side command routing", () => {
 			);
 		},
 	);
+	it.each(["/side", "/side question"])("sends literal %s to the main agent even when side creation is available", async text => {
+		sideMocks.create.mockReset();
+		const mainSend=vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as {send?:unknown}).send=mainSend;
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session}/></Wrapper>);
+		await act(async()=>{await sideMocks.workspaceSend!(text,undefined,"literal-side");});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({text}));
+		delete (conversationCommandState as {send?:unknown}).send;
+	});
 	it.each(["btw", "side"])("preserves provider /%s when resume is unavailable", async (command) => {
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [] };
 		sideMocks.create.mockReset();
@@ -1377,5 +1414,142 @@ describe("SessionChatSurface startup recovery", () => {
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		expect(conversationRefreshes(invalidate)).toBe(0);
+	});
+});
+
+
+describe("selection side-chat operation ownership", () => {
+	const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
+	function mount() {
+		useUiStore.setState({ developerMode:true, sideChats:true });
+		conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
+		sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
+		sideMocks.activeId = undefined; sideMocks.sides = [];
+		const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+		const view = render(<Wrapper client={client}><SessionChatSurface session={{...session}} /></Wrapper>);
+		return { ...view, advance() {
+			conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"], latestSequence:42 };
+			view.rerender(<Wrapper client={client}><SessionChatSurface session={{...session}} /></Wrapper>);
+		} };
+	}
+	it("follows the current destination on a new click after a lost creation reply", async () => {
+		const view = mount();
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValueOnce({id:"original-side"});
+		await act(async()=>{ await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost"); });
+		sideMocks.activeId = "unrelated-side"; sideMocks.sides = [{id:"unrelated-side",hasWork:false}]; view.advance();
+		await act(async()=>{ await sideMocks.attach!(excerpt); });
+		expect(sideMocks.create).toHaveBeenCalledTimes(1);
+		expect(sideMocks.addReference).toHaveBeenCalledWith("unrelated-side", excerpt);
+		expect(sideMocks.show).toHaveBeenCalledWith("unrelated-side");
+	});
+	it("coalesces reselected text while processing and releases confirmed creation identities", async () => {
+		mount(); let resolve!: (side:{id:string})=>void;
+		sideMocks.create.mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue({id:"next"});
+		let first!: Promise<void>; let second!: Promise<void>;
+		act(()=>{ first = sideMocks.attach!(excerpt); second = sideMocks.attach!({...excerpt,id:"reselected"}); });
+		await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
+		await act(async()=>{ resolve({id:"original"}); await Promise.all([first,second]); });
+		await act(async()=>{ await sideMocks.attach!({...excerpt,id:"next-selection"}); });
+		expect(sideMocks.create.mock.calls[1][2]).not.toBe(sideMocks.create.mock.calls[0][2]);
+	});
+	it("recovers a lost creation reply after the parent advances and text is reselected", async () => {
+		const view = mount();
+		const creations = new Map<string, string>();
+		sideMocks.create.mockImplementation(async (_excerpt, _forceNew, key) => {
+			const existed = creations.has(key);
+			if (!existed) creations.set(key, `side-${creations.size + 1}`);
+			if (!existed) throw new Error("Reply lost");
+			return { id: creations.get(key) };
+		});
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+		view.advance();
+		await act(async()=>{await sideMocks.attach!({...excerpt,id:"reselected"});});
+		expect(sideMocks.create).toHaveBeenCalledTimes(2);
+		expect(sideMocks.create.mock.calls[1].slice(0,3)).toEqual(sideMocks.create.mock.calls[0].slice(0,3));
+		expect(creations.size).toBe(1);
+	});
+	it("keeps an unanswered creation receipt when a later click attaches to another side", async () => {
+		const view = mount();
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValue({id:"recovered"});
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+		sideMocks.activeId="other";sideMocks.sides=[{id:"other",hasWork:false}];view.advance();
+		await act(async()=>{await sideMocks.attach!({...excerpt,id:"another-range"});});
+		expect(sideMocks.addReference).toHaveBeenCalledWith("other",expect.objectContaining({text:excerpt.text}));
+		sideMocks.activeId=undefined;sideMocks.sides=[];view.advance();
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.create.mock.calls[1][2]).toBe(sideMocks.create.mock.calls[0][2]);
+	});
+	it.each(["text", "messageId", "revision", "conversationId"] as const)("keeps changed %s selections independent of an unanswered creation", async (field) => {
+		mount();
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValue({id:"next"});
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+		const changed = {...excerpt, [field]:field === "revision" ? 2 : "changed"};
+		await act(async()=>{await sideMocks.attach!(changed);});
+		expect(sideMocks.create.mock.calls[1][2]).not.toBe(sideMocks.create.mock.calls[0][2]);
+	});
+	it("retains rejected creation receipts without leaving processing locked", async () => {
+		mount();
+		sideMocks.create.mockRejectedValueOnce({code:"CHAT_EXCERPT_INVALID"}).mockResolvedValue({id:"next"});
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toEqual({code:"CHAT_EXCERPT_INVALID"});});
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.create.mock.calls[1][2]).toBe(sideMocks.create.mock.calls[0][2]);
+	});
+	it("retires a definitively closed creation receipt before the next deliberate Add", async () => {
+		const view = mount();
+		const closed = {code:"CHAT_SIDE_CLOSED", message:"Side chat is closed"};
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockRejectedValueOnce(closed).mockResolvedValue({id:"new"});
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+		const originalKey = sideMocks.create.mock.calls[0][2];
+		// Polling discovers the original destination, which the user then closes.
+		sideMocks.activeId="original";sideMocks.sides=[{id:"original",hasWork:false}];view.advance();
+		sideMocks.activeId=undefined;sideMocks.sides=[];view.advance();
+		await act(async()=>{await expect(sideMocks.attach!({...excerpt,id:"reselected"})).rejects.toEqual(closed);});
+		expect(sideMocks.create).toHaveBeenCalledTimes(2);
+		expect(sideMocks.create.mock.calls[1][2]).toBe(originalKey);
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.create).toHaveBeenCalledTimes(3);
+		expect(sideMocks.create.mock.calls[2][2]).not.toBe(originalKey);
+	});
+	it("discards an unanswered creation when its session surface is replaced", async () => {
+		const first = mount();
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost"));
+		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+		const key = sideMocks.create.mock.calls[0][2]; first.unmount();
+		mount(); sideMocks.create.mockResolvedValue({id:"new"});
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.create.mock.calls[0][2]).not.toBe(key);
+	});
+	it("keeps an in-flight creation scoped to its original activation when the active tab changes", async () => {
+		const view=mount();let resolve!:(side:{id:string})=>void;
+		sideMocks.create.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));
+		let first!:Promise<void>;act(()=>{first=sideMocks.attach!(excerpt);});
+		await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
+		sideMocks.activeId="other";sideMocks.sides=[{id:"other",hasWork:false}];view.advance();
+		await act(async()=>{
+			const repeated=sideMocks.attach!(excerpt);
+			expect(sideMocks.create).toHaveBeenCalledTimes(1);
+			expect(sideMocks.addReference).not.toHaveBeenCalled();
+			resolve({id:"original"});await Promise.all([first,repeated]);
+		});
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.addReference).toHaveBeenCalledWith("other",excerpt);
+	});
+	it("follows the active tab on a new click after attachment fails", async () => {
+		const view = mount();sideMocks.activeId="original";sideMocks.sides=[{id:"original",hasWork:false},{id:"other",hasWork:false}];view.advance();
+		sideMocks.addReference.mockImplementationOnce(()=>{throw new Error("Failed");});
+		await act(async()=>{ await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Failed"); });
+		sideMocks.activeId="other";view.advance();
+		await act(async()=>{await sideMocks.attach!(excerpt);});
+		expect(sideMocks.addReference.mock.calls.map(call=>call[0])).toEqual(["original","other"]);
+		expect(sideMocks.create).not.toHaveBeenCalled();
+	});
+	it("ignores a late creation completion after the source surface is disposed", async () => {
+		const view=mount();let resolve!:(side:{id:string})=>void;
+		sideMocks.create.mockImplementation(()=>new Promise(done=>{resolve=done;}));
+		let request!:Promise<void>;act(()=>{request=sideMocks.attach!(excerpt);});
+		await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
+		view.unmount();
+		await act(async()=>{resolve({id:"old-side"});await expect(request).rejects.toThrow("no longer active");});
+		expect(sideMocks.show).not.toHaveBeenCalled();
 	});
 });

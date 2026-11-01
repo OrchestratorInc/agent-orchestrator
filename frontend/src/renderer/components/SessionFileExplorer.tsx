@@ -18,6 +18,8 @@ import {
 import {
 	sessionSourceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
+	clearMissingWorkspace,
+	isMissingWorkspaceError,
 	type FilesBranchTarget,
 	type FilesSource,
 	type WorkspaceFilesResponse,
@@ -116,7 +118,8 @@ export function SessionFileExplorer({
 
 	const filesQuery = useQuery({
 		...sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		refetchInterval: (query) => workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
+		refetchInterval: (query) => isMissingWorkspaceError(query.state.error)
+			? false : workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
 	});
 	useLayoutEffect(() => {
 		if (filesQuery.data) markFileViewerPerformance("manifest-ready");
@@ -478,8 +481,12 @@ export function SessionFileExplorer({
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
-					<PanelMessage action={<RetryButton onClick={() => void filesQuery.refetch()} />}>
-						{filesQuery.error.message || t("files.error.loadWorkspace")}
+					<PanelMessage action={<RetryButton onClick={() => {
+						clearMissingWorkspace(sessionId, hostId);
+						void filesQuery.refetch();
+					}} />}>
+						{isMissingWorkspaceError(filesQuery.error)
+							? t("files.error.workspaceMissing") : filesQuery.error.message || t("files.error.loadWorkspace")}
 					</PanelMessage>
 				) : filesData ? (
 					isMaximized ? (
