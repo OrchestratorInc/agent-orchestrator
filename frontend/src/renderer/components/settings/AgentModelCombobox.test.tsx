@@ -4,6 +4,17 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentModelCombobox, buildModelSearchIndex, searchModelIndex } from "./AgentModelCombobox";
 
+const LARGE_CATALOG_MODEL_COUNT = 1_397;
+const LARGE_CATALOG_VISIBLE_MODELS = 50;
+const SINGLE_MATCH_COUNT = 1;
+const TYPE_TO_NARROW_TEXT = " — type to narrow";
+const hasTextContent =
+	(expected: string) =>
+	(_content: string, element: Element | null): boolean =>
+		element?.textContent === expected;
+const matchingCountText = (visible: number, total: number, suffix = "") =>
+	`Showing ${visible.toLocaleString()} of ${total.toLocaleString()} matching models${suffix}`;
+
 function renderCombobox(
 	models: React.ComponentProps<typeof AgentModelCombobox>["models"],
 	overrides: Partial<React.ComponentProps<typeof AgentModelCombobox>> = {},
@@ -268,7 +279,7 @@ describe("AgentModelCombobox", () => {
 	});
 
 	it("renders only the first 50 models from a large cached catalog", async () => {
-		const models = Array.from({ length: 1_397 }, (_, index) => ({
+		const models = Array.from({ length: LARGE_CATALOG_MODEL_COUNT }, (_, index) => ({
 			id: `provider-${index % 4}/model-${index}`,
 			label: `Model ${index}`,
 			provider: `provider-${index % 4}`,
@@ -280,8 +291,12 @@ describe("AgentModelCombobox", () => {
 
 		// The first 50 catalog models. The custom-model action appears
 		// only after the user types a value that does not match the catalog.
-		expect(screen.getAllByRole("menuitem")).toHaveLength(50);
-		expect(screen.getByText("Showing 50 of 1,397 matching models — type to narrow")).toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem")).toHaveLength(LARGE_CATALOG_VISIBLE_MODELS);
+		expect(
+			screen.getByText(
+				hasTextContent(matchingCountText(LARGE_CATALOG_VISIBLE_MODELS, LARGE_CATALOG_MODEL_COUNT, TYPE_TO_NARROW_TEXT)),
+			),
+		).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Model 1000/ })).not.toBeInTheDocument();
 	});
 
@@ -500,7 +515,9 @@ describe("AgentModelCombobox", () => {
 		await userEvent.type(search, "provider-1/model-99");
 
 		expect(screen.getByText("provider-1", { selector: "div" })).toBeInTheDocument();
-		expect(screen.getByText("Showing 1 of 1 matching models")).toBeInTheDocument();
+		expect(
+			screen.getByText(hasTextContent(matchingCountText(SINGLE_MATCH_COUNT, SINGLE_MATCH_COUNT))),
+		).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /Model 99/ }));
 		expect(onChange).toHaveBeenCalledWith("provider-1/model-99");
 	});
