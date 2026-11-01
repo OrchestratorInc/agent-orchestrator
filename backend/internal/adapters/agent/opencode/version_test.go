@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ func versionBinary(t *testing.T, script string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
+	isolateVersionResolver(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
@@ -31,7 +33,17 @@ func versionBinary(t *testing.T, script string) string {
 	return path
 }
 
+// Keep system Homebrew binaries out of tests that require only their fixture.
+func isolateVersionResolver(t *testing.T) {
+	t.Helper()
+	oldPaths, oldPrefixes := opencodeUnixPaths, homebrewDefaultPrefixes
+	opencodeUnixPaths, homebrewDefaultPrefixes = nil, nil
+	t.Cleanup(func() { opencodeUnixPaths, homebrewDefaultPrefixes = oldPaths, oldPrefixes })
+	t.Setenv("HOMEBREW_PREFIX", "")
+}
+
 func TestResolveBinaryForMajor(t *testing.T) {
+	isolateVersionResolver(t)
 	for _, tc := range []struct {
 		name, output, wantErr string
 		major, wantFoundMajor int
@@ -80,6 +92,7 @@ func TestResolveBinaryForMajor(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
+	isolateVersionResolver(t)
 	for _, canceled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "timeout", true: "canceled"}[canceled], func(t *testing.T) {
 			versionBinary(t, "exec /bin/sleep 30\n")
@@ -105,6 +118,7 @@ func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
+	isolateVersionResolver(t)
 	dir := t.TempDir()
 	name, body := "opencode", "#!/bin/sh\nsleep 4\nprintf '2.0.0\\n'\n"
 	if runtime.GOOS == "windows" {
@@ -123,6 +137,7 @@ func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorMissing(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix resolver paths")
 	}
@@ -130,9 +145,7 @@ func TestResolveBinaryForMajorMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("VOLTA_HOME", t.TempDir())
 	t.Setenv("FNM_DIR", t.TempDir())
-	old := opencodeUnixPaths
-	opencodeUnixPaths = nil
-	t.Cleanup(func() { opencodeUnixPaths = old })
+	isolateVersionResolver(t)
 	_, err := ResolveBinaryForMajor(context.Background(), 2)
 	if !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("error = %v, want missing binary", err)
@@ -160,6 +173,7 @@ func TestV1RejectsWrongMajorBeforeOverlay(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -183,6 +197,7 @@ func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T)
 }
 
 func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -202,6 +217,7 @@ func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.
 }
 
 func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -221,6 +237,7 @@ func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -237,13 +254,16 @@ func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("VOLTA_HOME", t.TempDir())
 	t.Setenv("FNM_DIR", t.TempDir())
-	oldPaths := opencodeUnixPaths
-	opencodeUnixPaths = nil
-	t.Cleanup(func() { opencodeUnixPaths = oldPaths })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-finished
+	})
 	go func() {
+		defer close(finished)
 		_, err := ResolveBinaryForMajor(ctx, 2)
 		done <- err
 	}()
@@ -268,6 +288,7 @@ func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.
 }
 
 func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixtures")
 	}
@@ -287,5 +308,98 @@ func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
 		if err != nil || got != filepath.Join(dir, name) {
 			t.Fatalf("major %d=%q,%v", major, got, err)
 		}
+	}
+}
+
+func TestReplacedOpenCode1MessageOnlyForDefaultLocations(t *testing.T) {
+	dataHome := filepath.Join(t.TempDir(), "share")
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	v2Home := filepath.Join(dataHome, "opencode-v2-home")
+	for _, tc := range []struct {
+		name     string
+		err      IncompatibleVersionError
+		replaced bool
+	}{
+		{"v2 at the installer default", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "opencode v2.1.2", Path: "/Users/me/.opencode/bin/opencode"}, true},
+		{"v2 linked by Homebrew", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/bin/opencode"}, true},
+		{"v2 in AO's npm prefix", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "npm", "bin", "opencode")}, false},
+		{"v2 in AO's installer home", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(v2Home, "installer", ".opencode", "bin", "opencode")}, false},
+		{"v2 through the unlinked formula", IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: "/opt/homebrew/opt/opencode-v2/bin/opencode"}, false},
+		{"v1 found for the OpenCode 2 harness", IncompatibleVersionError{ExpectedMajor: 2, FoundMajor: 1, FoundVersion: "1.19.3", Path: "/Users/me/.opencode/bin/opencode"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tc.err.Path, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
+			got := tc.err.ReplacedOpenCode1Message()
+			if tc.replaced != (got != "") {
+				t.Fatalf("ReplacedOpenCode1Message() = %q, want replaced=%v", got, tc.replaced)
+			}
+			if tc.replaced && (!strings.Contains(got, tc.err.Path) || !strings.Contains(got, "reinstall OpenCode 1")) {
+				t.Fatalf("message %q must name %s and the repair steps", got, tc.err.Path)
+			}
+		})
+	}
+}
+
+func TestReplacedOpenCode1MessageForHomebrewLinkedV2(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew links are POSIX symlinks")
+	}
+	prefix := t.TempDir()
+	keg := filepath.Join(prefix, "Cellar", "opencode-v2", "2.1.2", "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(keg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keg, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(prefix, "bin", "opencode")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(keg, link); err != nil {
+		t.Fatal(err)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: link}
+	if got := err.ReplacedOpenCode1Message(); !strings.Contains(got, "brew unlink opencode-v2") || !strings.Contains(got, link) {
+		t.Fatalf("message = %q, want the Homebrew unlink repair for %s", got, link)
+	}
+}
+
+func TestV2HomebrewCandidatesIncludeCustomPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew does not run on Windows")
+	}
+	prefix := filepath.Join(t.TempDir(), "brew")
+	t.Setenv("HOMEBREW_PREFIX", prefix)
+	want := filepath.ToSlash(filepath.Join(prefix, "opt", "opencode-v2", "bin", "opencode"))
+	candidates := v2HomebrewCandidates()
+	if !slices.Contains(candidates, want) {
+		t.Fatalf("candidates = %v, want %s", candidates, want)
+	}
+	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.FromSlash(want)}
+	if got := err.ReplacedOpenCode1Message(); got != "" {
+		t.Fatalf("OpenCode 2 at a custom prefix's opt link = %q, want no replacement message", got)
+	}
+}
+
+func TestReplacedOpenCode1MessageExcludesManagedV2Launchers(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "harnesses", "bin")
+	binaryutil.SetManagedBinDir(bin)
+	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })
+	for _, name := range []string{"opencode-v2", "opencode-v2.cmd", "opencode-v2.exe", "opencode-v2.bat"} {
+		t.Run(name, func(t *testing.T) {
+			mismatch := &IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(bin, name)}
+			if got := mismatch.ReplacedOpenCode1Message(); got != "" {
+				t.Fatalf("managed v2 launcher reported a replacement: %s", got)
+			}
+			// A v2 binary using v1's name in the same directory is not v2's
+			// separate launcher and must retain the repair message.
+			mismatch.Path = filepath.Join(bin, "opencode")
+			if got := mismatch.ReplacedOpenCode1Message(); got == "" {
+				t.Fatal("v1 launcher containing v2 should still report replacement")
+			}
+		})
 	}
 }
