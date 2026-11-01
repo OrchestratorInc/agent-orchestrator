@@ -25,6 +25,7 @@ import {
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
@@ -578,11 +579,12 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}).finally(() => setClearingAll(false));
 	}, [clearAll, clearCloud, clearLocal, clearingAll, queryClient, remoteAll.hosts, t]);
 
-	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId) => {
+	/** Resolves to whether the notification was cleared. */
+	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId): Promise<boolean> => {
 		setActionError(null);
 		const key = notificationKey(hostId, notification.id);
 		setClearingNotificationIds((current) => new Set(current).add(key));
-		void (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
+		return (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
 			await clearRemoteNotification(hostId, notification.id, queryClient);
 			remoteHistoryGeneration.current += 1;
 			setRemoteLoadingEarlierHost(null);
@@ -593,8 +595,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				})),
 			}));
 		})())
-			.catch((error: unknown) => {
+			.then(() => true, (error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
+				return false;
 			})
 			.finally(() => {
 				setClearingNotificationIds((current) => {
@@ -605,13 +608,15 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [clearOne, queryClient, t]);
 
-	const handleClearCloud = useCallback((notification: CloudCpNotification) => {
+	/** Resolves to whether the notification was cleared. */
+	const handleClearCloud = useCallback((notification: CloudCpNotification): Promise<boolean> => {
 		const clearingId = cloudRowKey(notification.id);
 		setActionError(null);
 		setClearingNotificationIds((current) => new Set(current).add(clearingId));
-		void clearCloudOne(notification)
-			.catch((error: unknown) => {
+		return clearCloudOne(notification)
+			.then(() => true, (error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
+				return false;
 			})
 			.finally(() => {
 				setClearingNotificationIds((current) => {
@@ -785,7 +790,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						<>
 						<div
 						aria-busy={allQuery.isFetchingNextPage || remoteLoadingEarlierHost !== null}
-						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-y-auto overscroll-contain"
+						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-x-hidden overflow-y-auto overscroll-contain"
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>
@@ -946,7 +951,7 @@ const NotificationItem = memo(function NotificationItem({
 	offerRestore: boolean;
 	onOpenSession: (notification: NotificationDTO) => void;
 	onRestore: (notification: NotificationDTO) => void;
-	onClear: (notification: NotificationDTO) => void;
+	onClear: (notification: NotificationDTO) => Promise<boolean>;
 	hostLabel?: string;
 	projectName?: string;
 	clearing: boolean;
@@ -967,8 +972,10 @@ const NotificationItem = memo(function NotificationItem({
 	const openRow = () => {
 		if (canOpenSession) onOpenSession(notification);
 	};
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div className="border-b border-border last:border-b-0" role="listitem">
+		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" role="listitem">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
@@ -1087,7 +1094,7 @@ const NotificationItem = memo(function NotificationItem({
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
-									onClear(notification);
+									void onClear(notification);
 								}}
 								onKeyDown={(event) => event.stopPropagation()}
 								type="button"
@@ -1137,7 +1144,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	offerRestore: boolean;
 	onOpenSession: (projectId: string, sessionId: string) => void;
 	onRestore: (projectId: string, sessionId: string) => void;
-	onClear: (notification: CloudCpNotification) => void;
+	onClear: (notification: CloudCpNotification) => Promise<boolean>;
 	projectId?: string;
 	projectName?: string;
 	clearing: boolean;
@@ -1156,8 +1163,10 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	const openRow = () => {
 		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
 	};
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div className="border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
+		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
@@ -1256,7 +1265,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
-									onClear(notification);
+									void onClear(notification);
 								}}
 								onKeyDown={(event) => event.stopPropagation()}
 								type="button"

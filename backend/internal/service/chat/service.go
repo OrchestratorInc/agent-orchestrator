@@ -1040,6 +1040,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
+		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("settle uncertain queued batch: %w", err)
+		}
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
 			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {
@@ -1347,6 +1351,9 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if err := validateFileReferenceContent(msg, string(id)); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	if s.switchBeforeSend(ctx, record) {
 		// The provider stopped on its old release. The hibernated path below
 		// queues this message and wakes the session on the installed one.
@@ -1359,6 +1366,9 @@ func (s *Service) Send(
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
 				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 			} else if found {
+				if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
 				return controller.Send(ctx, msg)
 			}
@@ -1437,6 +1447,11 @@ func (s *Service) Send(
 
 // SendForOwner sends a user message to an owner-specific chat controller.
 func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
+	for _, block := range msg.Content {
+		if block.Type == "file_reference" {
+			return domain.ConversationTurn{}, fmt.Errorf("%w: file annotations require the main chat", ErrExcerptInvalid)
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1450,6 +1465,9 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 		); lookupErr != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 		} else if found {
+			if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+				return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+			}
 			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}
@@ -1964,6 +1982,41 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 	return out
 }
 
+// adoptedImportSnapshot is the whole history of an adopted import: every page
+// of the paged read, which alone puts the archive in place of the provider's
+// replay, joined oldest first, as a full Snapshot promises.
+func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
+	snap, err := s.SnapshotPage(ctx, id, 0, 0)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	seenTurns := make(map[string]bool, len(snap.Turns))
+	for _, turn := range snap.Turns {
+		seenTurns[turn.ID] = true
+	}
+	for snap.HasMoreBefore && snap.OldestSequence > 0 {
+		page, err := s.SnapshotPage(ctx, id, snap.OldestSequence, 0)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if page.OldestSequence <= 0 || page.OldestSequence >= snap.OldestSequence {
+			break // No progress: stop rather than loop on a malformed page.
+		}
+		var turns []domain.ConversationTurn
+		for _, turn := range page.Turns {
+			if !seenTurns[turn.ID] {
+				seenTurns[turn.ID] = true
+				turns = append(turns, turn)
+			}
+		}
+		snap.Turns = append(turns, snap.Turns...)
+		snap.Messages = append(page.Messages, snap.Messages...)
+		snap.Activities = append(page.Activities, snap.Activities...)
+		snap.OldestSequence, snap.HasMoreBefore = page.OldestSequence, page.HasMoreBefore
+	}
+	return snap, nil
+}
+
 // Snapshot reads a session's conversation.
 //
 // It does not require a live controller: history must remain readable after the
@@ -1982,7 +2035,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	// An adopted import shows its archive in place of the provider's replay,
 	// which only the paged read assembles.
 	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && s.pageReader != nil {
-		return s.SnapshotPage(ctx, id, 0, 0)
+		return s.adoptedImportSnapshot(ctx, id)
 	}
 
 	conversation, err := s.store.ConversationForSession(ctx, id)
@@ -2444,7 +2497,8 @@ func (s *Service) StartChatTurn(ctx context.Context, id domain.SessionID, text s
 		return "", err
 	}
 	turn, err := controller.Send(ctx, ports.ChatUserMessage{
-		Text: text,
+		Text:               text,
+		SpawnOpeningPrompt: true,
 		// The initial prompt is the user's task brief. Origin records who AUTHORED
 		// a message, not who delivered it — the daemon carrying it to the provider
 		// no more makes it the daemon's message than the network makes it the

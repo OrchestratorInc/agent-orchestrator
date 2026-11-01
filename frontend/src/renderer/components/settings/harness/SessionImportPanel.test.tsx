@@ -12,6 +12,12 @@ vi.mock("../../../lib/api-client", () => ({
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: () => "Import failed",
 }));
+it("gates session import to the agents with a readable local history", () => {
+	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
+});
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -67,6 +73,12 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
 	expect(screen.getByText("Already in AO")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
+});
+
+it("gates importable harnesses to the ones with a verified resume path", () => {
+	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
+	// Kimi chats import and resume by the native session_<uuid> id over ACP session/load.
+	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(true);
 });
 
 it("reports new, existing and failed imports separately", async () => {

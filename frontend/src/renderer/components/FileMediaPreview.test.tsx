@@ -50,6 +50,12 @@ describe("FileMediaPreview", () => {
 		expect(onAccessRefused).toHaveBeenCalledTimes(1);
 	});
 
+	it("loads cloud media without CORS, which a localhost control plane does not send", () => {
+		const source = { kind: "artifact" as const, cloud: true, rawUrl: "http://127.0.0.1:8081/api/cloud/v1/artifact-files/t/demo.mp4?v=1", onAccessRefused: vi.fn() };
+		render(<FileMediaPreview kind="video" path="demo.mp4" sessionId="session-1" source={source} version={1} />);
+		expect(screen.getByLabelText("demo.mp4")).not.toHaveAttribute("crossorigin");
+	});
+
 	it("takes one fresh link per file version, then shows a cloud file that still fails", () => {
 		const onAccessRefused = vi.fn();
 		const props = { kind: "video" as const, path: "broken.mp4", sessionId: "session-1", version: 1 };

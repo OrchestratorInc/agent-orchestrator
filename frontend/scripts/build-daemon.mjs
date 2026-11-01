@@ -51,7 +51,13 @@ if (isWindowsDev) {
 	mkdirSync(outDir, { recursive: true });
 }
 
-const result = spawnSync("go", ["build", "-o", buildOutPath, "./cmd/ao"], {
+// `ao remote-host link` must sign in with the same WorkOS client as this
+// desktop build, or the machine lands in a different AO account.
+const workOSClientID = process.env.VITE_WORKOS_CLIENT_ID?.trim();
+const ldflags = workOSClientID
+	? ["-ldflags", `-X github.com/aoagents/agent-orchestrator/backend/internal/cli.defaultWorkOSClientID=${workOSClientID}`]
+	: [];
+const result = spawnSync("go", ["build", ...ldflags, "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,
 	stdio: "inherit",
 	windowsHide: true,

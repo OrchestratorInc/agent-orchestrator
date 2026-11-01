@@ -3,6 +3,7 @@ import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
@@ -153,7 +154,8 @@ const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(h
 const lastRemoteHealthRecheck = new Map<string, number>();
 
 function recheckRemoteHost(hostId: string, status: number): void {
-	if (![401, 403, 426, 502, 503].includes(status)) return;
+	// 530: Cloudflare answers for a fixed address whose machine is offline.
+	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 15_000) return;
@@ -417,6 +419,33 @@ export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
+/**
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
+ */
+export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
+		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
+	]).then(() => undefined);
+}
+
+/**
+ * Adds a session the desktop just created to the sessions list, when it runs
+ * on Freestyle, so its view opens on the in-place start instead of the
+ * startup screen shown while a session it does not know yet resolves. Other
+ * providers (Coder) are left to the next list refresh, so their start is
+ * unchanged.
+ */
+export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
+	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
+	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
+		current === undefined || current.some((candidate) => candidate.id === session.id) ? current : [...current, session]);
+}
+
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
 // product-ui mappers apply; fields with no cloud analogue take safe defaults.
@@ -571,8 +600,8 @@ export function refetchCloudProjectsForUnknownSessions(
 }
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
-	const { client, ready, baseUrl } = useCloudCp();
-	const { org } = useCloudOrg();
+	const { client, ready, baseUrl } = useCloudCp(options.enabled !== false);
+	const { org } = useCloudOrg(options.enabled !== false);
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudProjectsQueryKey, baseUrl, orgId ?? ""],

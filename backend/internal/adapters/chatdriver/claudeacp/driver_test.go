@@ -482,17 +482,27 @@ func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
 }
 
 // settings.json's model must not replace the one AO resumes a chat with.
-func TestClaudeACPLaunchEnvPinsSelectedModel(t *testing.T) {
+func TestPinResumedModel(t *testing.T) {
 	t.Setenv("ANTHROPIC_MODEL", "")
-	if env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-haiku-5-5", nil); env["ANTHROPIC_MODEL"] != "claude-haiku-5-5" {
-		t.Fatalf("ANTHROPIC_MODEL = %q", env["ANTHROPIC_MODEL"])
+	pinned := func(input map[string]string, selected string) string {
+		env := claudeACPLaunchEnv(input, "/opt/claude", selected, nil)
+		pinResumedModel(env, input, selected)
+		return env["ANTHROPIC_MODEL"]
+	}
+	if got := pinned(nil, "claude-haiku-5-5"); got != "claude-haiku-5-5" {
+		t.Fatalf("ANTHROPIC_MODEL = %q", got)
 	}
 	for _, unset := range []string{"", "default"} {
-		if env := claudeACPLaunchEnv(nil, "/opt/claude", unset, nil); env["ANTHROPIC_MODEL"] != "" {
-			t.Fatalf("selection %q pinned %q", unset, env["ANTHROPIC_MODEL"])
+		if got := pinned(nil, unset); got != "" {
+			t.Fatalf("selection %q pinned %q", unset, got)
 		}
 	}
-	if env := claudeACPLaunchEnv(map[string]string{"ANTHROPIC_MODEL": "glm-5"}, "/opt/claude", "claude-haiku-5-5", nil); env["ANTHROPIC_MODEL"] != "glm-5" {
-		t.Fatalf("project pin replaced: %q", env["ANTHROPIC_MODEL"])
+	if got := pinned(map[string]string{"ANTHROPIC_MODEL": "glm-5"}, "claude-haiku-5-5"); got != "glm-5" {
+		t.Fatalf("project pin replaced: %q", got)
+	}
+	// A fresh chat is not pinned: the variable would override settings.json and
+	// leak into every tool subprocess the agent runs.
+	if env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-haiku-5-5", nil); env["ANTHROPIC_MODEL"] != "" {
+		t.Fatalf("a fresh launch pinned ANTHROPIC_MODEL = %q", env["ANTHROPIC_MODEL"])
 	}
 }

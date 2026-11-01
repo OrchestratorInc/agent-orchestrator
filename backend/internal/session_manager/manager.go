@@ -539,6 +539,9 @@ type Manager struct {
 	// nil means they do not (see SetVersionRefreshPolicy).
 	versionPolicyMu sync.Mutex
 	versionPolicy   func() VersionRefreshPolicy
+	// computerUse reports the "Let agents use this computer" setting; nil is off.
+	computerUseMu sync.Mutex
+	computerUse   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -3024,6 +3027,11 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	defer releaseHarness()
 	if !rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
+	}
+	if held, err := m.importHeldByLiveSession(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	} else if held {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionOpenElsewhere)
 	}
 	meta := rec.Metadata
 	project, err := m.loadProject(ctx, rec.ProjectID)
@@ -5988,7 +5996,16 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 
 	switch kind {
 	case domain.KindOrchestrator:
-		cfg.OrchestratorRules = project.Config.OrchestratorRules
+		rules, err := buildProjectRules(projectRulesConfig{
+			ProjectPath:    project.Path,
+			Rules:          project.Config.OrchestratorRules,
+			RulesFile:      project.Config.OrchestratorRulesFile,
+			RulesFileField: "orchestratorRulesFile",
+		})
+		if err != nil {
+			return "", err
+		}
+		cfg.OrchestratorRules = rules
 	case domain.KindWorker:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
@@ -6001,8 +6018,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		}
 		rules, err := buildProjectRules(projectRulesConfig{
 			ProjectPath:    project.Path,
-			AgentRules:     project.Config.AgentRules,
-			AgentRulesFile: project.Config.AgentRulesFile,
+			Rules:          project.Config.AgentRules,
+			RulesFile:      project.Config.AgentRulesFile,
+			RulesFileField: "agentRulesFile",
 		})
 		if err != nil {
 			return "", err
@@ -6023,6 +6041,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
+	}
+	if chat && m.computerUseEnabled(ctx) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
@@ -6212,8 +6233,9 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 // artifactOutputPrompt is added for a session spawned with the artifact output
 // kind.
 const artifactOutputPrompt = "## Artifact Output\n\n" +
-	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
-	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
+	"The initial deliverable for this session is an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not commit the artifact deliverable to the git workspace. Do not push or open a PR/MR unless a later direct human instruction or authorized orchestrator scope update explicitly authorizes one in this same session. " +
+	"If the artifact request is unclear, ask the user what it should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)
@@ -7056,15 +7078,25 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	var cmd []string
+	var ok bool
+	var err error
+	nativeID := meta.AgentSessionID
+	if resolver, supported := agent.(ports.AgentNativeRestoreCommand); supported {
+		cmd, nativeID, ok, err = resolver.GetRestoreCommandWithSessionID(ctx, cfg)
+	} else {
+		cmd, ok, err = agent.GetRestoreCommand(ctx, cfg)
+	}
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
+	ref.Metadata[ports.MetadataKeyAgentSessionID] = nativeID
 	// The id is real but the provider never persisted a conversation under it —
 	// a session torn down before its first turn, or one whose switch away failed
 	// after the source stopped. Resuming that id fails with "No conversation
 	// found" every time, so the id alone must not gate restore.
-	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, meta.AgentSessionID, env)
+	conversationLost := ok && nativeConversationMissing(ctx, agent, ref, nativeID, env)
 	if ok && !conversationLost {
 		return cmd, ports.PromptDeliveryInCommand, RestoreModeNative, nil
 	}

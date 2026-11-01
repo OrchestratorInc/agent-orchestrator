@@ -112,9 +112,11 @@ const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^ht
 export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
-		// react-refresh injects its inline preamble in serve mode; a hash is
-		// impractical because the preamble changes with the plugin version.
-		mode === "serve" ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
+		// 'wasm-unsafe-eval' lets @pierre/highlights compile its WebAssembly module;
+		// it does not permit JS eval. react-refresh injects its inline preamble in
+		// serve mode; a hash is impractical because the preamble changes with the
+		// plugin version.
+		mode === "serve" ? "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'" : "script-src 'self' 'wasm-unsafe-eval'",
 		"style-src 'self' 'unsafe-inline'",
 		// Repository avatars can come from self-hosted SCM instances whose origins
 		// are only known at runtime. Keep the broad exception limited to images;

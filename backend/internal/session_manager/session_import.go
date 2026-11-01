@@ -73,12 +73,24 @@ var ErrImportHistoryOnly = errors.New("this imported chat is read-only; its prov
 // setting even the default path logs a keychain user out, and an AO account's
 // folder links the computer's history, so replacing it would run the chat
 // under another login than the session's account.
+//
+// Kimi Code stores every session strictly under its home (KIMI_CODE_HOME, else
+// ~/.kimi-code); KIMI_SHARE_DIR is only the legacy kimi-cli migration source and
+// there is no sessions-dir or session-path override, so an imported Kimi chat
+// has to launch in the source home to be found. This stays equivalent to a
+// managed Kimi chat: AO's managed Kimi home only mirrors that same login
+// (ShareCredentials symlinks the managed credentials to it and seeds its config
+// from it), and standing instructions reach the ACP session through the
+// workspace .kimi-code/AGENTS.md and the first-prompt preamble, both independent
+// of the home. The config.toml lifecycle hooks are a TUI-only mechanism the ACP
+// chat driver does not use, so pointing at the source home drops nothing a chat
+// relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -100,7 +112,13 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 			}
 		}
 	}
-	setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
+	value := source.ConfigDir
+	if rec.Harness == domain.HarnessDroid {
+		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
+		// not the state dir itself, so point it at the parent of the config dir.
+		value = filepath.Dir(source.ConfigDir)
+	}
+	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
 
 func sameDirectory(a, b string) bool {
@@ -116,6 +134,14 @@ func sameDirectory(a, b string) bool {
 // importOwnedElsewhere reports positive evidence that another provider process
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
+//
+// Pi has no such signal: it keeps no writer lock or live-session registry and
+// does not hold its session file open (see writableTranscriptOwner), and
+// pi-acp's session/load does not refuse a second writer. So a Pi conversation
+// still open in the Pi CLI/TUI is not detected, and importing it can interleave
+// turns with the other writer. This matches the documented posture for
+// lock-less providers; a reliable per-session Pi owner signal would be needed
+// to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	switch rec.Harness {
@@ -127,6 +153,16 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		if claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), source.NativeID, rec.Metadata.WorkspacePath) {
 			return true
 		}
+	case domain.HarnessKimi:
+		// Kimi publishes a per-session lock file holding the live writer's pid;
+		// its transcript is append-open-close so it is never held open for lsof.
+		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
+	case domain.HarnessOpenCode:
+		// OpenCode keeps all conversations in one shared SQLite store with no
+		// per-session lock or live-session registry, and its transcript path is a
+		// row id rather than a writable file. With no positive evidence that
+		// another process holds this conversation, report not-owned.
+		return false
 	}
 	// A writer holds the plain file; Codex restores a compressed one on resume.
 	return writableTranscriptOwner(ctx, strings.TrimSuffix(rec.Metadata.NativeTranscriptPath, ".zst"))
@@ -146,6 +182,8 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), nativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessCodex:
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
+	case domain.HarnessKimi:
+		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	}
 	return false
 }
@@ -198,6 +236,14 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
+//
+// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
+// appendFileSync/writeFileSync, opening and closing the session file for each
+// entry rather than holding it open, so lsof reports a Pi writer only during
+// the instant of a write. Pi also keeps no writer lock or live-session
+// registry, and pi-acp's session/load does not refuse a second writer, so an
+// imported Pi conversation that is still open elsewhere is not detected. See
+// importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -213,7 +259,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid")) {
 			return true
 		}
 	}
@@ -262,7 +308,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if available == ports.NativeSessionAvailabilityUnavailable {
-			return rec, fmt.Errorf("%w: the original provider history is missing; restore it and retry", ports.ErrChatResumeFailed)
+			return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the original provider history is missing; restore it and retry"))
 		}
 	}
 	release := m.acquireWorkspaceGate(rec.ProjectID)
@@ -276,7 +322,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		marker, err := os.ReadFile(importCopyMarker(ws.Path, rec.ID))
 		if err == nil {
 			if string(marker) != string(rec.ID) {
-				return rec, errors.New("invalid workspace transfer marker")
+				return rec, importNotice("invalid workspace transfer marker")
 			}
 			copied = true
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -308,7 +354,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			if copyFrom != "" {
 				// Never fetch or copy an unrelated repository that sits inside the project folder.
 				if !sessionimport.SameRepository(ctx, repoRoot, project.Path) {
-					return rec, errors.New("the conversation's folder is not a checkout of this project's repository")
+					return rec, importNotice("the conversation's folder is not a checkout of this project's repository")
 				}
 				copyFrom = repoRoot
 			}
@@ -327,13 +373,13 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				if err != nil {
 					return rec, err
 				}
-				// Like a session started from a feature branch, show only this
-				// session's own changes: compare with the commit the chat continued
-				// from, following the default branch while that commit is on it.
-				diffSHA, diffRef = resolveSpawnDiffBase(ctx, ws.Path, project.Config.WorktreeBaseBranch())
-				if diffSHA != sha {
-					diffSHA, diffRef = sha, "HEAD"
-				}
+			}
+			// Like a session started from a feature branch, show only this
+			// session's own changes: compare with the commit the chat continued
+			// from. A retry resets an existing workspace to the source's current
+			// HEAD, so the base follows the commit transferred this time.
+			if ws.Path != "" {
+				diffSHA, diffRef = importDiffBase(ctx, ws.Path, sha, project.Config.WorktreeBaseBranch())
 			}
 		case domain.ProjectKindWorkspace:
 			copyFrom = project.Path
@@ -359,10 +405,10 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					}
 				}
 				if len(overrides) > 1 {
-					return rec, errors.New("the original repository matches multiple workspace children")
+					return rec, importNotice("the original repository matches multiple workspace children")
 				}
 				if len(overrides) == 0 && !pathWithin(copyFrom, source.CWD) {
-					return rec, errors.New("the original workspace no longer matches this AO project")
+					return rec, importNotice("the original workspace no longer matches this AO project")
 				}
 			}
 			baseRefs := map[string]string{}
@@ -459,7 +505,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					cleanupErr = m.workspace.Destroy(cleanupCtx, ws)
 				}
 				if err == nil {
-					err = errors.New("session changed during workspace creation; retry")
+					err = importNotice("session changed during workspace creation; retry")
 				}
 				return rec, errors.Join(err, cleanupErr)
 			}
@@ -467,6 +513,18 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			workspace.ImportSource = &stored
 			rec.Metadata = workspace
 			source = rec.Metadata.ImportSource
+		} else if diffSHA != "" && (rec.Metadata.DiffBaseSHA != diffSHA || rec.Metadata.DiffBaseRef != diffRef) {
+			// Record the new base before the copy moves the workspace to it.
+			workspace := rec.Metadata
+			workspace.DiffBaseSHA, workspace.DiffBaseRef = diffSHA, diffRef
+			updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, source, workspace, m.clock())
+			if err != nil {
+				return rec, err
+			}
+			if !updated {
+				return rec, importNotice("session changed during workspace transfer; retry")
+			}
+			rec.Metadata = workspace
 		}
 		if copyFrom != "" {
 			if err := copyImportedWorkspace(ctx, copyFrom, ws.Path, overrides, importCopyMarker(ws.Path, rec.ID)); err != nil {
@@ -481,7 +539,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if !updated {
-			return rec, errors.New("session changed during workspace transfer; retry")
+			return rec, importNotice("session changed during workspace transfer; retry")
 		}
 		rec.Metadata.ImportSource = &next
 	}
@@ -490,7 +548,13 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	// Retry setup after a failed post-create command, without copying over AO edits.
 	if !rec.Metadata.ImportSource.Prepared {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		// Like a native spawn, give the post-create steps their own limits on
+		// top of the resume request's budget, so a long install is not cut
+		// short and rerun from the start on every retry.
+		setupCtx, cancelSetup := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+		err := m.provisionWorkspace(setupCtx, project, ws.Path)
+		cancelSetup()
+		if err != nil {
 			return rec, err
 		}
 		prepared := *rec.Metadata.ImportSource
@@ -500,7 +564,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if !updated {
-			return rec, errors.New("session changed during workspace setup; retry")
+			return rec, importNotice("session changed during workspace setup; retry")
 		}
 	}
 	current, ok, err := m.store.GetSession(ctx, rec.ID)
@@ -508,9 +572,93 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		return rec, err
 	}
 	if !ok || current.IsTerminated {
-		return rec, errors.New("session was terminated during workspace setup")
+		return rec, importNotice("session was terminated during workspace setup")
 	}
 	return current, nil
+}
+
+// importDiffBase is the diff base for an imported workspace whose history ends
+// at sha: the commit itself, named after the default branch while that commit
+// is on it.
+func importDiffBase(ctx context.Context, root, sha, defaultBranch string) (string, string) {
+	for _, ref := range spawnDiffBaseRefCandidates(defaultBranch) {
+		if base, ok := spawnGitSingleLine(ctx, root, "merge-base", sha, ref); ok {
+			if base == sha {
+				return sha, ref
+			}
+			break
+		}
+	}
+	return sha, "HEAD"
+}
+
+// importLaunchPath is the folder an imported chat continues in: the subfolder
+// it ran in when the new worktree has it. Only Git's changes are copied, so a
+// git-ignored or empty folder, or one inside an unregistered nested repository,
+// is missing there; the provider would then fail to start on every retry, so
+// the chat continues from the worktree root instead.
+func importLaunchPath(workspace, subdir string) string {
+	path := filepath.Join(workspace, subdir)
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return workspace
+	}
+	return path
+}
+
+// importHeldByLiveSession reports whether a terminated imported session's
+// conversation was imported again into a live session. Only one live session
+// may hold an imported conversation, so the terminated one cannot come back.
+func (m *Manager) importHeldByLiveSession(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	source := rec.Metadata.ImportSource
+	if source == nil {
+		return false, nil
+	}
+	sessions, err := m.store.ListAllSessions(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, other := range sessions {
+		if other.ID == rec.ID || other.IsTerminated || other.Metadata.ImportSource == nil {
+			continue
+		}
+		if other.Metadata.ImportSource.ConfigDir == source.ConfigDir && other.Metadata.ImportSource.NativeID == source.NativeID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// chatPermissionModeLister lists the permission modes a harness can run a chat
+// in, strictest first.
+type chatPermissionModeLister interface {
+	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
+}
+
+// importedChatPermissions is the permission mode an imported chat opens in. An
+// import never chose one, so it would inherit the project default, which some
+// harnesses cannot run: Pi cannot ask for approval, so it only runs bypassing
+// permissions. The project default is kept when the harness accepts it;
+// otherwise the strictest mode the harness accepts is used, as a new chat on
+// that harness would offer.
+func (m *Manager) importedChatPermissions(ctx context.Context, rec domain.SessionRecord, configured ports.PermissionMode) ports.PermissionMode {
+	if rec.Metadata.ImportSource == nil || rec.Metadata.Permissions != "" {
+		return configured
+	}
+	lister, ok := m.chat.(chatPermissionModeLister)
+	if !ok {
+		return configured
+	}
+	modes, err := lister.PermissionModes(ctx, rec.Harness)
+	if err != nil || len(modes) == 0 {
+		return configured
+	}
+	want := ports.NormalizePermissionMode(configured)
+	for _, mode := range modes {
+		if ports.NormalizePermissionMode(mode) == want {
+			return configured
+		}
+	}
+	return modes[0]
 }
 
 func importCopyMarker(workspace string, id domain.SessionID) string {
@@ -562,7 +710,9 @@ func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string
 			return nil, err
 		}
 		info, err := root.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || err != nil && importAncestorNotDir(root, path) {
+			// A tracked folder replaced by a file (ENOTDIR on its children)
+			// deleted everything that was under it.
 			continue
 		}
 		if err != nil {
@@ -576,6 +726,17 @@ func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string
 		}
 	}
 	return facts, nil
+}
+
+// importAncestorNotDir reports whether a folder above path now exists as
+// something other than a folder, so path itself cannot exist.
+func importAncestorNotDir(root *os.Root, path string) bool {
+	for dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if info, err := root.Lstat(dir); err == nil {
+			return !info.IsDir()
+		}
+	}
+	return false
 }
 
 // clearEarlierImportCopy removes what an earlier, failed copy left that the
@@ -624,7 +785,7 @@ func importGitPaths(root string) ([]string, error) {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("git metadata must not be a symlink")
+			return importNotice("git metadata must not be a symlink")
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
@@ -653,7 +814,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		return err
 	}
 	if pathWithin(source, destination) {
-		return errors.New("destination must be outside the original folder")
+		return importNotice("destination must be outside the original folder")
 	}
 	gitPaths, err := importGitPaths(destination)
 	if err != nil {
@@ -697,7 +858,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 			native = override
 		}
 		if pathWithin(native, destination) {
-			return errors.New("destination must be outside the original folder")
+			return importNotice("destination must be outside the original folder")
 		}
 		state := gitState{rel: rel, source: native}
 		if err := read(&state); err != nil {
@@ -843,14 +1004,14 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		}
 		if !bytes.Equal(before.head, after.head) || !bytes.Equal(before.staged, after.staged) ||
 			!slices.Equal(before.changed, after.changed) || !maps.Equal(before.facts, after.facts) {
-			return errors.New("source files changed while copying; retry")
+			return importNotice("source files changed while copying; retry")
 		}
 	}
 	if completionMarker == "" {
 		return nil
 	}
 	if _, err := os.Lstat(completionMarker); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("source contains a reserved workspace transfer marker")
+		return importNotice("source contains a reserved workspace transfer marker")
 	}
 	return os.WriteFile(completionMarker, []byte(strings.TrimPrefix(filepath.Base(completionMarker), ".ao-import-complete-")), 0o600)
 }

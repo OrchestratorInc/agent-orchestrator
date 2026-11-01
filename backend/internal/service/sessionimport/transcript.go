@@ -51,8 +51,9 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
-	// model is the Claude model the conversation last answered with.
-	model string
+	// model is the model the conversation last answered with: a Claude model
+	// id, or Pi's provider/model. effort is Pi's thinking level.
+	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
 }
@@ -346,12 +347,23 @@ type claudeNode struct {
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
+	if harness == domain.HarnessPi {
+		return readPiTranscript(ctx, root, paths...)
+	}
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
-	// Qwen's records differ from Claude's and Codex's; its parser lives in qwen.go.
-	if harness == domain.HarnessQwen {
+	// Harnesses whose transcript format differs from the Claude/Codex JSONL
+	// handled below parse in their own file.
+	switch harness {
+	case domain.HarnessKimi:
+		return readKimiTranscript(ctx, root, paths...)
+	case domain.HarnessOpenCode:
+		// OpenCode's history lives in a SQLite database read by session id.
+		return readOpenCodeTranscript(ctx, root, paths...)
+	case domain.HarnessQwen:
+		// Qwen is a Gemini-CLI fork; its records differ from Claude's and Codex's.
 		return readQwenTranscript(ctx, root, paths...)
 	}
 	root = canonical(root)
@@ -366,7 +378,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	case domain.HarnessCodex:
 		t.nativeID = codexThreadID(paths[0])
+	case domain.HarnessDroid:
+		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	}
+	var droidState droidParse
 	var (
 		items       []tagged
 		ids         = map[string]int{}
@@ -425,6 +440,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if harness == domain.HarnessDroid {
+			return droidState.handle(line, &t, now, add)
+		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
 			return nil //nolint:nilerr // A torn or foreign record does not hide the rest of the conversation.
@@ -436,13 +454,15 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if r.Sidechain {
 				return nil
 			}
-			if r.SessionID != "" && r.SessionID != t.nativeID {
-				return errors.New("native identity mismatch")
-			}
-			if title := strings.TrimSpace(r.CustomTitle); title != "" {
+			// A forked or resumed conversation (--fork-session, older --resume)
+			// opens its own file with copies of the ancestor's records, which
+			// keep the ancestor's sessionId. They are this conversation's history
+			// too; only its own records name it.
+			own := r.SessionID == "" || r.SessionID == t.nativeID
+			if title := strings.TrimSpace(r.CustomTitle); title != "" && own {
 				customTitle = title
 			}
-			if title := strings.TrimSpace(r.AITitle); title != "" {
+			if title := strings.TrimSpace(r.AITitle); title != "" && own {
 				t.title = title
 			}
 			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, model: r.Message.Model, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
@@ -540,6 +560,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessCodex && !sawMeta {
 		return t, errors.New("no readable native conversation")
 	}
+	if harness == domain.HarnessDroid && !droidState.sawStart {
+		return t, errors.New("no readable native conversation")
+	}
 	chain := claude
 	if claudeLeaf != "" {
 		// Follow the active branch so rewound prompts are not shown as history.
@@ -597,6 +620,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessCodex {
 		prompted = true
 	}
+	if harness == domain.HarnessDroid {
+		prompted = droidState.prompted
+	}
 	trim()
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
@@ -633,26 +659,38 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	return t, nil
 }
 
-// codexVisible keeps one representation per role: Codex writes prompts as
-// events and/or response items, and only events exclude injected context.
-// Prompts are already unwrapped, so running it again changes nothing.
+// codexVisible keeps one representation of each message. Codex writes a prompt
+// as an event and/or a response item (only events exclude injected context),
+// and a reply as a response item and/or an event. Which ones it writes depends
+// on the client and version, and a thread continued elsewhere mixes them, so
+// the choice is made per run of consecutive same-role messages, one turn's
+// prompt or replies: the run's most preferred representation stands for it,
+// and a run with no preferred one keeps what it has. Prompts are already
+// unwrapped, so running it again changes nothing.
 func codexVisible(items []tagged) []tagged {
-	pick := func(kinds ...string) string {
-		for _, kind := range kinds {
-			if slices.ContainsFunc(items, func(i tagged) bool { return i.kind == kind }) {
-				return kind
+	preference := map[string]int{
+		"event-user": 0, "item-user": 1, "response-user": 2,
+		"response-assistant": 0, "event-assistant": 1, "item-assistant": 2,
+	}
+	out := items[:0]
+	for start := 0; start < len(items); {
+		end := start + 1
+		for end < len(items) && items[end].Role == items[start].Role {
+			end++
+		}
+		best := -1
+		for _, item := range items[start:end] {
+			if rank, ok := preference[item.kind]; ok && (best < 0 || rank < best) {
+				best = rank
 			}
 		}
-		return ""
-	}
-	user := pick("event-user", "item-user", "response-user")
-	assistant := pick("response-assistant", "event-assistant", "item-assistant")
-	out := items[:0]
-	for _, item := range items {
-		if item.kind != user && item.kind != assistant {
-			continue
+		// Writes trail reads, so filtering in place is safe.
+		for _, item := range items[start:end] {
+			if rank, ok := preference[item.kind]; ok && rank == best {
+				out = append(out, item)
+			}
 		}
-		out = append(out, item)
+		start = end
 	}
 	return out
 }

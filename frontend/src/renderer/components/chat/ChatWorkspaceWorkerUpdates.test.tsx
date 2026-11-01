@@ -44,27 +44,27 @@ function reply(turnId: string, minute: number, text: string): ConversationMessag
 	};
 }
 
-function snapshot(items: ConversationItem[]): ConversationSnapshot {
-	const turnIds = [...new Set(items.map((item) => item.turnId as string))];
+function snapshot(items: ConversationItem[], turnState: "completed" | "running" = "completed"): ConversationSnapshot {
+	const turnIds = [...new Set(items.map((item) => item.turnId).filter((id): id is string => Boolean(id)))];
 	return {
 		...chatFixtureEmpty,
 		latestSequence: Math.max(...items.map((item) => item.sequence)),
 		turns: turnIds.map((id) => ({
-			id, state: "completed" as const, providerTurnId: `provider-${id}`,
+			id, state: turnState, providerTurnId: `provider-${id}`,
 			requestedAt: items.find((item) => item.turnId === id)!.createdAt,
-			completedAt: items.filter((item) => item.turnId === id).at(-1)!.createdAt,
+			completedAt: turnState === "completed" ? items.filter((item) => item.turnId === id).at(-1)!.createdAt : undefined,
 		})),
 		items,
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator") {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items)} sessionRole={sessionRole} onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -72,6 +72,101 @@ function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), wor
 }
 
 describe("orchestrator worker updates", () => {
+	it("shows one collapsed spawn group and an idle worker when the daemon also recorded the spawn", async () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj --name 'Audit usage'"),
+			detail: { command: "ao spawn --project proj --name 'Audit usage'", output: 'spawned session proj-288 "Audit usage" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
+
+		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
+		expect(group).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Audit usage")).not.toBeInTheDocument();
+		await userEvent.click(group);
+		expect(group).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Audit usage")).toBeInTheDocument();
+		const idle = screen.getByText("Idle");
+		expect(idle.parentElement?.querySelector(".animate-spin")).toBeNull();
+	});
+
+	it("keeps a structured spawn action when no command group represents it", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("hides the matching action as soon as the command completes during a running turn", () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, action], vi.fn(), [], "orchestrator", "running");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("keeps a distinct structured spawn next to the command spawn group", () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-289", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
+		expect(screen.getByRole("button", { name: "Spawned 1 agent" })).toBeInTheDocument();
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it.each([
+		["provisioning", { provisionState: "provisioning" }, "Spawning", true],
+		["active", { status: "working", activity: { state: "active" } }, "Working", true],
+		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
+		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
+		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
+		["failed start", { provisionState: "failed" }, "Start failed", false],
+		["status needs input", { status: "needs_input" }, "Needs input", false],
+		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],
+		["activity waiting input", { activity: { state: "waiting_input" } }, "Needs input", false],
+		["activity blocked", { activity: { state: "blocked" } }, "Needs input", false],
+		["checking", { statusReadiness: "checking" }, "Checking status", false],
+		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
+		["missing", null, "Status unavailable", false],
+	] as const)("shows %s child state without a false spinner", async (_case, child, label, spinning) => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: child ? [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [], ...child }] : [],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
+		await userEvent.click(screen.getByRole("button", { name: "Spawned 1 agent" }));
+		const line = screen.getByText(label).parentElement;
+		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
+	});
+
 	it("draws a report as a row and an answer that asks nothing as one line that keeps copy and rollback", async () => {
 		const onRollback = renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
@@ -217,5 +312,48 @@ describe("agent messages in a worker chat", () => {
 
 		expect(screen.queryByTestId("agent-message")).not.toBeInTheDocument();
 		expect(screen.getByText("Rebased on main.")).toBeInTheDocument();
+	});
+});
+
+describe("messages an outside tool relayed", () => {
+	const ask = "Catch me up on what is done, what is blocked and what is next.";
+
+	it("draws an automation message under the tool's name, without its prefix or tag", () => {
+		renderOrchestrator([automation("t1", 1, `[via Grok Bot #191450] ${ask}`), reply("t1", 2, "Two PRs merged.")]);
+
+		const message = screen.getByTestId("agent-message");
+		expect(message).toHaveTextContent("Grok Bot");
+		expect(message).toHaveTextContent(ask);
+		expect(message).not.toHaveTextContent("[via");
+		expect(message).not.toHaveTextContent("191450");
+		expect(screen.queryByText("automation")).not.toBeInTheDocument();
+		// The orchestrator's answer stays a full reply: the tool asked, not a worker.
+		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
+	});
+
+	it("draws one AO stored as the human's the same way, instead of as the user's bubble", () => {
+		renderOrchestrator([{ ...automation("t1", 1, `[via Grok Bot] ${ask}`), origin: "human" }, reply("t1", 2, "Two PRs merged.")]);
+
+		expect(screen.getByTestId("agent-message")).toHaveTextContent(`Grok Bot${ask}`);
+	});
+
+	it("draws a steer it sent into a running turn the same way", () => {
+		renderOrchestrator([
+			{ ...automation("t1", 0, "List the open PRs."), origin: "human" },
+			command("t1", 1, "gh pr list"),
+			{
+				kind: "activity", id: "t1-steer", turnId: "t1", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+				summary: "[via Grok Bot #200733] Stop that.", detail: { event: "steer", text: "[via Grok Bot #200733] Stop that." }, createdAt: at(1),
+			},
+			reply("t1", 2, "Stopped."),
+		]);
+
+		expect(screen.getByTestId("agent-message")).toHaveTextContent("Grok BotStop that.");
+	});
+
+	it("keeps a message an AO session sent as that session's, whatever its text says", () => {
+		renderOrchestrator([{ ...automation("t1", 1, `[via Grok Bot] ${ask}`), senderSessionId: "proj-404" }, reply("t1", 2, "Ok.")], vi.fn(), [], "worker");
+
+		expect(screen.queryByTestId("agent-message")).not.toBeInTheDocument();
 	});
 });

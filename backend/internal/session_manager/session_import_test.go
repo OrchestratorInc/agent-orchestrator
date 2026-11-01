@@ -535,6 +535,36 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	}
 }
 
+type kimiHomeAgent struct{ fakeAgent }
+
+func (kimiHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
+	return nativeconfig.Resolve(env, "KIMI_CODE_HOME", ".kimi-code")
+}
+
+type kimiHomeAgents struct{}
+
+func (kimiHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return kimiHomeAgent{}, true }
+
+// Kimi stores sessions only under its home, so an imported Kimi chat must launch
+// in the source home that holds the conversation, overriding AO's managed home.
+func TestImportedConfigEnvPointsKimiAtSourceHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KIMI_CODE_HOME", "")
+	m := &Manager{agents: kimiHomeAgents{}}
+	source := filepath.Join(home, ".kimi-code")
+	sessionID := "session_11111111-2222-3333-4444-555555555555"
+	transcript := filepath.Join(source, "sessions", "wd_repo_abc123", sessionID, "agents", "main", "wire.jsonl")
+	rec := domain.SessionRecord{Harness: domain.HarnessKimi}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: sessionID, NativeTranscriptPath: transcript, ImportSource: &domain.SessionImportSource{NativeID: sessionID, ConfigDir: source}}
+	// The launch starts in AO's managed Kimi home, which does not hold this session.
+	env := map[string]string{"KIMI_CODE_HOME": filepath.Join(home, "managed-kimi")}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["KIMI_CODE_HOME"] != source {
+		t.Fatalf("KIMI_CODE_HOME = %q, want source home %q", env["KIMI_CODE_HOME"], source)
+	}
+}
+
 // Startup health treats a ready row without a workspace as an interrupted
 // spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
@@ -845,5 +875,49 @@ func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "setup-output")); err != nil {
 		t.Fatalf("a file the earlier attempt did not copy was removed: %v", err)
+	}
+}
+
+type droidHomeAgent struct{ fakeAgent }
+
+// NativeSessionConfigDir mirrors Droid's own resolver: FACTORY_HOME_OVERRIDE (or
+// HOME) with ".factory" appended. The env value is a home override, not the
+// state directory itself.
+func (droidHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
+	home := strings.TrimSpace(env["FACTORY_HOME_OVERRIDE"])
+	if home == "" {
+		home = strings.TrimSpace(env["HOME"])
+	}
+	return filepath.Join(home, ".factory"), nil
+}
+
+type droidHomeAgents struct{}
+
+func (droidHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return droidHomeAgent{}, true }
+
+// Droid's config env is a home override, so AO points FACTORY_HOME_OVERRIDE at
+// the parent of the imported conversation's state directory (not the dir
+// itself), and leaves it unset when the default home already owns it.
+func TestImportedConfigEnvDroidHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	m := &Manager{agents: droidHomeAgents{}}
+	rec := domain.SessionRecord{Harness: domain.HarnessDroid}
+
+	// Default home already holds the conversation: no override forced.
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: filepath.Join(home, ".factory")}}
+	env := map[string]string{"HOME": home}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if value, set := env["FACTORY_HOME_OVERRIDE"]; set {
+		t.Fatalf("default home forced an override: %q", value)
+	}
+
+	// A different, unreachable source home is selected by its parent directory.
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	rec.Metadata.ImportSource.ConfigDir = filepath.Join(other, ".factory")
+	rec.Metadata.NativeTranscriptPath = filepath.Join(other, ".factory", "sessions", "-work", "native.jsonl")
+	env = map[string]string{"HOME": home}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["FACTORY_HOME_OVERRIDE"] != other {
+		t.Fatalf("FACTORY_HOME_OVERRIDE = %q, want %q", env["FACTORY_HOME_OVERRIDE"], other)
 	}
 }

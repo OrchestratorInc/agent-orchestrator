@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
+import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -273,11 +274,17 @@ const config: ForgeConfig = {
 		// the artifact CI ships for x64 — completely unverified: a regression of
 		// exactly the crash #3879 fixed could ship without any automated gate
 		// catching it.
+		//
+		// Before any of that, fail the build if the dmg lost its install window
+		// layout (.DS_Store, background, icon positions). Without them Finder
+		// shows a large plain window with two small icons in a corner, and
+		// nothing else would notice. Runs on unsigned builds too.
 		postMake: async (_forgeConfig, makeResults) => {
 			for (const result of makeResults) {
 				if (result.platform !== "darwin") continue;
 				for (const artifact of result.artifacts) {
 					if (artifact.endsWith(".dmg")) {
+						await checkMacDmgLayout(artifact);
 						if (await sealDmg(artifact)) await verifyDmg(artifact);
 					} else if (artifact.endsWith(".zip") && isSigningConfigured()) {
 						await verifyMacArtifact(artifact);

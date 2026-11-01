@@ -155,4 +155,9 @@ func TestAdoptedImportShowsArchiveInPlaceOfPartialReplay(t *testing.T) {
 	if err != nil || texts(older.Messages) != "first,reply one" || older.HasMoreBefore {
 		t.Fatalf("older page = %q more=%v: %v", texts(older.Messages), older.HasMoreBefore, err)
 	}
+	// The full read promises the whole history, not one page of it.
+	full, err := svc.Snapshot(ctx, rec.ID)
+	if err != nil || texts(full.Messages) != "first,reply one,second,reply two,third" || full.HasMoreBefore {
+		t.Fatalf("full snapshot = %q more=%v: %v", texts(full.Messages), full.HasMoreBefore, err)
+	}
 }

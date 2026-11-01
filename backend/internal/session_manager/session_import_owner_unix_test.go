@@ -15,7 +15,60 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
+
+// TestFakeClaudeOwnerProcess is the body of startFakeClaude's child, not a test.
+func TestFakeClaudeOwnerProcess(t *testing.T) {
+	if os.Getenv("AO_TEST_FAKE_CLAUDE_OWNER") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+}
+
+// startFakeClaude runs a long-lived process that ps names "claude": this test
+// binary, through a symlink of that name, running only the helper above. A
+// symlink to /bin/sleep does not work where sleep is a multicall coreutils
+// (uutils, Ubuntu's default since 25.10): it does not know a tool called
+// "claude" and exits at once.
+func startFakeClaude(t *testing.T) *exec.Cmd {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	if err := os.Symlink(self, bin); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "-test.run=^TestFakeClaudeOwnerProcess$")
+	cmd.Env = append(os.Environ(), "AO_TEST_FAKE_CLAUDE_OWNER=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd
+}
+
+// waitForExecName waits until a just-started child has replaced the forked test
+// binary with its own executable and is still running. Until then ps names the
+// child after the test binary, so an ownership check run too early sees no
+// Claude process; a child that already exited is a zombie, never an owner.
+func waitForExecName(t *testing.T, pid int, name string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got, _, ok := processStart(context.Background(), pid); ok && got == name {
+			if !processalive.Alive(pid) {
+				t.Fatalf("process %d ran as %q but already exited", pid, name)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d never ran as %q", pid, name)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	ctx := context.Background()
@@ -48,15 +101,9 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 
 	// Claude Code registers live sessions under sessions/<pid>.json.
-	claudeBin := filepath.Join(t.TempDir(), "claude")
-	if err := os.Symlink("/bin/sleep", claudeBin); err != nil {
-		t.Fatal(err)
-	}
-	owner := exec.Command(claudeBin, "30")
-	if err := owner.Start(); err != nil {
-		t.Fatal(err)
-	}
+	owner := startFakeClaude(t)
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	waitForExecName(t, owner.Process.Pid, "claude")
 	claude := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
 	claude.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "7999f45f-eb7e-43b7-90da-be3d5fd2208d", ConfigDir: home}
 	register := func(pid int, cwd string, startedAt ...time.Time) {
@@ -103,18 +150,28 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 }
 
+// OpenCode has no per-session lock or live-session registry and stores no
+// writable transcript file, so there is never positive evidence that another
+// process holds the conversation.
+func TestImportOwnedElsewhereOpenCodeNeverOwned(t *testing.T) {
+	ctx := context.Background()
+	oc := domain.SessionRecord{Harness: domain.HarnessOpenCode}
+	oc.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "ses_e830c4a8affelmmC9j6HFbCZAr", ConfigDir: t.TempDir()}
+	oc.Metadata.NativeTranscriptPath = oc.Metadata.ImportSource.NativeID
+	if importOwnedElsewhere(ctx, oc) {
+		t.Fatal("OpenCode import must report not-owned without positive evidence")
+	}
+	if adoptedOwnedElsewhere(ctx, oc) {
+		t.Fatal("adopted OpenCode import must report not-owned")
+	}
+}
+
 // Claude Code accepts a second writer, so AO checks its registry after adoption too.
 func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	home := t.TempDir()
-	claudeBin := filepath.Join(t.TempDir(), "claude")
-	if err := os.Symlink("/bin/sleep", claudeBin); err != nil {
-		t.Fatal(err)
-	}
-	owner := exec.Command(claudeBin, "30")
-	if err := owner.Start(); err != nil {
-		t.Fatal(err)
-	}
+	owner := startFakeClaude(t)
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	waitForExecName(t, owner.Process.Pid, "claude")
 	body, _ := json.Marshal(map[string]any{"pid": owner.Process.Pid, "sessionId": "thread-1", "cwd": "/source"})
 	if err := os.MkdirAll(filepath.Join(home, "sessions"), 0o700); err != nil {
 		t.Fatal(err)

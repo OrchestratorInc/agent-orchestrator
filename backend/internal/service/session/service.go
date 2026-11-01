@@ -14,12 +14,14 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
@@ -206,6 +208,10 @@ type Service struct {
 	clock               func() time.Time
 	dataDir             string
 	telemetry           ports.EventSink
+	usageArchiveFlush   func(context.Context)
+	milestones          ports.InstallMilestones
+	firstSession        firstSessionClaims
+	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -285,7 +291,13 @@ type Deps struct {
 	Clock     func() time.Time
 	DataDir   string
 	Telemetry ports.EventSink
-	Logger    *slog.Logger
+	// Milestones durably records the install's first spawned session, so
+	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
+	Milestones ports.InstallMilestones
+	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
+	// nil, neither is reported from this service.
+	Delivery *deliverytelemetry.Recorder
+	Logger   *slog.Logger
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
 	// BackgroundContext owns best-effort work that must survive an HTTP request
@@ -315,7 +327,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -329,6 +341,11 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceManifests.now = s.clock
 	s.commitSelections = newCommitSelectionCache(commitSelectionCacheSize)
 	return s
+}
+
+// SetUsageArchiveFlush sends pending session summaries after a user archive.
+func (s *Service) SetUsageArchiveFlush(flush func(context.Context)) {
+	s.usageArchiveFlush = flush
 }
 
 // Spawn creates a session and returns the API-facing read model plus
@@ -436,12 +453,20 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
 	}
+	// Registered before Spawn writes its seed row, so a concurrent spawn that
+	// sees that row cannot take this spawn's first_for_install claim.
+	s.firstSession.begin(firstSession)
+	createdBy := s.spawnCreatedBy(ctx, cfg)
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
 	if err != nil {
+		s.firstSession.finish(s.milestones, firstSession, false)
 		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
 		return domain.SessionRecord{}, 0, 0, err
 	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	// Claimed even when telemetry is off: the marker describes the install.
+	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
+	s.recordCreatedBy(ctx, rec.ID, createdBy)
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -503,16 +528,63 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64) {
+// firstSessionClaims decides first_for_install on ao.session.spawned. The
+// prior-session check runs before Spawn, which persists a seed row before
+// provisioning, so a spawn that saw an empty install (eligible) can still be
+// provisioning when a later spawn that saw its row (ineligible) finishes.
+// While any eligible spawn is in flight, an ineligible one reports false
+// without claiming the durable marker; the eligible spawn owns the claim. With
+// none in flight, an ineligible spawn claims the marker so an install upgraded
+// from a build without markers never reports a later session as its first.
+type firstSessionClaims struct {
+	mu               sync.Mutex
+	eligibleInFlight int
+}
+
+func (c *firstSessionClaims) begin(eligible bool) {
+	if !eligible {
+		return
+	}
+	c.mu.Lock()
+	c.eligibleInFlight++
+	c.mu.Unlock()
+}
+
+// finish ends a spawn begun with begin. known is false when the flag should be
+// omitted: the spawn failed, there is no marker store, or it was unreadable.
+func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeeded bool) (first, known bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if eligible {
+		c.eligibleInFlight--
+	}
+	if !succeeded || m == nil {
+		return false, false
+	}
+	if !eligible && c.eligibleInFlight > 0 {
+		return false, true
+	}
+	return ports.FirstForInstall(m, "session_spawned", eligible)
+}
+
+func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
 	if s.telemetry == nil {
 		return
 	}
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        string(rec.Kind),
+		"kind":        telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
+		"created_by":  string(createdBy),
+	}
+	// Absent for spawns that no client request started (schedules, intake).
+	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
+		payload["surface"] = string(surface)
+	}
+	if firstKnown {
+		payload["first_for_install"] = firstForInstall
 	}
 	if actor, ok := s.githubActor(ctx); ok {
 		payload["github_actor"] = actor
@@ -545,6 +617,9 @@ func (s *Service) githubActor(ctx context.Context) (string, bool) {
 	return identity.Login, true
 }
 
+// emitFirstSessionSpawned is deprecated: it fires whenever the sessions table is
+// empty, so it repeats after a user clears their sessions. Use
+// ao.session.spawned with first_for_install=true. Kept for dashboard continuity.
 func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) {
 	if s.telemetry == nil {
 		return
@@ -552,7 +627,7 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":    string(rec.Kind),
+		"kind":    telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness": string(rec.Harness),
 	}
 	if !project.RegisteredAt.IsZero() {
@@ -580,7 +655,7 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	payload := map[string]any{
 		"component":   "session_service",
 		"operation":   "spawn_session",
-		"kind":        string(cfg.Kind),
+		"kind":        telemetrymeta.SessionKind(cfg.Kind, cfg.ProjectID),
 		"harness":     string(cfg.Harness),
 		"duration_ms": durationMs,
 		"error_kind":  errorKind,
@@ -600,14 +675,17 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	})
 }
 
-// captureRelaunchError sends a relaunch failure's raw error to Sentry.
-var captureRelaunchError = sentryobs.CaptureHTTPError
+// captureRelaunchError sends a relaunch failure through the daemon's gated,
+// privacy-safe Sentry boundary.
+var captureRelaunchError = func(ctx context.Context, err error, tags map[string]string, fingerprint string) {
+	sentryobs.CaptureError(ctx, err, tags, fingerprint, telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+}
 
 // emitRelaunchFailed records a failed agent relaunch. These answer 409
 // AGENT_RESUME_FAILED rather than 500, so neither ao.http.5xx nor the request
 // logger's Sentry capture sees them any more. PostHog gets the operation, step
 // and the root error's Go type (never its text, which can carry paths and env);
-// Sentry, which scrubs events, gets the raw error the 500 used to carry.
+// Sentry receives only fixed diagnostics after scrubbing the raw error.
 func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id domain.SessionID, err, mapped error) {
 	var relaunchErr *sessionmanager.RelaunchError
 	var apiErr *apierr.Error
@@ -632,10 +710,10 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 	var projectID *domain.ProjectID
 	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
 		payload["harness"] = string(rec.Harness)
-		payload["kind"] = string(rec.Kind)
+		payload["kind"] = telemetrymeta.SessionKind(rec.Kind, rec.ProjectID)
 		projectID = &rec.ProjectID
 	}
-	tags := map[string]string{"request_id": reqid.FromContext(ctx)}
+	tags := map[string]string{"area": "agent"}
 	for key, value := range payload {
 		tags[key] = fmt.Sprint(value)
 	}
@@ -707,9 +785,13 @@ func (s *Service) SpawnOrchestrator(
 		}
 		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
+			before, live := s.liveSessionBeforeEnd(retireCtx, orch.ID)
 			_ = s.sendRetireNotice(retireCtx, orch.ID)
-			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
-				return domain.Session{}, toAPIError(err)
+			retireErr := s.manager.RetireForReplacement(retireCtx, orch.ID)
+			// A failed cleanup can follow a successful terminal transition.
+			s.recordKillOutcome(retireCtx, before, live, retireErr)
+			if retireErr != nil {
+				return domain.Session{}, toAPIError(retireErr)
 			}
 		}
 	} else {
@@ -880,11 +962,16 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
 		// Known conditions (open elsewhere, resume in progress, terminated) keep
-		// their codes; any other failure of a pending import shows its cause.
+		// their codes; any other failure of a pending import is logged in full
+		// and reported by importResumeAPIError. The record is read even after
+		// the request's budget ran out, so a timeout is still recognized.
 		var known *apierr.Error
 		if !errors.As(mapSessionError(err), &known) {
-			if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok && rec.NeedsImportResume() {
-				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", err.Error(), nil)
+			if rec, ok, readErr := s.store.GetSession(context.WithoutCancel(ctx), id); readErr == nil && ok && rec.NeedsImportResume() {
+				if s.logger != nil {
+					s.logger.Warn("resume imported session", "session", id, "err", err)
+				}
+				apiErr := importResumeAPIError(err)
 				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 				return ResumeAgentOutcome{}, apiErr
 			}
@@ -898,6 +985,20 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// importResumeAPIError reports a pending import's failure without its raw
+// text: a reason written for the user (or a failed Setup step, as a native
+// spawn shows it) is a conflict the user can act on, a timeout asks for a
+// retry, and anything else is a server fault with a fixed message.
+func importResumeAPIError(err error) *apierr.Error {
+	if message, ok := sessionmanager.ImportFailureNotice(err); ok {
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", message, nil)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apierr.Unavailable("SESSION_IMPORT_RESUME_TIMEOUT", "Preparing this imported chat took too long. Try again.")
+	}
+	return apierr.Internal("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureFallback)
 }
 
 // StartAccountTransition moves the session's agent to another provider account
@@ -1008,20 +1109,29 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	freed, err := s.manager.Kill(ctx, id)
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
 		return freed, apiErr
 	}
 	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
+	}
 	return freed, nil
 }
 
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	result, err := s.manager.RequestKill(ctx, id)
+	// Terminal intent is acknowledged even while cleanup still runs: the
+	// session has ended for the user, also when a later step then failed.
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
@@ -1031,6 +1141,9 @@ func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (session
 	// A later cleanup failure must not leave a completed action in chat.
 	if !result.CleanupPending {
 		s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	}
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
 	}
 	return result, nil
 }
@@ -1604,6 +1717,11 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
 		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
+		// A chat session whose controller stopped or never started. Same answer
+		// steer-or-send gives, so clients can offer a resume instead of a 500.
+		return apierr.Conflict("CHAT_CONTROLLER_NOT_READY",
+			"the agent controller for this session is not running", nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)
@@ -1742,6 +1860,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_CWD_MISMATCH", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceLocked):
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspacePathOccupied):
+		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):

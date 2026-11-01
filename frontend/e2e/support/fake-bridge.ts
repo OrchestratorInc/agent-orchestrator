@@ -147,7 +147,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
-				sideChats: { capture: async () => undefined },
+				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
@@ -159,6 +159,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						preferredEditorId: "cursor" as const,
 						workspaceAvailable: true,
 					}),
+					getEditors: async () => ({
+						editors: [{ id: "cursor" as const, name: "Cursor", kind: "editor" as const }],
+						preferredEditorId: "cursor" as const,
+					}),
+					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
@@ -357,7 +362,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					list: async () => [],
 					importAccountHost: async () => undefined,
 					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => "",
+					issueAccountToken: async () => ({ token: "" }),
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -1044,7 +1049,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
-				sideChats: { capture: async () => undefined },
+				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
@@ -1056,6 +1061,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						preferredEditorId: "cursor" as const,
 						workspaceAvailable: true,
 					}),
+					getEditors: async () => ({
+						editors: [{ id: "cursor" as const, name: "Cursor", kind: "editor" as const }],
+						preferredEditorId: "cursor" as const,
+					}),
+					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
@@ -1246,7 +1256,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					list: async () => [],
 					importAccountHost: async () => undefined,
 					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => "",
+					issueAccountToken: async () => ({ token: "" }),
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,

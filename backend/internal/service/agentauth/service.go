@@ -210,6 +210,11 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
+	if plan.AgentID == "claude-code" && s.dataDir != "" {
+		// The launcher runs in a private auth workspace. Preserve the daemon's
+		// resolved data root instead of re-resolving a relative inherited value.
+		input.Env = map[string]string{"AO_DATA_DIR": s.dataDir}
+	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {

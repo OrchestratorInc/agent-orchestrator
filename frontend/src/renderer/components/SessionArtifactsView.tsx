@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal } from "lucide-react";
-import { isAgentActivityWorking } from "@aoagents/product-ui";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -88,14 +87,12 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 	);
 }
 
-// Full screen covers the whole app window. A wide markdown body keeps
-// GitHub's reading width, centred on the app's own background; the `!`
-// overrides github-markdown-css, which sets both outside Tailwind's layers.
+// Full screen covers the whole app window; Markdown keeps its shared reading layout.
 const FULLSCREEN_FRAME_CLASS =
-	"fixed inset-0 z-overlay flex flex-col bg-background outline-none [&_.markdown-body]:mx-auto! [&_.markdown-body]:max-w-[980px] [&_.markdown-body]:bg-transparent!";
+	"fixed inset-0 z-overlay flex flex-col bg-background outline-none";
 // The window's macOS traffic lights sit over the overlay's header unless the
 // window itself is full screen.
-const FULLSCREEN_MAC_HEADER_CLASS = "pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:pl-1";
+const FULLSCREEN_MAC_HEADER_CLASS = "min-h-traffic-light-clearance pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:min-h-9 [html:has(.native-fullscreen)_&]:pl-1";
 const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
 
 /**
@@ -351,7 +348,7 @@ export function SessionArtifactsView({
 	);
 	const livePreviewPaths = useMemo(() => new Set(
 		artifacts.filter((artifact) =>
-			(artifact.kind === "html" && artifact.inlineUrl && artifact.rawUrl)
+			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
 			|| (!cloud && /\.pdf$/i.test(artifact.path) && artifact.rawUrl),
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [artifacts, cloud]);
@@ -392,7 +389,6 @@ export function SessionArtifactsView({
 		sessionId: session.id,
 		sessionTitle: session.title ?? "",
 		cloud: session.cloud,
-		generating: isAgentActivityWorking(session.activity),
 	});
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
 		setEditingPath(null);

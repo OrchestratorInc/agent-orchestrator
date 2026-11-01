@@ -257,7 +257,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
+		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -344,11 +344,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 
 // aoMCPServers is the tool server every chat session gets: `ao mcp` from the
 // daemon's own binary, which gives the agent the html_preview and html_render
-// tools. Chat Service keeps it for every later start and resume of the
-// session (edit, rollback, fork). Its env holds only what the CLI needs to
-// reach this daemon for this session, never a credential such as
-// AO_BROWSER_CAPABILITY.
-func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
+// tools, and the computer-use tools while "Let agents use this computer" is
+// on, read like the system prompt when the chat starts or restores. Chat
+// Service keeps it for every later start and resume of the session (edit,
+// rollback, fork). Its env holds only what the CLI needs to reach this daemon
+// for this session, never a credential such as AO_BROWSER_CAPABILITY.
+func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
 		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
@@ -361,11 +362,14 @@ func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]strin
 	}
 	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
 	// without it config.Load needs $HOME to find the data dir.
-	serverEnv := make(map[string]string, 3)
+	serverEnv := make(map[string]string, 4)
 	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
 		if value := env[key]; value != "" {
 			serverEnv[key] = value
 		}
+	}
+	if m.computerUseEnabled(ctx) {
+		serverEnv[envComputerUse] = "1"
 	}
 	return []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
@@ -449,7 +453,7 @@ func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKin
 //
 // Whether the harness can run the result is checked afterwards. The cloud
 // control plane resolves a cloud session's interface with the same precedence
-// (cloud/internal/domain.StartInterface); both are tested against
+// (internal/domain.StartInterface in the private control plane); both are tested against
 // contracts/session-start-interface.json so they cannot drift.
 func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {
@@ -497,6 +501,7 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
+	agentConfig.Permissions = m.importedChatPermissions(ctx, rec, agentConfig.Permissions)
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, ws.Path)
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
@@ -520,7 +525,7 @@ func (m *Manager) resumeChatController(
 	}
 	launchPath := ws.Path
 	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
-		launchPath = filepath.Join(ws.Path, source.WorkingSubdir)
+		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
@@ -547,7 +552,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(rec.Harness, env),
+		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -576,7 +581,7 @@ func (m *Manager) resumeChatController(
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			if rec.NeedsImportResume() && started.ProviderConversationID != rec.Metadata.ImportSource.NativeID {
-				return ChatControllerCommit{}, fmt.Errorf("%w: the provider did not resume the original conversation", ports.ErrChatResumeFailed)
+				return ChatControllerCommit{}, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the provider did not resume the original conversation"))
 			}
 
 			metadata := rec.Metadata

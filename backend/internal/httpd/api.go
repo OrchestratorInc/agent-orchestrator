@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	UsageFlush         func(context.Context)
 	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
@@ -80,7 +82,9 @@ type APIDeps struct {
 	// phone's endpoint-refresh route.
 	Endpoints controllers.EndpointSource
 	Installer controllers.Installer
-	AgentAuth controllers.AgentAuthService
+	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
+	ComputerUse controllers.ComputerUse
+	AgentAuth   controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
 	GitHub controllers.GitHubPATService
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
@@ -155,6 +159,7 @@ type API struct {
 	endpoints     *controllers.EndpointsController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
+	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
 	github        *controllers.GitHubController
@@ -210,7 +215,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
@@ -219,6 +224,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
+		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
@@ -234,7 +240,9 @@ func setupRoute(req *http.Request) bool {
 		return false
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
+		// The first open of an imported chat runs Setup in its new workspace.
+		"/api/v1/sessions/{sessionId}/resume-agent":
 		return true
 	}
 	return false
@@ -274,6 +282,7 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
+				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -282,19 +291,26 @@ func (a *API) Register(root chi.Router) {
 						clone.ServeHTTP(w, req)
 						return
 					}
+					// A run_steps batch may run for the driver's full 60 s before
+					// its step report and closing window read, and an action is
+					// followed by its own read: either outlasts the REST budget.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
+						computerUse.ServeHTTP(w, req)
+						return
+					}
 					// A spawn, an orchestrator start or a restore runs the project's
 					// Setup inside the request, and a Setup step may take far longer
 					// than one REST request: the operation extends this budget by its
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
 						budget := timeout
-						if attachmentUploadRoute(req) {
+						if attachmentUploadRoute(req) || resumeAgentRoute(req) {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) || resumeAgentRoute(req) || sessionImportRoute(req) {
+					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -337,6 +353,7 @@ func (a *API) Register(root chi.Router) {
 			a.endpoints.Register(r)
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
+			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.github.Register(r)
@@ -431,4 +448,11 @@ func agentBrowserURL(raw string) *url.URL {
 		return nil
 	}
 	return u
+}
+
+// userMessageRecorder reuses the session service, which owns session telemetry,
+// to report human chat sends. Nil when the service cannot record.
+func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
+	recorder, _ := sessions.(controllers.UserMessageRecorder)
+	return recorder
 }
