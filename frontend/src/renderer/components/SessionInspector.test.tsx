@@ -1835,7 +1835,7 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("2h ago")).toBeInTheDocument();
   });
 
-  it("renders each Activity event as one row with its time on the right", () => {
+  it("renders each Activity event with its node on a connecting line and its time on the right", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
     renderWithQuery(
@@ -1852,11 +1852,48 @@ describe("SessionInspector Activity section", () => {
       const row = activitySection()
         .getByText(label)
         .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
-      expect(row).toHaveClass("flex", "items-center");
-      expect(row.firstElementChild).toHaveClass("rounded-full");
-      expect(row.lastElementChild).toHaveClass("font-mono");
+      expect(row).toHaveClass("flex");
+      // The node column comes first: a line in, the node, a line out.
+      expect(row.firstElementChild?.children).toHaveLength(3);
+      expect(within(row).getByText(/ago$/)).toHaveClass("font-mono");
     }
-    expect(screen.queryByTestId("inspector-timeline-connector")).not.toBeInTheDocument();
+  });
+
+  it("shows each PR review in Activity, counts them, and flips to oldest first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
+    const reviewed = prSummary(7, "open", {
+      createdAt: "2026-06-15T09:30:00Z",
+      review: {
+        decision: "changes_requested",
+        hasUnresolvedHumanComments: false,
+        unresolvedBy: [],
+        reviews: [
+          { reviewerId: "lin", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", autoInjectReview: false },
+          { reviewerId: "ada", verdict: "approved", submittedAt: "2026-06-15T11:30:00Z", autoInjectReview: false },
+        ],
+      },
+    });
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [reviewed], linkedPrs: [] }, error: undefined } : respond(path),
+    );
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open", { url: reviewed.url })], { createdAt: "2026-06-15T09:00:00Z", activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [reviewed]),
+    );
+
+    expect(await activitySection().findByText("Approved by ada")).toBeInTheDocument();
+    expect(activitySection().getByText("Changes requested by lin")).toBeInTheDocument();
+    expect(activitySection().getAllByText("on PR #7")).toHaveLength(2);
+    expect(activitySection().getByText("2 reviews")).toBeInTheDocument();
+    const order = () => activitySection().getAllByTestId("inspector-timeline-event").map((row) => row.textContent ?? "");
+    expect(order()[0]).toContain("Approved by ada");
+
+    await userEvent.click(activitySection().getByRole("button", { name: "Newest first" }));
+    expect(activitySection().getByRole("button", { name: "Oldest first" })).toHaveAttribute("aria-pressed", "true");
+    expect(order()[0]).toContain("Created workspace");
   });
 
   it("lists the branch's newest commits in Activity", async () => {

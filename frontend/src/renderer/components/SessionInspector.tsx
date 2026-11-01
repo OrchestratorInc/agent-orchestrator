@@ -27,8 +27,13 @@ import {
 } from "@aoagents/product-ui";
 import {
 	Archive,
+	ArrowDownUp,
 	ArrowUpRight,
 	ChevronRight,
+	CircleAlert,
+	CircleCheck,
+	FolderPlus,
+	GitCommitHorizontal,
 	GitPullRequest,
 	GitPullRequestClosed,
 	GitPullRequestDraft,
@@ -1241,6 +1246,7 @@ type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 const TIMELINE_COMMIT_LIMIT = 5;
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
+	const [newestFirst, setNewestFirst] = useState(true);
 	// Keyed on the daemon's commit count, not the shared history query that every
 	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
@@ -1260,21 +1266,33 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	pushEvent(
 		{
 			tone: "neutral",
+			icon: <FolderPlus />,
 			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
 	);
 
-	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
+	const commits = history.data?.commits ?? [];
+	for (const commit of commits.slice(0, TIMELINE_COMMIT_LIMIT)) {
+		const additions = commit.files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
+		const deletions = commit.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
 		pushEvent(
 			{
 				tone: "neutral",
+				icon: <GitCommitHorizontal />,
 				content: (
 					<>
-						{appI18n.t("inspector.timeline.committed")} <span className="text-passive">{commit.subject}</span>
+						<span className="sr-only">{appI18n.t("inspector.timeline.committed")} </span>
+						<span className="font-medium">{commit.subject}</span>
 					</>
 				),
+				detail: <span className="font-mono">{commit.sha.slice(0, 7)}</span>,
+				aside: commit.files.length > 0 ? (
+					<>
+						<span className="text-success">+{additions}</span> <span className="text-error">−{deletions}</span>
+					</>
+				) : undefined,
 				timestamp: formatTimeCompact(commit.timestamp),
 			},
 			commit.timestamp,
@@ -1285,6 +1303,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "neutral",
+				icon: <GitPullRequestDraft />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.draft")} />,
 				timestamp: prStateTime(pr),
 			},
@@ -1296,6 +1315,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "neutral",
+				icon: <GitPullRequest />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.opened")} />,
 				timestamp: prCreatedTime(pr),
 			},
@@ -1307,11 +1327,72 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		pushEvent(
 			{
 				tone: "good",
+				icon: <GitMerge />,
 				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.merged")} />,
 				timestamp: prStateTime(pr),
 			},
 			pr.stateChangedAt,
 		);
+	}
+
+	for (const pr of prs.filter((pr) => pr.state === "closed")) {
+		pushEvent(
+			{
+				tone: "neutral",
+				icon: <GitPullRequestClosed />,
+				content: <PRTimelineLink pr={pr} verb={appI18n.t("inspector.timeline.closed")} />,
+				timestamp: prStateTime(pr),
+			},
+			pr.stateChangedAt,
+		);
+	}
+
+	// Each review the provider reported, so the PR's conversation reads in order.
+	let reviewCount = 0;
+	for (const pr of prs) {
+		for (const review of pr.review.reviews ?? []) {
+			reviewCount += 1;
+			const approved = review.verdict === "approved";
+			const changes = review.verdict === "changes_requested";
+			pushEvent(
+				{
+					tone: approved ? "good" : changes ? "warn" : "neutral",
+					icon: approved ? <CircleCheck /> : changes ? <CircleAlert /> : <MessageSquare />,
+					content: approved
+						? appI18n.t("pr.review.approvedBy", { names: review.reviewerId })
+						: changes
+							? appI18n.t("pr.review.changesRequestedBy", { names: review.reviewerId })
+							: appI18n.t("inspector.timeline.reviewedBy", { name: review.reviewerId }),
+					detail: appI18n.t("inspector.timeline.onPR", { number: pr.number }),
+					timestamp: formatTimeCompact(review.submittedAt),
+				},
+				review.submittedAt,
+			);
+		}
+	}
+
+	// Comments and the first note of each review thread, so a conversation that
+	// happened on the provider still reads in order here.
+	let commentCount = 0;
+	for (const pr of prs) {
+		const notes = [
+			...(pr.conversation ?? []).map((comment) => ({ author: comment.author, at: comment.createdAt, where: undefined as string | undefined })),
+			...(pr.threads ?? []).flatMap((thread) => thread.comments[0] ? [{ author: thread.comments[0].author, at: thread.comments[0].createdAt, where: thread.path }] : []),
+		];
+		for (const note of notes) {
+			if (!note.at) continue;
+			commentCount += 1;
+			pushEvent(
+				{
+					tone: "neutral",
+					icon: <MessageSquare />,
+					content: appI18n.t("inspector.timeline.commentedBy", { name: note.author }),
+					detail: note.where ? `${note.where} · ${appI18n.t("inspector.timeline.onPR", { number: pr.number })}` : appI18n.t("inspector.timeline.onPR", { number: pr.number }),
+					timestamp: formatTimeCompact(note.at),
+				},
+				note.at,
+			);
+		}
 	}
 
 	if (session.status === "merged") {
@@ -1362,7 +1443,29 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		activityAt,
 	);
 
-	return <InspectorActivityTimelineView events={[...events].sort((a, b) => b.sortTime - a.sortTime)} />;
+	const sorted = [...events].sort((a, b) => (newestFirst ? b.sortTime - a.sortTime : a.sortTime - b.sortTime));
+	const counts = [
+		commits.length > 0 ? appI18n.t("inspector.git.commits", { count: Math.min(commits.length, TIMELINE_COMMIT_LIMIT) }) : undefined,
+		reviewCount > 0 ? appI18n.t("inspector.timeline.reviews", { count: reviewCount }) : undefined,
+		commentCount > 0 ? appI18n.t("inspector.timeline.comments", { count: commentCount }) : undefined,
+	].filter(Boolean);
+	return (
+		<>
+			<div className="mb-1 flex min-w-0 items-center justify-between gap-2 text-micro text-passive">
+				<span className="truncate">{counts.join(" · ")}</span>
+				<button
+					aria-pressed={!newestFirst}
+					className="inline-flex shrink-0 items-center gap-1 rounded-sm font-medium transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+					onClick={() => setNewestFirst((value) => !value)}
+					type="button"
+				>
+					<ArrowDownUp aria-hidden="true" className="size-icon-2xs" />
+					{newestFirst ? appI18n.t("inspector.timeline.newestFirst") : appI18n.t("inspector.timeline.oldestFirst")}
+				</button>
+			</div>
+			<InspectorActivityTimelineView events={sorted} />
+		</>
+	);
 }
 
 function PRTimelineLink({ pr, verb }: { pr: SessionPRSummary; verb: string }) {

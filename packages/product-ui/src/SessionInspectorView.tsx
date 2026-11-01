@@ -455,7 +455,13 @@ export function InspectorPullRequestCardView({
 export type InspectorTimelineTone = "now" | "good" | "warn" | "neutral";
 
 export type InspectorTimelineEvent = {
+	/** Right of the second line, such as a commit's "+12 −3". */
+	aside?: ReactNode;
 	content: ReactNode;
+	/** A second line under the title, such as a commit's short SHA. */
+	detail?: ReactNode;
+	/** Drawn in the node instead of the dot; the live row keeps its dot. */
+	icon?: ReactNode;
 	markerBreathe?: boolean;
 	markerTone?: string;
 	timestamp: string | null;
@@ -469,24 +475,51 @@ const timelineNodeTone: Record<InspectorTimelineTone, string> = {
 	warn: "bg-warning shadow-timeline-dot",
 };
 
+const timelineIconTone: Record<InspectorTimelineTone, string> = {
+	neutral: "text-passive",
+	now: "text-working",
+	good: "text-success",
+	warn: "text-warning",
+};
+
+/** One line joins the nodes, as in a commit history; it stops at the first and last node. */
 export function InspectorActivityTimelineView({ events }: { events: InspectorTimelineEvent[] }) {
 	return (
 		<div className="flex flex-col">
 			{events.map((event, index) => (
-				<div key={index} className="flex min-h-7 items-center gap-2.5" data-testid="inspector-timeline-event">
-					<span
-						aria-hidden="true"
-						className={cn(
-							"size-1.5 shrink-0 rounded-full",
-							timelineNodeTone[event.tone],
-							event.markerBreathe && "animate-status-pulse",
+				<div key={index} className="flex min-h-7 gap-2.5" data-testid="inspector-timeline-event">
+					<span aria-hidden="true" className="relative flex w-4 shrink-0 flex-col items-center">
+						{/* Centres the node on the title line (py-1 plus a 20px line). */}
+						<span className={cn("w-px flex-none bg-border", event.icon ? "basis-1.5" : "basis-[11px]", index === 0 && "invisible")} />
+						{event.icon ? (
+							<span className={cn("grid size-4 shrink-0 place-items-center [&_svg]:size-3.5", timelineIconTone[event.tone])}>{event.icon}</span>
+						) : (
+							<span
+								aria-hidden="true"
+								className={cn(
+									"size-1.5 shrink-0 rounded-full",
+									timelineNodeTone[event.tone],
+									event.markerBreathe && "animate-status-pulse",
+								)}
+								style={event.markerTone ? { background: event.markerTone } : undefined}
+							/>
 						)}
-						style={event.markerTone ? { background: event.markerTone } : undefined}
-					/>
-					<div className="min-w-0 flex-1 truncate text-sm text-foreground [&_b]:font-semibold">{event.content}</div>
-					{event.timestamp ? (
-						<span className="shrink-0 font-mono text-xs tabular-nums text-passive">{event.timestamp}</span>
-					) : null}
+						<span className={cn("w-px flex-1 bg-border", index === events.length - 1 && "invisible")} />
+					</span>
+					<div className="min-w-0 flex-1 py-1">
+						<div className="flex min-w-0 items-baseline gap-2">
+							<div className="min-w-0 flex-1 truncate text-sm text-foreground [&_b]:font-semibold">{event.content}</div>
+							{event.timestamp ? (
+								<span className="shrink-0 font-mono text-xs tabular-nums text-passive">{event.timestamp}</span>
+							) : null}
+						</div>
+						{event.detail || event.aside ? (
+							<div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-passive">
+								<div className="min-w-0 flex-1 truncate">{event.detail}</div>
+								{event.aside ? <div className="shrink-0 font-mono tabular-nums">{event.aside}</div> : null}
+							</div>
+						) : null}
+					</div>
 				</div>
 			))}
 		</div>
