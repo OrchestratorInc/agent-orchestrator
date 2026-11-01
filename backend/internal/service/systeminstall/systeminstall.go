@@ -1233,7 +1233,17 @@ func (s *Service) beginWorker() bool {
 // harness hold, command termination delays, and terminal state persistence. The daemon
 // must drain for at least this long so normal shutdown cannot skip v1 relinking.
 func (s *Service) ShutdownTimeout() time.Duration {
-	return 2*s.cleanupStepTimeout() + otherHarnessHoldWait + 2*defaultPersistenceTimeout + 30*time.Second
+	return shutdownTimeoutForCleanup(s.cleanupStepTimeout())
+}
+
+// DefaultShutdownTimeout is the installer drain budget available before the
+// service is constructed, so a replacement daemon can wait for its predecessor.
+func DefaultShutdownTimeout() time.Duration {
+	return shutdownTimeoutForCleanup(cleanupTimeout)
+}
+
+func shutdownTimeoutForCleanup(stepTimeout time.Duration) time.Duration {
+	return 2*stepTimeout + otherHarnessHoldWait + 2*defaultPersistenceTimeout + 30*time.Second
 }
 
 // Close cancels and drains daemon-owned harness installation work.
