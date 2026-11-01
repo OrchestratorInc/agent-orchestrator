@@ -178,6 +178,11 @@ type SessionImportSource struct {
 	Transferred   bool   `json:"transferred"`
 	Prepared      bool   `json:"prepared"`
 	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// ResumeCwd is the launch directory AO prepared a directory-keyed provider's
+	// session for on the first open (see ports.AgentImportedSessionRelocator).
+	// Every later launch of the session uses it, so the provider keeps finding
+	// the same copy even if WorkingSubdir appears or disappears in between.
+	ResumeCwd string `json:"resumeCwd,omitempty"`
 	// HistoryThrough is the last conversation sequence the provider replayed
 	// while adopting. The timeline shows the archive in place of that replay.
 	HistoryThrough int64 `json:"historyThrough,omitempty"`

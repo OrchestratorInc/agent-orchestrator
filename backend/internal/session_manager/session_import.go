@@ -117,6 +117,69 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
 
+// relocateImportedSession lets a provider that finds a session by the directory
+// it runs in (OMP, Qwen, Kimchi) load the imported session from AO's launch
+// directory, before the first resume. Providers that find a session by id from
+// any directory do not implement the relocator and need nothing.
+//
+// It records the launch directory as ResumeCwd, and every later launch of the
+// session is pinned to it (pinnedImportLaunchPath), so the provider keeps
+// finding the same copy, which then holds AO's turns. If the copy is still not
+// where the provider looks, the required first-open replay comes back without
+// messages and the import fails rather than continuing an empty chat.
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string) (domain.SessionRecord, error) {
+	source := rec.Metadata.ImportSource
+	if source == nil || m.agents == nil {
+		return rec, nil
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return rec, nil
+	}
+	relocator, ok := agent.(ports.AgentImportedSessionRelocator)
+	if !ok {
+		return rec, nil
+	}
+	err := relocator.RelocateImportedSession(ctx, ports.ImportedSessionRelocation{
+		NativeSessionID: source.NativeID,
+		ConfigDir:       source.ConfigDir,
+		TranscriptPath:  rec.Metadata.NativeTranscriptPath,
+		SourceCWD:       source.CWD,
+		LaunchCWD:       launchPath,
+	})
+	if err != nil {
+		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), err)
+	}
+	if source.ResumeCwd == launchPath {
+		return rec, nil
+	}
+	next := *source
+	next.ResumeCwd = launchPath
+	updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
+	if err != nil {
+		return rec, err
+	}
+	if !updated {
+		return rec, importNotice("session changed while preparing the conversation; retry")
+	}
+	rec.Metadata.ImportSource = &next
+	return rec, nil
+}
+
+// pinnedImportLaunchPath is the launch directory of a relocated import: the one
+// its provider's copy was prepared for. It must stay inside the workspace, and
+// is recreated when something removed it, so the provider never looks for the
+// session in another folder.
+func pinnedImportLaunchPath(workspace, resumeCwd string) (string, error) {
+	if !pathWithin(workspace, resumeCwd) {
+		return "", importNotice("this chat's folder is no longer inside its AO workspace")
+	}
+	if err := os.MkdirAll(resumeCwd, 0o755); err != nil {
+		return "", err
+	}
+	return resumeCwd, nil
+}
+
 func sameDirectory(a, b string) bool {
 	if resolved, err := filepath.EvalSymlinks(a); err == nil {
 		a = resolved

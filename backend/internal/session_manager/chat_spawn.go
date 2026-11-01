@@ -524,8 +524,21 @@ func (m *Manager) resumeChatController(
 		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
 	}
 	launchPath := ws.Path
-	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
+	if source := rec.Metadata.ImportSource; source != nil && source.ResumeCwd != "" {
+		pinned, pinErr := pinnedImportLaunchPath(ws.Path, source.ResumeCwd)
+		if pinErr != nil {
+			return RestoreResult{}, relaunchFailed("import launch directory", fmt.Errorf("%s %s: %w", operation, rec.ID, pinErr))
+		}
+		launchPath = pinned
+	} else if source != nil && source.WorkingSubdir != "" {
 		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
+	}
+	if requireNativeHistory && rec.NeedsImportResume() {
+		relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath)
+		if relocateErr != nil {
+			return RestoreResult{}, relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, relocateErr))
+		}
+		rec = relocated
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
