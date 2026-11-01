@@ -36,6 +36,7 @@ import {
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
 import { renderChat as render } from "../../test/render-chat";
+import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -1538,6 +1539,45 @@ describe("ChatWorkspace timeline", () => {
 		expect(
 			within(screen.getByRole("log", { name: "Conversation" })).queryByText("Which harness?"),
 		).not.toBeInTheDocument();
+	});
+
+	it("answers a Codex structured question through the real elicitation dock instead of an empty command approval", async () => {
+		const user = userEvent.setup();
+		const onResolveInput = vi.fn();
+		const onDecide = vi.fn();
+		const snapshot = withUserInput("pending");
+		const input = snapshot.items.find((item) => item.id === "input-1");
+		if (!input || input.kind !== "activity") throw new Error("missing input activity");
+		input.summary = codexInput.detail.message;
+		input.detail = { ...codexInput.detail, inputMode: "form", schema: { ...codexInput.detail.schema, type: "object" } };
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} onResolveInput={onResolveInput} onDecide={onDecide} />);
+		const dock = within(screen.getByTestId("elicitation-composer-dock"));
+		expect(dock.getAllByText("Which direction should we take?").length).toBeGreaterThan(0);
+		expect(dock.getByText("Use the native protocol")).toBeVisible();
+		expect(dock.getByText("Keep the bridge")).toBeVisible();
+		expect(screen.queryByText("The agent offered no decisions AO can present")).not.toBeInTheDocument();
+		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
+		await user.click(dock.getByRole("radio", { name: /Native/ }));
+		await user.click(dock.getByRole("button", { name: "Continue" }));
+		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
+		expect(onDecide).not.toHaveBeenCalled();
+		input.status = "resolved";
+		input.inputResponse = { action: "accept", content: { first_value: "Native" } };
+		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
+		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
+		const history = within(screen.getByRole("region", { name: "Agent question history" }));
+		expect(history.getByText("Which direction should we take?")).toBeVisible();
+		const header = history.getByText("Direction");
+		expect(header).toBeVisible();
+		const field = header.parentElement;
+		if (!field) throw new Error("missing answered Direction field");
+		const answer = within(field).getByRole("definition");
+		expect(answer).toBeVisible();
+		expect(answer.textContent).toBe("Native");
+		expect(history.queryByText("Bridge", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Use the native protocol", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Keep the bridge", { exact: false })).not.toBeInTheDocument();
+		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 	});
 
 	it.each(["running", "completed"] as const)("keeps answered questions and feedback readable during a %s turn", async (state) => {
