@@ -1481,9 +1481,11 @@ select {
 	font: inherit;
 }
 
+/* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+[role="alert"] {
 	-webkit-user-select: text;
 	user-select: text;
 }

@@ -193,6 +193,8 @@ export function SessionInspectorShellView({
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
 					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
+					(activeView === "summary" || activeView === "reviews") && "select-text",
 					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
