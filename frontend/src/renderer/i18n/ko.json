@@ -3314,6 +3314,7 @@
 	"remote.shareThisComputer": "내 기기에서 접근 허용",
 	"remote.shareThisComputerDescription": "AO 계정에 로그인한 기기에서 이 컴퓨터의 프로젝트와 세션을 열 수 있습니다. 터널을 거치는 트래픽은 Cloudflare가 읽을 수 있습니다.",
 	"remote.shareThisComputerOn": "기기에서 이 컴퓨터는 {{name}}(으)로 표시됩니다.",
+	"remote.shareThisComputerUnlinked": "연결 비밀번호가 바뀌어 기기에서 더 이상 {{name}}을(를) 열 수 없습니다. 다시 접근을 허용하려면 켜세요.",
 	"remote.shareThisComputerStarting": "원격 접근을 시작하는 중…",
 	"remote.shareThisComputerNeedsCloudflared": "기기에서 이 컴퓨터에 연결하려면 cloudflared를 설치하세요.",
 	"remote.shareThisComputerTimeout": "원격 접근을 시작하지 못했습니다. 다시 시도하세요.",

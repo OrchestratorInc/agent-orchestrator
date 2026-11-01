@@ -187,6 +187,29 @@ it.each([
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(message));
 });
 
+it("says it is loading while a remote host has not answered, never \"No session\"", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	// A machine behind a fixed address that is offline: Cloudflare answers 530,
+	// after however long the tunnel takes.
+	let answer: () => void = () => undefined;
+	const answered = new Promise<void>((resolve) => { answer = resolve; });
+	vi.stubGlobal("fetch", vi.fn(async () => {
+		await answered;
+		return new Response("<html>error code: 1033</html>", { status: 530, headers: { "content-type": "text/html" } });
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+
+	expect(await screen.findByRole("status")).toHaveTextContent("Loading session");
+	// The session surface without a session reads "No session" and asks to pick a worker.
+	expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
+	expect(screen.queryByText("No session")).not.toBeInTheDocument();
+
+	await act(async () => { answer(); });
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not load this remote session."));
+	expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
+});
+
 it("resolves an approval and interrupts Box B despite equal IDs on Box A and local", async () => {
 	localGet.mockReset();
 	localPost.mockReset();

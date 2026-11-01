@@ -3426,6 +3426,7 @@
 	"remote.shareThisComputer": "Разрешить доступ с ваших устройств",
 	"remote.shareThisComputerDescription": "Устройства, на которых выполнен вход в ваш аккаунт AO, могут открывать проекты и сессии этого компьютера. Cloudflare может читать трафик в туннеле.",
 	"remote.shareThisComputerOn": "Ваши устройства видят этот компьютер как {{name}}.",
+	"remote.shareThisComputerUnlinked": "Ваши устройства больше не могут открыть {{name}}: пароль подключения изменился. Включите, чтобы снова дать им доступ.",
 	"remote.shareThisComputerStarting": "Запуск удалённого доступа…",
 	"remote.shareThisComputerNeedsCloudflared": "Установите cloudflared, чтобы ваши устройства могли подключаться к этому компьютеру.",
 	"remote.shareThisComputerTimeout": "Удалённый доступ не запустился. Попробуйте ещё раз.",

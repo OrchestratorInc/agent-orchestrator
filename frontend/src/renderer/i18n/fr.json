@@ -3375,6 +3375,7 @@
 	"remote.shareThisComputer": "Autoriser l’accès depuis vos appareils",
 	"remote.shareThisComputerDescription": "Les appareils connectés à votre compte AO peuvent ouvrir les projets et les sessions de cet ordinateur. Cloudflare peut lire le trafic du tunnel.",
 	"remote.shareThisComputerOn": "Vos appareils voient cet ordinateur sous le nom {{name}}.",
+	"remote.shareThisComputerUnlinked": "Vos appareils ne peuvent plus ouvrir {{name}} : son mot de passe de connexion a changé. Activez cette option pour leur redonner l’accès.",
 	"remote.shareThisComputerStarting": "Démarrage de l’accès à distance…",
 	"remote.shareThisComputerNeedsCloudflared": "Installez cloudflared pour que vos appareils puissent joindre cet ordinateur.",
 	"remote.shareThisComputerTimeout": "L’accès à distance n’a pas démarré. Réessayez.",

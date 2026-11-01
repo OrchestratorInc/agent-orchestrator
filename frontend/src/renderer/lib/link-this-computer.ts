@@ -22,30 +22,32 @@ export function fitLabel(name: string): string {
  * host id is "" when nothing was linked:
  * without url on an AO Cloud with no fixed addresses (Allow access links again
  * with the quick tunnel's url once it has one), or with ifListed when the
- * account does not list this computer. With ifUnlisted, a listed computer is
- * left as it is and its host id returned. All are decided before the machine
+ * account does not list this computer. Both are decided before the machine
  * moves its account token here, which cuts off an account that had it.
+ *
+ * A computer the account already lists is linked again with a token the
+ * machine holds now, under the name the account shows for it.
  */
 export async function linkThisComputer(
 	cloudBaseUrl: string,
 	accountId: string,
 	hostId: string,
 	password: string,
-	options: { url?: string; ifListed?: boolean; ifUnlisted?: boolean } = {},
+	options: { url?: string; ifListed?: boolean } = {},
 ): Promise<{ hostId: string; added: boolean }> {
 	const directory = await readAccountHostDirectory(cloudBaseUrl);
-	const listed = directory.hosts.some((host) => host.hostId === hostId);
+	const listing = directory.hosts.find((host) => host.hostId === hostId);
+	const listed = listing !== undefined;
 	if (options.url === undefined && !directory.fixedAddresses) return { hostId: "", added: false };
 	if (options.ifListed && !listed) return { hostId: "", added: false };
-	// Already listed: nothing to do, and no new credential for the account.
-	if (options.ifUnlisted && listed) return { hostId, added: false };
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});
 	if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
 	await saveAccountRemoteHost(cloudBaseUrl, {
 		hostId: issued.data.hostId,
-		label: fitLabel(await aoBridge.remotes.computerName()),
+		// A name set on another device stays.
+		label: fitLabel(listing?.label || await aoBridge.remotes.computerName()),
 		url: options.url,
 		token: issued.data.token,
 		// AO Cloud then needs the machine's own signature on its requests. An

@@ -3375,6 +3375,7 @@
 	"remote.shareThisComputer": "Permitir acesso dos seus dispositivos",
 	"remote.shareThisComputerDescription": "Dispositivos conectados à sua conta AO podem abrir os projetos e as sessões deste computador. A Cloudflare pode ler o tráfego do túnel.",
 	"remote.shareThisComputerOn": "Seus dispositivos veem este computador como {{name}}.",
+	"remote.shareThisComputerUnlinked": "Seus dispositivos não conseguem mais abrir {{name}}: a senha de conexão mudou. Ative para liberar o acesso de novo.",
 	"remote.shareThisComputerStarting": "Iniciando o acesso remoto…",
 	"remote.shareThisComputerNeedsCloudflared": "Instale o cloudflared para que seus dispositivos alcancem este computador.",
 	"remote.shareThisComputerTimeout": "O acesso remoto não foi iniciado. Tente novamente.",

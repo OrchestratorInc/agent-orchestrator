@@ -66,7 +66,12 @@ export function ThisComputerAccess() {
 
 	const current = status.data;
 	const record = current ? accountHosts.data?.find((host) => host.hostId === current.hostId) : undefined;
-	const on = Boolean(current?.enabled && !current.noPublicTunnel && record);
+	const listedAndServed = Boolean(current?.enabled && !current.noPublicTunnel && record);
+	// A new connection password took back the token the account's listing
+	// carries: the account's devices are refused, and the machine no longer
+	// publishes its address. Turning on links it again.
+	const unlinked = listedAndServed && current?.accountLinked === false;
+	const on = listedAndServed && !unlinked;
 	const loaded = current !== undefined && accountHosts.data !== undefined;
 	const loadError = [status.error, accountHosts.error].find((cause) => cause instanceof Error)?.message ?? "";
 
@@ -139,6 +144,7 @@ export function ThisComputerAccess() {
 	let description = t("remote.shareThisComputerDescription");
 	if (pending === true || (unreachable && !tunnelError)) description = t("remote.shareThisComputerStarting");
 	else if (on && record) description = t("remote.shareThisComputerOn", { name: record.label });
+	else if (unlinked && record) description = t("remote.shareThisComputerUnlinked", { name: record.label });
 	const shownError = error || tunnelError || loadError;
 
 	return (

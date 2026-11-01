@@ -46,14 +46,19 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 			Use: action.name, Args: noArgs,
 			Short: action.name + " this machine's authenticated remote listener",
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				var status remoteHostStatus
+				var status, before remoteHostStatus
 				method, path := action.method, action.path
+				if action.name == "enable" {
+					// Read first: enabling a stopped listener makes a new
+					// connection password, which takes back the account link.
+					if err := ctx.doJSON(cmd.Context(), "GET", "mobile/status", nil, &before); err != nil {
+						return remoteHostDaemonError(err)
+					}
+				}
 				if action.name == "enable" && tunnelOnly {
 					method, path = "POST", "mobile/enable-tunnel-only"
 				} else if action.name == "enable" && tunnel {
-					if err := ctx.doJSON(cmd.Context(), "GET", "mobile/status", nil, &status); err != nil {
-						return remoteHostDaemonError(err)
-					}
+					status = before
 					if status.Enabled && status.LoopbackOnly {
 						return errors.New("listener is loopback-only; run `ao remote-host disable` before enabling LAN and tunnel access")
 					}
@@ -77,6 +82,13 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				}
 				if status.AccountLinked {
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Linked to an AO account: its signed-in devices list this machine."); err != nil {
+						return err
+					}
+				} else if before.AccountLinked {
+					// The account still lists this machine, with a token it no
+					// longer accepts: its devices are refused, and the machine
+					// stops publishing its address to the account.
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "The new connection password unlinked this machine from your AO account, so its devices can no longer open it. Run `ao remote-host link` to link it again."); err != nil {
 						return err
 					}
 				}
