@@ -68,6 +68,15 @@ func (f *guidedTerminalFake) IsShellTerminalChildAlive(context.Context, string) 
 	return f.alive && !f.closed, nil
 }
 
+func (f *guidedTerminalFake) CommandTerminalHandles(_ context.Context, owner string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.input.Owner != owner || f.closed {
+		return nil, nil
+	}
+	return []string{"private-auth-pty"}, nil
+}
+
 func TestEveryCommandPlanHasAnInlineLoginMethod(t *testing.T) {
 	for _, plan := range plans {
 		if len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
