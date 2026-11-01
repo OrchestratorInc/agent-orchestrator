@@ -21,12 +21,13 @@ type command struct {
 }
 
 type frame struct {
-	Version   int        `json:"version"`
-	Type      string     `json:"type"`
-	RequestID string     `json:"requestId,omitempty"`
-	EventID   string     `json:"eventId,omitempty"`
-	Error     string     `json:"error,omitempty"`
-	Event     *wireEvent `json:"event,omitempty"`
+	Version         int                         `json:"version"`
+	Type            string                      `json:"type"`
+	RequestID       string                      `json:"requestId,omitempty"`
+	EventID         string                      `json:"eventId,omitempty"`
+	Error           string                      `json:"error,omitempty"`
+	BackgroundTasks *[]ports.ChatBackgroundTask `json:"backgroundTasks,omitempty"`
+	Event           *wireEvent                  `json:"event,omitempty"`
 }
 
 type wireEvent struct {

@@ -146,6 +146,8 @@ type Config struct {
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// BackgroundTasks reads native background work without issuing a prompt.
+	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -733,6 +735,7 @@ func (d *Driver) initialize(
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.backgroundTasks = d.cfg.BackgroundTasks
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
@@ -793,7 +796,7 @@ func (d *Driver) initialize(
 				"jetbrains": map[string]any{
 					"air": map[string]any{
 						"version":      1,
-						"capabilities": []string{"sessionFailure"},
+						"capabilities": []string{"sessionFailure", "asyncTasks"},
 					},
 				},
 			},
@@ -1010,4 +1013,12 @@ func normalizeACPLoadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}
 	return normalizeACPError(operation, err)
+}
+
+// BackgroundTaskReporting describes the task reader shared by every conversation.
+func (d *Driver) BackgroundTaskReporting() string {
+	if d.cfg.BackgroundTasks != nil {
+		return "native"
+	}
+	return "reported"
 }

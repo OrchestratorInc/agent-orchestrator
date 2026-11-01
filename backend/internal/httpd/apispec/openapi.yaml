@@ -6602,6 +6602,33 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/background-tasks:
+    get:
+      operationId: getBackgroundTasks
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTasksResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Inspect native background work without waking the session
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/chat-view:
     post:
       operationId: setSessionChatView
@@ -12214,6 +12241,26 @@ paths:
         decorated
       tags:
       - sessions
+  /api/v1/sessions/background-tasks:
+    get:
+      operationId: listBackgroundTasks
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBackgroundTasksResponse'
+          description: OK
+      summary: List native background work for attached session controllers
+      tags:
+      - conversations
   /api/v1/sessions/cleanup:
     post:
       operationId: cleanupSessions
@@ -14552,6 +14599,66 @@ components:
       - reason
       - paused
       - networkOutcome
+      type: object
+    BackgroundTaskResponse:
+      properties:
+        description:
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        kind:
+          enum:
+          - shell
+          - agent
+          - other
+          type: string
+        runId:
+          type: string
+        state:
+          enum:
+          - running
+          - paused
+          - completed
+          - failed
+          - stopped
+          type: string
+      required:
+      - id
+      - kind
+      - description
+      - state
+      type: object
+    BackgroundTasksResponse:
+      properties:
+        availability:
+          enum:
+          - ready
+          - partial
+          - unavailable
+          type: string
+        controllerGeneration:
+          type: string
+        observedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/BackgroundTaskResponse'
+          type: array
+      required:
+      - sessionId
+      - controllerGeneration
+      - availability
+      - tasks
       type: object
     BrowserCommandRequest:
       properties:
@@ -17984,6 +18091,15 @@ components:
           type: string
       required:
       - automations
+      type: object
+    ListBackgroundTasksResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/BackgroundTasksResponse'
+          type: array
+      required:
+      - sessions
       type: object
     ListCompactSessionUsageResponse:
       properties:
