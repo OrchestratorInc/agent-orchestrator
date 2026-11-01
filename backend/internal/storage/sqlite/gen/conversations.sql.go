@@ -4555,6 +4555,84 @@ func (q *Queries) SelectSessionForActivityProviderItem(ctx context.Context, prov
 	return current_session_id, err
 }
 
+const selectSpanningPlanCopiesOnActivePath = `-- name: SelectSpanningPlanCopiesOnActivePath :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT activity.id,
+       activity.turn_id,
+       activity.sequence,
+       activity.detail_json,
+       activity.created_at,
+       turn.completed_at AS turn_completed_at
+FROM conversation_activities AS activity
+JOIN active_path AS path ON path.branch_id = activity.branch_id
+LEFT JOIN conversation_turns AS turn ON turn.id = activity.turn_id
+WHERE activity.conversation_id = ?1
+  AND activity.kind = 'plan'
+  AND json_valid(activity.detail_json)
+  AND json_extract(activity.detail_json, '$.spansTurns') = 1
+  AND (path.max_sequence IS NULL OR activity.sequence <= path.max_sequence)
+  AND (turn.id IS NULL OR (turn.rolled_back_at IS NULL AND turn.state <> 'cancelled'))
+ORDER BY activity.sequence
+`
+
+type SelectSpanningPlanCopiesOnActivePathRow struct {
+	ID              string
+	TurnID          sql.NullString
+	Sequence        int64
+	DetailJson      string
+	CreatedAt       time.Time
+	TurnCompletedAt sql.NullTime
+}
+
+// A list the agent keeps across turns has one current copy on the active path:
+// the one written last. Every copy has a plan row, a turn's included, so the rows
+// on the path decide it, with the same branch and discarded-turn filters as the
+// timeline. Copies on other branches keep their marks until their branch is
+// active again.
+func (q *Queries) SelectSpanningPlanCopiesOnActivePath(ctx context.Context, conversationID string) ([]SelectSpanningPlanCopiesOnActivePathRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectSpanningPlanCopiesOnActivePath, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectSpanningPlanCopiesOnActivePathRow{}
+	for rows.Next() {
+		var i SelectSpanningPlanCopiesOnActivePathRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnID,
+			&i.Sequence,
+			&i.DetailJson,
+			&i.CreatedAt,
+			&i.TurnCompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one
 SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, t.handled_by_review_id, t.usage_limit_resets_at, t.usage_limit_auto_resume, t.usage_limit_resume_error, t.batched_input, t.provider_input_text FROM conversation_turns t
 JOIN conversations c ON c.id = t.conversation_id
@@ -4641,6 +4719,28 @@ func (q *Queries) SetConversationMessageDeliveryContent(ctx context.Context, arg
 	return err
 }
 
+const setConversationPlanActivitySuperseded = `-- name: SetConversationPlanActivitySuperseded :exec
+UPDATE conversation_activities
+SET detail_json = CASE WHEN CAST(?1 AS BOOLEAN)
+                       THEN json_set(detail_json, '$.superseded', json('true'))
+                       ELSE json_remove(detail_json, '$.superseded') END,
+    revision = revision + 1,
+    updated_at = ?2
+WHERE id = ?3
+  AND ifnull(json_extract(detail_json, '$.superseded'), 0) <> CAST(?1 AS BOOLEAN)
+`
+
+type SetConversationPlanActivitySupersededParams struct {
+	Superseded bool
+	UpdatedAt  time.Time
+	ID         string
+}
+
+func (q *Queries) SetConversationPlanActivitySuperseded(ctx context.Context, arg SetConversationPlanActivitySupersededParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationPlanActivitySuperseded, arg.Superseded, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const setConversationProviderInputText = `-- name: SetConversationProviderInputText :execrows
 UPDATE conversation_turns
 SET provider_input_text = ?
@@ -4690,6 +4790,27 @@ func (q *Queries) SetConversationTurnAutoResume(ctx context.Context, arg SetConv
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setConversationTurnPlanSuperseded = `-- name: SetConversationTurnPlanSuperseded :exec
+UPDATE conversation_turns
+SET plan_json = CASE WHEN CAST(?1 AS BOOLEAN)
+                     THEN json_set(plan_json, '$.superseded', json('true'))
+                     ELSE json_remove(plan_json, '$.superseded') END
+WHERE id = ?2
+  AND plan_json <> ''
+  AND json_valid(plan_json)
+  AND ifnull(json_extract(plan_json, '$.superseded'), 0) <> CAST(?1 AS BOOLEAN)
+`
+
+type SetConversationTurnPlanSupersededParams struct {
+	Superseded bool
+	ID         string
+}
+
+func (q *Queries) SetConversationTurnPlanSuperseded(ctx context.Context, arg SetConversationTurnPlanSupersededParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationTurnPlanSuperseded, arg.Superseded, arg.ID)
+	return err
 }
 
 const settleConversationActivity = `-- name: SettleConversationActivity :exec
@@ -4890,52 +5011,6 @@ type SettleStreamingConversationMessagesForTurnParams struct {
 // still the durable answer, and the enclosing turn is the terminal boundary.
 func (q *Queries) SettleStreamingConversationMessagesForTurn(ctx context.Context, arg SettleStreamingConversationMessagesForTurnParams) error {
 	_, err := q.db.ExecContext(ctx, settleStreamingConversationMessagesForTurn, arg.UpdatedAt, arg.ConversationID, arg.TurnID)
-	return err
-}
-
-const supersedeConversationPlanActivities = `-- name: SupersedeConversationPlanActivities :exec
-UPDATE conversation_activities
-SET detail_json = json_set(detail_json, '$.superseded', json('true')),
-    revision = revision + 1,
-    updated_at = ?1
-WHERE conversation_id = ?2
-  AND kind = 'plan'
-  AND provider_item_id <> ?3
-  AND json_extract(detail_json, '$.spansTurns') = 1
-  AND json_extract(detail_json, '$.superseded') IS NULL
-`
-
-type SupersedeConversationPlanActivitiesParams struct {
-	UpdatedAt             time.Time
-	ConversationID        string
-	CurrentProviderItemID string
-}
-
-func (q *Queries) SupersedeConversationPlanActivities(ctx context.Context, arg SupersedeConversationPlanActivitiesParams) error {
-	_, err := q.db.ExecContext(ctx, supersedeConversationPlanActivities, arg.UpdatedAt, arg.ConversationID, arg.CurrentProviderItemID)
-	return err
-}
-
-const supersedeConversationTurnPlans = `-- name: SupersedeConversationTurnPlans :exec
-UPDATE conversation_turns
-SET plan_json = json_set(plan_json, '$.superseded', json('true'))
-WHERE conversation_id = ?1
-  AND provider_turn_id <> ?2
-  AND plan_json <> ''
-  AND json_extract(plan_json, '$.spansTurns') = 1
-  AND json_extract(plan_json, '$.superseded') IS NULL
-`
-
-type SupersedeConversationTurnPlansParams struct {
-	ConversationID        string
-	CurrentProviderTurnID string
-}
-
-// A list the agent keeps across turns has one current copy: the one written last.
-// These mark every other copy, on a turn or on a plan row, superseded. A copy is
-// rewritten whole when its turn or run revises it, which clears the mark.
-func (q *Queries) SupersedeConversationTurnPlans(ctx context.Context, arg SupersedeConversationTurnPlansParams) error {
-	_, err := q.db.ExecContext(ctx, supersedeConversationTurnPlans, arg.ConversationID, arg.CurrentProviderTurnID)
 	return err
 }
 

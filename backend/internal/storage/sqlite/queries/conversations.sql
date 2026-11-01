@@ -1437,28 +1437,63 @@ UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
 WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
 
--- A list the agent keeps across turns has one current copy: the one written last.
--- These mark every other copy, on a turn or on a plan row, superseded. A copy is
--- rewritten whole when its turn or run revises it, which clears the mark.
--- name: SupersedeConversationTurnPlans :exec
-UPDATE conversation_turns
-SET plan_json = json_set(plan_json, '$.superseded', json('true'))
-WHERE conversation_id = sqlc.arg(conversation_id)
-  AND provider_turn_id <> sqlc.arg(current_provider_turn_id)
-  AND plan_json <> ''
-  AND json_extract(plan_json, '$.spansTurns') = 1
-  AND json_extract(plan_json, '$.superseded') IS NULL;
+-- A list the agent keeps across turns has one current copy on the active path:
+-- the one written last. Every copy has a plan row, a turn's included, so the rows
+-- on the path decide it, with the same branch and discarded-turn filters as the
+-- timeline. Copies on other branches keep their marks until their branch is
+-- active again.
+-- name: SelectSpanningPlanCopiesOnActivePath :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT activity.id,
+       activity.turn_id,
+       activity.sequence,
+       activity.detail_json,
+       activity.created_at,
+       turn.completed_at AS turn_completed_at
+FROM conversation_activities AS activity
+JOIN active_path AS path ON path.branch_id = activity.branch_id
+LEFT JOIN conversation_turns AS turn ON turn.id = activity.turn_id
+WHERE activity.conversation_id = sqlc.arg(conversation_id)
+  AND activity.kind = 'plan'
+  AND json_valid(activity.detail_json)
+  AND json_extract(activity.detail_json, '$.spansTurns') = 1
+  AND (path.max_sequence IS NULL OR activity.sequence <= path.max_sequence)
+  AND (turn.id IS NULL OR (turn.rolled_back_at IS NULL AND turn.state <> 'cancelled'))
+ORDER BY activity.sequence;
 
--- name: SupersedeConversationPlanActivities :exec
+-- name: SetConversationPlanActivitySuperseded :exec
 UPDATE conversation_activities
-SET detail_json = json_set(detail_json, '$.superseded', json('true')),
+SET detail_json = CASE WHEN CAST(sqlc.arg(superseded) AS BOOLEAN)
+                       THEN json_set(detail_json, '$.superseded', json('true'))
+                       ELSE json_remove(detail_json, '$.superseded') END,
     revision = revision + 1,
     updated_at = sqlc.arg(updated_at)
-WHERE conversation_id = sqlc.arg(conversation_id)
-  AND kind = 'plan'
-  AND provider_item_id <> sqlc.arg(current_provider_item_id)
-  AND json_extract(detail_json, '$.spansTurns') = 1
-  AND json_extract(detail_json, '$.superseded') IS NULL;
+WHERE id = sqlc.arg(id)
+  AND ifnull(json_extract(detail_json, '$.superseded'), 0) <> CAST(sqlc.arg(superseded) AS BOOLEAN);
+
+-- name: SetConversationTurnPlanSuperseded :exec
+UPDATE conversation_turns
+SET plan_json = CASE WHEN CAST(sqlc.arg(superseded) AS BOOLEAN)
+                     THEN json_set(plan_json, '$.superseded', json('true'))
+                     ELSE json_remove(plan_json, '$.superseded') END
+WHERE id = sqlc.arg(id)
+  AND plan_json <> ''
+  AND json_valid(plan_json)
+  AND ifnull(json_extract(plan_json, '$.superseded'), 0) <> CAST(sqlc.arg(superseded) AS BOOLEAN);
 
 -- Resolving an approval matches on the provider's request id, so a card the user
 -- left on screen cannot answer a request that replaced it.

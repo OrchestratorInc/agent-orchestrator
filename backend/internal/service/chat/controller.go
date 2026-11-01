@@ -159,7 +159,7 @@ type Store interface {
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
-	SupersedeSpanningPlans(ctx context.Context, conversationID, providerTurnID, providerItemID string, now time.Time) error
+	ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error
 	MarkCompacted(ctx context.Context, conversationID string, at time.Time) error
 	ResolveApproval(ctx context.Context, conversationID, requestID, detailJSON string, now time.Time) error
 	HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error)
@@ -3362,7 +3362,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				Kind:           domain.ActivityKindPlan,
 				Status:         planActivityStatus(*event.Plan),
 				Summary:        event.Summary,
-				Detail:         planDetail(*event.Plan),
+				Detail:         planDetail(*event.Plan, now),
 				ProviderItemID: itemID,
 			}, now); err != nil {
 			return err
@@ -3371,9 +3371,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			return nil
 		}
 		// Every earlier turn and run holds a copy of this same list. The daemon sees
-		// the writes in order, so it marks which copy is current rather than leaving
-		// each client to date the copies.
-		return c.store.SupersedeSpanningPlans(ctx, c.conversation.ID, event.ProviderTurnID, itemID, now)
+		// the writes in order, so it marks which copy is current on the active path
+		// rather than leaving each client to date the copies.
+		return c.store.ReconcileSpanningPlans(ctx, c.conversation.ID, now)
 
 	case ports.ChatEventModelRerouted:
 		// A correction to a claim AO has already made. The composer names the model it
@@ -4042,7 +4042,11 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 // planDetail is the plan's typed payload. The steps go in as structure rather than
 // as rendered text: a client that wants checkboxes needs the per-step status, and a
 // client that wants prose can join them, but the reverse is not recoverable.
-func planDetail(plan domain.ConversationPlan) []byte {
+//
+// A cross-turn list's row also records when it was written. One run's revisions
+// rewrite one row in place, so neither its position nor its updated_at says
+// which copy of the list is newest; this does.
+func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	steps := make([]map[string]any, 0, len(plan.Steps))
 	for _, step := range plan.Steps {
 		steps = append(steps, map[string]any{"text": step.Text, "status": string(step.Status)})
@@ -4055,6 +4059,7 @@ func planDetail(plan domain.ConversationPlan) []byte {
 	// row of a cross-turn list carries the flag.
 	if plan.SpansTurns {
 		detail["spansTurns"] = true
+		detail["writtenAt"] = writtenAt.UTC()
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {

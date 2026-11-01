@@ -1106,7 +1106,8 @@ func (s *Store) ActivateConversationBranch(
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
-		return nil
+		// The new path holds its own copies of a list that spans turns.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 }
 
@@ -2352,30 +2353,68 @@ func (s *Store) SetTurnPlan(
 	return rows > 0, nil
 }
 
-// SupersedeSpanningPlans marks every copy of a list that spans turns superseded
-// except the one just written: the plan of providerTurnID, if any, and the plan
-// row keyed providerItemID.
-func (s *Store) SupersedeSpanningPlans(
-	ctx context.Context,
-	conversationID, providerTurnID, providerItemID string,
-	now time.Time,
-) error {
+// ReconcileSpanningPlans marks which copy of a list that spans turns is current
+// on the conversation's active path: the copy written last. Every other copy on
+// the path is superseded. Copies on other branches keep their marks until their
+// branch is active again, when this runs for that path.
+func (s *Store) ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
-	if err := q.SupersedeConversationTurnPlans(ctx, gen.SupersedeConversationTurnPlansParams{
-		ConversationID:        conversationID,
-		CurrentProviderTurnID: providerTurnID,
-	}); err != nil {
-		return fmt.Errorf("supersede turn plans in %s: %w", conversationID, err)
+	return reconcileSpanningPlans(ctx, q, conversationID, now)
+}
+
+func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID string, now time.Time) error {
+	copies, err := q.SelectSpanningPlanCopiesOnActivePath(ctx, conversationID)
+	if err != nil {
+		return fmt.Errorf("select spanning plan copies in %s: %w", conversationID, err)
 	}
-	if err := q.SupersedeConversationPlanActivities(ctx, gen.SupersedeConversationPlanActivitiesParams{
-		UpdatedAt:             now,
-		ConversationID:        conversationID,
-		CurrentProviderItemID: providerItemID,
-	}); err != nil {
-		return fmt.Errorf("supersede plan rows in %s: %w", conversationID, err)
+	current := -1
+	var currentAt time.Time
+	for index, copy := range copies {
+		at := spanningPlanWrittenAt(copy)
+		// Rows come in sequence order, so a tie goes to the later row.
+		if current < 0 || !at.Before(currentAt) {
+			current, currentAt = index, at
+		}
+	}
+	for index, copy := range copies {
+		superseded := index != current
+		if err := q.SetConversationPlanActivitySuperseded(ctx, gen.SetConversationPlanActivitySupersededParams{
+			Superseded: superseded,
+			UpdatedAt:  now,
+			ID:         copy.ID,
+		}); err != nil {
+			return fmt.Errorf("mark plan row %s: %w", copy.ID, err)
+		}
+		// A turn's plan and its plan row are one copy, written from one event.
+		if copy.TurnID.Valid {
+			if err := q.SetConversationTurnPlanSuperseded(ctx, gen.SetConversationTurnPlanSupersededParams{
+				Superseded: superseded,
+				ID:         copy.TurnID.String,
+			}); err != nil {
+				return fmt.Errorf("mark turn plan %s: %w", copy.TurnID.String, err)
+			}
+		}
 	}
 	return nil
+}
+
+// spanningPlanWrittenAt is when a copy's content was last written. The daemon
+// records it on each write. A copy from before that is dated as the upgrade
+// migration dates it: a turnless row was one revision, written when created,
+// and a turn's copy could change only until its turn ended. The row's updated_at
+// is no guide, since settling and recovery touch rows they do not rewrite.
+func spanningPlanWrittenAt(copy gen.SelectSpanningPlanCopiesOnActivePathRow) time.Time {
+	var detail struct {
+		WrittenAt time.Time `json:"writtenAt"`
+	}
+	if json.Unmarshal([]byte(copy.DetailJson), &detail) == nil && !detail.WrittenAt.IsZero() {
+		return detail.WrittenAt
+	}
+	if copy.TurnID.Valid && copy.TurnCompletedAt.Valid {
+		return copy.TurnCompletedAt.Time
+	}
+	return copy.CreatedAt
 }
 
 // MaxStreamedTextChars caps the provider prose stored for one activity.
@@ -3636,7 +3675,8 @@ func (s *Store) RollbackTurns(
 			}); err != nil {
 			return fmt.Errorf("fail rolled back approvals: %w", err)
 		}
-		return nil
+		// A rolled-back turn's copy of a list that spans turns is no longer current.
+		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 	if err != nil {
 		return 0, err

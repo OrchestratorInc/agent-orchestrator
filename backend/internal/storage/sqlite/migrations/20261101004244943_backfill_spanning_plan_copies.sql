@@ -64,50 +64,66 @@ WHERE plan_json <> ''
   AND json_extract(plan_json, '$.spansTurns') IS NULL
   AND id IN (SELECT turn_id FROM legacy_spanning_plan_rows WHERE turn_id IS NOT NULL);
 
--- Each conversation's latest copy is the one whose content was written last. Every
--- copy has a plan row, a turn's included, so the rows decide it. updated_at is no
--- guide: settling a turn or recovering a controller touches rows it does not
--- rewrite. A turnless row was one revision, written when it was created; a turn's
--- copy can change only until its turn ends.
+-- Each conversation's latest copy on its active path is the one whose content was
+-- written last; the timeline shows only that path, and copies on other branches
+-- are reconciled when their branch is active again. Every copy has a plan row, a
+-- turn's included, so the rows decide it. updated_at is no guide: settling a turn
+-- or recovering a controller touches rows it does not rewrite. A turnless row was
+-- one revision, written when it was created; a turn's copy can change only until
+-- its turn ends.
+CREATE TEMP TABLE active_path_spanning_plan_rows AS
+WITH RECURSIVE active_path(conversation_id, branch_id, max_sequence) AS (
+    SELECT conversations.id, conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    UNION ALL
+    SELECT path.conversation_id,
+           branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT a.conversation_id, a.id, a.turn_id, a.sequence,
+       CASE
+           WHEN a.turn_id IS NULL THEN a.created_at
+           ELSE COALESCE(t.completed_at, a.created_at)
+       END AS written_at
+FROM conversation_activities a
+JOIN active_path AS path ON path.conversation_id = a.conversation_id AND path.branch_id = a.branch_id
+LEFT JOIN conversation_turns t ON t.id = a.turn_id
+WHERE a.kind = 'plan'
+  AND json_valid(a.detail_json)
+  AND json_extract(a.detail_json, '$.spansTurns') = 1
+  AND (path.max_sequence IS NULL OR a.sequence <= path.max_sequence)
+  AND (t.id IS NULL OR (t.rolled_back_at IS NULL AND t.state <> 'cancelled'));
+
 CREATE TEMP TABLE current_spanning_plan_copies AS
 SELECT conversation_id, id, turn_id
 FROM (
-  SELECT a.conversation_id, a.id, a.turn_id,
-         ROW_NUMBER() OVER (
-           PARTITION BY a.conversation_id
-           ORDER BY CASE
-                      WHEN a.turn_id IS NULL THEN a.created_at
-                      ELSE COALESCE((SELECT t.completed_at FROM conversation_turns t WHERE t.id = a.turn_id), a.updated_at)
-                    END DESC,
-                    a.sequence DESC
-         ) AS rank
-  FROM conversation_activities a
-  WHERE a.kind = 'plan'
-    AND json_valid(a.detail_json)
-    AND json_extract(a.detail_json, '$.spansTurns') = 1
-    AND json_extract(a.detail_json, '$.superseded') IS NULL
+  SELECT conversation_id, id, turn_id,
+         ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY written_at DESC, sequence DESC) AS copy_rank
+  FROM active_path_spanning_plan_rows
 )
-WHERE rank = 1;
+WHERE copy_rank = 1;
 
 UPDATE conversation_activities
 SET detail_json = json_set(detail_json, '$.superseded', json('true'))
-WHERE kind = 'plan'
-  AND json_valid(detail_json)
-  AND json_extract(detail_json, '$.spansTurns') = 1
-  AND json_extract(detail_json, '$.superseded') IS NULL
-  AND conversation_id IN (SELECT conversation_id FROM current_spanning_plan_copies)
+WHERE id IN (SELECT id FROM active_path_spanning_plan_rows)
   AND id NOT IN (SELECT id FROM current_spanning_plan_copies);
 
 UPDATE conversation_turns
 SET plan_json = json_set(plan_json, '$.superseded', json('true'))
 WHERE plan_json <> ''
   AND json_valid(plan_json)
-  AND json_extract(plan_json, '$.spansTurns') = 1
-  AND json_extract(plan_json, '$.superseded') IS NULL
-  AND conversation_id IN (SELECT conversation_id FROM current_spanning_plan_copies)
+  AND id IN (SELECT turn_id FROM active_path_spanning_plan_rows WHERE turn_id IS NOT NULL)
   AND id NOT IN (SELECT turn_id FROM current_spanning_plan_copies WHERE turn_id IS NOT NULL);
 
 DROP TABLE current_spanning_plan_copies;
+DROP TABLE active_path_spanning_plan_rows;
 DROP TABLE legacy_spanning_plan_rows;
 
 -- +goose Down
