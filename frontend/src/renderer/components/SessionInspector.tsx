@@ -70,7 +70,6 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { SessionLineageFooter } from "./SessionLineage";
 import { PRMergeButton, PRStateActions, PRStateMenu } from "./PRActions";
 import { PRComments } from "./PRComments";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -440,11 +439,6 @@ const SummaryView = memo(function SummaryView({
 		: t("inspector.artifact");
 	const branchPR = sessionBranchPR(session, prSummaries);
 	const openPRNumber = branchPR?.number;
-	// "Merged into main" only while the branch tip is what a merged PR shipped;
-	// a new commit after the merge is unshipped work again.
-	const shippedMerge = openPRNumber === undefined && session.branchState?.head
-		? prSummaries.find((pr) => pr.state === "merged" && pr.headSha === session.branchState?.head)
-		: undefined;
 	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
 	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
@@ -512,7 +506,6 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
-			footer={<SessionLineageFooter branchPRNumber={openPRNumber} hostId={hostId} mergedAt={shippedMerge?.stateChangedAt ?? undefined} prs={prSummaries} session={session} />}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>

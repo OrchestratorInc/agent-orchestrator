@@ -272,7 +272,6 @@ export function SessionInspectorSummaryView({
 	branch,
 	completion,
 	context,
-	footer,
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
@@ -288,8 +287,6 @@ export function SessionInspectorSummaryView({
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
-	/** Pinned to the bottom of the panel while the summary scrolls (the lineage button). */
-	footer?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
@@ -304,7 +301,7 @@ export function SessionInspectorSummaryView({
 	workers?: ReactNode;
 }) {
 	return (
-		<div className={footer ? "flex min-h-full flex-col" : undefined} role="tabpanel">
+		<div role="tabpanel">
 			{workers}
 			{context}
 			{branch}
@@ -323,8 +320,6 @@ export function SessionInspectorSummaryView({
 			{scripts}
 			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
 			{usage}
-			{/* The body's bottom padding would leave a gap under the pinned footer. */}
-			{footer ? <div className="sticky -bottom-3 z-10 -mb-3 mt-auto">{footer}</div> : null}
 		</div>
 	);
 }

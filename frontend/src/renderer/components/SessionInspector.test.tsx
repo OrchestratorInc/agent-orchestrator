@@ -11,7 +11,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPRSectionExpansion, SessionInspector } from "./SessionInspector";
-import { resetLineageExpansion } from "./SessionLineage";
 import { resetPRMergeMethods } from "./PRActions";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -321,7 +320,6 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 
 beforeEach(() => {
   resetPRSectionExpansion();
-  resetLineageExpansion();
   resetPRMergeMethods();
   cloudCpMock.cancelSessionReviews.mockReset();
   cloudCpMock.getSessionReviewState.mockReset();
@@ -5183,95 +5181,7 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByText(/behind main/)).not.toBeInTheDocument();
   });
 
-  const lineageBranch = { ...pushed(2), base: "main", baseRef: "origin/main", behind: 3 };
-
-  // Lineage lives behind the button pinned to the bottom of the summary.
-  const openLineage = async () => {
-    const button = await screen.findByRole("button", { name: /^Lineage/ });
-    if (button.getAttribute("aria-expanded") !== "true") await userEvent.click(button);
-    return screen.getByTestId("lineage-footer");
-  };
-
-  it("keeps lineage out of the branch rows and the PR card, behind a button at the bottom", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
-    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
-
-    const button = await screen.findByRole("button", { name: /^Lineage/ });
-    expect(button).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByTestId("session-lineage")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Branch" })).not.toContainElement(button);
-
-    await userEvent.click(button);
-    expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(within(screen.getByTestId("lineage-footer")).getByTestId("session-lineage")).toBeInTheDocument();
-  });
-
-  it("draws the lineage of an open branch: the base, its commits, and the split", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
-    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
-
-    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
-    const items = lineage.getAllByRole("listitem").map((item) => item.textContent);
-    expect(items).toEqual(["main+3 new since the split", "second change", "first change", "split from main"]);
-    expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
-  });
-
-  it("collapses a long branch to its newest commits", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["c5", "c4", "c3", "c2", "c1", "c0"] });
-    renderWithQuery(<SessionInspector session={session([], { branchState: { ...lineageBranch, commits: 6 } })} />);
-
-    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
-    expect(lineage.getByText("c2")).toBeInTheDocument();
-    expect(lineage.queryByText("c1")).not.toBeInTheDocument();
-    expect(lineage.getByText("+2 more")).toBeInTheDocument();
-  });
-
-  it("shows where a merged branch came back while its tip is the merged PR's head", async () => {
-    const merged = prSummary(7, "merged", { stateChangedAt: new Date(Date.now() - 7 * 86_400_000).toISOString() });
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"], prs: [merged] });
-    renderWithQuery(
-      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...lineageBranch, head: "sha-7" } })} />,
-      undefined,
-      (client) => seedPRSummaries(client, [merged]),
-    );
-
-    const footer = await openLineage();
-    const lineageEl = await within(footer).findByTestId("session-lineage");
-    expect(await within(lineageEl).findByText("merged into main 7d ago")).toBeInTheDocument();
-  });
-
-  it("remembers the open panel and each folded lineage, which keeps the base's news", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
-    const view = renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
-
-    const lineageEl = await within(await openLineage()).findByTestId("session-lineage");
-    const toggle = within(lineageEl).getAllByRole("button")[0];
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await userEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).not.toHaveAttribute("aria-controls");
-    expect(toggle).toHaveTextContent("+3 new since the split");
-
-    view.unmount();
-    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
-    expect(await screen.findByRole("button", { name: /^Lineage/ })).toHaveAttribute("aria-expanded", "true");
-    const again = await within(screen.getByTestId("lineage-footer")).findByTestId("session-lineage");
-    expect(within(again).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("does not call a branch merged once a new commit moves its tip", async () => {
-    const merged = prSummary(7, "merged", { stateChangedAt: new Date(Date.now() - 7 * 86_400_000).toISOString() });
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["after the merge", "first change"], prs: [merged] });
-    renderWithQuery(
-      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...lineageBranch, head: "sha-new" } })} />,
-      undefined,
-      (client) => seedPRSummaries(client, [merged]),
-    );
-
-    const lineage = within(await within(await openLineage()).findByTestId("session-lineage"));
-    expect(await lineage.findByText("after the merge")).toBeInTheDocument();
-    expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
-  });
+  const behindBranch = { ...pushed(2), base: "main", baseRef: "origin/main", behind: 3 };
 
   it("commits without pushing from the menu", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
@@ -5355,7 +5265,7 @@ describe("SessionInspector branch summary", () => {
     // No seeded summaries: the first render only has the session's PR facts.
     // The same URLs as the summaries, so each section stays mounted as they load.
     const facts = [other, checkedOut].map((summary) => pr(summary.number, "open", { url: summary.url }));
-    renderWithQuery(<SessionInspector session={session(facts, { branch: "feat/renamed", branchState: lineageBranch })} />);
+    renderWithQuery(<SessionInspector session={session(facts, { branch: "feat/renamed", branchState: behindBranch })} />);
 
     const sections = await screen.findByTestId("pr-sections");
     const header = (label: string) => within(sections).getByText(label).closest("button") as HTMLElement;
