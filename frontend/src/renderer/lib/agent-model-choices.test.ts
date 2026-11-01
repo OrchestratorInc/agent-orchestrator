@@ -8,7 +8,7 @@ import {
 	withoutLocalAvailability,
 } from "./agent-model-choices";
 
-type TestModel = { id: string; label: string; isDefault?: boolean };
+type TestModel = { id: string; label: string; isDefault?: boolean; requiresVersion?: string; unavailableReason?: string };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
 	id,
 	label,
