@@ -7,12 +7,27 @@ on:
     paths:
       - "backend/**"
       - "pricing/**"
+      - "go.work"
+      - "go.work.sum"
+      # Read by backend tests from outside backend/.
+      - "contracts/session-start-interface.json"
+      - "frontend/scripts/prepare-cloudflared.mjs"
       - "frontend/src/api/schema.ts"
       - "package.json"
       - ".github/workflows/go.yml"
+      - ".github/scripts/go-test-parallel.sh"
+      - ".github/actions/setup-go-cached/**"
 
 permissions:
   contents: read
+
+env:
+  # -race stays on for our code, but not for modernc.org's machine-translated
+  # SQLite and libc. Instrumenting every memory access in them made every
+  # SQLite-backed test several times slower (the slowest migration test took
+  # 128s with it, 9s without), and catching races in our own Go code doesn't
+  # depend on it.
+  GOFLAGS: -gcflags=modernc.org/...=-race=false
 
 concurrency:
   group: go-${{ github.event.pull_request.number || github.sha }}
@@ -24,48 +39,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2]
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go-cached
         with:
-          # Read the version from go.mod so CI can't drift from the module
-          # (it previously pinned 1.22 while go.mod declared 1.25).
-          go-version-file: backend/go.mod
-          # Restore the module and build caches. `go test -race ./...` rebuilds
-          # every dependency with race instrumentation, and modernc.org/sqlite
-          # alone is minutes of that on a 4-vCPU runner: the SQLite package did
-          # not start until ~5 minutes into a 20-minute Test step. The cache is
-          # keyed on go.sum, so a dependency bump still gets a cold, correct
-          # build.
-          cache-dependency-path: backend/go.sum
+          name: backend-core-${{ matrix.shard }}
 
       - name: Install Cue test shells
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends zsh fish
-
-      - name: Check formatting
-        if: matrix.shard == 0
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Build
-        if: matrix.shard == 0
-        run: go build ./...
-
-      - name: Vet
-        if: matrix.shard == 0
-        run: go vet ./...
 
       - name: Test
         env:
@@ -78,35 +66,13 @@ jobs:
         # a required check must still run every test. Compilation stays cached.
         run: |
           packages=$(go list ./... | grep -v -e '/internal/storage/sqlite$' -e '/internal/service/chat$' -e '/internal/session_manager$' -e '/internal/storage/sqlite/store$')
-          selected=$(printf '%s\n' "$packages" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 2) == shard')
+          selected=$(printf '%s\n' "$packages" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 3) == shard')
           test -n "$selected"
-          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=20m
+          printf '%s\n' "$selected" | xargs go test -race -count=1 -timeout=10m
 
-  chat-race:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1]
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Test chat
-        run: |
-          tests=$(go test -race -list . ./internal/service/chat | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 2) == shard' | paste -sd '|' -)
-          test -n "$selected"
-          go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/service/chat
-
-  session-store-race:
+  # These packages run their tests serially inside one test binary, for minutes
+  # each, so this job splits each across processes to use the runner's cores.
+  storage-race:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -114,50 +80,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          name: storage-race
 
-      - name: Test session manager and SQLite store
-        run: go test -race -count=1 -timeout=20m ./internal/session_manager ./internal/storage/sqlite/store
-
-  sqlite-race:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
-      - name: Test SQLite shard
-        run: |
-          tests=$(go test -race -list . ./internal/storage/sqlite | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 4) == shard' | paste -sd '|' -)
-          test -n "$selected"
-          go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/storage/sqlite
+      - name: Test SQLite, chat, session manager and SQLite store
+        run: ../.github/scripts/go-test-parallel.sh 4 ./internal/storage/sqlite ./internal/service/chat ./internal/session_manager ./internal/storage/sqlite/store
 
   # Keep the existing required check as the gate for every backend race test.
   build-test:
     if: always()
-    needs: [backend-core, chat-race, session-store-race, sqlite-race]
+    needs: [backend-core, storage-race]
     runs-on: ubuntu-latest
     steps:
       - name: Check backend results
         run: |
           test '${{ needs.backend-core.result }}' = success
-          test '${{ needs.chat-race.result }}' = success
-          test '${{ needs.session-store-race.result }}' = success
-          test '${{ needs.sqlite-race.result }}' = success
+          test '${{ needs.storage-race.result }}' = success
 
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree
@@ -225,10 +164,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      # golangci-lint type-checks against compiled dependencies, so a warm Go
+      # build cache saves it most of its run.
+      - uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: backend/go.mod
-          cache: false
+          name: lint
+
+      # Format, build and vet run here rather than in a test shard: the lint
+      # job finishes well inside the test jobs' time.
+      - name: Check formatting
+        working-directory: backend
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: backend
+        run: go build ./...
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
 
       - name: golangci-lint
         # v8 of the action drives golangci-lint v2 (the schema this config uses);
@@ -244,15 +204,15 @@ jobs:
           # Blocking on the full ruleset: the tree is clean at zero findings, so
           # any new issue fails CI rather than being grandfathered.
 
-  sqlc-drift:
+  codegen-drift:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      # A warm build cache spares rebuilding the pinned sqlc on every run.
+      - uses: ./.github/actions/setup-go-cached
         with:
-          go-version-file: backend/go.mod
-          cache: false
+          name: codegen-drift
 
       - uses: actions/setup-node@v4
         with:
@@ -265,20 +225,6 @@ jobs:
         run: |
           git diff --exit-code -- backend/internal/storage/sqlite/gen
           test -z "$(git ls-files --others --exclude-standard -- backend/internal/storage/sqlite/gen)"
-
-  api-drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache: false
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
 
       - name: Install dependencies
         run: npm ci
