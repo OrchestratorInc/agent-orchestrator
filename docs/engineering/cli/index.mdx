@@ -21,7 +21,7 @@ go build -o ./bin/ao ./cmd/ao
 
 ## Current commands
 
-Every product command resolves to a daemon HTTP route. Run `ao &lt;command>
+Every product command resolves to a daemon HTTP route. Run `ao <command>
 --help` for the authoritative flag shape.
 
 ### Daemon control
@@ -93,8 +93,8 @@ forces fresh installation and authentication checks before printing.
 `AO_PROJECT_ID`, `AO_SESSION_ID` (by fetching the current session from the
 daemon), then the current working directory matched against registered project
 paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
-`--project` explicitly. Use `ao spawn --standalone --agent &lt;agent> --name
-&lt;name>` to launch a worker in an AO-managed plain directory without resolving
+`--project` explicitly. Use `ao spawn --standalone --agent <agent> --name
+<name>` to launch a worker in an AO-managed plain directory without resolving
 or registering a project. Standalone sessions do not support orchestrator,
 branch, issue, or PR-claim options.
 

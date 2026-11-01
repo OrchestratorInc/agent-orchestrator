@@ -26,8 +26,8 @@ save/restore middle.
    fallback and triggers the same daemon-side save path).
 2. **The "last-stop manifest" is the existing SQLite state, not a new file.**
    `ListAllSessions` already records id, kind (worker/orchestrator), harness,
-   `is_terminated`, and `Metadata\{branch, workspacePath, agentSessionId,
-prompt\}`. The `session_worktrees` table already has a `preserved_ref` column
+   `is_terminated`, and `Metadata{branch, workspacePath, agentSessionId,
+prompt}`. The `session_worktrees` table already has a `preserved_ref` column
    (migration 0009) that nothing currently writes. No manifest.json, no new
    migration, no new format. The manifest is a query.
 3. **Uncommitted work is captured as a git commit object pointed to by a ref**
@@ -36,7 +36,7 @@ prompt\}`. The `session_worktrees` table already has a `preserved_ref` column
    valid single ref components, and are not stable identity). The session id is
    the stable key the rest of the system already uses.
 4. **Untracked files: respect `.gitignore`.** Build the preserve commit through
-   a temp index (`GIT_INDEX_FILE=&lt;tmp> git add -A; git write-tree; git
+   a temp index (`GIT_INDEX_FILE=<tmp> git add -A; git write-tree; git
 commit-tree`) so tracked + staged + new (non-ignored) files are captured,
    side-effect-free, without mutating the working tree or the stash stack.
    Ignored paths (`node_modules/`, build output, ignored `.env`) are skipped.
@@ -159,7 +159,7 @@ comment that ForceDestroy is only safe after the work is captured.
 ### Task 5 — Frontend: call `/shutdown` before kill (`main.ts`)
 
 In `before-quit`: `event.preventDefault()` once, `await fetch(
-http://127.0.0.1:&lt;port>/shutdown, \{method:'POST'\})` with an ~8s bounded timeout
+http://127.0.0.1:<port>/shutdown, {method:'POST'})` with an ~8s bounded timeout
 (port from the running.json the app already reads), then `killDaemon` +
 `app.exit()`. Keep the `process.on('exit')` SIGTERM fallback intact.
 **Check:** `cd frontend && <typecheck cmd>` green; manual: quit the app, daemon

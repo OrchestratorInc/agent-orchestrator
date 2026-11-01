@@ -1257,7 +1257,7 @@ git commit -m "feat(mobile): desktop Connect Mobile modal with QR, password, war
 
 - Produces:
   - `ServerConfig` gains `password: string`.
-  - `function authHeaders(cfg: ServerConfig): Record<string,string>` in `config.ts` → `cfg.password ? { Authorization: `Bearer $\{cfg.password\}` } : {}`.
+  - `function authHeaders(cfg: ServerConfig): Record<string,string>` in `config.ts` → `cfg.password ? { Authorization: `Bearer ${cfg.password}` } : {}`.
   - `api.ts`: every `fetch` spreads `authHeaders(cfg)` into request headers.
   - `mux.ts`: the `WebSocket` is constructed with RN's options arg — `new WebSocket(muxUrl(cfg), undefined, { headers: authHeaders(cfg) })`.
 

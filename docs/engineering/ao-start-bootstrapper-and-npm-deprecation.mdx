@@ -363,7 +363,7 @@ pin (`main.ts:64`) are in place. Do not re-implement.
 
 The `update-electron-app` updater is wired (§1.4) but inert until **both**: real
 version stamping (bump `package.json`; inject daemon version via `-ldflags -X
-…cli.Version=&lt;tag>` in `build-daemon.mjs`) **and** signed+notarized macOS builds
+…cli.Version=<tag>` in `build-daemon.mjs`) **and** signed+notarized macOS builds
 (`CSC_LINK` + `APPLE_*` in CI). Until then, v1 copy must **not** promise
 auto-update; users self-update by re-running `ao start` or downloading from the
 website.
