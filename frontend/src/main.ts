@@ -1,7 +1,7 @@
 import { SideCloseRecovery } from "./main/side-close";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { syncMacWindowButtons } from "./main/window-chrome";
-import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
+import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
@@ -156,7 +156,8 @@ import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, rendererTelemetryEnabled } from "./shared/telemetry";
+import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -207,6 +208,7 @@ import type {
 	BrowserRemoteTabAction,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -373,7 +375,13 @@ let pendingFolderPath: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
+type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
+let daemonAutoRestartExits: number[] = [];
+let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let daemonAutoRestartGeneration = 0;
+let daemonAutoRestartStandDown = false;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
+let daemonStartAutoRestartIntent: DaemonAutoRestartIntent | undefined;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
 const awakeDownloads = createAwakeDownloadBridge({
@@ -868,7 +876,7 @@ async function createWindowInternal(): Promise<void> {
 						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
 						// Center on the shared header; zoom/resize synchronization follows below.
-						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TITLEBAR_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
+						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TRAFFIC_LIGHT_ROW_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
 	};
 	mainWindow = new BaseWindow(windowOptions);
@@ -1749,6 +1757,7 @@ function establishBrowserRuntimeLink(): void {
  * browserRuntimeRecoveryDecision.
  */
 function handleBrowserRuntimeRejection(reason: string): void {
+	if (daemonAutoRestartStandDown) return;
 	const decision = browserRuntimeRecoveryDecision({
 		rejectedReason: reason,
 		spawnedHere: daemonProcess !== null,
@@ -1901,7 +1910,7 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	if (!launch) return daemonStatus;
 	const existing = await inspectExistingDaemon(launch);
 	if (existing) {
-		if (browserDaemonOwnershipDecision(appRunId, existing).action === "replace") {
+		if (!daemonAutoRestartStandDown && browserDaemonOwnershipDecision(appRunId, existing).action === "replace") {
 			return startDaemon();
 		}
 		setDaemonStatus(existing.status);
@@ -1918,7 +1927,11 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
-async function startDaemon(options: { forceReplaceAdopted?: boolean } = {}): Promise<DaemonStatus> {
+async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent } = {}): Promise<DaemonStatus> {
+	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
+		daemonStartEpoch += 1;
+		daemonStartPromise = null;
+	}
 	// Sticky, not a parameter of the in-flight call: the renderer's first
 	// daemon.getStatus() can attach while boot is still awaiting the shell
 	// environment, so a forced replacement requested in that window must be
@@ -1931,9 +1944,11 @@ async function startDaemon(options: { forceReplaceAdopted?: boolean } = {}): Pro
 		return daemonStartPromise;
 	}
 	const startEpoch = daemonStartEpoch;
-	const promise = startDaemonInner(startEpoch).finally(() => {
+	daemonStartAutoRestartIntent = options.autoRestartIntent;
+	const promise = startDaemonInner(startEpoch, options.autoRestartIntent).finally(() => {
 		if (daemonStartPromise === promise) {
 			daemonStartPromise = null;
+			daemonStartAutoRestartIntent = undefined;
 		}
 	});
 	daemonStartPromise = promise;
@@ -2004,13 +2019,15 @@ async function repairDevAcpRuntime(): Promise<void> {
 	});
 }
 
-async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
+async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
+	const startCancelled = () => startEpoch !== daemonStartEpoch || (autoRestartIntent !== undefined &&
+		(autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested));
 	if (daemonProcess) {
 		return daemonStatus;
 	}
 
 	await repairDevAcpRuntime();
-	if (startEpoch !== daemonStartEpoch) {
+	if (startCancelled()) {
 		return daemonStatus;
 	}
 
@@ -2043,10 +2060,11 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
 	let replacementKeepAlive: boolean | undefined;
 	const existing = await inspectExistingDaemon(launch);
-	if (startEpoch !== daemonStartEpoch) {
+	if (startCancelled()) {
 		return daemonStatus;
 	}
 	if (existing) {
+		if (autoRestartIntent) return daemonStatus;
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
 		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
@@ -2088,10 +2106,11 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		probe: readDaemonProbe,
 		identityError: (probe) => daemonIdentityError(launch, probe),
 	});
-	if (startEpoch !== daemonStartEpoch) {
+	if (startCancelled()) {
 		return daemonStatus;
 	}
 	if (directDaemon) {
+		if (autoRestartIntent) return daemonStatus;
 		let portAttachOwner: string | undefined;
 		let portAttachAppRunId: string | undefined;
 		// Re-link iff the daemon is app-owned. Read the run-file for the owner tag;
@@ -2139,7 +2158,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 
 	// Every path from here spawns a daemon, which needs the login-shell env.
 	await shellEnvReady;
-	if (startEpoch !== daemonStartEpoch) {
+	if (startCancelled()) {
 		return daemonStatus;
 	}
 	// The early probe runs while Electron itself is starting, the busiest moment
@@ -2149,7 +2168,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		earlyShellEnvProbe = null;
 		shellEnvPromise = null;
 		await ensureShellEnv();
-		if (startEpoch !== daemonStartEpoch) {
+		if (startCancelled()) {
 			return daemonStatus;
 		}
 	}
@@ -2176,7 +2195,8 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
-	const holder = await portHolderPidToReplace({
+	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
+	const holder = autoRestartIntent ? { pid: null, reason: "automatic recovery never signals a port holder" } : await portHolderPidToReplace({
 		probe: orphanProbe,
 		runFile,
 		processStartMs: readProcessStartMs,
@@ -2223,6 +2243,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	try {
 		await ensureBundledTmuxStaged();
 	} catch (err) {
+		if (autoRestartIntent && startCancelled()) return daemonStatus;
 		setDaemonStatus({
 			state: "error",
 			message: `Could not stage AO's bundled tmux under the AO data directory: ${(err as Error).message}`,
@@ -2230,6 +2251,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		});
 		return daemonStatus;
 	}
+	if (autoRestartIntent && startCancelled()) return daemonStatus;
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
@@ -2237,6 +2259,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		try {
 			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
 		} catch (err) {
+			if (autoRestartIntent && startCancelled()) return daemonStatus;
 			// A failure here (home unwritable, launch.cwd exists as a file) would
 			// otherwise reject out of startDaemonInner; boot calls this via
 			// `void startDaemon()`, so it would surface as an unhandled rejection
@@ -2249,6 +2272,11 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			return daemonStatus;
 		}
 	}
+	if (autoRestartIntent) {
+		const runFile = await readRunFileState();
+		if (!daemonAutoRestartMarkerMatches(autoRestartIntent, runFile)) return daemonStatus;
+	}
+	if (startCancelled()) return daemonStatus;
 
 	// Capture the spawned handle locally so the async lifecycle listeners act only
 	// on THIS process. Without this, a stale exit from an already-stopped daemon
@@ -2265,7 +2293,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = autoRestartIntent?.keepAlive ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
 	// We are about to own the daemon and hand it this launch's runtime token, so
 	// any forced replacement has been honored and must not leak into a later
 	// startup in this process.
@@ -2330,6 +2358,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 	if (keep) child.unref();
 	daemonProcess = child;
+	daemonAutoRestartStandDown = false;
 
 	// Discover the port the daemon ACTUALLY bound rather than trusting AO_PORT:
 	// the daemon may fall back to a different port than the one requested. Two
@@ -2462,6 +2491,9 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			setDaemonStatus({ state: "stopped" });
 			return;
 		}
+		supervisorLink?.dispose();
+		supervisorLink = null;
+		daemonAutoRestartStandDown = true;
 		setDaemonStatus({
 			state: "stopped",
 			message: signal ? `Daemon exited with ${signal}` : `Daemon exited with code ${code ?? "unknown"}`,
@@ -2469,6 +2501,22 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			code: "exited",
 			exitCode: code,
 			signal,
+		});
+		const exitedPid = child.pid ?? null;
+		const generation = daemonAutoRestartGeneration;
+		void readRunFileState().then((runFile) => {
+			if (generation !== daemonAutoRestartGeneration || browserQuitRequested || daemonProcess) return;
+			if (
+				daemonExitWasUngraceful({
+					runFilePresent: runFile.present,
+					runFilePid: runFile.pid,
+					childPid: exitedPid,
+					code,
+					signal,
+				})
+			) {
+				scheduleDaemonAutoRestart(exitedPid, runFile.present, keep);
+			}
 		});
 	});
 
@@ -2488,12 +2536,59 @@ function killDaemon(child: ChildProcess): void {
 	}
 }
 
+async function readRunFileState(): Promise<{ present: boolean; pid: number | null }> {
+	const rfp = runFilePath();
+	if (rfp === null) return { present: true, pid: null };
+	try {
+		return { present: true, pid: parseRunFile(await readFile(rfp, "utf8"))?.pid ?? null };
+	} catch (error) {
+		return { present: (error as NodeJS.ErrnoException).code !== "ENOENT", pid: null };
+	}
+}
+
+function daemonAutoRestartMarkerMatches(intent: DaemonAutoRestartIntent, runFile: { present: boolean; pid: number | null }): boolean {
+	return intent.runFilePresent ? runFile.present && runFile.pid === intent.crashedPid : !runFile.present;
+}
+
+// Cancel a pending auto-restart and forget the recent-exit window. Called when
+// the user (or the app) deliberately changes daemon state, so a stale respawn
+// cannot race an explicit stop/restart or fire during shutdown.
+function cancelDaemonAutoRestart(): void {
+	daemonAutoRestartGeneration += 1;
+	if (daemonAutoRestartTimer !== null) {
+		clearTimeout(daemonAutoRestartTimer);
+		daemonAutoRestartTimer = null;
+	}
+	daemonAutoRestartExits = [];
+}
+
+function scheduleDaemonAutoRestart(crashedPid: number | null, runFilePresent: boolean, keepAlive: boolean): void {
+	if (browserQuitRequested || crashedPid === null) return;
+	if (daemonAutoRestartTimer !== null) clearTimeout(daemonAutoRestartTimer);
+	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
+	daemonAutoRestartExits = recentExits;
+	daemonAutoRestartTimer = null;
+	if (plan.action === "give_up") return;
+	const intent = { generation: daemonAutoRestartGeneration, crashedPid, runFilePresent, keepAlive };
+	daemonAutoRestartTimer = setTimeout(() => {
+		daemonAutoRestartTimer = null;
+		if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) return;
+		void readRunFileState().then((runFile) => {
+			if (!daemonAutoRestartMarkerMatches(intent, runFile)) return;
+			if (intent.generation !== daemonAutoRestartGeneration || daemonProcess || browserQuitRequested) return;
+			void startDaemonForRestart(intent);
+		});
+	}, plan.delayMs);
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
+	daemonStartAutoRestartIntent = undefined;
 	// An explicit stop (or a newer restart request) cancels any deferred restart
 	// left waiting for a previously slow child to exit.
 	daemonRestartAfterExitProcess = null;
+	cancelDaemonAutoRestart();
 	if (!daemonProcess) {
 		setDaemonStatus({ state: "stopped" });
 		return daemonStatus;
@@ -2521,15 +2616,19 @@ function reportDaemonRestartFailure(error: unknown): DaemonStatus {
 	return daemonStatus;
 }
 
-async function startDaemonForRestart(): Promise<DaemonStatus> {
+async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent): Promise<DaemonStatus> {
 	try {
-		return await startDaemon();
+		return await startDaemon({ autoRestartIntent });
 	} catch (error) {
+		if (autoRestartIntent && (autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested)) return daemonStatus;
 		return reportDaemonRestartFailure(error);
 	}
 }
 
 async function restartDaemon(): Promise<DaemonStatus> {
+	daemonAutoRestartStandDown = false;
+	// A manual restart supersedes any pending automatic respawn.
+	cancelDaemonAutoRestart();
 	const child = daemonProcess;
 	if (!child) return startDaemonForRestart();
 	await captureSideChatState().catch((error) => console.warn("AO: pre-restart side snapshot failed", error));
@@ -2578,7 +2677,11 @@ registerCliLinkIpc({
 });
 
 ipcMain.handle("daemon:getStatus", () => refreshDaemonStatus());
-ipcMain.handle("daemon:start", () => startDaemon());
+ipcMain.handle("daemon:start", () => {
+	daemonAutoRestartStandDown = false;
+	cancelDaemonAutoRestart();
+	return startDaemon();
+});
 ipcMain.handle("daemon:stop", () => stopDaemon());
 ipcMain.handle("daemon:restart", async () => {
 	try {
@@ -2838,11 +2941,19 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 			return;
 	}
 });
-ipcMain.handle("telemetry:getBootstrap", () => {
+ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!telemetryPolicyController) return null;
 	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
 	if (telemetryIdentity.isOptedOut()) return null;
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
+	const runFile = runFilePath();
+	const install = await readTelemetryInstallContext({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		arch: process.arch,
+		osVersion: process.getSystemVersion(),
+		env: process.env,
+		exists: existsSync,
+	});
+	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 async function flushDaemonUsage(): Promise<void> {
@@ -2888,7 +2999,7 @@ ipcMain.handle("telemetry:capture", (_event, request: RendererTelemetryCapture) 
 	return telemetryPolicyController.capture(sanitized);
 });
 function failClosedTelemetryPolicyView(): TelemetryPolicyView {
-	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
+	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
 }
 async function chooseDirectory(title: string, defaultPath?: string): Promise<string | null> {
 	if (defaultPath) await mkdir(defaultPath, { recursive: true });
@@ -3538,6 +3649,13 @@ async function writeAppStateOnLaunch(): Promise<void> {
 		appPath: resolveBundlePath(),
 		version: app.getVersion(),
 		installedVia: parseInstalledVia(process.argv),
+		detectedInstallSource: detectInstallSource({
+			platform: process.platform,
+			isPackaged: app.isPackaged,
+			execPath: process.execPath,
+			env: process.env,
+			exists: existsSync,
+		}),
 		now: () => new Date(),
 	});
 }
@@ -3745,6 +3863,9 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
+	// Never respawn the daemon while the app is shutting down; the daemon's own
+	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
+	cancelDaemonAutoRestart();
 	disposeBrowserRuntimeLink();
 	disposeBrowserStreamLink();
 	trayLifecycle.dispose();

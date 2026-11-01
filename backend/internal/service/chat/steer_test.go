@@ -309,7 +309,7 @@ func TestSteerOrSendSteersAndRecoversOneAtomicOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover SteerOrSend: %v", err)
 	}
-	if !recovered.Steered || !recovered.Duplicate || recovered.Steer != first.Steer {
+	if !recovered.Steered || !recovered.Duplicate || !recovered.Steer.Replayed || withoutReplay(recovered.Steer) != first.Steer {
 		t.Fatalf("recovered = %+v, want %+v", recovered, first)
 	}
 	if calls := provider.steers(); len(calls) != 1 {
@@ -402,6 +402,11 @@ func TestSteerIsIdempotentOnTheClientHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retried Steer: %v", err)
 	}
+	// Usage counting relies on the flag: only the accepted original is new.
+	if first.Replayed || !replayed.Replayed {
+		t.Fatalf("Replayed = %v then %v, want false then true", first.Replayed, replayed.Replayed)
+	}
+	replayed.Replayed = false
 	if replayed != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
@@ -435,7 +440,8 @@ func TestAcceptedSteerReplaysAfterControllerRestartWithoutProviderRedispatch(t *
 	if err != nil {
 		t.Fatalf("Steer after restart: %v", err)
 	}
-	if replayed != first {
+	// A retry after a daemon restart is still the original steer.
+	if !replayed.Replayed || withoutReplay(replayed) != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
 	if calls := restartedProvider.steers(); len(calls) != 0 {
@@ -1069,7 +1075,7 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 			for range 2 {
 				recovered, err := h.svc.RecoverSteer(ctx, testSession, "image-steer")
-				if !errors.Is(err, tc.wantError) || recovered != original {
+				if !errors.Is(err, tc.wantError) || withoutReplay(recovered) != original {
 					t.Fatalf("recovery = %+v, %v; want %+v, %v", recovered, err, original, tc.wantError)
 				}
 			}
@@ -1083,4 +1089,11 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withoutReplay compares a replayed steer receipt with the original: they
+// differ only in Replayed, which marks the retry.
+func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
+	r.Replayed = false
+	return r
 }

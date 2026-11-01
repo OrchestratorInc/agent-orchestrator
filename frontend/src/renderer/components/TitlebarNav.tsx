@@ -79,9 +79,10 @@ export function TitlebarNav({
     : isFullScreen
       ? "left-titlebar-cluster-left-fullscreen"
       : "left-titlebar-cluster-left";
-  // macOS traffic lights centre at y = 18; top-0 puts this row on that centreline.
+  // top-0 plus the traffic-light row height puts this row on the native
+  // buttons' centreline; fullscreen has no frame, so it uses the flush row.
   const topClass = isMac ? "top-0" : "top-0.75";
-  const heightClass = "h-traffic-light-clearance";
+  const heightClass = isMac && !isFullScreen ? "h-traffic-light-clearance" : "h-toolbar";
 
   // With the sidebar open the brand sits where the history arrows would be;
   // collapsed, the arrows take its place.
@@ -159,7 +160,7 @@ export function TitlebarNav({
             <BuildInfoTooltip>
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 <AOMascot className="h-5.5 w-5.5 shrink-0" />
-                <span className="min-w-0 truncate" data-brand-label="">Orchestrator.inc</span>
+                <span className="min-w-0 truncate" data-brand-label="">Orchestrator</span>
               </span>
             </BuildInfoTooltip>
           </span>

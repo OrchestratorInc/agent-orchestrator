@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -19,7 +19,12 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
+	cloudListUserAgentModels: vi.fn(),
+	cloudListProviderConnections: vi.fn(),
 	cloudChatHarnesses: ["claude-code", "codex", "cursor"],
+	cloudOrgId: "org-1",
+	cloudBaseUrl: "https://cloud-a.example.test",
+	cloudUserId: "user-1",
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -89,11 +94,15 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 }));
 
 vi.mock("../hooks/useCloudOrg", () => ({
-	useCloudOrg: () => ({ org: { id: "org-1" } }),
+	useCloudOrg: () => ({ org: { id: h.cloudOrgId } }),
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
+	useCloudCp: () => ({
+		baseUrl: h.cloudBaseUrl,
+		userId: h.cloudUserId,
+		client: { createSession: h.cloudCreateSession, listUserAgentModels: h.cloudListUserAgentModels, listUserProviderConnections: h.cloudListProviderConnections },
+	}),
 }));
 
 vi.mock("../hooks/useCloudOffering", () => ({
@@ -117,6 +126,41 @@ function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { quer
 
 const task = () => screen.getByRole("textbox", { name: "Task" });
 const startTask = () => screen.getByRole("button", { name: "Start task" });
+const localModelReads = () => h.get.mock.calls.filter(([path]) => String(path).includes("/models"));
+
+/** A cloud project whose worker runs `agent`, connected for Cloud unless `connections` says otherwise. */
+function cloudFixture(
+	agent: string,
+	agentConfig: Record<string, string> = {},
+	connections: Array<Record<string, unknown>> = [
+		{ id: `${agent}-connection`, provider: agent, label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} },
+	],
+) {
+	h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent, agentConfig } } });
+	h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(providerConnectionsQueryKey, connections);
+	return queryClient;
+}
+
+function releaseCatalog(models: Array<Record<string, unknown>>, cliVersion = "2.1.287") {
+	return { models, source: "release", cliVersion };
+}
+
+/** Picks a listed Cloud model, which nothing selected for the user beforehand. */
+async function chooseCloudModel(label: string) {
+	const picker = await screen.findByRole("button", { name: "Model" });
+	await waitFor(() => expect(picker).toHaveTextContent("Project or agent default"));
+	await userEvent.click(picker);
+	await userEvent.click(await screen.findByRole("menuitem", { name: label }));
+	expect(picker).toHaveTextContent(label);
+}
+
+async function enterCloudModel(id: string) {
+	await userEvent.click(screen.getByRole("button", { name: "Model" }));
+	await userEvent.type(screen.getByRole("searchbox"), id);
+	await userEvent.click(screen.getByRole("menuitem", { name: new RegExp(id) }));
+}
 
 async function waitForTaskReady() {
 	await waitFor(() => expect(startTask()).toBeEnabled());
@@ -124,6 +168,9 @@ async function waitForTaskReady() {
 
 beforeEach(() => {
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
+	// An older control plane, unless a test says otherwise.
+	h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
+	h.cloudListProviderConnections.mockRejectedValue(new CloudCpError("Signed out", { status: 401 }));
 	h.get.mockImplementation(async (path: string) => {
 		if (path.includes("/models")) {
 			return {
@@ -141,6 +188,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	cleanup();
 	useUiStore.setState({ developerMode: false, remoteHosts: false });
 	h.delete.mockReset();
 	h.get.mockReset();
@@ -155,7 +203,12 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
+	h.cloudListUserAgentModels.mockReset();
+	h.cloudListProviderConnections.mockReset();
 	h.cloudChatHarnesses = ["claude-code", "codex", "cursor"];
+	h.cloudOrgId = "org-1";
+	h.cloudBaseUrl = "https://cloud-a.example.test";
+	h.cloudUserId = "user-1";
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -1244,16 +1297,15 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
-	// The catalog is this device's; its first model may not run on the cloud VM.
+	// An older control plane lists this device's models, whose first one the cloud VM may not run.
 	it("leaves an unreported cloud default model to the cloud VM", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+		const queryClient = cloudFixture("codex");
 		h.get.mockImplementation(async () => ({ data: { agent: "codex", selectionMode: "catalog", models: [
 			{ id: "gpt-local-only", label: "Local only" },
 			{ id: "gpt-other", label: "Other" },
 		], allowCustom: true } }));
-		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
-		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		await screen.findByRole("button", { name: "Model" });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/This Cloud server can't list its models/);
 		fireEvent.change(task(), { target: { value: "Do the work" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
@@ -1261,12 +1313,12 @@ describe("TaskComposer", () => {
 	});
 
 	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
-		h.get.mockImplementation(async () => ({ data: { agent: "claude-code", selectionMode: "catalog", models: [
-			{ id: "claude-sonnet-test", label: "Sonnet", isDefault: true, efforts: ["low", "medium", "high"] },
-		], allowCustom: true } }));
-		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
-		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true, efforts: ["low", "medium", "high"] },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Sonnet");
 		const picker = await screen.findByRole("button", { name: "Effort" });
 		await waitFor(() => expect(picker).toHaveTextContent("Medium"));
 		await userEvent.click(picker);
@@ -2469,9 +2521,9 @@ describe("TaskComposer", () => {
 			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 		});
 
-		// A cloud task runs with the cloud credential; this computer's login only
-		// shapes the model list, so it must never read as a blocking error.
-		it("keeps a cloud project startable with a quiet note when the local login fails", async () => {
+		// A cloud task runs with the cloud credential and the control plane's
+		// catalog, so this computer's login never reads as a problem.
+		it("keeps a cloud project startable without consulting the local login", async () => {
 			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
 			h.get.mockImplementation(async () => ({ data: claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }) }));
@@ -2479,9 +2531,8 @@ describe("TaskComposer", () => {
 			const onCreated = vi.fn();
 			render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
 
-			const notice = await screen.findByTestId("model-catalog-notice");
-			expect(notice).toHaveTextContent("Cloud tasks use your cloud connection and can still start.");
-			expect(notice).not.toHaveClass("text-warning");
+			await screen.findByRole("textbox", { name: "Task" });
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 			fireEvent.change(task(), { target: { value: "Do the work" } });
 			await waitForTaskReady();
@@ -2493,14 +2544,16 @@ describe("TaskComposer", () => {
 			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
 			h.get.mockImplementation(async () => ({ data: claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }) }));
+			h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "sonnet", displayName: "Sonnet", default: true }]));
 			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 			queryClient.setQueryData(providerConnectionsQueryKey, [
 				{ id: "c-1", provider: "claude-code", label: "default", validationState: "valid", config: { credentialType: "oauth" } },
 			]);
 			render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 			await screen.findByRole("textbox", { name: "Task" });
-			await waitFor(() => expect(h.get).toHaveBeenCalled());
+			await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
 			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(h.get.mock.calls.filter(([path]) => String(path).includes("/models"))).toEqual([]);
 		});
 
 		it("re-reads the catalog by itself once the agent reads as logged in", async () => {
@@ -2526,6 +2579,535 @@ describe("TaskComposer", () => {
 			act(() => { window.dispatchEvent(new Event("focus")); });
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
+	});
+});
+
+describe("TaskComposer Cloud model catalog", () => {
+	it("lists the release catalog without a live worker and starts on the default", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true, efforts: ["low", "medium", "high"] },
+			{ id: "claude-opus-test", displayName: "Opus", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledWith("org-1", "claude-code", { signal: expect.any(AbortSignal) }));
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Use project or agent default" })).toBeInTheDocument();
+		expect(screen.getByText("Models for Claude Code 2.1.287")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		// The catalog's own default is the agent's, not a pick made for the user.
+		expect(picker).toHaveTextContent("Project or agent default");
+		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Use the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+		expect(localModelReads()).toEqual([]);
+	});
+
+	it("says when Cloud workers verified the catalog and sends the chosen model and effort", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue({ source: "worker", cliVersion: "0.130.0", models: [
+			{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] },
+		] });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("GPT-5.6 Sol");
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.getByText("Verified on your Cloud workers")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		fireEvent.change(task(), { target: { value: "Use the verified model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+		expect(screen.queryByText(/may not run/)).not.toBeInTheDocument();
+	});
+
+	it("never lists this computer's models beside Cloud's", async () => {
+		const queryClient = cloudFixture("codex");
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-6-luna", label: "GPT-6 Luna", isDefault: true }], allowCustom: true } }
+			: { data: { status: "ok", project: { config: {} } } });
+		let finishCatalog!: (catalog: ReturnType<typeof releaseCatalog>) => void;
+		h.cloudListUserAgentModels.mockReturnValue(new Promise((resolve) => { finishCatalog = resolve; }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		// Usable on the default while Cloud answers.
+		expect(picker).toBeEnabled();
+		expect(picker).toHaveTextContent("Project or agent default");
+		act(() => finishCatalog(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] }], "0.130.0")));
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "GPT-6 Luna" })).not.toBeInTheDocument();
+		expect(screen.getByText("Models for Codex 0.130.0")).toBeInTheDocument();
+		expect(localModelReads()).toEqual([]);
+	});
+
+	it("keeps OpenCode's credential-scoped discovery when Cloud has no catalog for it", async () => {
+		const queryClient = cloudFixture("opencode", {}, [
+			{ id: "o", provider: "opencode", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: { credentialType: "anthropic_api_key" } },
+		]);
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		h.get.mockResolvedValue({ data: { agent: "opencode", selectionMode: "catalog", models: [{ id: "anthropic/sonnet", label: "Connected Sonnet", isDefault: true }], allowCustom: true } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Connected Sonnet");
+		expect(h.cloudListUserAgentModels).toHaveBeenCalledWith("org-1", "opencode", { signal: expect.any(AbortSignal) });
+		expect(h.get).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.objectContaining({ params: expect.objectContaining({ query: { projectId: "@cred:anthropic_api_key" } }) }));
+		// Only the credential's own catalog, never this device's.
+		expect(localModelReads().every(([, init]) => init.params.query.projectId === "@cred:anthropic_api_key")).toBe(true);
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.getByText("From your connected provider's model list")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText(/Cloud has no model list/)).not.toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Use the connected provider" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "anthropic/sonnet" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it.each([
+		{ agent: "cursor", config: {} },
+		{ agent: "opencode", config: {} },
+	])("offers the default and any model ID when Cloud has no $agent catalog", async ({ agent, config }) => {
+		const queryClient = cloudFixture(agent, {}, [{ id: "c", provider: agent, label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config }]);
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Cloud has no model list for/);
+		const picker = screen.getByRole("button", { name: "Model" });
+		expect(picker).toBeEnabled();
+		expect(picker).toHaveTextContent("Project or agent default");
+		await enterCloudModel("explicit-cloud-model");
+		fireEvent.change(task(), { target: { value: "Run the explicit model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "explicit-cloud-model" }), { idempotencyKey: expect.any(String) }));
+		expect(localModelReads()).toEqual([]);
+	});
+
+	it.each([404, 501])("lists this computer's models as unverified suggestions for an older control plane (%s)", async (status) => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("Old server", { status }));
+		h.get.mockResolvedValue({ data: { agent: "codex", selectionMode: "catalog", models: [{ id: "legacy-model", label: "Legacy model", isDefault: true }], allowCustom: true } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/This Cloud server can't list its models/);
+		await chooseCloudModel("Legacy model");
+	});
+
+	it.each(["codex", "claude-code"])("does not start an older control plane's %s task on a suggestion", async (agent) => {
+		const queryClient = cloudFixture(agent);
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
+		h.get.mockResolvedValue({ data: { agent, selectionMode: "catalog", models: [{ id: "desktop-opus", label: "Desktop Opus", isDefault: true }], allowCustom: true } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/This Cloud server can't list its models/);
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(await screen.findByRole("menuitem", { name: "Desktop Opus" })).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Project or agent default");
+		fireEvent.change(task(), { target: { value: "Use native default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+	});
+
+	it.each([{ status: 404, code: "not_found" }, { status: 501, code: "not_implemented" }])("does not take a handler's $code for an older control plane", async ({ status, code }) => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("Handler error", { status, code }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Couldn't load Cloud's models for Codex/);
+		expect(localModelReads()).toEqual([]);
+	});
+
+	it.each([
+		{ status: 502, code: "BAD_GATEWAY" },
+		{ status: 504, code: "WORKER_TIMEOUT" },
+		{ status: 429, code: "TOO_MANY_REQUESTS" },
+	])("keeps the default and manual entry when the catalog fails with $status", async ({ status, code }) => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("Unavailable", { status, code }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Couldn't load Cloud's models for Codex/);
+		const picker = screen.getByRole("button", { name: "Model" });
+		expect(picker).toBeEnabled();
+		expect(picker).toHaveTextContent("Project or agent default");
+		await enterCloudModel("explicit-worker-model");
+		fireEvent.change(task(), { target: { value: "Run explicit choice" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "explicit-worker-model" }), { idempotencyKey: expect.any(String) }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use project or agent default" }));
+		fireEvent.change(task(), { target: { value: "Run native default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledTimes(2));
+		expect(h.cloudCreateSession.mock.calls[1]?.[1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[1]?.[1]).not.toHaveProperty("reasoningEffort");
+		expect(localModelReads()).toEqual([]);
+	});
+
+	it("drops an effort the newly chosen listed model does not take", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "sonnet", displayName: "Sonnet", default: false, efforts: ["low", "medium", "high"] },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Sonnet");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Haiku" }));
+		fireEvent.change(task(), { target: { value: "Use Haiku" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "haiku" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("keeps a configured model the catalog does not list, and warns that it may not run", async () => {
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] },
+		], "0.130.0"));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const warning = "configured-model isn't in Cloud's model list for Codex, so it may not run.";
+		await screen.findByText(warning);
+		const picker = screen.getByRole("button", { name: "Model" });
+		expect(picker).toHaveTextContent("configured-model");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.6 Sol" }));
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+		// Still listed, so it can be chosen again.
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "configured-model" }));
+		expect(screen.getByText(warning)).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Use the configured model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "configured-model", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("preserves a configured model and effort when Cloud has no catalog", async () => {
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Cloud has no model list for Codex/);
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("configured-model");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		fireEvent.change(task(), { target: { value: "Use configured choices" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "configured-model", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("retains an explicit model and effort through a failed refetch and a changed catalog", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValueOnce(releaseCatalog([{ id: "chosen", displayName: "Chosen", default: false, efforts: ["high"] }]))
+			.mockRejectedValueOnce(new CloudCpError("Timeout", { status: 504, code: "WORKER_TIMEOUT" }))
+			.mockResolvedValue(releaseCatalog([{ id: "other", displayName: "Other", default: true }]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Chosen" }));
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-agent-models"] }));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Chosen");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		expect(screen.queryByText(/Couldn't load/)).not.toBeInTheDocument();
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-agent-models"] }));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("chosen");
+		expect(screen.getByText(/chosen isn't in Cloud's model list/)).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Retain my choices" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "chosen", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("waits for Cloud's catalog before starting, so the effort matches the model", async () => {
+		const queryClient = cloudFixture("claude-code", { model: "haiku", effort: "high" });
+		let finishCatalog!: (value: ReturnType<typeof releaseCatalog>) => void;
+		h.cloudListUserAgentModels.mockReturnValue(new Promise((resolve) => { finishCatalog = resolve; }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		fireEvent.change(task(), { target: { value: "Use Haiku" } });
+		expect(startTask()).toBeDisabled();
+		await act(async () => finishCatalog(releaseCatalog([{ id: "haiku", displayName: "Haiku", default: false }])));
+		await waitFor(() => expect(startTask()).toBeEnabled());
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "haiku" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("drops another model's effort when the default is chosen", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "opus", displayName: "Opus", default: false, efforts: ["low", "high", "max"] },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Opus");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Max" }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		fireEvent.change(task(), { target: { value: "Use the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("keeps Scratchpad's choices when the composer leaves a Cloud project", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true }], "0.165.0"));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { usageCount: 3, lastUsedAt: "2026-09-20T12:00:00Z" })] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "text", allowCustom: true, models: [
+				{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true },
+				{ id: "gpt-5.5", label: "GPT-5.5" },
+			] } }
+			: { data: { status: "ok", project: { config: {} } } });
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT-6-Astra"));
+		await userEvent.click(model);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5"));
+	});
+
+	it("keeps the configured effort for an entered model the catalog does not list", async () => {
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed-no-levels", displayName: "Listed without levels", default: false }]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		await enterCloudModel("manual-unlisted");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		fireEvent.change(task(), { target: { value: "Retain configured effort" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "manual-unlisted", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("sends no configured effort with a listed model that reports no levels", async () => {
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed-no-levels", displayName: "Listed without levels", default: false }]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Listed without levels" }));
+		fireEvent.change(task(), { target: { value: "Use the listed model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "listed-no-levels" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("sends a listed model with one of its advertised efforts", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] },
+			{ id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", default: false, efforts: ["medium"] },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("GPT-5.6 Luna");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Medium" }));
+		fireEvent.change(task(), { target: { value: "Use the supported model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "gpt-5.6-luna", reasoningEffort: "medium" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("passes the cancellation signal and reuses a fresh catalog on reopen", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed", displayName: "Listed", default: true }]));
+		const first = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledOnce());
+		expect(h.cloudListUserAgentModels.mock.calls[0][2].signal).toBeInstanceOf(AbortSignal);
+		first.unmount();
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Listed");
+		expect(h.cloudListUserAgentModels).toHaveBeenCalledOnce();
+	});
+
+	it("waits for the provider connections and keeps a choice made meanwhile", async () => {
+		const queryClient = cloudFixture("codex", { effort: "high" });
+		queryClient.removeQueries({ queryKey: providerConnectionsQueryKey });
+		h.cloudListProviderConnections.mockReturnValue(new Promise(() => undefined));
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await enterCloudModel("pending-choice");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		expect(h.cloudListUserAgentModels).not.toHaveBeenCalled();
+		act(() => queryClient.setQueryData(providerConnectionsQueryKey, [{ id: "loaded-connection", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} }]));
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledOnce());
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("pending-choice");
+		fireEvent.change(task(), { target: { value: "Keep choices through hydration" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "pending-choice", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("keeps a manual choice when the project turns out to be a cloud project", async () => {
+		const queryClient = cloudFixture("codex", { effort: "high" });
+		const project = h.cloudProjects.pop()!;
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", models: [{ id: "manual-choice", label: "Manual choice" }], allowCustom: true, customModelEntry: "direct", selectionMode: "catalog" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Manual choice" }));
+		h.cloudProjects.push(project);
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Cloud has no model list for Codex/);
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("manual-choice");
+	});
+
+	it("remembers each agent's explicit Cloud choice across agent switches", async () => {
+		const queryClient = cloudFixture("codex", { effort: "high" }, ["codex", "claude-code"].map((provider) => ({ id: provider, provider, label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} })));
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		for (const model of ["codex-choice", "claude-choice"]) {
+			await enterCloudModel(model);
+			await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+		}
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("codex-choice");
+		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		fireEvent.change(task(), { target: { value: "Use remembered Codex choice" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "codex-choice", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+		await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("claude-choice");
+	});
+
+	it("starts over and asks again when the signed-in Cloud user changes", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await enterCloudModel("user-one-choice");
+		h.cloudUserId = "user-2";
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledTimes(2));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Project or agent default");
+		fireEvent.change(task(), { target: { value: "Use new identity defaults" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+	});
+
+	it("does not reuse another organization's catalog", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValueOnce(releaseCatalog([{ id: "org-a-model", displayName: "Org A model", default: true }]))
+			.mockRejectedValue(new CloudCpError("Unavailable", { status: 502, code: "BAD_GATEWAY" }));
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Org A model");
+		h.cloudOrgId = "org-2";
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText(/Couldn't load Cloud's models/);
+		expect(h.cloudListUserAgentModels).toHaveBeenLastCalledWith("org-2", "codex", { signal: expect.any(AbortSignal) });
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Project or agent default");
+	});
+
+	it("asks the new control plane after a server switch with equal organization and credential IDs", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValueOnce(releaseCatalog([{ id: "endpoint-a-model", displayName: "Endpoint A model", default: true }]))
+			.mockResolvedValueOnce(releaseCatalog([{ id: "endpoint-b-model", displayName: "Endpoint B model", default: true }]));
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Endpoint A model");
+		h.cloudBaseUrl = "https://cloud-b.example.test";
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Endpoint B model");
+		expect(h.cloudListUserAgentModels.mock.calls.map((args) => args.slice(0, 2))).toEqual([["org-1", "codex"], ["org-1", "codex"]]);
+	});
+
+	it("ignores a late answer from the previous control plane", async () => {
+		const queryClient = cloudFixture("codex");
+		let finishOldCatalog!: (value: ReturnType<typeof releaseCatalog>) => void;
+		h.cloudListUserAgentModels.mockReturnValueOnce(new Promise((resolve) => { finishOldCatalog = resolve; }))
+			.mockResolvedValueOnce(releaseCatalog([{ id: "endpoint-b-model", displayName: "Endpoint B model", default: true }]));
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledOnce());
+		h.cloudBaseUrl = "https://cloud-b.example.test";
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledTimes(2));
+		await chooseCloudModel("Endpoint B model");
+		await act(async () => finishOldCatalog(releaseCatalog([{ id: "late-endpoint-a-model", displayName: "Late endpoint A model", default: true }])));
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Endpoint B model");
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("menuitem", { name: "Late endpoint A model" })).not.toBeInTheDocument();
+	});
+
+	it("asks again when the agent's Cloud connection changes", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels
+			.mockResolvedValueOnce(releaseCatalog([{ id: "account-a", displayName: "Account A", default: true }]))
+			.mockResolvedValueOnce({ source: "worker", models: [{ id: "account-b", displayName: "Account B", default: true }] });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Account A");
+		act(() => queryClient.setQueryData(providerConnectionsQueryKey, [
+			{ id: "codex-b", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-24T01:00:00Z", config: {} },
+		]));
+		await chooseCloudModel("Account B");
+		expect(h.cloudListUserAgentModels).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a choice made for the previous credential after a resave", async () => {
+		const connection = { id: "c", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-20T00:00:00Z", config: {} };
+		const queryClient = cloudFixture("codex", {}, [connection]);
+		h.cloudListUserAgentModels.mockResolvedValueOnce(releaseCatalog([{ id: "old-model", displayName: "Old model", default: true, efforts: ["high"] }]))
+			.mockRejectedValue(new CloudCpError("No catalog", { status: 409, code: "MODEL_CATALOG_UNAVAILABLE" }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Old model");
+		act(() => queryClient.setQueryData(providerConnectionsQueryKey, [{ ...connection, updatedAt: "2026-10-21T00:00:00Z" }]));
+		await screen.findByText(/Cloud has no model list for Codex/);
+		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Project or agent default");
+		fireEvent.change(task(), { target: { value: "Start after credential resave" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("leaves a local project on this computer's catalog and its default", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "gpt-local", label: "Local GPT", isDefault: true }, { id: "gpt-other", label: "Other GPT" }], allowCustom: true } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		h.post.mockResolvedValue({ data: { workerId: "local-session" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Local GPT"));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("menuitem", { name: "Use project or agent default" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run locally" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ model: "gpt-local" }) })));
+		expect(h.get).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.anything());
+		expect(h.cloudListUserAgentModels).not.toHaveBeenCalled();
+	});
+
+	it("keeps local Cursor effort and thinking variants", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: "cursor", selectionMode: "catalog", customModelEntry: "none", allowCustom: false,
+				models: [
+					{ id: "claude-opus-4-8-low", label: "Claude Opus 4.8 Low", isDefault: true },
+					{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High" },
+					{ id: "claude-opus-4-8-thinking-low", label: "Claude Opus 4.8 Low Thinking" },
+					{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
+				],
+			} };
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui" } };
+			return { data: { status: "ok", project: { agent: "cursor", config: {} } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "cursor-session" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const effortPicker = await screen.findByRole("button", { name: "Effort" });
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await userEvent.click(effortPicker);
+		await userEvent.click(screen.getByText("Thinking"));
+		expect(screen.getByRole("switch", { name: "Thinking" })).toBeChecked();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Run Cursor with high thinking" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ model: "claude-opus-4-8-thinking-high" }) })));
+		expect(h.cloudListUserAgentModels).not.toHaveBeenCalled();
 	});
 });
 
