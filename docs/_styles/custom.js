@@ -24,8 +24,8 @@ function aoCurLangName() {
   /* "View on GitHub" targets the canonical upstream main source. While PR #7529
      is unmerged those paths do not exist upstream yet, so at build time we probe
      the upstream raw file (raw.githubusercontent.com allows cross-origin reads)
-     and fall back to the fork preview branch. After merge the upstream probe
-     succeeds and every link switches over with no code change. */
+     and switch the link over only on success. After merge the probe succeeds and
+     every link switches over with no code change. */
   var GH_UPSTREAM = "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs";
   var GH_UPSTREAM_RAW = "https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/docs";
   var GH_FALLBACK = "https://github.com/atul-upadhyay-7/agent-orchestrator/blob/mintlify-preview/docs";
@@ -590,22 +590,37 @@ function aoCurLangName() {
     var ghPath = pageMdxSourcePath();
     var ghUpstreamUrl = GH_UPSTREAM + ghPath;
     var ghFallbackUrl = GH_FALLBACK + ghPath;
-    var ghTarget = ghUpstreamUrl, ghResolved = false;
-    gh.href = ghUpstreamUrl;
-    fetch(GH_UPSTREAM_RAW + ghPath).then(function (r) {
-      ghTarget = r.ok ? ghUpstreamUrl : ghFallbackUrl;
-      gh.href = ghTarget;
-      ghResolved = true;
-    }, function () { ghResolved = true; });
+    /* Start from the fork URL, which is verified to exist while the PR is open,
+       so an early middle-click/copy is never broken. Swap to canonical upstream
+       only after the probe positively verifies the file exists on main. On a
+       probe network error (one retry), fall back by host: Mintlify serves
+       branch previews on *.mintlify.app subdomains, where the fork is the live
+       source; a custom domain means the production deployment, whose source is
+       upstream main. */
+    var ghTarget = ghFallbackUrl, ghResolved = false;
+    gh.href = ghFallbackUrl;
+    var ghProbe = function (retried) {
+      fetch(GH_UPSTREAM_RAW + ghPath).then(function (r) {
+        if (r.ok) { ghTarget = ghUpstreamUrl; gh.href = ghUpstreamUrl; }
+        ghResolved = true;
+      }, function () {
+        if (!retried) { ghProbe(true); return; }
+        if (!/\.mintlify\.app$/.test(location.hostname)) {
+          ghTarget = ghUpstreamUrl; gh.href = ghUpstreamUrl;
+        }
+        ghResolved = true;
+      });
+    };
+    ghProbe(false);
     gh.addEventListener("click", function (e) {
       e.preventDefault();
       if (ghResolved) { window.open(ghTarget, "_blank", "noreferrer"); return; }
       /* Probe still in flight: wait briefly, then navigate same-tab (async
-         window.open would be popup-blocked). */
+         window.open would be popup-blocked). The current target is the fork
+         URL until upstream is verified, so this is always a working page. */
       var t0 = Date.now();
       (function poll() {
-        if (ghResolved) { location.assign(ghTarget); }
-        else if (Date.now() - t0 > 4000) { location.assign(ghUpstreamUrl); }
+        if (ghResolved || Date.now() - t0 > 4000) { location.assign(ghTarget); }
         else setTimeout(poll, 100);
       })();
     });
