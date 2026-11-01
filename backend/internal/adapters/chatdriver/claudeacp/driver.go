@@ -286,12 +286,11 @@ func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string)
 	if isClaudeNativeModelAlias(model) {
 		return nil
 	}
-	binary, err := plugin.ResolveBinary(ctx)
-	if err != nil {
-		return nil
-	}
-	if reason := claudecode.UnsupportedModelReason(ctx, binary, model); reason != "" {
-		return fmt.Errorf("%w: model %q: %s", ports.ErrAgentVersionTooOld, model, reason)
+	// A binary AO cannot resolve has no known version, so the model may be tried.
+	if binary, err := plugin.ResolveBinary(ctx); err == nil {
+		if reason := claudecode.UnsupportedModelReason(ctx, binary, model); reason != "" {
+			return fmt.Errorf("%w: model %q: %s", ports.ErrAgentVersionTooOld, model, reason)
+		}
 	}
 	return nil
 }
