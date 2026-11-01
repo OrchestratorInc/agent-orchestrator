@@ -1,7 +1,12 @@
 package kimchi
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,9 +24,9 @@ const kimchiTestSession = "019fe4d5-24c5-77ac-a0e3-d3c18b37dcef"
 func TestEncodeKimchiCwdDir(t *testing.T) {
 	cases := map[string]string{
 		"/Users/me/.ao/data/worktrees/proj/x": "--Users-me-.ao-data-worktrees-proj-x--",
-		"/private/tmp/a/b":                     "--private-tmp-a-b--",
-		"/work/repo":                           "--work-repo--",
-		`C:\Users\me\proj`:                     "--C--Users-me-proj--",
+		"/private/tmp/a/b":                  "--private-tmp-a-b--",
+		"/work/repo":                        "--work-repo--",
+		`C:\Users\me\proj`:                  "--C--Users-me-proj--",
 	}
 	for in, want := range cases {
 		if got := encodeKimchiCwdDir(in); got != want {
@@ -52,7 +57,7 @@ func sourcePath(root, folder string) string {
 // the transcript is placed at the launch cwd's folder, its header cwd rewritten
 // to the exact launch cwd, and the original is left untouched.
 func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
 	writeKimchiFixture(t, src, "/work/repo")
 
@@ -63,6 +68,10 @@ func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
 	got, err := relocateKimchiImportedSession(context.Background(), configDir, kimchiTestSession, src, launch)
 	if err != nil {
 		t.Fatal(err)
+	}
+	info, err := os.Stat(got)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("copy permissions: %v, %v", info, err)
 	}
 	wantDir := filepath.Join(configDir, "sessions", encodeKimchiCwdDir(launch))
 	if filepath.Dir(got) != wantDir {
@@ -95,7 +104,7 @@ func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
 // open-only contract: a copy already at the launch cwd (which may hold turns AO
 // appended after the import) is returned as-is, never overwritten.
 func TestRelocateKimchiNeverOverwritesExistingCopy(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
 	writeKimchiFixture(t, src, "/work/repo")
 	launch := filepath.Join(t.TempDir(), "worktree")
@@ -149,7 +158,7 @@ func TestRelocateKimchiNeverOverwritesExistingCopy(t *testing.T) {
 // target differs from the link path; the copy must land under the link-named
 // folder, not the target-named one.
 func TestRelocateKimchiEncodesRawSymlinkedLaunchCWD(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
 	writeKimchiFixture(t, src, "/work/repo")
 
@@ -188,7 +197,7 @@ func TestRelocateKimchiEncodesRawSymlinkedLaunchCWD(t *testing.T) {
 }
 
 func TestRelocateKimchiRejectsMissingTranscript(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	launch := filepath.Join(t.TempDir(), "worktree")
 	if err := os.MkdirAll(launch, 0o755); err != nil {
 		t.Fatal(err)
@@ -200,7 +209,7 @@ func TestRelocateKimchiRejectsMissingTranscript(t *testing.T) {
 }
 
 func TestRelocateKimchiRejectsRelativeLaunchCWD(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
 	writeKimchiFixture(t, src, "/work/repo")
 	if _, err := relocateKimchiImportedSession(context.Background(), configDir, kimchiTestSession, src, "relative/dir"); err == nil {
@@ -209,7 +218,7 @@ func TestRelocateKimchiRejectsRelativeLaunchCWD(t *testing.T) {
 }
 
 func TestLocateTranscriptFindsByNativeID(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
 	writeKimchiFixture(t, src, "/work/repo")
 	p := New()
@@ -240,15 +249,53 @@ func TestProbeNativeSessionUnavailableWhenMissing(t *testing.T) {
 	}
 }
 
-func TestNativeSessionConfigDirHonorsEnv(t *testing.T) {
-	p := New()
-	dir := filepath.Join(t.TempDir(), "custom-kimchi")
-	got, err := p.NativeSessionConfigDir(context.Background(), map[string]string{kimchiCodingAgentDirEnv: dir})
-	if err != nil {
+func kimchiTestRoot(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(kimchiCodingAgentDirEnv, "")
+	root := filepath.Join(home, ".config", "kimchi", "harness")
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got != dir {
-		t.Fatalf("config dir = %q, want %q", got, dir)
+	return root
+}
+
+func TestNativeSessionConfigDirModelsActualHomeAndRejectsOverrides(t *testing.T) {
+	root := kimchiTestRoot(t)
+	p := New()
+	got, err := p.NativeSessionConfigDir(context.Background(), nil)
+	if err != nil || got != root {
+		t.Fatalf("native root = %q, %v; want %q", got, err, root)
+	}
+	t.Setenv(kimchiCodingAgentDirEnv, t.TempDir())
+	if _, err := p.NativeSessionConfigDir(context.Background(), nil); err == nil {
+		t.Fatal("daemon config override was presented as runtime-supported")
+	}
+	if got, err := p.NativeSessionConfigDir(context.Background(), map[string]string{kimchiCodingAgentDirEnv: ""}); err != nil || got != root {
+		t.Fatalf("empty child override did not mask daemon override: %q, %v", got, err)
+	}
+	alias := filepath.Join(t.TempDir(), "native-root")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.NativeSessionConfigDir(context.Background(), map[string]string{kimchiCodingAgentDirEnv: alias}); err != nil || got != root {
+		t.Fatalf("equivalent root alias rejected: %q, %v", got, err)
+	}
+}
+
+func TestRelocateKimchiRejectsUnsupportedRootBeforeCopy(t *testing.T) {
+	_ = kimchiTestRoot(t)
+	unsupported := t.TempDir()
+	src := sourcePath(unsupported, "--source--")
+	writeKimchiFixture(t, src, "/source")
+	launch := t.TempDir()
+	if _, err := relocateKimchiImportedSession(context.Background(), unsupported, kimchiTestSession, src, launch); err == nil || !strings.Contains(err.Error(), "native home root") {
+		t.Fatalf("unsupported source root was not clearly rejected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(unsupported, "sessions", encodeKimchiCwdDir(launch))); !os.IsNotExist(err) {
+		t.Fatalf("unsupported root was copied before rejection: %v", err)
 	}
 }
 
@@ -260,5 +307,168 @@ func TestCanonicalKimchiSessionIDRejectsPathEscape(t *testing.T) {
 	}
 	if _, err := canonicalKimchiSessionID(kimchiTestSession); err != nil {
 		t.Errorf("canonicalKimchiSessionID(valid uuid) errored: %v", err)
+	}
+}
+
+func TestRelocateKimchiRejectsInvalidCopiesWithoutPublishing(t *testing.T) {
+	for _, kind := range []string{"missing header", "duplicate header", "wrong id", "empty history", "torn record"} {
+		t.Run(kind, func(t *testing.T) {
+			root := kimchiTestRoot(t)
+			src := sourcePath(root, "--source--")
+			writeKimchiFixture(t, src, "/source")
+			body, err := os.ReadFile(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, rest, _ := bytes.Cut(body, []byte("\n"))
+			switch kind {
+			case "missing header":
+				body = rest
+			case "duplicate header":
+				body = append(body, append(header, '\n')...)
+			case "wrong id":
+				body = bytes.ReplaceAll(body, []byte(kimchiTestSession), []byte("019f0000-0000-7000-8000-000000000000"))
+			case "empty history":
+				body = append(header, '\n')
+			case "torn record":
+				body = append(body, []byte(`{"type":`)...)
+			}
+			if err := os.WriteFile(src, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			launch := t.TempDir()
+			p := New()
+			err = p.RelocateImportedSession(context.Background(), ports.ImportedSessionRelocation{
+				NativeSessionID: kimchiTestSession,
+				ConfigDir:       root,
+				TranscriptPath:  src,
+				LaunchCWD:       launch,
+			})
+			if err == nil {
+				t.Fatal("invalid native transcript was accepted")
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "sessions", encodeKimchiCwdDir(launch)))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("failed preparation left visible files: %v", entries)
+			}
+			original, err := os.ReadFile(src)
+			if err != nil || !bytes.Equal(original, body) {
+				t.Fatalf("source changed during failed preparation: %v", err)
+			}
+		})
+	}
+}
+
+func TestRelocateKimchiRejectsExistingInvalidOrAmbiguousDestination(t *testing.T) {
+	for _, kind := range []string{"wrong cwd", "duplicate header", "empty history", "other basename", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := kimchiTestRoot(t)
+			src := sourcePath(root, "--source--")
+			writeKimchiFixture(t, src, "/source")
+			launch := t.TempDir()
+			dest := sourcePath(root, encodeKimchiCwdDir(launch))
+			writeKimchiFixture(t, dest, launch)
+			body, err := os.ReadFile(dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			header, _, _ := bytes.Cut(body, []byte("\n"))
+			switch kind {
+			case "wrong cwd":
+				writeKimchiFixture(t, dest, "/other")
+			case "duplicate header":
+				body = append(body, append(header, '\n')...)
+				if err := os.WriteFile(dest, body, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "empty history":
+				if err := os.WriteFile(dest, append(header, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "other basename":
+				writeKimchiFixture(t, filepath.Join(filepath.Dir(dest), kimchiTestSession+".jsonl"), launch)
+			case "symlink":
+				if err := os.Remove(dest); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(src, dest); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadFile(dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := relocateKimchiImportedSession(context.Background(), root, kimchiTestSession, src, launch); err == nil {
+				t.Fatal("invalid existing destination was accepted")
+			}
+			after, err := os.ReadFile(dest)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("existing destination was changed: %v", err)
+			}
+		})
+	}
+}
+
+// readKimchiHeader returns the first session header record, or nil when the
+// file has none. It reads only the first non-empty line, which is always the
+// header in a Kimchi transcript.
+func readKimchiHeader(path string) (*kimchiSessionHeader, error) {
+	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	br := bufio.NewReaderSize(f, 256<<10)
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			var header kimchiSessionHeader
+			if jsonErr := json.Unmarshal(line, &header); jsonErr != nil || header.Type != "session" {
+				return nil, nil
+			}
+			return &header, nil
+		}
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// kimchiHasConversation reports whether path holds at least one user or
+// assistant message record, so an empty or header-only file is not mistaken
+// for replayable history.
+func kimchiHasConversation(path string) bool {
+	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	br := bufio.NewReaderSize(f, 256<<10)
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			var rec struct {
+				Type    string `json:"type"`
+				Message struct {
+					Role string `json:"role"`
+				} `json:"message"`
+			}
+			if json.Unmarshal(line, &rec) == nil && rec.Type == "message" && (rec.Message.Role == "user" || rec.Message.Role == "assistant") {
+				return true
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return false
+		}
+		if err != nil {
+			return false
+		}
 	}
 }

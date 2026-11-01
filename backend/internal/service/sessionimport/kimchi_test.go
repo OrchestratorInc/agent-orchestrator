@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -187,4 +188,81 @@ func folderDashes(abs string) string {
 		out = append(out, r)
 	}
 	return string(out)
+}
+
+func TestKimchiTranscriptAppliesActiveContextEditsAndRetractions(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","cwd":"/work/repo"}
+`+kimchiMsg("u1", "", "user", "first question")+`
+`+kimchiMsg("a1", "u1", "assistant", "outdated answer")+`
+`+kimchiMsg("u2", "a1", "user", "retracted question")+`
+{"type":"context_edit","id":"e1","parentId":"u2","targetId":"a1","replacement":{"content":[{"type":"text","text":"corrected answer"}]}}
+{"type":"context_edit","id":"e2","parentId":"e1","targetId":"u2","replacement":null}
+{"type":"context_edit","id":"abandoned","parentId":"e2","targetId":"u1","replacement":null}
+`+kimchiMsg("u3", "e2", "user", "real followup")+`
+`)
+	got, err := readTranscript(context.Background(), domain.HarnessKimchi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: first question", "assistant: corrected answer", "user: real followup")
+}
+
+func TestKimchiTranscriptRejectsDuplicateSessionRecords(t *testing.T) {
+	root := t.TempDir()
+	header := `{"type":"session","version":3,"id":"`+kimchiSession+`","cwd":"/work/repo"}`
+	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), header+"\n"+kimchiMsg("u1", "", "user", "hello")+"\n"+header+"\n")
+	if _, err := readTranscript(context.Background(), domain.HarnessKimchi, root, path); err == nil {
+		t.Fatal("expected duplicate native session record to fail")
+	}
+}
+
+func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := filepath.Join(home, ".config", "kimchi", "harness")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cwd := canonical(t.TempDir())
+	store := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}
+	t.Setenv("KIMCHI_CODING_AGENT_DIR", t.TempDir())
+	svc := New(store, "")
+	if svc.roots[domain.HarnessKimchi] != root {
+		t.Fatal("Kimchi discovery followed an override its runtime ignores")
+	}
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimchi: root}
+	header := `{"type":"session","version":3,"id":"`+kimchiSession+`","cwd":"`+cwd+`","timestamp":"`+time.Now().UTC().Format(time.RFC3339Nano)+`"}`
+	path := writeFile(t, kimchiPath(root, "--source--", kimchiSession), header+`
+{"type":"model_change","id":"m1","parentId":null,"provider":"kimchi-dev","modelId":"auto"}
+{"type":"thinking_level_change","id":"t1","parentId":"m1","thinkingLevel":"high"}
+`+kimchiMsg("u1", "t1", "user", "continue this task")+"\n")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan: %+v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("import: %+v, %v", results, err)
+	}
+	rec := store.sessions[0]
+	if rec.Harness != domain.HarnessKimchi || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.ProjectID != "repo" {
+		t.Fatalf("imported session cannot continue: %+v", rec)
+	}
+	if rec.Metadata.Model != "kimchi-dev/auto" || rec.Metadata.Effort != "high" || rec.Metadata.ProviderConversationID != kimchiSession || rec.Metadata.NativeTranscriptPath != canonical(path) {
+		t.Fatalf("lost continuation metadata: %+v", rec.Metadata)
+	}
+	if source := rec.Metadata.ImportSource; source == nil || source.NativeID != kimchiSession || source.ConfigDir != canonical(root) || source.CWD != canonical(cwd) {
+		t.Fatalf("lost import source: %+v", source)
+	}
+	wantTexts(t, store.messages, "user: continue this task")
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("import modified original: %v", err)
+	}
 }

@@ -16,7 +16,8 @@ import (
 
 // Kimchi (binary "kimchi", driver "kimchiacp") is a Pi fork (@kimchi-dev/cli)
 // that keeps one JSONL per conversation at
-// KIMCHI_CODING_AGENT_DIR/sessions/--<cwd-dashed>--/<ISO-time>_<uuid>.jsonl.
+// ~/.config/kimchi/harness/sessions/--<cwd-dashed>--/<ISO-time>_<uuid>.jsonl.
+// Its 1.24.3 entry point resets KIMCHI_CODING_AGENT_DIR to that home root.
 // The file opens with a `session` header record carrying the conversation's own
 // UUID and absolute cwd, followed by records (model_change,
 // thinking_level_change, message, session_info, custom, custom_message, label,
@@ -38,8 +39,10 @@ type kimchiRecord struct {
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
 	Message   struct {
-		Role    string      `json:"role"`
-		Content contentText `json:"content"`
+		Role     string      `json:"role"`
+		Content  contentText `json:"content"`
+		Provider string      `json:"provider"`
+		Model    string      `json:"model"`
 	} `json:"message"`
 
 	// model_change and thinking_level_change records name the model and
@@ -50,6 +53,12 @@ type kimchiRecord struct {
 
 	// session_info records carry the conversation's display name (its title).
 	Name string `json:"name"`
+
+	// context_edit replaces a message's visible content; null retracts it.
+	TargetID    string `json:"targetId"`
+	Replacement *struct {
+		Content contentText `json:"content"`
+	} `json:"replacement"`
 }
 
 // kimchiNode keeps only display facts and the tree link, so tool payloads are
@@ -57,8 +66,9 @@ type kimchiRecord struct {
 type kimchiNode struct {
 	id, parent, role, text string
 	model, thinking, name  string
-	at                     time.Time
-	dropped                bool
+	editTarget            string
+	at                    time.Time
+	dropped               bool
 }
 
 // kimchiNativeID is the conversation UUID encoded in a Kimchi session file
@@ -190,10 +200,10 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		}
 		if r.Type == "session" {
 			if sawHeader {
-				return nil // Later segments or forks repeat the header.
+				return errors.New("expected exactly one native session record")
 			}
 			sawHeader = true
-			if r.ID != "" && !strings.EqualFold(r.ID, t.nativeID) {
+			if r.ID != t.nativeID {
 				return errors.New("native identity mismatch")
 			}
 			t.cwd = r.CWD
@@ -210,10 +220,18 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 			node.thinking = r.ThinkingLevel
 		case r.Type == "session_info":
 			node.name = strings.TrimSpace(r.Name)
+		case r.Type == "context_edit":
+			node.editTarget = r.TargetID
+			if r.Replacement != nil {
+				node.text = string(r.Replacement.Content)
+			}
 		}
 		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
 			node.role = r.Message.Role
 			node.text = string(r.Message.Content)
+			if r.Message.Role == "assistant" && r.Message.Provider != "" && r.Message.Model != "" {
+				node.model = r.Message.Provider + "/" + r.Message.Model
+			}
 		}
 		leaf = r.ID
 		idx, seen := index[r.ID]
@@ -281,8 +299,17 @@ func readKimchiTranscript(ctx context.Context, root string, paths ...string) (tr
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: "kimchi"})
 	}
+	edits := map[string]kimchiNode{}
+	for _, node := range chain {
+		if node.editTarget != "" {
+			edits[node.editTarget] = node
+		}
+	}
 	var activeTitle string
 	for _, node := range chain {
+		if edit, ok := edits[node.id]; ok {
+			node.text, node.dropped = edit.text, edit.dropped
+		}
 		t.shortened = t.shortened || node.dropped
 		add(node.role, node.text, node.at)
 		// The active branch's latest choice is what Kimchi itself resumes with.

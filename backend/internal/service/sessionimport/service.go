@@ -115,12 +115,9 @@ func New(store Store, dataDir string) *Service {
 	if kimi == "" {
 		kimi = filepath.Join(home, ".kimi-code")
 	}
-	// Kimchi (a Pi fork) keeps its sessions under KIMCHI_CODING_AGENT_DIR,
-	// defaulting to ~/.config/kimchi/harness.
-	kimchi := os.Getenv("KIMCHI_CODING_AGENT_DIR")
-	if kimchi == "" {
-		kimchi = filepath.Join(home, ".config", "kimchi", "harness")
-	}
+	// Kimchi 1.24.3's entry point ignores config-root overrides and always uses
+	// homedir/.config/kimchi/harness. Only offer the root its runtime can load.
+	kimchi := filepath.Join(home, ".config", "kimchi", "harness")
 	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessKimchi: kimchi}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode

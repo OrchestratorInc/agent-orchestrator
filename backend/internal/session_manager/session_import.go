@@ -90,6 +90,13 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if key == "" {
 		return
 	}
+	if rec.Harness == domain.HarnessKimchi {
+		// Kimchi ignores this override. Keep the import's actual source root as
+		// a launch assertion: its ACP binding rejects an incompatible child HOME
+		// rather than accepting an account home that only links the transcript.
+		setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
+		return
+	}
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		if provider, ok := agent.(ports.AgentNativeSessionConfigProvider); ok {
 			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil {

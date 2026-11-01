@@ -12,14 +12,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const kimchiCodingAgentDirEnv = "KIMCHI_CODING_AGENT_DIR"
 
+var _ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
 var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
 var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
@@ -31,18 +33,59 @@ var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
 // id can never escape the sessions directory.
 var kimchiSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
-// NativeSessionConfigDir returns Kimchi's session-state root. A project
-// environment may explicitly select KIMCHI_CODING_AGENT_DIR; otherwise Kimchi
-// uses ~/.config/kimchi/harness.
+// NativeSessionConfigDir models Kimchi 1.24.3's src/entry.ts: it resets both
+// KIMCHI_CODING_AGENT_DIR and PI_CODING_AGENT_DIR to homedir/.config/kimchi/harness.
+// A different requested root cannot be honored and must not silently resume an
+// empty conversation. This inspects the child environment without changing it.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	dir, err := nativeconfig.Resolve(env, kimchiCodingAgentDirEnv, filepath.Join(".config", "kimchi", "harness"))
-	if err != nil {
-		return "", fmt.Errorf("kimchi: resolve config dir: %w", err)
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	home, set := kimchiEnvValue(env, homeKey)
+	if !set {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("kimchi: resolve native home: %w", err)
+		}
+	}
+	if home == "" || !filepath.IsAbs(home) {
+		return "", errors.New("kimchi: native home must be an absolute directory")
+	}
+	dir := filepath.Join(home, ".config", "kimchi", "harness")
+	if requested, _ := kimchiEnvValue(env, kimchiCodingAgentDirEnv); requested != "" && !sameKimchiRoot(requested, dir) {
+		return "", fmt.Errorf("kimchi: this runtime ignores KIMCHI_CODING_AGENT_DIR; requested root %q differs from its native home root %q", requested, dir)
 	}
 	return dir, nil
+}
+
+func kimchiEnvValue(env map[string]string, key string) (string, bool) {
+	if runtime.GOOS == "windows" {
+		for name, value := range env {
+			if strings.EqualFold(name, key) {
+				return value, true
+			}
+		}
+	} else if value, ok := env[key]; ok {
+		return value, true
+	}
+	return os.LookupEnv(key)
+}
+
+func sameKimchiRoot(left, right string) bool {
+	if !filepath.IsAbs(left) || !filepath.IsAbs(right) {
+		return false
+	}
+	if filepath.Clean(left) == filepath.Clean(right) {
+		return true
+	}
+	l, lerr := os.Stat(left)
+	r, rerr := os.Stat(right)
+	return lerr == nil && rerr == nil && l.IsDir() && r.IsDir() && os.SameFile(l, r)
 }
 
 // ProbeNativeSession uses Kimchi's local JSONL transcript as authoritative
@@ -115,31 +158,16 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return found, found != "", nil
 }
 
-// relocateKimchiImportedSession places a copy of the native transcript where
-// kimchi-acp's session/load will look when launched in launchCWD, with the
-// stored working directory rewritten to launchCWD so the loader accepts it. It
-// returns the path the provider will read.
-//
-// Kimchi's ACP loader computes its session directory as
-// sessions/--<launch-cwd-dashed>--/ from the launch cwd verbatim (no symlink
-// resolution) and, on a match, rejects the file unless header.cwd equals the
-// launch cwd exactly. When no file matches it silently starts an empty session
-// with the same id — so a missing or misplaced copy looks like a successful
-// resume with no history. This writes the copy to the exact lookup path, with
-// header.cwd rewritten to launchCWD, and verifies it carries that identity, a
-// single session record and a real conversation before returning, so that
-// silent empty load cannot happen.
-//
-// The original is only read, never modified, and an existing copy is never
-// overwritten: the relocation runs once, before the first imported resume
-// (requireNativeHistory && NeedsImportResume), so a copy already present at the
-// launch cwd is AO's and is kept.
-//
-// This is the harness-local half of the import relocation contract (folder
-// encoder, cwd rewrite, single-session-record check). It is wired into the
-// shared ports.AgentImportedSessionRelocator / importcopy.CopyOnce surface once
-// that contract is published in codex/session-import-build; until then it is a
-// self-contained implementation exercised by the adapter's tests.
+// RelocateImportedSession prepares the exact cwd-keyed file Kimchi's ACP loader
+// reads. ResumeCwd persistence and first-open admission belong to the manager.
+func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
+	_, err := relocateKimchiImportedSession(ctx, r.ConfigDir, r.NativeSessionID, r.TranscriptPath, r.LaunchCWD)
+	return err
+}
+
+// relocateKimchiImportedSession keeps the native basename and identity, rewriting
+// only the session record's cwd. Kimchi 1.24.3 encodes ACP params.cwd verbatim:
+// resolving a symlink here makes session/load silently open an empty chat.
 func relocateKimchiImportedSession(ctx context.Context, configDir, nativeID, transcriptPath, launchCWD string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -151,47 +179,150 @@ func relocateKimchiImportedSession(ctx context.Context, configDir, nativeID, tra
 	if strings.TrimSpace(configDir) == "" {
 		return "", errors.New("kimchi: no config dir for native resume")
 	}
+	nativeRoot, err := New().NativeSessionConfigDir(ctx, map[string]string{kimchiCodingAgentDirEnv: ""})
+	if err != nil {
+		return "", err
+	}
+	if !sameKimchiRoot(configDir, nativeRoot) {
+		return "", fmt.Errorf("kimchi: cannot import from root %q; this runtime only loads sessions from native home root %q", configDir, nativeRoot)
+	}
 	if transcriptPath == "" {
 		return "", errors.New("kimchi: no native transcript for native resume")
 	}
 	if launchCWD == "" || !filepath.IsAbs(launchCWD) {
 		return "", fmt.Errorf("kimchi: launch directory must be absolute, got %q", launchCWD)
 	}
-	// The folder and the header.cwd both come from the exact launch cwd AO's ACP
-	// driver sends (ports.ChatStartConfig.WorkspacePath), encoded verbatim:
-	// Kimchi resolves neither, so resolving here would place the copy where the
-	// loader never looks and reintroduce the silent empty load on symlinked
-	// paths.
+	name := filepath.Base(transcriptPath)
+	if name != sessionID+".jsonl" && !strings.HasSuffix(name, "_"+sessionID+".jsonl") {
+		return "", errors.New("kimchi: transcript basename does not match native session id")
+	}
 	destDir := filepath.Join(configDir, "sessions", encodeKimchiCwdDir(launchCWD))
-
-	// Idempotent: never overwrite a copy already at the launch cwd. It is AO's
-	// and may hold turns added since the import.
-	if existing, ok := resolveKimchiSessionByID(destDir, sessionID); ok {
-		return existing, nil
-	}
-
-	dest := filepath.Join(destDir, filepath.Base(transcriptPath))
-	if err := writeKimchiResumeCopy(ctx, transcriptPath, dest, launchCWD); err != nil {
+	dest := filepath.Join(destDir, name)
+	if err := checkKimchiLookup(destDir, sessionID, dest); err != nil {
 		return "", err
 	}
-
-	// Verify the copy landed at the loader's lookup path with the exact identity
-	// and working directory it checks, and holds a real conversation.
-	final, ok := resolveKimchiSessionByID(destDir, sessionID)
-	if !ok {
-		return "", fmt.Errorf("kimchi: resume copy was not written to %s", destDir)
+	var records int
+	var conversation bool
+	rewrite := func(line []byte) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Message struct {
+				Role string `json:"role"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return nil, fmt.Errorf("kimchi: invalid transcript record: %w", err)
+		}
+		if records == 0 && rec.Type != "session" {
+			return nil, errors.New("kimchi: first transcript record must be a session")
+		}
+		if rec.Type == "session" {
+			records++
+			if records != 1 || rec.ID != sessionID {
+				return nil, errors.New("kimchi: expected exactly one session record with the native id")
+			}
+			return importcopy.SetStringField(line, "cwd", launchCWD)
+		}
+		conversation = conversation || rec.Type == "message" && (rec.Message.Role == "user" || rec.Message.Role == "assistant")
+		return line, nil
 	}
-	match, err := kimchiHeaderMatches(final, sessionID, launchCWD)
+	check := func() error {
+		if records != 1 || !conversation {
+			return errors.New("kimchi: transcript needs exactly one session record and conversation history to replay")
+		}
+		return ctx.Err()
+	}
+	if _, err := importcopy.CopyOnce(transcriptPath, dest, rewrite, check); err != nil {
+		return "", fmt.Errorf("kimchi: prepare resume copy: %w", err)
+	}
+	// Existing copies may hold AO turns, but must still be valid native input.
+	if err := validateKimchiResumeCopy(ctx, dest, sessionID, launchCWD); err != nil {
+		return "", err
+	}
+	if err := checkKimchiLookup(destDir, sessionID, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// checkKimchiLookup rejects another matching basename: Kimchi picks the first
+// file matching an id, so a valid copy alone does not prove it will be loaded.
+func checkKimchiLookup(dir, sessionID, dest string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return "", err
+		return err
 	}
-	if !match {
-		return "", fmt.Errorf("kimchi: resume copy %s does not carry the requested identity and working directory", final)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == sessionID+".jsonl" || strings.HasSuffix(name, "_"+sessionID+".jsonl") {
+			if filepath.Join(dir, name) != dest || !entry.Type().IsRegular() {
+				return fmt.Errorf("kimchi: ambiguous or non-regular resume path %s", filepath.Join(dir, name))
+			}
+		}
 	}
-	if !kimchiHasConversation(final) {
-		return "", fmt.Errorf("kimchi: resume copy %s has no conversation to replay", final)
+	return nil
+}
+
+func validateKimchiResumeCopy(ctx context.Context, path, sessionID, cwd string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
 	}
-	return final, nil
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("kimchi: resume copy %s is not a regular file", path)
+	}
+	f, err := os.Open(path) //nolint:gosec // exact provider lookup path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	reader := bufio.NewReaderSize(f, 256<<10)
+	var records int
+	var conversation bool
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line, readErr := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			var rec struct {
+				kimchiSessionHeader
+				Message struct {
+					Role string `json:"role"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return fmt.Errorf("kimchi: invalid resume copy: %w", err)
+			}
+			if records == 0 && rec.Type != "session" {
+				return errors.New("kimchi: resume copy does not begin with a session record")
+			}
+			if rec.Type == "session" {
+				records++
+				if records != 1 || rec.ID != sessionID || rec.CWD != cwd {
+					return errors.New("kimchi: resume copy must have exactly one session record matching native id and raw launch cwd")
+				}
+			}
+			conversation = conversation || rec.Type == "message" && (rec.Message.Role == "user" || rec.Message.Role == "assistant")
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	if records != 1 || !conversation {
+		return errors.New("kimchi: resume copy has no conversation history to replay")
+	}
+	return nil
 }
 
 // encodeKimchiCwdDir reproduces kimchi-acp's encodeCwdDir exactly: strip a
@@ -205,210 +336,10 @@ func encodeKimchiCwdDir(cwd string) string {
 	return "--" + strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(cwd) + "--"
 }
 
-// resolveKimchiSessionByID mirrors kimchi-acp's resolveSessionPathById: a file
-// named exactly <id>.jsonl or ending in _<id>.jsonl inside dir.
-func resolveKimchiSessionByID(dir, sessionID string) (string, bool) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", false
-	}
-	bare := sessionID + ".jsonl"
-	suffix := "_" + sessionID + ".jsonl"
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name == bare || strings.HasSuffix(name, suffix) {
-			return filepath.Join(dir, name), true
-		}
-	}
-	return "", false
-}
-
 type kimchiSessionHeader struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
 	CWD  string `json:"cwd"`
-}
-
-// kimchiHeaderMatches reports whether path's first session header carries the
-// given id and working directory. The loader checks header.cwd === launch cwd
-// with exact string equality, so this compares verbatim.
-func kimchiHeaderMatches(path, sessionID, cwd string) (bool, error) {
-	header, err := readKimchiHeader(path)
-	if err != nil {
-		return false, err
-	}
-	if header == nil {
-		return false, nil
-	}
-	return header.ID == sessionID && header.CWD == cwd, nil
-}
-
-// readKimchiHeader returns the first session header record, or nil when the
-// file has none. It reads only the first non-empty line, which is always the
-// header in a Kimchi transcript.
-func readKimchiHeader(path string) (*kimchiSessionHeader, error) {
-	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	br := bufio.NewReaderSize(f, 256<<10)
-	for {
-		line, err := br.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			var header kimchiSessionHeader
-			if jsonErr := json.Unmarshal(line, &header); jsonErr != nil || header.Type != "session" {
-				return nil, nil
-			}
-			return &header, nil
-		}
-		if errors.Is(err, io.EOF) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-}
-
-// kimchiHasConversation reports whether path holds at least one user or
-// assistant message record, so an empty or header-only file is not mistaken
-// for replayable history.
-func kimchiHasConversation(path string) bool {
-	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	br := bufio.NewReaderSize(f, 256<<10)
-	for {
-		line, err := br.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			var rec struct {
-				Type    string `json:"type"`
-				Message struct {
-					Role string `json:"role"`
-				} `json:"message"`
-			}
-			if json.Unmarshal(line, &rec) == nil && rec.Type == "message" && (rec.Message.Role == "user" || rec.Message.Role == "assistant") {
-				return true
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return false
-		}
-		if err != nil {
-			return false
-		}
-	}
-}
-
-// writeKimchiResumeCopy streams source to dest, rewriting the first session
-// header's cwd to cwd and copying every other record verbatim. It writes to a
-// temporary file in the destination directory and renames it into place, mode
-// 0600, so the original is never modified and a partial copy is never visible.
-func writeKimchiResumeCopy(ctx context.Context, source, dest, cwd string) error {
-	in, err := os.Open(source) //nolint:gosec // provider-owned path resolved from the configured root
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".ao-kimchi-resume-*.jsonl")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = tmp.Close()
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return err
-	}
-	bw := bufio.NewWriterSize(tmp, 256<<10)
-	br := bufio.NewReaderSize(in, 256<<10)
-	rewrote := false
-	for {
-		line, readErr := br.ReadBytes('\n')
-		if len(line) > 0 {
-			out := line
-			if !rewrote {
-				if rewritten, ok, err := rewriteKimchiHeaderCwd(line, cwd); err != nil {
-					return err
-				} else if ok {
-					out, rewrote = rewritten, true
-				}
-			}
-			if _, err := bw.Write(out); err != nil {
-				return err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
-	if !rewrote {
-		return errors.New("kimchi: source transcript has no session header to rewrite")
-	}
-	if err := bw.Flush(); err != nil {
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, dest); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
-}
-
-// rewriteKimchiHeaderCwd rewrites the cwd of a session header line, preserving
-// every other field. ok is false for a line that is not a session header, so
-// the caller keeps scanning. The trailing newline, if any, is preserved.
-func rewriteKimchiHeaderCwd(line []byte, cwd string) ([]byte, bool, error) {
-	trimmed := bytes.TrimSpace(line)
-	if len(trimmed) == 0 {
-		return nil, false, nil
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &fields); err != nil {
-		return nil, false, nil //nolint:nilerr // a non-JSON line is not the header
-	}
-	if typ, ok := fields["type"]; !ok || string(typ) != `"session"` {
-		return nil, false, nil
-	}
-	encoded, err := json.Marshal(cwd)
-	if err != nil {
-		return nil, false, err
-	}
-	fields["cwd"] = encoded
-	rewritten, err := json.Marshal(fields)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(line) > 0 && line[len(line)-1] == '\n' {
-		rewritten = append(rewritten, '\n')
-	}
-	return rewritten, true, nil
 }
 
 // canonicalKimchiSessionID validates a native session id against Kimchi's own
