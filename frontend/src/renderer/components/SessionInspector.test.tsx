@@ -5304,7 +5304,7 @@ describe("SessionInspector branch summary", () => {
     expect(details.getByText("Review requested from lin, core-team")).toBeInTheDocument();
   });
 
-  it("lists the checks under merge readiness, failures first, and links the rest to the provider", async () => {
+  it("lists only the checks that need a look under merge readiness, three at a time, failures first", async () => {
     const checked = prSummary(7, "open", {
       ci: {
         autoInjectCI: true,
@@ -5314,9 +5314,9 @@ describe("SessionInspector branch summary", () => {
           { name: "build", status: "passed" },
           { name: "e2e", status: "in_progress" },
           { name: "lint", status: "failed", url: "https://github.com/acme/repo/runs/1" },
+          { name: "typecheck", status: "failed" },
+          { name: "deploy", status: "queued" },
           { name: "test-a", status: "passed" },
-          { name: "test-b", status: "passed" },
-          { name: "test-c", status: "passed" },
           { name: "docs", status: "skipped" },
         ],
       },
@@ -5328,9 +5328,22 @@ describe("SessionInspector branch summary", () => {
     await userEvent.click(readiness);
     const checks = within(await screen.findByTestId("pr-checks"));
     const names = checks.getAllByRole("listitem").map((item) => item.textContent);
-    expect(names).toEqual(["lint failed", "e2e running", "build passed", "test-a passed", "test-b passed", "+2 more"]);
+    // Passing and skipped checks stay out of it; past three, the rest are one link.
+    expect(names).toEqual(["lint failed", "typecheck failed", "e2e running", "+1 more"]);
     expect(checks.getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
-    expect(checks.getByRole("link", { name: /\+2 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
+    expect(checks.getByRole("link", { name: /\+1 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
+  });
+
+  it("lists no checks once they all pass: the Checks row says enough", async () => {
+    const passing = prSummary(7, "open", {
+      ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [{ name: "build", status: "passed" }, { name: "docs", status: "skipped" }] },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [passing] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [passing]));
+
+    await userEvent.click(await screen.findByRole("button", { name: /Not mergeable yet|Checking merge readiness|Mergeable/ }));
+    expect(await screen.findByText("Checks passing")).toBeInTheDocument();
+    expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
   });
 
   it("leaves the loading state once the PR appears", async () => {

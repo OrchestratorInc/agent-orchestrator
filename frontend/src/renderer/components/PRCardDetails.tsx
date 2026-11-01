@@ -8,7 +8,10 @@ import { ProductExternalLink } from "./ProductExternalLink";
 type Check = SessionPRSummary["ci"]["checks"][number];
 
 /** Checks listed under the Checks row; the rest are a link to the provider's checks page. */
-export const PR_CHECKS_SHOWN = 5;
+export const PR_CHECKS_SHOWN = 3;
+
+// Only what needs a look: a passing or skipped check adds nothing to "Checks passing".
+const needsAttention = new Set<Check["status"]>(["failed", "cancelled", "in_progress", "queued"]);
 
 // Failures first, then what is still running, then the settled rest.
 const checkOrder: Record<Check["status"], number> = {
@@ -70,10 +73,13 @@ export function PRLabelsAndReviewers({ pr }: { pr: SessionPRSummary }) {
 	);
 }
 
-/** Each check by name, failures first, linked to its run when the provider gave one. */
+/**
+ * The checks that need a look, failures first, linked to their runs: a few at
+ * a time, the rest one link to the provider. Nothing when every check passed.
+ */
 export function PRChecksList({ pr }: { pr: SessionPRSummary }) {
 	const { t } = useTranslation();
-	const checks = sortedChecks(pr.ci.checks ?? []);
+	const checks = sortedChecks((pr.ci.checks ?? []).filter((check) => needsAttention.has(check.status)));
 	if (checks.length === 0) return null;
 	const hidden = checks.length - PR_CHECKS_SHOWN;
 	const checksUrl = prChecksUrl(pr);
