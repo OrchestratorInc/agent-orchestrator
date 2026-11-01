@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPRSectionExpansion, SessionInspector } from "./SessionInspector";
 import { resetLineageExpansion } from "./SessionLineage";
+import { resetPRMergeMethods } from "./PRActions";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
@@ -321,6 +322,7 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 beforeEach(() => {
   resetPRSectionExpansion();
   resetLineageExpansion();
+  resetPRMergeMethods();
   cloudCpMock.cancelSessionReviews.mockReset();
   cloudCpMock.getSessionReviewState.mockReset();
   cloudCpMock.inspectSessionReviewerHarnesses.mockReset();
@@ -629,7 +631,7 @@ describe("SessionInspector PR section", () => {
     expect(section.getByText("External repository")).toBeInTheDocument();
     expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
     expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
-    expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
+    expect(section.queryByRole("button", { name: /^Merge PR #|merge: PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/pr")).toHaveLength(1);
   });
@@ -705,7 +707,7 @@ describe("SessionInspector PR section", () => {
     ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
     expect(prSection("Pull request").getByText("open")).toHaveClass("sr-only");
     expect(
-      prSection("Pull request").getByRole("button", { name: "Merge PR #7" }),
+      prSection("Pull request").getByRole("button", { name: "Squash and merge: PR #7" }),
     ).toBeInTheDocument();
   });
 
@@ -744,7 +746,7 @@ describe("SessionInspector PR section", () => {
       },
     );
 
-    const mergeButton = screen.getByRole("button", { name: "Merge PR #7" });
+    const mergeButton = screen.getByRole("button", { name: "Squash and merge: PR #7" });
     expect(mergeButton).toBeEnabled();
     fireEvent.click(mergeButton);
 
@@ -754,6 +756,7 @@ describe("SessionInspector PR section", () => {
         body: {
           prUrl: "https://example.com/pr/7",
           expectedHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          method: "squash",
         },
       }),
     );
@@ -763,7 +766,7 @@ describe("SessionInspector PR section", () => {
     await waitFor(() =>
       expect(prSection("Pull request").getByText("merged")).toBeInTheDocument(),
     );
-    expect(prSection("Pull request").queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+    expect(prSection("Pull request").queryByRole("button", { name: "Squash and merge: PR #7" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -814,7 +817,7 @@ describe("SessionInspector PR section", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Merge PR #7" }),
+      screen.queryByRole("button", { name: "Squash and merge: PR #7" }),
     ).not.toBeInTheDocument();
   });
 
@@ -834,7 +837,7 @@ describe("SessionInspector PR section", () => {
           ]);
         },
       );
-      expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Squash and merge: PR #7" })).not.toBeInTheDocument();
     },
   );
 
@@ -853,7 +856,79 @@ describe("SessionInspector PR section", () => {
         ]);
       },
     );
-    expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Squash and merge: PR #7" })).not.toBeInTheDocument();
+  });
+
+  // A PR whose summary the daemon keeps serving, so a refetch never drops seeded details.
+  const servePR = (summary: SessionPRSummary) => {
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [summary], linkedPrs: [] } }
+      : respond(path));
+    return renderWithQuery(
+      <SessionInspector session={session([pr(summary.number, summary.state, { url: summary.url })])} />,
+      undefined,
+      (client) => seedPRSummaries(client, [summary]),
+    );
+  };
+
+  it("merges with the method picked beside the button", async () => {
+    servePR(prSummary(7, "open", { url: "https://example.com/pr/7", headSha: "head-7" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Choose merge method" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: /Rebase and merge/ }));
+    // Picking only relabels the button; nothing merged yet.
+    expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Rebase and merge: PR #7" }));
+
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/merge", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", expectedHeadSha: "head-7", method: "rebase" },
+    }));
+  });
+
+  it("marks a draft ready for review straight from the card", async () => {
+    servePR(prSummary(7, "draft", { url: "https://example.com/pr/7" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ready for review" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/state", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", action: "ready" },
+    }));
+  });
+
+  it("converts an open PR to a draft, and asks before closing it", async () => {
+    servePR(prSummary(7, "open", { url: "https://example.com/pr/7" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Convert to draft" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["draft"]));
+
+    await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Close PR" }));
+    const dialog = await screen.findByRole("dialog", { name: "Close PR #7?" });
+    expect(postCallsFor("/api/v1/prs/{id}/state")).toHaveLength(1);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close PR" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["draft", "close"]));
+  });
+
+  it("offers Reopen on a closed PR and no merge", async () => {
+    servePR(prSummary(7, "closed", { url: "https://example.com/pr/7" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reopen PR" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["reopen"]));
+    expect(screen.queryByTestId("pr-merge-button")).not.toBeInTheDocument();
+  });
+
+  it("shows a failed state change under the PR's header", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/state"
+      ? { data: undefined, error: { error: { code: "PR_ACTION_REJECTED", message: "GitHub refused the change" } } }
+      : { data: { ok: true }, error: undefined });
+    servePR(prSummary(7, "open", { url: "https://example.com/pr/7" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Convert to draft" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/GitHub refused the change|Could not convert PR #7/);
   });
 
   it("offers Merge when the provider requires no review", () => {
@@ -865,7 +940,7 @@ describe("SessionInspector PR section", () => {
       },
     );
 
-    expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
     openReadiness();
     // With no review rule the row says what happened on the PR, not what the repo requires.
     expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
@@ -889,7 +964,7 @@ describe("SessionInspector PR section", () => {
           ]);
         },
       );
-      expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Squash and merge: PR #7" })).not.toBeInTheDocument();
     },
   );
 
@@ -905,7 +980,7 @@ describe("SessionInspector PR section", () => {
         ]);
       },
     );
-    expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Squash and merge: PR #7" })).not.toBeInTheDocument();
   });
 
   it("uses the state chip as the single merged-state indicator", () => {

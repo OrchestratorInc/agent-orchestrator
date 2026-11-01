@@ -71,6 +71,7 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { SessionLineageFooter } from "./SessionLineage";
+import { PRMergeButton, PRStateActions, PRStateMenu } from "./PRActions";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
@@ -995,6 +996,7 @@ export function PRSummaryCard({
 		setChoice(!expanded);
 	};
 	const bodyId = useId();
+	const [stateError, setStateError] = useState<string | null>(null);
 	const reduceMotion = useReducedMotion();
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
@@ -1083,6 +1085,8 @@ export function PRSummaryCard({
 						)}
 						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
 					</Button>
+				) : canMerge && !cloudOrgId ? (
+					<PRMergeButton hostId={hostId} pr={pr} sessionId={sessionId} />
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
@@ -1106,6 +1110,7 @@ export function PRSummaryCard({
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
+			actions={cloudOrgId || guest ? undefined : <PRStateActions hostId={hostId} pr={pr} sessionId={sessionId} />}
 			details={<PRLabelsAndReviewers pr={pr} />}
 			readinessDetails={{ ci: <PRChecksList pr={pr} /> }}
 		/>
@@ -1115,7 +1120,12 @@ export function PRSummaryCard({
 	return (
 		<section className="flex min-w-0 flex-col py-1">
 			<InfoRow
-				action={<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />}
+				action={
+					<>
+						{cloudOrgId || guest ? null : <PRStateMenu hostId={hostId} onError={setStateError} pr={pr} sessionId={sessionId} />}
+						<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />
+					</>
+				}
 				ariaControls={expanded ? bodyId : undefined}
 				expanded={expanded}
 				icon={state.icon}
@@ -1131,6 +1141,7 @@ export function PRSummaryCard({
 				onClick={toggle}
 				title={pr.title}
 			/>
+			{stateError ? <p className="m-0 pb-1 pl-6 text-xs leading-normal text-error" role="status">{stateError}</p> : null}
 			{/* Folded, the section keeps uncommitted or unpushed work in sight. */}
 			{!expanded && work?.note ? <p className="m-0 pb-1 pl-6 text-caption text-status-in-review">{work.note}</p> : null}
 			<AnimatePresence initial={false}>

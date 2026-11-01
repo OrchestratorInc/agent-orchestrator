@@ -357,6 +357,7 @@ export function InspectorPullRequestCardView({
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
+	actions,
 	mergeAction,
 	mergeError,
 	openLabel,
@@ -378,6 +379,8 @@ export function InspectorPullRequestCardView({
 	 * header row, as when several PRs share one card as collapsible sections.
 	 */
 	headerless?: boolean;
+	/** The PR's state changes (ready, draft, close, reopen), under the readiness rows. */
+	actions?: ReactNode;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
@@ -451,6 +454,7 @@ export function InspectorPullRequestCardView({
 							{mergeError}
 						</p>
 					) : null}
+					{actions}
 				</>
 			) : null}
 		</Frame>
