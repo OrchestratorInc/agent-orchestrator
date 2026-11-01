@@ -1,3 +1,4 @@
+import { terminalCommand, LINUX_TERMINAL_LAUNCHERS } from "./terminal-command";
 import { createHash } from "node:crypto";
 import { constants, statSync } from "node:fs";
 import path from "node:path";
@@ -197,61 +198,10 @@ function resolveOnPath(
 	return undefined;
 }
 
-function shellQuote(value: string): string {
-	return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function appleScriptString(value: string): string {
-	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-}
-
-function windowsCommandArg(value: string): string {
-	return `"${value.replaceAll('"', '""')}"`;
-}
-
-const LINUX_TERMINAL_LAUNCHERS = [
-	{ command: "x-terminal-emulator", argsBeforeCommand: ["-e"] },
-	{ command: "gnome-terminal", argsBeforeCommand: ["--"] },
-	{ command: "konsole", argsBeforeCommand: ["-e"] },
-	{ command: "xfce4-terminal", argsBeforeCommand: ["--execute"] },
-	{ command: "kitty", argsBeforeCommand: [] },
-	{ command: "alacritty", argsBeforeCommand: ["-e"] },
-] as const;
-
 function resolveTerminalEditor(editorCommand: string, deps: EditorHandoffDeps, isExecutable: (candidatePath: string) => boolean): ResolvedCommand | undefined {
-	if (deps.platform === "darwin") {
-		return {
-			command: "/usr/bin/osascript",
-			argsForWorkspace: (workspacePath) => {
-				const commandLine = `exec ${shellQuote(editorCommand)} ${shellQuote(workspacePath)}`;
-				const script = `tell application "Terminal"\nactivate\ndo script ${appleScriptString(commandLine)}\nend tell`;
-				return ["-e", script];
-			},
-		};
-	}
-	if (deps.platform === "win32") {
-		return {
-			command: deps.env.ComSpec || deps.env.COMSPEC || "cmd.exe",
-			argsForWorkspace: () => {
-				// launch() sets cwd to the workspace, so opening "." avoids sending the
-				// workspace path through cmd.exe variable expansion (for example %TEMP%).
-				const commandLine = [editorCommand, "."].map(windowsCommandArg).join(" ");
-				// /s strips the first and last quotes around the command string. The
-				// extra outer pair preserves the quotes around both executable paths.
-				return ["/d", "/s", "/v:off", "/k", `"${commandLine}"`];
-			},
-		};
-	}
-	for (const launcher of LINUX_TERMINAL_LAUNCHERS) {
-		const resolved = resolveOnPath(launcher.command, deps.platform, deps.env, isExecutable);
-		if (resolved) {
-			return {
-				command: resolved,
-				argsForWorkspace: (workspacePath) => [...launcher.argsBeforeCommand, editorCommand, workspacePath],
-			};
-		}
-	}
-	return undefined;
+	const resolve = (workspace: string) => terminalCommand([editorCommand, deps.platform === "win32" ? "." : workspace], deps.platform, deps.env, isExecutable);
+	const spec = resolve(".");
+	return spec ? { command: spec.command, argsForWorkspace: (workspace) => resolve(workspace)!.args } : undefined;
 }
 
 // Expands a candidate's Windows install locations into real paths. Each entry

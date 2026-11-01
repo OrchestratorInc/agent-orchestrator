@@ -179,7 +179,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("notify.earlierLoadFailed")).toBe("无法加载更早的通知。");
 		expect(chinese.t("notify.loadingEarlier")).toBe("正在加载更早的通知…");
 		expect(chinese.t("notify.retry")).toBe("重试");
-		expect(chinese.t("report.cancel")).toBe("取消");
+		expect(chinese.t("report.github")).toBe("GitHub");
 		expect(chinese.t("shell.openProjectDashboard", { name: "AO" })).toBe("打开 AO 看板");
 		expect(chinese.t("shell.renameSession", { title: "任务" })).toBe("重命名任务");
 		expect(chinese.t("shell.versionReady", { version: "9.9.9" })).toBe("v9.9.9 已就绪");
