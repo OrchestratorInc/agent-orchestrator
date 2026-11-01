@@ -2367,7 +2367,8 @@ func newExitedResumeManager(t *testing.T, runtime runtimeController, agent ports
 		Harness:   domain.HarnessCodex,
 		Activity:  domain.Activity{State: domain.ActivityExited},
 		Metadata: domain.SessionMetadata{
-			WorkspacePath:   "/ws/mer-1",
+			// A real directory: resume leaves a present workspace untouched.
+			WorkspacePath:   t.TempDir(),
 			Branch:          "ao/mer-1",
 			RuntimeHandleID: "tmux-mer-1",
 			RuntimeLaunchID: "launch-old",
@@ -2499,6 +2500,63 @@ func TestResumeAgent_RestartFailureLeavesSessionExited(t *testing.T) {
 	}
 	if !reflect.DeepEqual(lcm.cancelled, []string{"mer-1:launch-new"}) {
 		t.Fatalf("failed launch cleanup = %v, want waiting hooks released", lcm.cancelled)
+	}
+}
+
+func TestResumeAgent_RecreatesMissingWorkspaceBeforeRelaunch(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, st, ws := newExitedResumeManager(t, runtime, agent)
+	missing := filepath.Join(t.TempDir(), "removed", "mer-1")
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath = missing
+	st.sessions["mer-1"] = rec
+	ws.path = missing
+	runtime.onRestart = func() {
+		if len(ws.restoreConfigs) != 1 {
+			t.Fatalf("agent relaunched before the missing workspace was re-created: restores=%d", len(ws.restoreConfigs))
+		}
+	}
+
+	if _, err := m.ResumeAgentWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.restoreConfigs) != 1 {
+		t.Fatalf("restores = %d, want 1", len(ws.restoreConfigs))
+	}
+	cfg := ws.restoreConfigs[0]
+	if cfg.SessionID != "mer-1" || cfg.ProjectID != "mer" || cfg.Branch != "ao/mer-1" || cfg.Path != missing {
+		t.Fatalf("restore config = %+v, want the session's own branch and path", cfg)
+	}
+	if runtime.restarted != 1 {
+		t.Fatalf("restart = %d, want 1 after the workspace was re-created", runtime.restarted)
+	}
+	if got := st.sessions["mer-1"]; got.IsTerminated || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("resumed session = %+v, want live idle", got)
+	}
+}
+
+func TestResumeAgent_MissingWorkspaceRecreateFailureRefusesRelaunch(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, st, ws := newExitedResumeManager(t, runtime, agent)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath = filepath.Join(t.TempDir(), "removed", "mer-1")
+	st.sessions["mer-1"] = rec
+	ws.createErr = errors.New("worktree add failed")
+
+	_, err := m.ResumeAgentWithMode(ctx, "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "worktree add failed") {
+		t.Fatalf("resume error = %v, want the workspace re-create failure", err)
+	}
+	if runtime.restarted != 0 || baseRuntime.created != 0 {
+		t.Fatalf("agent relaunched without a workspace: restarted=%d created=%d", runtime.restarted, baseRuntime.created)
+	}
+	got := st.sessions["mer-1"]
+	if got.IsTerminated || got.Activity.State != domain.ActivityExited || got.Metadata.RuntimeLaunchID != "launch-old" {
+		t.Fatalf("failed resume changed session: %+v", got)
 	}
 }
 
