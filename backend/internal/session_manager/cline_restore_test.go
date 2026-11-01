@@ -84,6 +84,17 @@ func TestClineRestoreProbesRecoveredConversation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				// The hook must carry the new runtime's identity, not the shared
+				// Cline hub's environment or the generation from a previous launch.
+				hook, err := os.ReadFile(filepath.Join(workspace, ".clinerules", "hooks", "TaskStart"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				launchID := rt.lastCfg.Env["AO_RUNTIME_LAUNCH_ID"]
+				if launchID == "" || !strings.Contains(string(hook), "AO_RUNTIME_LAUNCH_ID='"+launchID+"'") ||
+					!strings.Contains(string(hook), "AO_SESSION_ID='"+string(rec.ID)+"'") {
+					t.Fatalf("%s hook is not bound to resumed runtime: %s", operation, hook)
+				}
 				wantMode := RestoreModeSavedPrompt
 				if savedHistory {
 					wantMode = RestoreModeNative
