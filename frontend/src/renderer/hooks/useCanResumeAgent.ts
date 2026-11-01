@@ -4,7 +4,7 @@ import {
 	useSessionInterfaceTransitionStatus,
 } from "./useSessionInterfaceTransition";
 import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
-import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage, apiErrorRequestId } from "../lib/api-client";
 import { appI18n } from "../i18n";
 import { clientForSessionHost } from "../lib/host-clients";
 
@@ -31,8 +31,20 @@ export function resumeAgentOnOpen(sessionId: string): Promise<void> {
 		const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
-		if (error) throw new Error(resumeAgentErrorMessage(error, response.status));
+		if (error || response?.ok === false) {
+			throw Object.assign(new Error(resumeAgentErrorMessage(error, response?.status)), {
+				code: apiErrorCode(error),
+				requestId: apiErrorRequestId(error),
+				status: response?.status,
+			});
+		}
 	});
+}
+
+/** Only explicit transient responses qualify; provider refusals need user action. */
+export function isRetryableResumeError(error: unknown): boolean {
+	return apiErrorCode(error) === "SERVICE_UNAVAILABLE" ||
+		(typeof error === "object" && error !== null && "status" in error && error.status === 504);
 }
 
 /** Run one resume per local session; later callers join the request in flight. */
