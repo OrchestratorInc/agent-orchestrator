@@ -2141,12 +2141,12 @@ function ImportSourcePicker({
 		<button
 			key={key}
 			type="button"
-			className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-card p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+			className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-interactive-hover p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
 			aria-label={label}
 			disabled={disabled}
 			onClick={onClick}
 		>
-			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground group-hover:text-foreground">{icon}</span>
+			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-interactive-active text-muted-foreground group-hover:bg-foreground/10 group-hover:text-foreground">{icon}</span>
 			<span className="min-w-0">
 				<span className="block text-[14px] font-medium text-foreground">{label}</span>
 				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
