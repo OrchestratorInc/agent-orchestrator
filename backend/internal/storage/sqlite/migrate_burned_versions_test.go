@@ -234,6 +234,7 @@ var shippedMigrations = map[int64]string{
 	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
 	20261030141527623: "20261030141527623_session_end_telemetry_claim.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
+	20261101191148503: "20261101191148503_allow_stakpak_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
