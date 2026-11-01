@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 type listingTracker struct {
@@ -50,15 +51,44 @@ func TestTaskSuggestionsOffersOpenIssuesNotAlreadyStarted(t *testing.T) {
 		t.Fatalf("TaskSuggestions: %v", err)
 	}
 	want := []TaskSuggestion{
-		{Source: TaskSuggestionSourceIssue, IssueNumber: 1, Title: "Fix login", URL: "https://github.com/acme/repo/issues/1"},
-		{Source: TaskSuggestionSourceIssue, IssueNumber: 3, Title: "Same number, other project", URL: "https://github.com/acme/repo/issues/3"},
-		{Source: TaskSuggestionSourceIssue, IssueNumber: 5, Title: "Add dark mode", URL: "https://github.com/acme/repo/issues/5"},
+		{Source: TaskSuggestionSourceIssue, IssueID: "github:acme/repo#1", IssueNumber: 1, Title: "Fix login", URL: "https://github.com/acme/repo/issues/1"},
+		{Source: TaskSuggestionSourceIssue, IssueID: "github:acme/repo#3", IssueNumber: 3, Title: "Same number, other project", URL: "https://github.com/acme/repo/issues/3"},
+		{Source: TaskSuggestionSourceIssue, IssueID: "github:acme/repo#5", IssueNumber: 5, Title: "Add dark mode", URL: "https://github.com/acme/repo/issues/5"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("suggestions = %#v, want %#v", got, want)
 	}
 	if len(tracker.repos) != 1 || tracker.repos[0].Native != "acme/repo" || tracker.repos[0].Provider != domain.TrackerProviderGitHub {
 		t.Fatalf("listed repos = %#v, want acme/repo on github", tracker.repos)
+	}
+}
+
+func TestTaskSuggestionsSkipAnIssueStartedFromASuggestion(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", RepoOriginURL: "https://github.com/acme/repo.git"}
+	cmd := &fakeCommander{}
+	cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
+		rec := domain.SessionRecord{ID: "ao-2", ProjectID: cfg.ProjectID, Kind: cfg.Kind, IssueID: cfg.IssueID}
+		st.sessions[rec.ID] = rec
+		return rec
+	}
+	tracker := &listingTracker{issues: []domain.Issue{githubIssue("12", "Fix login"), githubIssue("13", "Add dark mode")}}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Tracker: tracker})
+
+	before, err := svc.TaskSuggestions(context.Background(), "ao")
+	if err != nil || len(before) != 2 {
+		t.Fatalf("suggestions before = %#v, %v", before, err)
+	}
+	// The desktop starts the first suggestion with its issue id and its own brief.
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Work on issue #12", IssueID: before[0].IssueID}); err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if cmd.spawnedCfg.IssueID != "github:acme/repo#12" || cmd.spawnedCfg.Prompt != "Work on issue #12" {
+		t.Fatalf("spawned config = %#v, want the issue recorded and the brief unchanged", cmd.spawnedCfg)
+	}
+	after, err := svc.TaskSuggestions(context.Background(), "ao")
+	if err != nil || len(after) != 1 || after[0].IssueNumber != 13 {
+		t.Fatalf("suggestions after = %#v, %v; want only #13", after, err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/trackerintake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -40,7 +41,9 @@ const (
 // prompt from these facts in the user's language, so nothing here is prose.
 type TaskSuggestion struct {
 	Source TaskSuggestionSource
-	// Issue fields.
+	// Issue fields. IssueID is the canonical tracker id a worker started for the
+	// issue records, so the issue is not suggested again while it runs.
+	IssueID     domain.IssueID
 	IssueNumber int
 	Title       string
 	URL         string
@@ -86,7 +89,7 @@ func (s *Service) issueSuggestions(ctx context.Context, project domain.ProjectRe
 		if n == 0 || title == "" || taken[n] || issue.State == domain.IssueDone || issue.State == domain.IssueCancelled {
 			continue
 		}
-		out = append(out, TaskSuggestion{Source: TaskSuggestionSourceIssue, IssueNumber: n, Title: truncateRunes(title, taskSuggestionTextLimit), URL: issue.URL})
+		out = append(out, TaskSuggestion{Source: TaskSuggestionSourceIssue, IssueID: trackerintake.CanonicalIssueID(issue.ID), IssueNumber: n, Title: truncateRunes(title, taskSuggestionTextLimit), URL: issue.URL})
 	}
 	return out
 }

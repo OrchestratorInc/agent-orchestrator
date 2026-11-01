@@ -1,17 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDot, ListTodo, Pencil, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import {
 	clearPendingParallelStart,
 	dismissParallelPrompt,
+	markSuggestionStarted,
 	rankParallelSuggestions,
 	reportParallelPromptAction,
 	reportParallelPromptShown,
 	readPendingParallelStart,
+	readStartedSuggestions,
 	savePendingParallelStart,
 	type ParallelSuggestion,
+	type TaskSuggestionView,
 } from "../lib/parallel-prompt";
 import { POST_START_ERRORS } from "../lib/spawn-errors";
 import { isMacPlatform } from "../lib/platform";
@@ -46,11 +49,17 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 			return data?.suggestions ?? [];
 		},
 	});
+	// Ranked once per visit, leaving out tasks started on an earlier one. This
+	// visit's starts drop out of the list below without another sliding into
+	// their place, even as the cached suggestions are updated for the next visit.
 	// A failed lookup still offers the built-in tasks.
-	const ranked = useMemo(
-		() => (suggestionsQuery.isPending ? [] : rankParallelSuggestions(suggestionsQuery.data ?? [])),
-		[suggestionsQuery.isPending, suggestionsQuery.data],
-	);
+	const [ranked, setRanked] = useState<ParallelSuggestion[]>([]);
+	const rankedOnce = useRef(false);
+	useEffect(() => {
+		if (suggestionsQuery.isPending || rankedOnce.current) return;
+		rankedOnce.current = true;
+		setRanked(rankParallelSuggestions(suggestionsQuery.data ?? [], readStartedSuggestions(projectId)));
+	}, [projectId, suggestionsQuery.isPending, suggestionsQuery.data]);
 	const [started, setStarted] = useState<ReadonlySet<string>>(new Set());
 	const [edits, setEdits] = useState<Record<string, string>>({});
 	const [editingId, setEditingId] = useState<string>();
@@ -97,7 +106,14 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 				savePendingParallelStart(projectId, suggestion.id, { requestId, brief });
 				// A rejected request got no answer at all: undefined, not a refusal.
 				const response = await apiClient.POST("/api/v1/orchestrators/delegate", {
-					body: { clientRequestId: requestId, projectId, brief, spawnSource: "parallel_prompt" },
+					body: {
+						clientRequestId: requestId,
+						projectId,
+						brief,
+						spawnSource: "parallel_prompt",
+						// The worker records its issue, so the daemon stops suggesting it.
+						...(suggestion.source === "issue" && suggestion.issueId ? { issueId: suggestion.issueId } : {}),
+					},
 				}).catch(() => undefined);
 				const apiError = response?.error;
 				const workerId = response?.data?.workerId;
@@ -119,6 +135,10 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 				setPendingRevision((revision) => revision + 1);
 				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: projectId });
 				count += 1;
+				markSuggestionStarted(projectId, suggestion.id);
+				// The cached list predates this start; drop the started task from it.
+				queryClient.setQueryData<TaskSuggestionView[]>(parallelSuggestionsQueryKey(projectId), (cached) =>
+					cached?.filter((item) => !suggestionMatches(item, suggestion)));
 				setStarted((current) => new Set(current).add(suggestion.id));
 				if (editingId === suggestion.id) setEditingId(undefined);
 			}
@@ -257,4 +277,10 @@ function SuggestionLabel({ suggestion }: { suggestion: ParallelSuggestion }) {
 		case "starter":
 			return <span className="min-w-0 flex-1 truncate text-foreground">{t(`parallelPrompt.starter.${suggestion.starter}.label`)}</span>;
 	}
+}
+
+function suggestionMatches(item: TaskSuggestionView, suggestion: ParallelSuggestion): boolean {
+	if (suggestion.source === "issue") return item.source === "issue" && item.issueNumber === suggestion.issueNumber;
+	if (suggestion.source === "todo") return item.source === "todo" && item.path === suggestion.path && item.line === suggestion.line;
+	return false;
 }

@@ -5961,6 +5961,7 @@ export interface components {
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
+            issueId?: string;
             /** @enum {string} */
             mode?: "tui" | "chat";
             model?: string;
@@ -7752,6 +7753,7 @@ export interface components {
             requirements: components["schemas"]["SystemRequirement"][];
         };
         TaskSuggestionView: {
+            issueId?: string;
             issueNumber?: number;
             line?: number;
             path?: string;

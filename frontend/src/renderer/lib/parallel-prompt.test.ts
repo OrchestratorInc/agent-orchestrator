@@ -51,6 +51,8 @@ describe("parallel prompt", () => {
 		const starters = rankParallelSuggestions([]);
 		expect(starters.map((suggestion) => suggestion.id)).toEqual(["starter:fixBug", "starter:docs", "starter:tests"]);
 		expect(suggestionSetSource(starters)).toBe("starter");
+		expect(rankParallelSuggestions([], new Set(["starter:fixBug"])).map((suggestion) => suggestion.id))
+			.toEqual(["starter:docs", "starter:tests"]);
 	});
 
 	it("reports shown once per project per launch with enums and counts only", () => {

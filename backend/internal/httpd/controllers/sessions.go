@@ -51,6 +51,7 @@ const (
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
+	maxIssueIDLen     = 512
 
 	// Attachment limits guard the daemon against oversized spawn bodies. Files
 	// are pasted/dropped into the task brief and inlined as base64 in the JSON
@@ -2282,6 +2283,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_SPAWN_SOURCE", "spawnSource is invalid", nil)
 		return
 	}
+	if len(in.IssueID) > maxIssueIDLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ISSUE_ID_TOO_LONG", "issueId must be 512 bytes or fewer", nil)
+		return
+	}
 	attachments, attachErr := decodeSpawnAttachments(in.Attachments)
 	if attachErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
@@ -2310,6 +2315,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		RequestedMode:     in.Mode,
 		Attachments:       attachments,
 		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
+		IssueID:           domain.IssueID(domain.SanitizeControlChars(strings.TrimSpace(string(in.IssueID)))),
 		SpawnSource:       in.SpawnSource,
 	})
 	if err != nil {
@@ -2362,7 +2368,7 @@ func (c *SessionsController) taskSuggestions(w http.ResponseWriter, r *http.Requ
 	out := TaskSuggestionsResponse{Suggestions: make([]TaskSuggestionView, 0, len(suggestions))}
 	for _, s := range suggestions {
 		out.Suggestions = append(out.Suggestions, TaskSuggestionView{
-			Source: string(s.Source), IssueNumber: s.IssueNumber, Title: s.Title, URL: s.URL, Path: s.Path, Line: s.Line, Text: s.Text,
+			Source: string(s.Source), IssueID: s.IssueID, IssueNumber: s.IssueNumber, Title: s.Title, URL: s.URL, Path: s.Path, Line: s.Line, Text: s.Text,
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, out)

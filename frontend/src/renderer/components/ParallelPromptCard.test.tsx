@@ -25,8 +25,7 @@ function renderCard(onDismiss = vi.fn()) {
 	return onDismiss;
 }
 
-function renderCardWithHandle(onDismiss = vi.fn()) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderCardWithHandle(onDismiss = vi.fn(), queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
@@ -50,7 +49,7 @@ describe("ParallelPromptCard", () => {
 		getMock.mockResolvedValue({
 			data: {
 				suggestions: [
-					{ source: "issue", issueNumber: 12, title: "Fix login", url: "https://github.com/acme/repo/issues/12" },
+					{ source: "issue", issueId: "github:acme/repo#12", issueNumber: 12, title: "Fix login", url: "https://github.com/acme/repo/issues/12" },
 					{ source: "todo", path: "src/a.go", line: 3, text: "handle retries" },
 				],
 			},
@@ -76,10 +75,31 @@ describe("ParallelPromptCard", () => {
 		await waitFor(() => expect(screen.queryByText("Fix login")).not.toBeInTheDocument());
 		expect(postMock).toHaveBeenCalledTimes(1);
 		const body = postMock.mock.calls[0][1].body;
-		expect(body).toMatchObject({ projectId: "ao", spawnSource: "parallel_prompt" });
+		expect(body).toMatchObject({ projectId: "ao", spawnSource: "parallel_prompt", issueId: "github:acme/repo#12" });
 		expect(body.brief).toContain("#12");
 		expect(body.brief).toContain("https://github.com/acme/repo/issues/12");
 		expect(actions("ao.onboarding.parallel_prompt_action")).toEqual([{ action: "spawn_one", count: 1 }]);
+	});
+
+	it("does not offer a started task again when the board is revisited", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { unmount } = renderCardWithHandle(vi.fn(), queryClient);
+		const row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(screen.queryByText("Fix login")).not.toBeInTheDocument());
+		unmount();
+
+		// Back on the board with the cached suggestions...
+		const cached = renderCardWithHandle(vi.fn(), queryClient);
+		expect(await screen.findByText("handle retries")).toBeInTheDocument();
+		expect(screen.queryByText("Fix login")).not.toBeInTheDocument();
+		cached.unmount();
+
+		// ...and with a fresh lookup that still lists the issue.
+		renderCard();
+		expect(await screen.findByText("handle retries")).toBeInTheDocument();
+		expect(screen.queryByText("Fix login")).not.toBeInTheDocument();
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("starts an edited prompt", async () => {

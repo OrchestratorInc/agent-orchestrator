@@ -508,7 +508,7 @@ func (f *fakeSessionService) TaskSuggestions(_ context.Context, projectID domain
 		return nil, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
 	return []sessionsvc.TaskSuggestion{
-		{Source: sessionsvc.TaskSuggestionSourceIssue, IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
+		{Source: sessionsvc.TaskSuggestionSourceIssue, IssueID: "github:acme/repo#12", IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
 		{Source: sessionsvc.TaskSuggestionSourceTodo, Path: "src/a.go", Line: 3, Text: "handle retries"},
 	}, nil
 }
@@ -4807,13 +4807,18 @@ func TestSessionsAPI_DelegateTaskForwardsSpawnSource(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
-	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","spawnSource":"composer_next"}`)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","spawnSource":"composer_next","issueId":" github:acme/repo#12 "}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("delegate = %d, want 202; body=%s", status, body)
 	}
 	if svc.delegationInput.SpawnSource != domain.SpawnSourceComposerNext {
 		t.Fatalf("spawn source = %q, want composer_next", svc.delegationInput.SpawnSource)
 	}
+	if svc.delegationInput.IssueID != "github:acme/repo#12" {
+		t.Fatalf("issue id = %q, want the trimmed tracker id", svc.delegationInput.IssueID)
+	}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","issueId":"`+strings.Repeat("9", 513)+`"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ISSUE_ID_TOO_LONG")
 
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", `{"projectId":"ao","brief":"Fix it","spawnSource":"banner"}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_SPAWN_SOURCE")
@@ -5397,7 +5402,7 @@ func TestSessionsAPI_TaskSuggestions(t *testing.T) {
 	var got controllers.TaskSuggestionsResponse
 	mustJSON(t, body, &got)
 	want := controllers.TaskSuggestionsResponse{Suggestions: []controllers.TaskSuggestionView{
-		{Source: "issue", IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
+		{Source: "issue", IssueID: "github:acme/repo#12", IssueNumber: 12, Title: "Fix login", URL: "https://github.com/acme/repo/issues/12"},
 		{Source: "todo", Path: "src/a.go", Line: 3, Text: "handle retries"},
 	}}
 	if !reflect.DeepEqual(got, want) {

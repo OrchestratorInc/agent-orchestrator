@@ -113,6 +113,34 @@ export function clearPendingParallelStart(projectId: string, suggestionId: strin
 	writePendingStarts(all);
 }
 
+const STARTED_KEY = "ao.parallelPrompt.started.v1";
+
+/**
+ * Suggestions already started from this card, per project. Kept so revisiting
+ * the board never offers a task that is already running: a TODO note stays in
+ * the repository, and cached suggestions predate the start.
+ */
+export function readStartedSuggestions(projectId: string): ReadonlySet<string> {
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(STARTED_KEY) ?? "{}");
+		const ids = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>)[projectId] : undefined;
+		return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []);
+	} catch {
+		return new Set();
+	}
+}
+
+export function markSuggestionStarted(projectId: string, suggestionId: string): void {
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(STARTED_KEY) ?? "{}");
+		const all = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, string[]>) : {};
+		all[projectId] = [...readStartedSuggestions(projectId), suggestionId];
+		window.localStorage.setItem(STARTED_KEY, JSON.stringify(all));
+	} catch {
+		// Without storage the card still hides it until it remounts.
+	}
+}
+
 export type TaskSuggestionView = components["schemas"]["TaskSuggestionView"];
 
 /** Built-in tasks that suit almost any repository, used to fill the list. */
@@ -120,7 +148,7 @@ export const STARTER_TASKS = ["fixBug", "docs", "tests"] as const;
 export type StarterTask = (typeof STARTER_TASKS)[number];
 
 export type ParallelSuggestion =
-	| { id: string; source: "issue"; issueNumber: number; title: string; url?: string }
+	| { id: string; source: "issue"; issueNumber: number; title: string; url?: string; issueId?: string }
 	| { id: string; source: "todo"; path: string; line: number; text: string }
 	| { id: string; source: "starter"; starter: StarterTask };
 
@@ -128,12 +156,12 @@ export type ParallelSuggestionSource = ParallelSuggestion["source"];
 
 export const MAX_PARALLEL_SUGGESTIONS = 3;
 
-/** Issues first, then TODO/FIXME notes, then starter tasks, three in all. */
-export function rankParallelSuggestions(found: readonly TaskSuggestionView[]): ParallelSuggestion[] {
+/** Issues first, then TODO/FIXME notes, then starter tasks, three in all, leaving out `excluded` ids. */
+export function rankParallelSuggestions(found: readonly TaskSuggestionView[], excluded: ReadonlySet<string> = new Set()): ParallelSuggestion[] {
 	const out: ParallelSuggestion[] = [];
 	for (const item of found) {
 		if (item.source === "issue" && item.issueNumber && item.title) {
-			out.push({ id: `issue:${item.issueNumber}`, source: "issue", issueNumber: item.issueNumber, title: item.title, url: item.url });
+			out.push({ id: `issue:${item.issueNumber}`, source: "issue", issueNumber: item.issueNumber, title: item.title, url: item.url, issueId: item.issueId });
 		}
 	}
 	for (const item of found) {
@@ -142,7 +170,7 @@ export function rankParallelSuggestions(found: readonly TaskSuggestionView[]): P
 		}
 	}
 	for (const starter of STARTER_TASKS) out.push({ id: `starter:${starter}`, source: "starter", starter });
-	return out.slice(0, MAX_PARALLEL_SUGGESTIONS);
+	return out.filter((suggestion) => !excluded.has(suggestion.id)).slice(0, MAX_PARALLEL_SUGGESTIONS);
 }
 
 /** One source when every suggestion shares it, else "mixed". */

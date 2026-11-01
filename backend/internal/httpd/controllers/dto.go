@@ -1327,6 +1327,10 @@ type DelegateTaskRequest struct {
 	// TaskPreparation is the opaque worktree token returned while the New Task
 	// dialog is open. Missing or expired tokens fall back to normal creation.
 	TaskPreparation string `json:"taskPreparation,omitempty"`
+	// IssueID records the tracker issue the task works on, so the session
+	// carries it like an `ao spawn --issue` worker. It does not change the
+	// prompt: the brief is sent as written.
+	IssueID domain.IssueID `json:"issueId,omitempty" maxLength:"512"`
 	// SpawnSource names the desktop surface that started the task. It only
 	// labels telemetry; omitted is an ordinary start.
 	SpawnSource domain.SpawnSource `json:"spawnSource,omitempty" enum:"parallel_prompt,composer_next"`
@@ -1347,10 +1351,13 @@ type TaskSuggestionsResponse struct {
 // TaskSuggestionView is one candidate task: an open tracker issue, or a TODO or
 // FIXME comment in a tracked file. The client words the prompt itself.
 type TaskSuggestionView struct {
-	Source      string `json:"source" enum:"issue,todo"`
-	IssueNumber int    `json:"issueNumber,omitempty"`
-	Title       string `json:"title,omitempty"`
-	URL         string `json:"url,omitempty"`
+	Source string `json:"source" enum:"issue,todo"`
+	// IssueID is the canonical tracker id to pass back as the delegate
+	// request's issueId when starting this issue.
+	IssueID     domain.IssueID `json:"issueId,omitempty"`
+	IssueNumber int            `json:"issueNumber,omitempty"`
+	Title       string         `json:"title,omitempty"`
+	URL         string         `json:"url,omitempty"`
 	// Path is repository-relative.
 	Path string `json:"path,omitempty"`
 	Line int    `json:"line,omitempty"`
