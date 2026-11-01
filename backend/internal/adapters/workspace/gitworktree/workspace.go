@@ -290,7 +290,16 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if err := w.validateBranch(ctx, repo, cfg.Branch); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	if cfg.FreshBranch {
+	if cfg.RequireNewBranch {
+		exists, err := w.branchNameTaken(ctx, repo, cfg.Branch, true)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		if exists {
+			return ports.WorkspaceInfo{}, fmt.Errorf("%w: %q", ports.ErrWorkspaceBranchAlreadyExists, cfg.Branch)
+		}
+	}
+	if cfg.FreshBranch && !cfg.RequireNewBranch {
 		requested := cfg.Branch
 		for suffix := 2; ; suffix++ {
 			exists, err := w.branchNameTaken(ctx, repo, cfg.Branch, true)
@@ -336,7 +345,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true)
+	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true, cfg.RequireNewBranch)
 	if err != nil {
 		// An occupied path is refused before git runs, so there is no prepared
 		// branch or worktree to roll back, and the rollback would misreport the
@@ -480,7 +489,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	}
 	branch := requestedBranch
 	if !recovering {
-		branch, err = w.workspaceProjectBranch(ctx, repos, requestedBranch, cfg.FreshBranch)
+		branch, err = w.workspaceProjectBranch(ctx, repos, requestedBranch, cfg.FreshBranch, cfg.RequireNewBranch)
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, err
 		}
@@ -559,7 +568,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 				if cfg.FreshBranch {
 					touched = append(touched, info)
 				}
-				baseSHA, err = w.createWorkspaceProjectRepo(ctx, repo, branch)
+				baseSHA, err = w.createWorkspaceProjectRepo(ctx, repo, branch, cfg.RequireNewBranch)
 				if err == nil {
 					created = append(created, repo)
 				}
@@ -1463,7 +1472,7 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err := w.validateBranch(ctx, repo, recreateBranch); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", false)
+	baseRef, err := w.addWorktree(ctx, repo, path, recreateBranch, cfg.BaseBranch, cfg.BaseRef, "", false, false)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
@@ -1556,7 +1565,7 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 	return false, nil
 }
 
-func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase bool) (string, error) {
+func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase, requireNewBranch bool) (string, error) {
 	// Refuse early if the branch is already checked out in another worktree:
 	// `git worktree add` will fail, but its stderr leaks through as an opaque
 	// 500. A typed sentinel lets the HTTP layer surface a 409.
@@ -1589,6 +1598,9 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		return "", err
 	}
 	if localBranch {
+		if requireNewBranch {
+			return "", fmt.Errorf("%w: %q", ports.ErrWorkspaceBranchAlreadyExists, branch)
+		}
 		// Create needs a freshly resolved base for accurate initial diffs even
 		// when the requested branch already exists. Restore already has durable
 		// base metadata and only needs to reattach that branch; making it resolve
@@ -1831,7 +1843,7 @@ type workspaceProjectRepo struct {
 	baseRef      string
 }
 
-func (w *Workspace) workspaceProjectBranch(ctx context.Context, repos []workspaceProjectRepo, requested string, fresh bool) (string, error) {
+func (w *Workspace) workspaceProjectBranch(ctx context.Context, repos []workspaceProjectRepo, requested string, fresh, requireNewBranch bool) (string, error) {
 	branch := strings.TrimSpace(requested)
 	if branch == "" {
 		return "", errors.New("gitworktree: branch is required")
@@ -1847,6 +1859,9 @@ func (w *Workspace) workspaceProjectBranch(ctx context.Context, repos []workspac
 		}
 		if free {
 			return candidate, nil
+		}
+		if requireNewBranch {
+			return "", fmt.Errorf("%w: %q", ports.ErrWorkspaceBranchAlreadyExists, requested)
 		}
 	}
 	return "", fmt.Errorf("gitworktree: could not find free workspace branch for %q", branch)
@@ -1892,7 +1907,7 @@ func (w *Workspace) branchNameTaken(ctx context.Context, repo, branch string, in
 	return false, nil
 }
 
-func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspaceProjectRepo, branch string) (string, error) {
+func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspaceProjectRepo, branch string, requireNewBranch bool) (string, error) {
 	baseRef := strings.TrimSpace(repo.baseRef)
 	if baseRef == "" {
 		return "", errors.New("gitworktree: workspace repository base was not resolved before creation")
@@ -1904,7 +1919,7 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	}
 	// addWorktree handles both the ordinary new-branch path and a preparation
 	// recovered after a daemon crash left this branch or registration behind.
-	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false); err != nil {
+	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false, requireNewBranch); err != nil {
 		return "", fmt.Errorf("gitworktree: workspace repo %q worktree add branch %q from %q: %w", repo.name, branch, seedRef, err)
 	}
 	return baseSHA, nil

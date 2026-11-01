@@ -1152,9 +1152,11 @@ describe("SessionView", () => {
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
+		const priorToast = useUiStore.getState().globalToast;
 		const view = render(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		expect(useUiStore.getState().globalToast).toBe(priorToast);
 		expect(chatSurfaceTransitionRenders[0]).toBe(true);
 		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);

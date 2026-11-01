@@ -581,6 +581,8 @@ function stagingDiagnosticSnapshot(): Record<string, number | boolean | undefine
 // within minutes rather than waiting out a day: a daily interval meant any
 // release we published took up to 24h to reach users who keep the app running.
 const AUTOMATIC_UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const AUTOMATIC_UPDATE_RETRY_CAP_MS = 4 * 60 * 60 * 1000;
+let automaticRetryFailures = 0;
 let automaticUpdateTimer: ReturnType<typeof setInterval> | undefined;
 let automaticUpdateTimerIntervalMs: number | undefined;
 type UpdaterOperation =
@@ -2413,8 +2415,8 @@ async function awaitStartedDownload(result: UpdateCheckOutcome): Promise<void> {
 async function runAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number> {
-  let nextIntervalMs =
-    automaticUpdateTimerIntervalMs ?? AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
+  let nextIntervalMs = AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
+  let failed = false;
   try {
     await runSerializedUpdaterOperation("automatic-check", async () => {
       const settings = await reconcileAndPersist(
@@ -2507,9 +2509,15 @@ async function runAutomaticUpdateCheck(
       }
     });
   } catch (err) {
+    failed = true;
     console.error("auto-update check failed:", err);
   }
-  return nextIntervalMs;
+  if (failed || automaticCheckFailureCounted) {
+    automaticRetryFailures = Math.min(automaticRetryFailures + 1, 5);
+  } else {
+    automaticRetryFailures = 0;
+  }
+  return Math.min(nextIntervalMs * 2 ** automaticRetryFailures, AUTOMATIC_UPDATE_RETRY_CAP_MS);
 }
 
 function schedulePeriodicAutomaticUpdateCheck(
