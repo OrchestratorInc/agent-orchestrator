@@ -2136,14 +2136,22 @@ function ImportSourcePicker({
 		onClose?.();
 		onCreateStandaloneAgent?.();
 	};
-	const choiceClass = "group flex min-h-[76px] w-full items-center gap-3 border-b border-[var(--color-border-import-modal)] px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50 last:border-b-0";
-	// One icon chip for both steps so the tiles and the source rows read as one family.
-	const choiceIcon = (icon: ReactNode) => <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground group-hover:text-foreground">{icon}</span>;
-	const choiceText = (label: string, description: string) => (
-		<span className="min-w-0">
-			<span className="block text-[14px] font-medium text-foreground">{label}</span>
-			<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">{description}</span>
-		</span>
+	// Both steps use the same tile so they read as one family.
+	const tile = (key: string, icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
+		<button
+			key={key}
+			type="button"
+			className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
+			aria-label={label}
+			disabled={disabled}
+			onClick={onClick}
+		>
+			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground group-hover:text-foreground">{icon}</span>
+			<span className="min-w-0">
+				<span className="block text-[14px] font-medium text-foreground">{label}</span>
+				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
+			</span>
+		</button>
 	);
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
 		{
@@ -2201,25 +2209,8 @@ function ImportSourcePicker({
 			<AnimatePresence mode="popLayout" initial={false}>
 			{!gateKnown ? null : askPlacement ? (
 				<motion.div key="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
-					{([
-						{ id: "local", icon: Laptop, label: t("createProject.placementLocal"), description: t("createProject.placementLocalDesc"), onClick: () => onLocalChosenChange(true) },
-						{ id: "cloud", icon: Cloud, label: t("createProject.placementCloud"), description: t("createProject.placementCloudDesc"), onClick: onCloudSelect },
-					] as const).map(({ id, icon: Icon, label, description: hint, onClick }) => (
-						<button
-							key={id}
-							type="button"
-							className="group flex flex-col items-start gap-5 rounded-lg border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-4 text-left hover:border-[var(--color-border-strong)] hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
-							aria-label={label}
-							disabled={disabled}
-							onClick={onClick}
-						>
-							{choiceIcon(<Icon className="size-5" aria-hidden="true" strokeWidth={1.8} />)}
-							<span className="min-w-0">
-								<span className="block text-[14px] font-medium text-foreground">{label}</span>
-								<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
-							</span>
-						</button>
-					))}
+					{tile("local", <Laptop className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("createProject.placementLocal"), t("createProject.placementLocalDesc"), () => onLocalChosenChange(true))}
+					{tile("cloud", <Cloud className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
 				<motion.div key="sources" {...fade}>
@@ -2233,19 +2224,11 @@ function ImportSourcePicker({
 							</SelectContent>
 						</Select>
 					</div>}
-					<div className="mx-4 mb-4 overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">
-						{localSources.map(({ source, icon, label, description }) => (
-							<button key={source} type="button" className={choiceClass} aria-label={label} disabled={disabled} onClick={() => onSelect(source)}>
-								{choiceIcon(icon)}
-								{choiceText(label, description)}
-							</button>
-						))}
-						{onCreateStandaloneAgent ? (
-							<button type="button" className={choiceClass} aria-label={t("home.newStandaloneAgent")} disabled={disabled} onClick={createStandaloneAgent}>
-								{choiceIcon(<MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />)}
-								{choiceText(t("home.newStandaloneAgent"), t("createProject.standaloneDesc"))}
-							</button>
-						) : null}
+					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
+						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
+						{onCreateStandaloneAgent
+							? tile("standalone", <MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							: null}
 					</div>
 				</motion.div>
 			)}
