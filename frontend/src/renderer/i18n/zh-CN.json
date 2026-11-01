@@ -3470,6 +3470,7 @@
 	"chat.automation.visualChanges_other": "{{count}} 处视觉变更",
 	"chat.automation.screenshots_one": "{{count}} 张参考截图",
 	"chat.automation.screenshots_other": "{{count}} 张参考截图",
+	"chat.automation.steered": "已引导",
 	"sideChat.deleteConfirm": "删除侧边聊天？",
 	"sideChat.deleteExplanation": "此侧边聊天及其消息将被删除。",
 	"sideChat.delete": "删除",

@@ -3403,6 +3403,7 @@
 	"chat.automation.visualChanges_other": "{{count}} visual changes",
 	"chat.automation.screenshots_one": "{{count}} reference screenshot",
 	"chat.automation.screenshots_other": "{{count}} reference screenshots",
+	"chat.automation.steered": "Steered",
 	"sideChat.deleteConfirm": "Delete side chat?",
 	"sideChat.deleteExplanation": "This will remove this side chat and its messages.",
 	"sideChat.delete": "Delete",

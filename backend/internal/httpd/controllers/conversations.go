@@ -1414,6 +1414,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 			Continuation:      msg.Continuation,
+			AuthoredByUser:    msg.AuthoredByUser,
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence

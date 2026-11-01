@@ -3488,6 +3488,7 @@
 	"chat.automation.visualChanges_other": "시각적 변경 {{count}}개",
 	"chat.automation.screenshots_one": "참고 스크린샷 {{count}}개",
 	"chat.automation.screenshots_other": "참고 스크린샷 {{count}}개",
+	"chat.automation.steered": "조종됨",
 	"sideChat.deleteConfirm": "사이드 채팅을 삭제할까요?",
 	"sideChat.deleteExplanation": "이 사이드 채팅과 메시지가 삭제됩니다.",
 	"sideChat.delete": "삭제",

@@ -3539,6 +3539,7 @@
 	"chat.automation.screenshots_few": "{{count}} эталонных скриншота",
 	"chat.automation.screenshots_many": "{{count}} эталонных скриншотов",
 	"chat.automation.screenshots_other": "{{count}} эталонного скриншота",
+	"chat.automation.steered": "Скорректировано",
 	"sideChat.deleteConfirm": "Удалить дополнительный чат?",
 	"sideChat.deleteExplanation": "Этот дополнительный чат и его сообщения будут удалены.",
 	"sideChat.delete": "Удалить",
