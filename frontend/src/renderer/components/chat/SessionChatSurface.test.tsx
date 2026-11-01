@@ -94,7 +94,7 @@ const sideMocks = vi.hoisted(() => ({
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
-		| ((text: string, attachments: undefined, clientMessageId: string, excerpts?: undefined, fileReferences?: undefined, legacySideAlias?: boolean) => Promise<void>),
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
 }));
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
@@ -1283,9 +1283,9 @@ describe("side command routing", () => {
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
 	});
 
-	it.each(["btw"])(
-		"/%s creates a new side for every new submission and reuses a retry key",
-		async (command) => {
+	it(
+		"/btw creates a new side for every new submission and reuses a retry key",
+		async () => {
 			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
 			sideMocks.send.mockReset().mockResolvedValue(undefined);
 			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1295,9 +1295,9 @@ describe("side command routing", () => {
 				</Wrapper>,
 			);
 			await act(async () => {
-				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
-				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw first", undefined, "submission-1");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
+				await sideMocks.workspaceSend!("/btw second", undefined, "submission-2");
 			});
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
@@ -1333,14 +1333,6 @@ describe("side command routing", () => {
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({text}));
 		delete (conversationCommandState as {send?:unknown}).send;
-	});
-	it("keeps explicit recovered legacy /side delivery on the original side operation key", async()=>{
-		sideMocks.create.mockReset().mockResolvedValue({id:"original-side"});
-		sideMocks.send.mockReset().mockResolvedValue(undefined);
-		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session}/></Wrapper>);
-		await act(async()=>{await sideMocks.workspaceSend!("/side original question",undefined,"old-key",undefined,undefined,true);});
-		expect(sideMocks.create).toHaveBeenCalledWith(undefined,true,"old-key");
-		expect(sideMocks.send).toHaveBeenCalledWith("original-side","original question",undefined,undefined,true,"old-key");
 	});
 	it.each(["btw", "side"])("preserves provider /%s when resume is unavailable", async (command) => {
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: [] };

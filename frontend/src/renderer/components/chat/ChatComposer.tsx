@@ -266,7 +266,6 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
-	legacySideAlias?: boolean,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -1564,10 +1563,7 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
-    const legacySideAlias = prepared.recovered && delivery.commandRoutingVersion === undefined && /^\/side(?:\s+|$)/i.test(delivery.requestText);
-    if (legacySideAlias && fileReferenceDelivery !== "text") {
-     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, true);
-    } else if (delivery.fileReferences?.length) {
+    if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
       await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
      } else {

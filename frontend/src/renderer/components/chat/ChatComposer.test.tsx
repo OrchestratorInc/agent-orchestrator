@@ -805,23 +805,21 @@ describe("send keys", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	it.each([true,false])("keeps recovered /side routing distinct for legacy=%s", async legacy => {
-		const sessionId=`side-routing-${legacy}`;
-		writeChatComposerText(sessionId,"/side original question");
-		prepareChatComposerDelivery(sessionId,{kind:"send",composerText:"/side original question",requestText:"/side original question",attachments:[],clientMessageId:"original-key"});
-		if (legacy) {
-			const key=`ao.chat.draft:${encodeURIComponent(sessionId)}`;
-			const saved=JSON.parse(window.localStorage.getItem(key)!);
-			delete saved.composer.delivery.commandRoutingVersion;
-			window.localStorage.setItem(key,JSON.stringify(saved));
-		}
-		expect(readChatSessionDraft(sessionId).composer.delivery?.commandRoutingVersion).toBe(legacy ? undefined : 1);
-		const onSend=vi.fn().mockResolvedValue(undefined);
-		render(<ChatComposer draftSessionId={sessionId} onSend={onSend}/>);
-		await userEvent.click(await screen.findByRole("button",{name:"Retry message safely"}));
-		await waitFor(()=>expect(onSend).toHaveBeenCalledTimes(1));
-		expect(onSend.mock.calls[0].slice(0,3)).toEqual(["/side original question",undefined,"original-key"]);
-		expect(onSend.mock.calls[0][6]).toBe(legacy ? true : undefined);
+	it("retries a saved /side message as ordinary agent text with its original key", async () => {
+		const sessionId = "side-routing";
+		writeChatComposerText(sessionId, "/side original question");
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "/side original question",
+			requestText: "/side original question",
+			attachments: [],
+			clientMessageId: "original-key",
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend).toHaveBeenCalledWith("/side original question", undefined, "original-key");
 	});
 	it.each(["read", "write"])("preserves safe retry when recording acceptance fails to %s storage", async (failure) => {
 		const sessionId = `composer-live-acceptance-storage-failure-${failure}`;
@@ -3085,7 +3083,7 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	for(let i=0;i<localStorage.length;i++){
 		const key=localStorage.key(i)!;const raw=localStorage.getItem(key)!;
 		if(raw.includes('"clientMessageId":"legacy-receipt"')){
-			const saved=JSON.parse(raw);delete saved.composer.delivery.fileReferenceFormat;window.localStorage.setItem(key,JSON.stringify(saved));
+			const saved=JSON.parse(raw);delete saved.composer.delivery.fileReferenceFormat;localStorage.setItem(key,JSON.stringify(saved));
 		}
 	}
 	const onSend=vi.fn().mockResolvedValue(undefined);
