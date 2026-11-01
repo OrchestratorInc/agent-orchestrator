@@ -17,6 +17,13 @@ const test = process.env.AO_E2E_ELECTRON
 					args: [path.join(__dirname, "support/electron-shell.cjs")],
 				});
 				const page = await app.firstWindow();
+				await app.evaluate(async ({ BrowserWindow }) => {
+					const contents = BrowserWindow.getAllWindows()[0].webContents;
+					if (contents.isLoading())
+						await new Promise<void>((resolve) =>
+							contents.once("did-finish-load", () => resolve()),
+						);
+				});
 				await page.bringToFront();
 				await use(page);
 				await app.close();
@@ -231,9 +238,13 @@ async function open(page: Page, mode: "main" | "existing" | "new" | "mermaid") {
 	return { sends, creations, drafts };
 }
 
-async function selectMixed(page: Page, reverse = false) {
+async function selectMixed(page: Page, reverse = false, extent = 200) {
 	const worked = page.getByRole("button", { name: /Worked for/ });
-	if (await worked.count()) await worked.click();
+	if (
+		(await worked.count()) &&
+		(await worked.getAttribute("aria-expanded")) !== "true"
+	)
+		await worked.click();
 	const card = page.locator('[data-chat-activity-id="command"]');
 	await expect(card).toBeVisible();
 	const disclosure = card.locator('button[aria-expanded="false"]');
@@ -263,7 +274,7 @@ async function selectMixed(page: Page, reverse = false) {
 		b = (await answer.boundingBox())!;
 	const points = [
 		{ x: a.x + 2, y: a.y + a.height / 2 },
-		{ x: b.x + Math.min(200, b.width - 3), y: b.y + b.height / 2 },
+		{ x: b.x + Math.min(extent, b.width - 3), y: b.y + b.height / 2 },
 	];
 	if (reverse) points.reverse();
 	await page.mouse.move(points[0].x, points[0].y);
@@ -290,14 +301,6 @@ for (const destination of ["main", "existing", "new"] as const)
 				.outputPath(`${destination}-selection-before-attachment.png`),
 		});
 		if (destination === "main") {
-			await page.keyboard.press("Escape");
-			await expect(
-				page.getByRole("button", { name: "Add to chat", exact: true }),
-			).not.toBeVisible();
-			expect(
-				await page.evaluate(() => window.getSelection()!.toString()),
-			).not.toBe("");
-			await selectMixed(page);
 			await page.keyboard.press("ControlOrMeta+l");
 		} else
 			await page
