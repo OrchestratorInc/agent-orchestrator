@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/reviewerror"
 )
 
 const (
@@ -177,6 +179,7 @@ func newReviewListCommand(ctx *commandContext) *cobra.Command {
 			if err := ctx.getJSON(cmd.Context(), path, &res); err != nil {
 				return err
 			}
+			res = reviewListPayload(res)
 			if opts.json {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
@@ -477,6 +480,30 @@ func (c *commandContext) stopReview(cmd *cobra.Command, args []string, opts revi
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "cancelled review for %s\n", session)
 	return err
+}
+
+// Older daemons may return unsanitized historical failures. Apply the same
+// policy before either JSON or table output, without changing submitted bodies.
+func reviewListPayload(res listReviewsResponse) listReviewsResponse {
+	if res.Reviews == nil {
+		return res
+	}
+	reviews := make([]reviewState, len(res.Reviews))
+	for i, review := range res.Reviews {
+		for _, target := range []**reviewRun{&review.LatestRun, &review.PreviousRun} {
+			if *target == nil {
+				continue
+			}
+			run := **target
+			if reviewerror.Eligible(run.Status, run.Verdict, run.GithubReviewID) {
+				run.Body = reviewerror.Summary(run.Body)
+			}
+			*target = &run
+		}
+		reviews[i] = review
+	}
+	res.Reviews = reviews
+	return res
 }
 
 func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse) error {
