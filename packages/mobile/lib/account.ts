@@ -2,9 +2,11 @@ import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 
-// The desktop uses this public AuthKit client and HTTPS callback. The callback
+// The production AuthKit client (auth.orchestrator.inc), the same one desktop
+// release builds get from the VITE_WORKOS_CLIENT_ID repository variable, so a
+// phone signs in to the same AO account as the desktop. The HTTPS callback
 // returns to ao-app://callback; mobile registers that scheme as well.
-const CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
+const CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
 const REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const APP_CALLBACK = "ao-app://callback";
 const AUTH_URL = "https://api.workos.com/user_management/authorize";

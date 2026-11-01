@@ -38,11 +38,12 @@ it("uses the existing AO AuthKit callback and keeps refresh credentials in Secur
 	const [authorizationUrl, redirectUrl] = browser.openAuthSessionAsync.mock.calls[0] as [string, string];
 	const authorization = new URL(authorizationUrl);
 	expect(redirectUrl).toBe("ao-app://callback");
+	expect(authorization.searchParams.get("client_id")).toBe("client_01KZ3VRKTDKBZ3JA8AMKTF6W2X");
 	expect(authorization.searchParams.get("redirect_uri")).toBe("https://api.aoagents.dev/app/auth/return");
 	expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
 	expect(authorization.searchParams.get("code_challenge")).toBe("YWJjZA");
 	expect(JSON.parse((fetch.mock.calls[0]?.[1] as RequestInit).body as string)).toMatchObject({
-		grant_type: "authorization_code", code: "once", code_verifier: expect.any(String),
+		client_id: "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X", grant_type: "authorization_code", code: "once", code_verifier: expect.any(String),
 	});
 	expect(await loadAccount()).toEqual({ id: "user_1", email: "person@example.com" });
 	expect([...secure.values()].join(" ")).not.toContain("access");
