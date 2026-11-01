@@ -54,8 +54,8 @@ func parseUserInput(raw json.RawMessage) (*parkedInput, ports.ChatInputRequest, 
 		if question.IsSecret != nil && *question.IsSecret {
 			return nil, ports.ChatInputRequest{}, errors.New("secret request_user_input is unsupported: answers cannot be safely stored in chat history")
 		}
-		if strings.TrimSpace(question.ID) == "" || strings.TrimSpace(question.Header) == "" || strings.TrimSpace(question.Question) == "" || ids[question.ID] {
-			return nil, ports.ChatInputRequest{}, errors.New("request_user_input requires unique nonempty question ids, headers and question text")
+		if strings.TrimSpace(question.ID) == "" || strings.TrimSpace(question.Question) == "" || ids[question.ID] {
+			return nil, ports.ChatInputRequest{}, errors.New("request_user_input requires unique nonempty question ids and question text")
 		}
 		ids[question.ID] = true
 	}
@@ -63,7 +63,11 @@ func parseUserInput(raw json.RawMessage) (*parkedInput, ports.ChatInputRequest, 
 	properties := make(map[string]any)
 	required := make([]string, 0, len(params.Questions))
 	for index, question := range params.Questions {
-		property := map[string]any{"type": "string", "title": question.Header, "description": question.Question}
+		title := question.Header
+		if strings.TrimSpace(title) == "" {
+			title = question.Question
+		}
+		property := map[string]any{"type": "string", "title": title, "description": question.Question}
 		if len(question.Options) > 0 {
 			options := make([]any, 0, len(question.Options))
 			labels := make(map[string]bool, len(question.Options))
@@ -85,7 +89,7 @@ func parseUserInput(raw json.RawMessage) (*parkedInput, ports.ChatInputRequest, 
 			ids[customID] = true
 			parked.custom[question.ID] = customID
 			properties[customID] = map[string]any{
-				"type": "string", "title": question.Header + " — other answer or additional details",
+				"type": "string", "title": title + " — other answer or additional details",
 				"description": question.Question,
 			}
 		} else {
@@ -111,7 +115,7 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 	}
 	parked, input, err := parseUserInput(req.Params)
 	if err != nil {
-		c.log.Warn("refusing invalid request_user_input payload", "request_id", requestID)
+		c.log.Warn("refusing invalid request_user_input payload", "request_id", requestID, "error", err)
 		return nil, err
 	}
 	c.mu.Lock()

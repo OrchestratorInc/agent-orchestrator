@@ -147,11 +147,72 @@ func TestUserInputOtherAndFreeText(t *testing.T) {
 	}
 }
 
+func TestUserInputHeaderFallback(t *testing.T) {
+	for _, header := range []struct {
+		name, field, title string
+	}{
+		{"missing", "", "Which direction should we take?"},
+		{"empty", `"header":"",`, "Which direction should we take?"},
+		{"whitespace", `"header":" \t ",`, "Which direction should we take?"},
+		{"null", `"header":null,`, "Which direction should we take?"},
+		{"nonblank preserved", `"header":"  Direction  ",`, "  Direction  "},
+	} {
+		for name, other := range map[string]bool{"choice": false, "other": true} {
+			t.Run(header.name+"/"+name, func(t *testing.T) {
+				d, srv := newTestDriver(t)
+				conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = conv.Close() }()
+				params := strings.Replace(inputParams, `"header":"Direction",`, header.field, 1)
+				if other {
+					params = strings.Replace(params, `"options":`, `"isOther":true,"options":`, 1)
+				}
+				srv.push(`{"id":"header","method":"item/tool/requestUserInput","params":` + params + `}`)
+				ev := nextEvent(t, conv.Events(), ports.ChatEventInputRequested)
+				if ev.Input == nil || ev.Input.Mode != ports.ChatInputModeForm || ev.Input.Message != "Which direction should we take?" || len(ev.Decisions) != 0 {
+					t.Fatalf("question was not a real form: %#v", ev)
+				}
+				properties := ev.Input.Schema["properties"].(map[string]any)
+				property := properties["first_value"].(map[string]any)
+				if property["title"] != header.title || property["description"] != ev.Input.Message {
+					t.Fatalf("question metadata = %#v", property)
+				}
+				content := map[string]any{"first_value": "Bridge"}
+				answers := []string{"Bridge"}
+				if other {
+					custom := properties["codex_other_0"].(map[string]any)
+					if custom["title"] != header.title+" — other answer or additional details" || custom["description"] != ev.Input.Message {
+						t.Fatalf("other metadata = %#v", custom)
+					}
+					content["codex_other_0"] = "More context"
+					answers = append(answers, "user_note: More context")
+				}
+				if err := conv.(ports.ChatInputResponder).ResolveInput(context.Background(), ev.RequestID, ports.ChatInputResponse{Action: ports.ChatInputActionAccept, Content: content}); err != nil {
+					t.Fatal(err)
+				}
+				reply := srv.awaitFrame(func(f frame) bool { return f.ID != nil && string(*f.ID) == `"header"` && f.Method == "" })
+				var payload userInputReply
+				if err := json.Unmarshal(reply.Result, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if reply.Error != nil || !reflect.DeepEqual(payload.Answers, map[string]userInputAnswer{"first_value": {Answers: answers}}) {
+					t.Fatalf("native answer = %s, error = %#v", reply.Result, reply.Error)
+				}
+			})
+		}
+	}
+}
+
 func TestUserInputRefusesMalformedAndSecretRequests(t *testing.T) {
 	for name, params := range map[string]string{
 		"secret":            strings.Replace(inputParams, `"header":"Direction"`, `"isSecret":true,"header":"Direction"`, 1),
 		"old prompt field":  strings.Replace(inputParams, `"question":`, `"prompt":`, 1),
-		"missing header":    strings.Replace(inputParams, `"header":"Direction",`, "", 1),
+		"boolean header":    strings.Replace(inputParams, `"header":"Direction"`, `"header":false`, 1),
+		"numeric header":    strings.Replace(inputParams, `"header":"Direction"`, `"header":42`, 1),
+		"object header":     strings.Replace(inputParams, `"header":"Direction"`, `"header":{}`, 1),
+		"array header":      strings.Replace(inputParams, `"header":"Direction"`, `"header":[]`, 1),
 		"blank question id": strings.Replace(inputParams, `"id":"first_value"`, `"id":" "`, 1),
 		"missing thread":    strings.Replace(inputParams, `"threadId":"thread-1",`, "", 1),
 		"missing turn":      strings.Replace(inputParams, `"turnId":"turn-1",`, "", 1),
@@ -233,11 +294,12 @@ func TestUserInputRefusalDiagnosticsDoNotLeakPayload(t *testing.T) {
 	private = strings.ReplaceAll(private, "Which direction should we take?", canary+"-question")
 	private = strings.ReplaceAll(private, "Native", canary+"-option")
 	for name, params := range map[string]string{
-		"secret":          strings.Replace(private, `"header":`, `"isSecret":true,"header":`, 1),
-		"missing header":  strings.Replace(private, `"header":`, `"`+canary+`-unknown":`, 1),
-		"invalid options": strings.Replace(private, `"options":[`, `"options":false,"ignored":[`, 1),
-		"malformed JSON":  strings.TrimSuffix(private, "}"),
-		"trailing data":   private + ` {"answer":"` + canary + `-answer"}`,
+		"secret":           strings.Replace(private, `"header":`, `"isSecret":true,"header":`, 1),
+		"missing question": strings.Replace(private, `"question":`, `"`+canary+`-unknown":`, 1),
+		"invalid header":   strings.Replace(private, `"header":`, `"header":false,"ignoredHeader":`, 1),
+		"invalid options":  strings.Replace(private, `"options":[`, `"options":false,"ignored":[`, 1),
+		"malformed JSON":   strings.TrimSuffix(private, "}"),
+		"trailing data":    private + ` {"answer":"` + canary + `-answer"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var logs bytes.Buffer
@@ -251,7 +313,7 @@ func TestUserInputRefusalDiagnosticsDoNotLeakPayload(t *testing.T) {
 			if len(c.pendingInputs) != 0 || len(c.events) != 0 {
 				t.Fatal("invalid input was parked or exposed to history")
 			}
-			if strings.Contains(logs.String(), canary) {
+			if strings.Contains(logs.String(), canary) || strings.Contains(err.Error(), canary) {
 				t.Fatal("diagnostic leaked request contents")
 			}
 			var entry map[string]any
@@ -261,7 +323,10 @@ func TestUserInputRefusalDiagnosticsDoNotLeakPayload(t *testing.T) {
 			if entry["level"] != "WARN" || entry["msg"] != "refusing invalid request_user_input payload" || entry["request_id"] != "diagnostic-request" {
 				t.Fatalf("unexpected refusal diagnostic: %#v", entry)
 			}
-			if len(entry) != 4 {
+			if entry["error"] != err.Error() || strings.TrimSpace(err.Error()) == "" {
+				t.Fatalf("refusal diagnostic omitted its sanitized reason: %#v", entry)
+			}
+			if len(entry) != 5 {
 				t.Fatalf("refusal diagnostic contains unexpected fields: %#v", entry)
 			}
 		})
