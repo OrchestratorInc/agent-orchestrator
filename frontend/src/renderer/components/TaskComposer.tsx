@@ -991,7 +991,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				}
 			}
 			setError(message);
-			throw new Error(message);
+			throw err instanceof TaskCreateError
+				? new TaskCreateError(message, err.code, err.details)
+				: err instanceof Error ? err : new Error(message);
 		} finally {
 			launchingPreparationRef.current = "";
 			setIsSubmitting(false);

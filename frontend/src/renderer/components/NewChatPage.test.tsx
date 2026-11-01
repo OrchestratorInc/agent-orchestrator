@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 	fallbackAction: undefined as string | undefined,
 	error: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
+	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 }));
 
@@ -38,7 +39,7 @@ vi.mock("./TaskComposer", () => ({
 		submitMode: undefined,
 		isCloudProject: false,
 		canSubmit: true,
-		launchSnapshot: () => ({ agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined }),
+		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
 		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
@@ -76,6 +77,7 @@ beforeEach(() => {
 	h.fallbackAction = undefined;
 	h.error = undefined;
 	h.errorAction = undefined;
+	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	window.localStorage.clear();
 });
@@ -143,6 +145,24 @@ describe("NewChatPage", () => {
 		expect(h.workspace?.localEchos).toBeUndefined();
 		expect(h.workspace?.draftSettings).toBeTruthy();
 		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("clears a typed model refusal so the next send uses the reviewed choice", async () => {
+		h.launch.mockRejectedValueOnce(Object.assign(new Error("Review the agent default and start again"), { name: "TaskCreateError", code: "UNSUPPORTED_MODEL" }))
+			.mockResolvedValueOnce("sess-2");
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ code: "TASK_CREATE_FAILED" });
+		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}")).toEqual({});
+		h.replay = { ...h.replay, model: "agent-default" };
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-2"); });
+		expect(h.launch).toHaveBeenNthCalledWith(2, "Fix the build", expect.objectContaining({
+			clientRequestId: "cid-2",
+			replay: expect.objectContaining({ model: "agent-default" }),
+		}));
 	});
 
 	it("shows the new branch input after a primary send conflict", async () => {

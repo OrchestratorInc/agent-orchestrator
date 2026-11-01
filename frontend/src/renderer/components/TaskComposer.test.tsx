@@ -3243,6 +3243,27 @@ describe("useTaskLaunch on the new chat page", () => {
 		return <p>{task.remoteLoadError ?? "ready"}</p>;
 	}
 
+	it.each(["UNSUPPORTED_MODEL", "AGENT_BINARY_NOT_FOUND", "BRANCH_CHECKED_OUT_ELSEWHERE", "AGENT_AUTH_REQUIRED"])(
+		"preserves the typed %s refusal for New Chat delivery handling",
+		async (code) => {
+			const details = { source: "daemon" };
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/orchestrators/delegate"
+				? { error: { code, message: "Daemon refused", details } }
+				: { data: {} });
+			let launch!: ReturnType<typeof useTaskLaunch>;
+			function Launcher() {
+				launch = useTaskLaunch({ projectId: "proj-1" });
+				return null;
+			}
+			render(<Wrap><Launcher /></Wrap>);
+			await waitFor(() => expect(launch.canSubmit).toBe(true));
+			let refusal: unknown;
+			await act(async () => { refusal = await launch.launch("Fix the build").catch((error: unknown) => error); });
+			expect(refusal).toMatchObject({ name: "TaskCreateError", code, details });
+			expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
+		},
+	);
+
 	it("says at once that Scratchpad has no ready agent", async () => {
 		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
 		render(<Wrap><LoadError /></Wrap>);
