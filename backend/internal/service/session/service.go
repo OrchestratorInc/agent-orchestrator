@@ -1193,8 +1193,9 @@ type archivedSessionLister interface {
 
 // DeleteExpired permanently deletes the archived sessions whose worktree is
 // released and that were archived more than days ago, the same way Delete
-// does. A session the delete refuses (shared history, an operation running) or
-// that is already gone is left for a later pass.
+// does. The store leaves out sessions with shared history, which the delete
+// always refuses. A session the delete refuses for now (an operation running)
+// or that is already gone is left for a later pass.
 func (s *Service) DeleteExpired(ctx context.Context, days int) error {
 	lister, ok := s.store.(archivedSessionLister)
 	if !ok || days <= 0 {

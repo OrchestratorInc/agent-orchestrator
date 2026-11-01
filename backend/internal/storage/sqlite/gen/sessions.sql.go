@@ -998,6 +998,16 @@ WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
         WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
             AND f.workspace_disposition IN ('removed', 'not_applicable')
     ))
+    AND s.id NOT IN (
+        SELECT t.handled_by_session_id FROM conversation_turns t
+        JOIN conversations c ON c.id = t.conversation_id
+        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+    )
+    AND s.id NOT IN (
+        SELECT c.current_session_id FROM conversations c
+        WHERE c.current_session_id IS NOT NULL
+            AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+    )
 ORDER BY s.id
 `
 
@@ -1009,7 +1019,9 @@ type ListReleasedArchivedSessionsRow struct {
 
 // Archived sessions retention may delete: the worktree is released for the
 // current generation, or there never was one. A row archived before
-// terminated_at existed counts from its last update.
+// terminated_at existed counts from its last update. Sessions in another
+// session's conversation history are left out, as DeleteTerminatedSession
+// refuses them, so retention does not retry them on every pass.
 func (q *Queries) ListReleasedArchivedSessions(ctx context.Context) ([]ListReleasedArchivedSessionsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listReleasedArchivedSessions)
 	if err != nil {

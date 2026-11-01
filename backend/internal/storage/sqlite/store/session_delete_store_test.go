@@ -244,3 +244,42 @@ func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
 		t.Fatalf("legacy archived at %v, want its last update %v", byID[legacy.ID], legacy.UpdatedAt)
 	}
 }
+
+// Retention leaves out the sessions delete refuses for shared history: an
+// earlier orchestrator whose turns stay in the project conversation, and the
+// one that conversation now belongs to. Otherwise every pass would retry them.
+// A session's own conversation does not hold it back.
+func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ret")
+	now := time.Now()
+	released := func() domain.SessionRecord {
+		t.Helper()
+		sess := terminalSession(t, s, "ret", 0)
+		upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: sess.ID, WorkspaceDisposition: domain.DispositionRemoved})
+		return sess
+	}
+	previous := released()
+	current := released()
+	own := released()
+	project, err := s.CreateConversation(ctx, "conv-project", domain.ConversationScopeProject, "ret", previous.ID, now)
+	mustNoError(t, err)
+	mustNoError(t, s.AdoptProviderTurn(ctx, project.ID, previous.ID, "gen-1", "turn-1", "provider-turn-1", now))
+	_, err = s.CreateConversation(ctx, project.ID, domain.ConversationScopeProject, "ret", current.ID, now)
+	mustNoError(t, err)
+	ownConversation, err := s.CreateConversation(ctx, "conv-own", domain.ConversationScopeSession, "ret", own.ID, now)
+	mustNoError(t, err)
+	mustNoError(t, s.AdoptProviderTurn(ctx, ownConversation.ID, own.ID, "gen-1", "turn-2", "provider-turn-2", now))
+
+	got, err := s.ListReleasedArchivedSessions(ctx)
+	mustNoError(t, err)
+	if len(got) != 1 || got[0].ID != own.ID {
+		t.Fatalf("listed = %+v, want only %s", got, own.ID)
+	}
+	for _, id := range []domain.SessionID{previous.ID, current.ID} {
+		if deleted, err := s.DeleteTerminatedSession(ctx, id); !errors.Is(err, domain.ErrSessionHistoryShared) || deleted {
+			t.Fatalf("delete %s = %v, %v; want ErrSessionHistoryShared", id, deleted, err)
+		}
+	}
+}
