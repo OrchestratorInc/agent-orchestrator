@@ -43,7 +43,7 @@ func CopyOnce(src, dst string, rewrite RewriteLine, check Check) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return false, err
@@ -53,23 +53,23 @@ func CopyOnce(src, dst string, rewrite RewriteLine, check Check) (bool, error) {
 		return false, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if err := copyLines(in, tmp, rewrite); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if check != nil {
 		if err := check(); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return false, err
 		}
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if err := tmp.Close(); err != nil {
