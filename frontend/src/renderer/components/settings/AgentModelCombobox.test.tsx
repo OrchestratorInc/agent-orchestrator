@@ -487,6 +487,51 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByText("anthropic/opus-long")).toBeInTheDocument();
 	});
 
+	it("names the provider on a compact row when several providers list the same model", async () => {
+		renderCombobox(
+			[
+				{ id: "openrouter/anthropic/claude-opus-5", label: "anthropic/claude-opus-5", provider: "openrouter" },
+				{ id: "console-openrouter/anthropic/claude-opus-5", label: "anthropic/claude-opus-5", provider: "console-openrouter" },
+			],
+			{ compact: true, allowCustom: false },
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		const rows = screen.getAllByRole("menuitem");
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toHaveTextContent("anthropic/claude-opus-5");
+		expect(rows[0]).toHaveTextContent("openrouter");
+		expect(rows[0]).not.toHaveTextContent("console-openrouter");
+		expect(rows[1]).toHaveTextContent("console-openrouter");
+	});
+
+	it("leaves the provider off a compact row when the catalog has one", async () => {
+		renderCombobox(
+			[{ id: "anthropic/claude-opus-5", label: "anthropic/claude-opus-5", provider: "anthropic" }],
+			{ compact: true, allowCustom: false },
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		expect(screen.getByRole("menuitem", { name: "anthropic/claude-opus-5" })).toBeInTheDocument();
+	});
+
+	it("reports the models a truncated compact list leaves out", async () => {
+		renderCombobox(
+			Array.from({ length: 60 }, (_, index) => ({
+				id: `openrouter/model-${index}`,
+				label: `model-${index}`,
+				provider: "openrouter",
+			})),
+			{ compact: true, allowCustom: false },
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		expect(screen.getByText("Showing 50 of 60 matching models — type to narrow")).toBeInTheDocument();
+	});
+
 	it("searches the full catalog and groups matching models by provider", async () => {
 		const models = Array.from({ length: 100 }, (_, index) => ({
 			id: `provider-${index % 2}/model-${index}`,
