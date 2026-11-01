@@ -458,6 +458,8 @@ const TURN_OUTCOME_COPY = {
 export function TurnOutcome({
 	state,
 	error,
+	failureCode,
+	onConfigure,
 	retry,
 	usageLimit,
 	copyText,
@@ -468,6 +470,8 @@ export function TurnOutcome({
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
+	failureCode?: "provider_key_missing";
+	onConfigure?: () => void;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -496,13 +500,27 @@ export function TurnOutcome({
 	}
 	const copy = TURN_OUTCOME_COPY[state];
 	const Icon = copy.icon;
+	const needsDeepSeekKey = state === "failed" && failureCode === "provider_key_missing" && onConfigure;
 	return (
 		<div className="group/message flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
-				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>{copy.label}</span>
+				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>
+					{needsDeepSeekKey ? "DeepSeek needs an API key for this model route" : copy.label}
+				</span>
 			</div>
-			{error ? (
+			{needsDeepSeekKey ? (
+				<>
+					<p className="pl-[22px] text-sm text-foreground">Set up the key in DeepSeek Harness, then retry this turn.</p>
+					<button type="button" onClick={onConfigure} className="ml-[22px] w-fit rounded px-2 py-1 text-sm text-primary hover:bg-interactive-hover">Set up DeepSeek</button>
+					{error ? (
+						<details className="pl-[22px] text-sm text-muted-foreground">
+							<summary className="cursor-pointer">Technical details</summary>
+							<div className="whitespace-pre-wrap wrap-anywhere pt-1">{linkifiedProviderErrorText(error)}</div>
+						</details>
+					) : null}
+				</>
+			) : error ? (
 				<div
 					className={cn(
 						"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",

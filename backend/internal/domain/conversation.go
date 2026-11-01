@@ -562,6 +562,7 @@ type ConversationTurn struct {
 	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
+	FailureCode  ConversationFailureCode `json:"failureCode,omitempty"`
 	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
 	RequestedAt  time.Time               `json:"requestedAt"`
 	StartedAt    *time.Time              `json:"startedAt,omitempty"`
@@ -582,6 +583,12 @@ type ConversationTurn struct {
 	// earlier ones are the same plan with fewer steps ticked off.
 	Plan *ConversationPlan `json:"plan,omitempty"`
 }
+
+// ConversationFailureCode identifies a provider failure with a known recovery path.
+type ConversationFailureCode string
+
+// ConversationFailureProviderKeyMissing means the provider route lacks a configured API key.
+const ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
 
 // ConversationTurnDiff is the turn's changed-file summary.
 //
@@ -633,8 +640,11 @@ type QueuedTurn struct {
 	Text   string
 	// ClientMessageID is carried through to the provider so a dispatch retried
 	// after a crash cannot produce a second provider turn.
-	ClientMessageID   string
-	Origin            MessageOrigin
+	ClientMessageID string
+	Origin          MessageOrigin
+	// AuthoredByUser is user-written content AO delivered as automation, which
+	// the user may promote like their own typed message.
+	AuthoredByUser    bool
 	SenderSessionID   string
 	SenderProjectID   string
 	SenderDisplayName string
@@ -673,10 +683,12 @@ type ConversationMessage struct {
 	// The agent receives Text like any message; the timeline shows a marker
 	// instead of a message bubble.
 	Continuation bool `json:"continuation,omitempty"`
-	// AuthoredByUser is an intake-only fact used to project user activity when
-	// AO delivered the message as automation. It is not part of the persisted
-	// delivery origin or the conversation API representation.
-	AuthoredByUser bool `json:"-"`
+	// AuthoredByUser marks user-written content AO delivered as automation, such
+	// as Browser-panel annotations. Origin stays automation; the user may still
+	// steer or cancel the queued turn, but not edit its generated text. The API
+	// exposes it through the conversation message response.
+	AuthoredByUser     bool `json:"-"`
+	SpawnOpeningPrompt bool `json:"-"`
 	// Streaming is true while more deltas are expected.
 	Streaming bool `json:"streaming"`
 	// ProviderItemID deduplicates provider observations of the same message.
