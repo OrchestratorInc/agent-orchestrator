@@ -183,7 +183,15 @@ function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) 
 	return { text: visibleText.slice(0, boundary), count };
 }
 
+/**
+ * Whether replies pace their reveal to how far apart bursts arrive and play
+ * out their last burst (Cloud chat, whose text can arrive a poll at a time).
+ * Elsewhere a reply settles in STREAM_SETTLE_MS and shows whole once done.
+ */
+export const AdaptiveStreamPacingContext = createContext(false);
+
 function useSmoothStreamingText(message: ConversationMessage): string {
+	const adaptive = useContext(AdaptiveStreamPacingContext);
 	const [reducedMotion, setReducedMotion] = useState(
 		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
 	);
@@ -311,7 +319,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			// The reply is done. A short remainder plays out; anything else, or a
 			// reply that was never being revealed, shows whole.
 			const remaining = message.text.startsWith(visibleRef.current) ? message.text.length - visibleRef.current.length : -1;
-			if (remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG) {
+			if (!adaptive || remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG) {
 				showWhole();
 				return;
 			}
@@ -322,7 +330,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 				return;
 			}
 		}
-		if (grew && message.streaming) {
+		if (adaptive && grew && message.streaming) {
 			// Spread each burst over most of the gap since the last one.
 			const now = performance.now();
 			if (lastGrowthAtRef.current !== undefined) {
@@ -351,7 +359,7 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		}
 		if (visibleGraphemeCountRef.current < targetGraphemesRef.current.length) scheduleDrain();
 		else endFinishing();
-	}, [cancelDrain, endFinishing, message.id, message.text, message.streaming, reducedMotion, scheduleDrain, targetGraphemes]);
+	}, [adaptive, cancelDrain, endFinishing, message.id, message.text, message.streaming, reducedMotion, scheduleDrain, targetGraphemes]);
 
 	useEffect(
 		() => cancelDrain,

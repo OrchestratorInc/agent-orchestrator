@@ -27,6 +27,7 @@ import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 
@@ -1466,6 +1467,8 @@ export function CloudSessionChatSurface({
 		[catalogDefaultUnknown, choiceModels],
 	);
 	return (
+		// Replies pace their reveal to how the stream arrives (a poll at a time while it is down).
+		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
 			snapshot={snapshot}
 			onSessionLinkOpen={openSessionLink}
@@ -1597,5 +1600,6 @@ export function CloudSessionChatSurface({
 			workspaceTabs={workspaceTabs}
 			workspaceActiveTabKey={workspaceActiveTabKey}
 		/>
+		</AdaptiveStreamPacingContext.Provider>
 	);
 }
