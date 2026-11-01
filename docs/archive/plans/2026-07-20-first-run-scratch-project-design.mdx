@@ -1,0 +1,190 @@
+---
+title: "First-Run Scratch Project design"
+description: "Historical design doc (2026-07-20) for booting AO into a managed scratch project on first run. Converted from the original HTML design document."
+---
+
+<Note>
+This page was converted from the original HTML design document `docs/plans/2026-07-20-first-run-scratch-project-design.html` (preserved in the repository; [view on GitHub](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/plans/2026-07-20-first-run-scratch-project-design.html)). It is a point-in-time plan, not current product documentation.
+</Note>
+
+Design Doc
+
+## AO should boot into a managed Scratch project on first run and allow agents without a git repo.
+
+The daemon seeds one built-in `scratch` project only for a truly fresh
+registry. Scratch sessions run in isolated AO-managed directories under
+`AO_DATA_DIR`, have no branch metadata, and avoid git-only PR, tracker,
+review, and worktree flows. Existing git-backed projects keep their
+current behavior.
+
+- **Scope:** First-run scratch only
+
+- **Project ID:** `scratch`
+
+- **State Root:** `AO_DATA_DIR/scratch/default`
+
+- **Git Required:** No, for scratch only
+
+## Goals And Non-Goals
+
+### Goals
+
+  - Fresh AO installs show a usable Scratch project immediately.
+  - Users can spawn orchestrator and worker agents without running `git
+    init`.
+  - Each scratch session gets an isolated plain directory.
+  - Scratch state stays inside AO-managed data paths.
+  - `ao spawn` can fall back to scratch when it is the only active
+    project.
+  - Git project behavior stays unchanged.
+
+### Non-Goals
+
+  - No arbitrary non-git folder import.
+  - No scratch branches, PRs, review workflow, or tracker intake.
+  - No automatic scratch-to-git conversion.
+  - No shared scratch workspace across sessions.
+  - No weakening of git validation for normal projects.
+
+## Architecture
+
+Add `ProjectKindScratch` as a third project kind. The daemon creates
+Scratch during startup after core services are initialized and before
+the app surface depends on the project list. Session workspace creation
+routes by project kind: git projects continue through the git worktree
+adapter, while scratch projects use a plain-directory adapter.
+
+| Kind          | Workspace Strategy                   | Branch       | Git Features                        |
+| ------------- | ------------------------------------ | ------------ | ----------------------------------- |
+| `single_repo` | Existing git worktree adapter        | Required     | Diffs, PRs, reviews, tracker intake |
+| `workspace`   | Existing multi-repo worktree adapter | Required     | Per-repo worktrees and PR scan      |
+| `scratch`     | Plain AO-managed session directories | Always empty | None                                |
+
+## Storage
+
+  - Add a new migration that widens the `projects.kind` check constraint
+    to include `scratch`.
+  - Do not edit old migrations.
+  - Seed only when the total project count, including archived rows, is
+    zero.
+  - If Scratch was archived or any project previously existed, do not
+    recreate Scratch on boot.
+  - Scratch rows use empty `repo_origin_url` and empty default branch.
+
+Counting only active projects is unsafe. A user who archived Scratch has
+made a durable choice, so startup must not surprise them by reseeding
+it.
+
+## Backend
+
+### Project Service
+
+  - Add `EnsureDefaultScratchProject` with path normalization, directory
+    creation, count guard, and default agent validation.
+  - Reject scratch config fields that require git, especially
+    `defaultBranch` and enabled tracker intake.
+  - Return scratch read models with empty repo/default branch.
+
+### Workspace And Lifecycle
+
+  - Add a scratch workspace adapter that creates isolated per-session
+    directories.
+  - Add a workspace router that delegates git projects to the git
+    adapter and scratch to the scratch adapter.
+  - Reject explicit branch on scratch spawns before creating a session
+    row.
+  - Restore scratch sessions with workspace path only; branch is
+    required only for non-scratch projects.
+  - Never stash or force-delete scratch workspaces during shutdown,
+    reconcile, kill, cleanup, or orchestrator replacement.
+  - Preserve non-empty scratch directories and remove only empty
+    directories during normal cleanup.
+
+### File Browser
+
+  - Detect scratch from the session project, not from git command
+    failures.
+  - Walk the filesystem with traversal and symlink-escape protection.
+  - Return scratch files as added with line additions for text files and
+    empty diffs.
+  - Skip internal `.git` directories, but do not hide user-created
+    dotfiles.
+
+## Frontend
+
+  - Preserve `kind: "scratch"` instead of mapping unknown kinds to
+    `single_repo`.
+  - Keep `session.branch` optional; do not synthesize `session/<id>`.
+  - Redirect the root shell route to `/projects/scratch` only when
+    Scratch is the sole active project.
+  - Hide the New Task branch field for scratch and omit `branch` from
+    spawn requests.
+  - Hide scratch settings controls for Worktrees, Reviewers, and Tracker
+    intake.
+  - Use branch-neutral copy in board, inspector, terminal, restore, and
+    session metadata surfaces.
+
+## CLI And Mobile
+
+  - Update CLI help from git-worktree-only language to isolated
+    workspace language.
+  - If no project resolves from flags, environment, session, or cwd,
+    default to Scratch when it is the only active project.
+  - Reject `--branch` and `--claim-pr` for scratch before spawning.
+  - Update mobile spawn copy to avoid claiming every session has a git
+    branch or worktree.
+
+## Testing
+
+  - Storage migration accepts `scratch` and archived-inclusive count
+    suppresses reseeding.
+  - Project service seeds Scratch only for fresh registries and rejects
+    git-only scratch config.
+  - Daemon boot seeds Scratch under the configured data dir.
+  - Scratch workspace adapter and router cover spawn, destroy, dirty
+    preservation, and git delegation.
+  - Session manager covers branchless spawn/restore, shutdown,
+    reconcile, cleanup, and orchestrator replacement.
+  - Workspace file service covers scratch listing/detail, traversal
+    rejection, and symlink escapes.
+  - Renderer tests cover kind preservation, root redirect, New Task,
+    settings, inspector, topbar, and terminal copy.
+  - CLI tests cover scratch fallback and scratch rejection of branch/PR
+    flags.
+
+\{/* end list */\}
+
+    npm run sqlc
+    npm run api
+    cd backend && go test ./internal/storage/sqlite/store ./internal/service/project ./internal/adapters/workspace/... ./internal/daemon ./internal/session_manager ./internal/service/session ./internal/cli ./internal/httpd/controllers
+    npm run frontend:typecheck
+    cd frontend && npm run test -- scratch-related files
+
+## Risks And Mitigations
+
+| Risk                                         | Mitigation                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Scratch cleanup deletes user output.         | Preserve any non-empty scratch directory; remove only empty directories in normal cleanup. |
+| Branch assumptions reject scratch restore.   | Load project kind before branch guards and require branch only for git projects.           |
+| Frontend leaks branch or PR UI into scratch. | Preserve scratch kind and make branch optional through shared renderer types.              |
+| Archived Scratch reappears.                  | Seed from archived-inclusive project count, not active list count.                         |
+| Git projects lose existing safety checks.    | Keep scratch routing explicit; do not convert git errors into scratch behavior.            |
+
+## Acceptance Criteria
+
+1.  A fresh database contains exactly one built-in Scratch project.
+2.  AO opens to the Scratch board when Scratch is the only active
+    project.
+3.  Users can spawn orchestrator and worker sessions without a git repo.
+4.  Scratch sessions are isolated per session and branchless in API/UI
+    metadata.
+5.  Scratch file inspection works without git and rejects path escapes.
+6.  Scratch shutdown, reconcile, cleanup, and replacement preserve user
+    output.
+7.  `ao spawn` works on fresh Scratch and rejects branch/PR flags for
+    scratch.
+8.  Existing git-backed project behavior and validation continue to
+    pass.
+
+Implementation should remain explicit about the boundary: Scratch is a
+first-run built-in project, not a general non-git project import system.

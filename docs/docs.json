@@ -227,6 +227,7 @@
                 "group": "Plans",
                 "pages": [
                   "archive/plans/2026-06-26-import-offer",
+                  "archive/plans/2026-07-20-first-run-scratch-project-design",
                   "archive/plans/2026-10-13-desktop-performance-overhaul",
                   "archive/plans/chinese-ui-i18n",
                   "archive/plans/session-lifecycle-persistence"
@@ -290,6 +291,7 @@
               {
                 "group": "Screenshots",
                 "pages": [
+                  "archive/screenshots/index",
                   "archive/screenshots/issue-5280/index",
                   "archive/screenshots/pr-4924/index",
                   "archive/screenshots/pr-4925/index",
