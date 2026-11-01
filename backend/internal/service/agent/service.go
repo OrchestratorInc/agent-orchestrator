@@ -77,6 +77,7 @@ type Service struct {
 	cache              ports.AgentModelCatalogCache
 	discoverer         ports.AgentModelDiscoverer
 	modelDiscoveryDir  string
+	dataDir            string // the AO data directory local sessions launch from
 	sessions           SessionUsageLookup
 	resolverMu         map[string]*sync.Mutex
 	modelCallMu        sync.Mutex
@@ -107,6 +108,7 @@ type ModelGate func(ctx context.Context, agentID string, catalog ports.AgentMode
 
 // Deps contains optional durable dependencies for the agent catalog service.
 type Deps struct {
+	DataDir                string
 	Cache                  ports.AgentModelCatalogCache
 	Discoverer             ports.AgentModelDiscoverer
 	ModelDiscoveryDir      string
@@ -143,6 +145,7 @@ func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
 	svc := newService(agents, deps.Cache, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
+	svc.dataDir = deps.DataDir
 	svc.readinessWarm = make(chan struct{})
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
@@ -156,6 +159,7 @@ func NewWithDeps(deps Deps) *Service {
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
+		DataDir:             deps.DataDir,
 		AuthenticationCheck: svc.authenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
 		// (a rejected-credential warning or bare fallback aliases). A detected
@@ -592,7 +596,26 @@ func (s *Service) modelDiscoveryRequest(agentID, projectID, binary string) (port
 		request.CredentialType = credentialType
 		return request, nil
 	}
+	request.Env = s.runtimeCredentialEnv(agentID)
 	return s.globalModelDiscoveryRequest(request)
+}
+
+// runtimeCredentialEnv is the credential AO adds to agentID's local sessions
+// (a Claude setup token saved through AO's login menu), so the catalog lists
+// the models those sessions can run even with no native login on the computer.
+func (s *Service) runtimeCredentialEnv(agentID string) map[string]string {
+	if s.dataDir == "" {
+		return nil
+	}
+	item, ok := s.agent(agentID)
+	if !ok {
+		return nil
+	}
+	source, ok := item.Agent.(ports.AgentRuntimeCredentialEnv)
+	if !ok {
+		return nil
+	}
+	return source.RuntimeCredentialEnv(s.dataDir)
 }
 
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {

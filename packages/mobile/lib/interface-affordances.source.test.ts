@@ -54,9 +54,13 @@ describe("Interface affordances", () => {
 			expect(timeline).not.toMatch(/<Pressable style=\{styles\.planHeader\}/);
 			expect(timeline).not.toMatch(/<Pressable disabled=\{!hasPatch\} onPress=/);
 			const expanded = timeline.match(/accessibilityState=\{\{ expanded: open \}\}/g)?.length ?? 0;
-			// The three plan headers, the changed-file header and the per-file rows.
-			expect(expanded).toBeGreaterThanOrEqual(5);
+			// The step-less plan activity header, the changed-file header and the per-file rows.
+			expect(expanded).toBeGreaterThanOrEqual(4);
 			expect(timeline).toContain('accessibilityState={hasPatch ? { expanded: open } : undefined}');
+			// The plan panel lives in its own file and its header says so too.
+			const plan = source("./chat/TurnPlan.tsx");
+			expect(plan).toContain('accessibilityRole="button"');
+			expect(plan).toContain("accessibilityState={{ expanded, ");
 		});
 	});
 

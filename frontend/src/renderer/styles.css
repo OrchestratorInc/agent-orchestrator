@@ -3,6 +3,7 @@
 @import "../styles/tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "./components/artifact-document.css";
 @source "../../../packages/product-ui/src";
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
@@ -171,7 +172,6 @@
 	--size-icon-sm: var(--size-icon-sm);
 	--size-icon-md: var(--size-icon-md);
 	--size-icon-base: var(--size-icon-base);
-	--size-terminal-agent-icon: var(--size-terminal-agent-icon);
 	--size-icon-lg: var(--size-icon-lg);
 	--size-icon-xl: var(--size-icon-xl);
 
@@ -206,6 +206,7 @@
 	--spacing-toolbar: var(--size-toolbar);
 	--spacing-window-titlebar: var(--size-window-titlebar);
 	--spacing-titlebar-content-offset: var(--size-titlebar-content-offset);
+	--spacing-mac-panel-header-bottom: var(--size-mac-panel-header-bottom);
 	--spacing-titlebar-cluster-left: var(--size-titlebar-cluster-left);
 	/* Linux has no traffic lights — the cluster sits at the sidebar's own inset,
 	 * and clears the framed panel border when the sidebar is off-canvas. */
@@ -233,7 +234,6 @@
 	--spacing-content-max: var(--size-content-max);
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
-	--spacing-shell-tab-connected: var(--size-shell-tab-connected);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
@@ -340,6 +340,35 @@
 	background-color: var(--color-scrim);
 	-webkit-backdrop-filter: blur(var(--blur-overlay));
 	backdrop-filter: blur(var(--blur-overlay));
+}
+
+/* In a translucent window, Chromium's backdrop blur cannot see content drawn
+ * over the transparent window base, so text behind would show through sharp.
+ * There the surface turns nearly solid instead. */
+html[data-window-translucent="true"] .overlay-glass {
+	background-color: color-mix(in oklch, var(--popover) 96%, transparent);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+/* See-through modal surface: the app shows through, blurred and slightly
+ * saturated so colour behind it reads as depth rather than noise. */
+@utility overlay-glass {
+	background-color: var(--color-bg-overlay-glass);
+	-webkit-backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	@media (prefers-reduced-transparency: reduce) {
+		background-color: var(--popover);
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+/* While one modal hands the screen to the next (lib/modal-handoff.ts), the
+ * backdrops appear and leave at full strength so the dim never dips. */
+html[data-modal-handoff] .dialog-overlay,
+.dialog-overlay[data-modal-handoff]:not([data-state="closed"]) {
+	animation: none !important;
 }
 
 @utility modal-shake {
@@ -508,7 +537,10 @@
 	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
-	padding-left: 0;
+	/* Same inset on the left whether or not the sidebar is open, so the frame
+	 * never resizes or jumps with the sidebar; only the sidebar slides. */
+	padding-left: var(--size-center-panel-inset-mac);
+	transition: none;
 }
 
 /* Keep the center surface closed on all four edges, including macOS where the
@@ -548,15 +580,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	-webkit-app-region: drag;
 }
 
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
-.sidebar-hidden .center-panel-shell.center-panel-shell--mac {
-	padding: 0;
-}
-
-.sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
-	border-radius: 0;
+/* Sidebar closed on mac: the panel keeps its frame, which recedes to half
+ * strength without a sidebar beside it. Native fullscreen stays flush. */
+.sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
@@ -629,7 +656,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * Native macOS fullscreen removes the traffic lights, so the cluster moves to
  * the compact panel inset instead of retaining the windowed 79px reserve. */
 .app-shell-root {
-	--ao-titlebar-content-left: var(--size-titlebar-content-offset);
+	--ao-titlebar-content-left: var(--size-titlebar-content-offset-mac-panel);
 }
 .native-fullscreen {
 	--ao-titlebar-content-left: calc(var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap));
@@ -649,24 +676,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * missing slice instead of applying the full off-canvas navigation clearance. */
 .session-topbar-terminal-region {
 	transition: padding-left 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-/* Preserve the established tab chrome while preventing flex pressure from
- * erasing the agent icon. This class controls sizing only. */
-.session-tab-icon-floor {
-	min-width: calc(var(--size-icon-base) + var(--space-6));
-}
-
-.session-tab-icon-floor--closable {
-	width: auto;
-	min-width: var(--size-shell-tab-min);
-	max-width: var(--size-shell-tab-connected);
-}
-
-.session-tab-icon-floor[data-editing="true"] {
-	flex-shrink: 0;
-	width: var(--size-shell-tab-connected);
-	min-width: var(--size-shell-tab-connected);
 }
 
 .session-topbar-traffic-light-clearance-mac {
@@ -741,7 +750,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * Pad the title past that cluster so it sits next to the buttons. Fullscreen
  * drops the traffic-light reserve so title sits next to the left-edge buttons. */
 .center-panel-shell--titlebar-clearance .center-panel-titlebar {
-	padding-left: var(--size-titlebar-content-offset);
+	padding-left: var(--size-titlebar-content-offset-mac-panel);
 }
 
 /* Linux: same cluster clearance without the traffic-light reserve. Keep the
@@ -825,13 +834,13 @@ button.settings-row-bar {
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border-radius: var(--radius-settings-row);
+	/* Same row as the action menus (menu-styles.ts): one menu rhythm app-wide. */
+	border-radius: var(--radius-md);
 	border: 1px solid transparent;
-	padding-inline: var(--space-3);
-	padding-block: var(--space-2_5);
-	font-size: var(--font-size-md);
-	line-height: var(--line-height-row);
-	color: var(--color-text-settings-row);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
+	font-size: var(--font-size-base);
+	color: var(--muted-foreground);
 }
 
 @utility settings-option-trigger {
@@ -878,21 +887,21 @@ button.settings-row-bar {
 	border-radius: var(--radius-settings-panel);
 	border: 1px solid var(--color-border-settings-menu);
 	background-color: var(--color-bg-settings-menu);
-	padding: var(--space-2);
-	gap: var(--space-1_5);
-	box-shadow: none;
+	padding: var(--space-1);
+	gap: 1px;
+	box-shadow: var(--shadow-popover);
 }
 
 @utility settings-agent-menu-surface {
 	width: var(--size-settings-agent-menu-min-width);
 	min-width: var(--size-settings-agent-menu-min-width);
-	padding: var(--space-3);
-	gap: var(--space-2);
+	padding: var(--space-1);
+	gap: 1px;
 }
 
 @utility settings-agent-menu-item {
-	padding-inline: var(--space-4);
-	padding-block: var(--space-3);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
 }
 
 @utility settings-field-label {
@@ -1892,10 +1901,9 @@ textarea,
 	to { background-position: -400px center; }
 }
 
-/* Live "Working for" label: solid muted text with a soft brighter band sweeping across it.
-   The muted layer keeps every glyph painted; the band fades in and out so it has no hard edge.
-   The band's strength is a registered property so it can fade out when the turn settles
-   without the text ever switching paint technique (which would blink). */
+/* Live status label (the chat's current step, a board card's working state): solid
+   muted text with a soft brighter band sweeping across it. The muted layer keeps every
+   glyph painted; the band fades in and out so it has no hard edge. */
 @property --working-shimmer {
 	syntax: "<number>";
 	inherits: false;
@@ -1916,47 +1924,67 @@ textarea,
 	will-change: transform;
 }
 
-/* Settling: the highlight fades, the label slides over the spinner's footprint, the
-   spinner shrinks away. Keyframes (not transitions) so a row that first mounts
-   already settled still plays them. */
-.chat-working-shimmer[data-settling] {
-	animation:
-		chat-working-shimmer 2.4s ease-in-out infinite,
-		chat-working-shift 400ms cubic-bezier(0.22, 1, 0.36, 1) both,
-		chat-working-fade 300ms ease-out both;
+/* The live row's label (current step, retry chip, setup label) fades in once when the
+   row changes what it is showing; the text inside then updates in place. */
+.chat-live-label {
+	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.chat-working-spinner-slot {
-	will-change: transform, opacity;
+@keyframes chat-live-label-in {
+	from { opacity: 0; transform: translateY(2px); }
 }
 
-.chat-working-spinner-slot[data-settling] {
-	animation: chat-working-close 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+@media (prefers-reduced-motion: reduce) {
+	.chat-live-label {
+		animation: none;
+	}
 }
 
-@keyframes chat-working-close {
-	from { opacity: 1; transform: scale(1); }
-	to { opacity: 0; transform: scale(0); }
+/* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
+   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
+   lands on whole device pixels on a 2x display. The outer twelve share one beat,
+   staggered inline. */
+.chat-lattice {
+	display: grid;
+	grid-template-columns: repeat(4, 2.5px);
+	grid-auto-rows: 2.5px;
+	gap: 1px;
+}
+
+.chat-lattice-dot {
+	border-radius: 9999px;
+	background: currentColor;
+	opacity: 0.1;
+}
+
+.chat-lattice-dot[data-trail-step] {
+	opacity: 0.2;
+	animation: chat-lattice-trail 1200ms cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes chat-lattice-trail {
+	0%, 100% { opacity: 0.2; }
+	12%, 22% { opacity: 1; }
+	40% { opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-lattice-dot[data-trail-step] {
+		animation: none;
+		opacity: 0.45;
+	}
 }
 
 /* Streamed prose: each newly revealed character fades in once, on mount (see
-   lib/rehype-stream-fade.ts). */
+   lib/rehype-stream-fade.ts). No fill mode: with no delay it looks the same,
+   and a filling animation never ends, so a long reply kept a thousand finished
+   animations alive and re-layerized them on every frame. */
 .stream-char {
-	animation: stream-char-in 300ms ease both;
+	animation: stream-char-in 300ms ease;
 }
 
 @keyframes stream-char-in {
 	from { opacity: 0; }
-}
-
-@keyframes chat-working-shift {
-	from { transform: translateX(0); }
-	to { transform: translateX(-18px); }
-}
-
-@keyframes chat-working-fade {
-	from { --working-shimmer: 1; }
-	to { --working-shimmer: 0; }
 }
 
 @keyframes chat-working-shimmer {
@@ -1965,19 +1993,54 @@ textarea,
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.chat-working-shimmer,
-	.chat-working-shimmer[data-settling] {
+	.chat-working-shimmer {
 		animation: none;
 		background: none;
 		color: var(--color-muted-foreground);
 	}
-	.chat-working-shimmer[data-settling] {
-		transform: translateX(-18px);
-	}
-	.chat-working-spinner-slot[data-settling] {
-		animation: none;
-		opacity: 0;
-		transform: scale(0);
+}
+
+/* Chat scroll windows (the plan, a live turn's activity): content fades out at
+   whichever edge still has more to scroll to, so a long list reads as continuing
+   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
+   from the scroll position; the lengths are registered so the fade eases in and out
+   instead of snapping. */
+@property --edge-fade-top {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --edge-fade-bottom {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.edge-fade-viewport {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent,
+		#000 var(--edge-fade-top),
+		#000 calc(100% - var(--edge-fade-bottom)),
+		transparent
+	);
+	transition:
+		--edge-fade-top 150ms ease-out,
+		--edge-fade-bottom 150ms ease-out;
+}
+
+.edge-fade-viewport[data-fade-top] {
+	--edge-fade-top: 24px;
+}
+
+.edge-fade-viewport[data-fade-bottom] {
+	--edge-fade-bottom: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edge-fade-viewport {
+		transition: none;
 	}
 }
 
@@ -2158,6 +2221,13 @@ textarea,
 	border-radius: var(--radius-full);
 	background: var(--color-accent);
 	animation: ao-install-progress-sweep 1.1s ease-in-out infinite;
+}
+
+/* The installer reported how far it is: fill from the left instead of sweeping. */
+.ao-install-progress__bar--determinate {
+	left: 0;
+	animation: none;
+	transition: width 300ms ease-out;
 }
 
 @keyframes overlay-in {
@@ -2456,9 +2526,13 @@ html.sidebar-reordering * {
 		animation: none;
 	}
 
-	.ao-install-progress__bar {
+	.ao-install-progress__bar:not(.ao-install-progress__bar--determinate) {
 		animation: none;
 		width: 60%;
+	}
+
+	.ao-install-progress__bar--determinate {
+		transition: none;
 	}
 
 	[data-slot="command-dialog-overlay"],
@@ -2523,7 +2597,7 @@ html.sidebar-reordering * {
 	transform: none;
 }
 
-/* Welcome sample prompts are list rows like the sidebar's: no press scale. */
+/* Welcome sample prompt chips hold still when pressed. */
 .cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
 	transform: none;
 }
@@ -2710,6 +2784,27 @@ html.sidebar-reordering * {
 	border-radius: var(--radius-chat-composer);
 	background: var(--composer-bg);
 	box-shadow: none;
+	transition: box-shadow 300ms ease-out;
+}
+
+/* With a tray tucked under it, a hairline edge keeps the composer the layer on top. */
+[data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+/* Narrower than the composer and hung from its bottom edge, cancelling the dock's
+   gap-2. It starts at the edge rather than under it: in transparency mode the
+   composer is see-through, and anything behind it would show. 1rem in, the
+   composer's corner has already curved back to the edge. The inset inside is
+   the same on every side. */
+.chat-composer-tray {
+	--tray-inset: 0.375rem;
+
+	margin: -0.5rem 1rem 0;
+	padding: var(--tray-inset);
+	/* Concentric with the rounded-lg control inside it. */
+	border-radius: 0 0 calc(var(--radius-lg) + var(--tray-inset)) calc(var(--radius-lg) + var(--tray-inset));
+	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
 .chat-composer-startup-shimmer {
@@ -2739,7 +2834,8 @@ html.sidebar-reordering * {
 	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
-.cursor-chat-composer[data-attached-top] {
+/* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
 }
@@ -2747,6 +2843,46 @@ html.sidebar-reordering * {
 /* Dragging remains visible without changing the composer's structural edge. */
 .cursor-chat-composer[data-dragging] {
 	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
+}
+
+/* The session header arriving in the new chat page's empty strip. */
+@keyframes chat-header-slide-in {
+	from {
+		opacity: 0;
+		transform: translateY(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.chat-header-slide-in {
+	animation: chat-header-slide-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-header-slide-in { animation: none; }
+}
+
+/* Setup steps arrive one after another on a fresh start. */
+@keyframes session-startup-step-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.session-startup-step-in {
+	animation: session-startup-step-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-startup-step-in { animation: none; }
 }
 
 @keyframes queue-dock-in {
@@ -6056,11 +6192,82 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	color: inherit;
 }
 
+/* pdf.js text layer over a PDF page canvas: invisible text sized to the page's glyphs, so it can be selected. */
+.pdf-text-layer {
+	position: absolute;
+	inset: 0;
+	overflow: clip;
+	line-height: 1;
+	text-align: initial;
+	letter-spacing: normal;
+	word-spacing: normal;
+	text-size-adjust: none;
+	forced-color-adjust: none;
+	transform-origin: 0 0;
+	z-index: 0;
+	--min-font-size: 1;
+	--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+	--min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+	position: absolute;
+	color: transparent;
+	white-space: pre;
+	cursor: text;
+	transform-origin: 0% 0%;
+	user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+	z-index: 1;
+	--font-height: 0;
+	font-size: calc(var(--text-scale-factor) * var(--font-height));
+	--scale-x: 1;
+	--rotate: 0deg;
+	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+	display: contents;
+}
+
+.pdf-text-layer ::selection {
+	background: var(--color-term-selection-light);
+	color: transparent;
+}
+
+.pdf-text-layer br::selection {
+	background: transparent;
+}
+
+.pdf-text-layer .endOfContent {
+	position: absolute;
+	inset: 100% 0 0;
+	display: block;
+	z-index: 0;
+	cursor: default;
+	user-select: none;
+}
+
+.pdf-text-layer.selecting .endOfContent {
+	top: 0;
+}
+
 .chat-annotation-target {
 	background-color: #6b72801f;
 	outline: 2px solid #6b7280;
 	outline-offset: 4px;
 	border-radius: 10px;
+}
+
+/* A setting a deep link opened (lib/settings-focus.ts), marked like the
+ * Harness page's focused agent. */
+.settings-focus-target {
+	background-color: var(--color-accent-weak);
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+	transition: background-color 200ms, box-shadow 200ms;
 }
 
 /* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
@@ -6094,7 +6301,7 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
  *      card or button reads one step up from whatever sits behind it.
  *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
  *      solid theme values so they stay legible above the material.
- * The terminal keeps its own opaque plate. */
+ * Terminal canvases are clear too, showing the same shell tint. */
 
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
@@ -6114,6 +6321,9 @@ html:root[data-window-translucent="true"] {
 html[data-window-translucent="true"] body {
 	--color-bg-primary: transparent;
 	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
 	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
 	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
 	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
@@ -6138,10 +6348,19 @@ html[data-window-translucent="true"] :is(
 	--color-bg-secondary: var(--solid-bg-secondary);
 	--color-bg-tertiary: var(--solid-bg-tertiary);
 	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
 	--muted: var(--solid-muted);
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Text drawn in the canvas colour sits on a solid foreground fill (the send
+ * button's arrow), so it must keep the solid colour or it vanishes. */
+html[data-window-translucent="true"] :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
 }
 
 /* tokens.css resolves the legacy aliases on :root, before the swaps above.

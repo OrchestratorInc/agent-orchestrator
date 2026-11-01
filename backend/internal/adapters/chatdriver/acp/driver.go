@@ -46,7 +46,12 @@ type LaunchConfig struct {
 	Model           string
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
+	DisableTools    bool
 	ProviderScopeID string
+	// ProviderConversationID carries the stored native conversation on resume so
+	// a binding can migrate provider-side history into a fresh process home.
+	// Empty on first start.
+	ProviderConversationID string
 }
 
 // Config binds one harness to an ACP agent implementation.
@@ -142,6 +147,10 @@ type Config struct {
 	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
 	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
+	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
+	// session (claude-agent-acp's task list), re-sent into later turns, rather
+	// than a plan for the turn it arrives in.
+	PlansSpanTurns bool
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
@@ -296,6 +305,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		DisableTools:    cfg.DisableTools,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
 	connectStarted := time.Now()
@@ -462,6 +472,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
+		// The connect below spawns a fresh process, so a resumed conversation's
+		// provider-side history has to be reachable from the new process home.
+		ProviderConversationID: cfg.ProviderConversationID,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -733,6 +746,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
+	conv.plansSpanTurns = d.cfg.PlansSpanTurns
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if d.cfg.ServedModel != nil {
 		servedModel := d.cfg.ServedModel

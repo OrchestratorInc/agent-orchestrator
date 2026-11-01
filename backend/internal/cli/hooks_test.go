@@ -376,6 +376,39 @@ func TestHooks_ReviewerRoutesToReviewActivity(t *testing.T) {
 	}
 }
 
+func TestHooks_ClineReviewerUsesResumableIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"task ID", `{"taskId":"conv_123"}`, ""},
+		{"snake task ID", `{"task_id":"conv_123"}`, ""},
+		{"root ID", `{"taskId":"conv_123","sessionContext":{"rootSessionId":"native-root"}}`, "native-root"},
+		{"legacy ID", `{"taskResume":{"taskMetadata":{"ulid":"native-legacy"}}}`, "native-legacy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_HARNESS", "cline")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setReviewActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if capture.path != "/api/v1/reviews/review-7/activity" || req.AgentSessionID != tc.want || req.State != "active" {
+				t.Fatalf("review hook = %s, %+v; want native ID %q and active state", capture.path, req, tc.want)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
@@ -1202,7 +1235,7 @@ func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
 	}
 }
 
-func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
+func TestHooks_ClineSessionStartIgnoresTaskID(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1219,7 +1252,7 @@ func TestHooks_ClineSessionStartReportsTaskID(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
-	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-task-abc123"}
+	want := setActivityAPIRequest{State: "active", Event: "session-start"}
 	assertActivityRequest(t, req, want)
 }
 
@@ -1325,6 +1358,58 @@ func TestHooks_PostToolUseCarriesCorrelationFields(t *testing.T) {
 	}
 	want := setActivityAPIRequest{State: "active", Event: "post-tool-use", ToolName: "Bash", ToolUseID: "toolu_42"}
 	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_ClineTaskIDDoesNotBecomeAgentSessionID(t *testing.T) {
+	for _, payload := range []string{`{"taskId":"conv_123"}`, `{"task_id":"conv_123"}`, `{"session_id":"conv_123"}`} {
+		t.Run(payload, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "" || req.State != "active" {
+				t.Fatalf("hook must report activity without replacing native ID: %+v", req)
+			}
+		})
+	}
+}
+
+func TestHooks_ClineTaskStartCarriesAgentSessionID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_123","sessionContext":{"rootSessionId":"cline-session-123"},"hookName":"agent_start","taskStart":{"task":"fix restore"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.ObservedAt.IsZero() {
+		t.Fatal("hook omitted its observation time")
+	}
+	req.ObservedAt = time.Time{}
+	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-session-123", Harness: "cline"}
+	if req != want {
+		t.Errorf("body = %+v, want %+v", req, want)
+	}
 }
 
 func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {
@@ -1571,7 +1656,11 @@ func TestHooks_GeminiBeforeAgentReturnsStandingInstructions(t *testing.T) {
 	}
 }
 
-func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
+// Command Code's SessionStart hook reports activity and the native session id,
+// but no longer carries AO's standing instructions. Memory is the delivery
+// channel now, so emitting context here would duplicate the role prompt in the
+// Terminal surface while Chat never received it at all.
+func TestHooks_CommandCodeSessionStartReportsActivityWithoutSystemPromptContext(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	promptDir := filepath.Join(cfg.dataDir, "prompts", "ao-7")
@@ -1591,15 +1680,8 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got sessionStartHookOutput
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode Command Code hook output: %v\n%s", err, out)
-	}
-	if got.HookSpecificOutput.HookEventName != "SessionStart" {
-		t.Fatalf("hookEventName = %q", got.HookSpecificOutput.HookEventName)
-	}
-	if got.HookSpecificOutput.AdditionalContext != "follow AO standing instructions" {
-		t.Fatalf("additionalContext = %q", got.HookSpecificOutput.AdditionalContext)
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("hook output = %q, want no SessionStart context payload", out)
 	}
 	if capture.hits != 1 {
 		t.Fatalf("daemon calls = %d, want 1", capture.hits)
@@ -1608,8 +1690,6 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
 		t.Fatalf("decode activity request: %v\n%s", err, capture.body)
 	}
-	// Context injection is the reason SessionStart runs at all; the activity
-	// report stays metadata-only for Command Code.
 	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "command-code-native-1"}
 	assertActivityRequest(t, request, want)
 }
@@ -2448,5 +2528,66 @@ func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
 	}
 	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
 		t.Fatalf("hook facts=%+v", req)
+	}
+}
+
+func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event, tool string) string {
+		t.Helper()
+		stdout, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native","tool_name":"` + tool + `","tool_use_id":"tu-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+
+	if out := run("claude-code", "pre-tool-use", "Bash"); out != "" {
+		t.Fatalf("non-Artifact tool produced output: %q", out)
+	}
+	if out := run("codex", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("non-Claude harness produced output: %q", out)
+	}
+	if out := run("claude-code", "post-tool-use", "Artifact"); out != "" {
+		t.Fatalf("post-tool-use produced output: %q", out)
+	}
+
+	hits := capture.hits
+	var got claudePreToolUseDenyOutput
+	if err := json.Unmarshal([]byte(run("claude-code", "pre-tool-use", "Artifact")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
+		got.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
+		t.Fatalf("unexpected decision: %+v", got)
+	}
+	if capture.hits != hits+1 {
+		t.Fatalf("activity still reports on a denied Artifact: %d hits", capture.hits-hits)
+	}
+	if out := run("claude-code", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("second Artifact use was blocked: %q", out)
+	}
+}
+
+func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	setConfigEnv(t)
+	t.Setenv("AO_DATA_DIR", "")
+	// No daemon run file and no data dir: the hook must still exit cleanly with no decision.
+	stdout, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"tool_name":"Artifact"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "pre-tool-use")
+	if err != nil || stdout != "" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
 }

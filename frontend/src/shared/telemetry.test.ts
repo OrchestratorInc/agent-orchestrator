@@ -8,11 +8,12 @@ import {
 	defaultDataDir,
 	loadOrCreateTelemetryInstallId,
 	parseDisabledEvents,
+	readTelemetryInstallContext,
 	rendererTelemetryEnabled,
 } from "./telemetry";
 
 const tempDirs: string[] = [];
-const enabledPolicy = { eventsEnabled: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false };
+const enabledPolicy = { eventsEnabled: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true };
 
 afterEach(async () => {
 	await Promise.all(
@@ -37,6 +38,25 @@ test("loadOrCreateTelemetryInstallId persists a stable install id", async () => 
 	expect(first).toMatch(/^ins_/);
 	expect(second).toBe(first);
 	expect(stored).toBe(first);
+});
+
+test("loadOrCreateTelemetryInstallId heals an empty file and publishes one id to concurrent callers", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const file = path.join(dir, "telemetry_install_id");
+	await writeFile(file, " \n");
+	const recovered = await loadOrCreateTelemetryInstallId(dir);
+	expect(recovered).toMatch(/^ins_/);
+	expect((await readFile(file, "utf8")).trim()).toBe(recovered);
+
+	for (const legacyEmpty of [false, true]) {
+		const concurrentDir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		tempDirs.push(concurrentDir);
+		if (legacyEmpty) await writeFile(path.join(concurrentDir, "telemetry_install_id"), "\n");
+		const ids = await Promise.all(Array.from({ length: 16 }, () => loadOrCreateTelemetryInstallId(concurrentDir)));
+		expect(new Set(ids).size).toBe(1);
+		expect((await readFile(path.join(concurrentDir, "telemetry_install_id"), "utf8")).trim()).toBe(ids[0]);
+	}
 });
 
 test("buildTelemetryBootstrap returns null when no home dir is available", async () => {
@@ -101,6 +121,7 @@ test("buildTelemetryBootstrap withholds an install id linked to an AO Cloud acco
 
 	const unlinked = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
 	expect(unlinked?.distinctId).toBe(installId);
+	expect(unlinked?.installId).toBe(installId);
 
 	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 	const linked = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
@@ -108,6 +129,8 @@ test("buildTelemetryBootstrap withholds an install id linked to an AO Cloud acco
 	expect(linked?.distinctId).toMatch(/^anon_/);
 	expect(linked?.distinctId).not.toBe(installId);
 	expect(again?.distinctId).not.toBe(linked?.distinctId); // throwaway, never reused across launches
+	expect(linked?.installId).toBe(installId);
+	expect(again?.installId).toBe(installId);
 	expect(await readFile(path.join(dir, "telemetry_install_id"), "utf8")).toContain(installId);
 });
 
@@ -125,7 +148,7 @@ test("buildTelemetryBootstrap withholds the install id when the bound-user marke
 
 // The daemon retires an ID by writing the replacement, then removing the marker.
 async function rotate(dir: string, next: string): Promise<void> {
-	await writeFile(path.join(dir, "telemetry_install_id"), `${next}\n`);
+	await writeFile(path.join(dir, "telemetry_anonymous_id"), `${next}\n`);
 	await rm(path.join(dir, "telemetry_bound_user"), { force: true });
 }
 
@@ -139,25 +162,53 @@ test("bootstrapDistinctId never returns an ID retired between the marker check a
 	// read afterwards is already the replacement.
 	const afterRotation = await bootstrapDistinctId(dir, {
 		markerMissing: async (file) => {
-			await rotate(dir, "ins_replacement");
+			await rotate(dir, "anon_replacement");
 			return access(file).then(() => false, () => true);
 		},
 		loadId: loadOrCreateTelemetryInstallId,
 	});
-	expect(afterRotation).toBe("ins_replacement");
+	expect(afterRotation).toBe("anon_replacement");
 	expect(afterRotation).not.toBe(retired);
+	expect(await loadOrCreateTelemetryInstallId(dir)).toBe(retired);
 
 	// Rotation after the marker check: the marker was present, so the linked ID is withheld.
-	await writeFile(path.join(dir, "telemetry_install_id"), `${retired}\n`);
 	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 	const beforeRotation = await bootstrapDistinctId(dir, {
 		markerMissing: (file) => access(file).then(() => false, () => true),
-		loadId: async (d) => {
-			const id = await loadOrCreateTelemetryInstallId(d);
-			await rotate(d, "ins_replacement"); // lands between the two reads
-			return id;
-		},
+		loadId: loadOrCreateTelemetryInstallId,
 	});
 	expect(beforeRotation).toMatch(/^anon_/);
 	expect(beforeRotation).not.toBe(retired);
+});
+
+test("readTelemetryInstallContext reads app-state.json and sends only enum and day values", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-install-"));
+	tempDirs.push(dir);
+	const base = { stateDir: dir, arch: "arm64", osVersion: "15.1.2", env: {}, exists: () => false };
+	expect(await readTelemetryInstallContext(base)).toEqual({ arch: "arm64", osVersion: "15.1.2", installSource: "unknown", isCi: false });
+
+	await writeFile(
+		path.join(dir, "app-state.json"),
+		JSON.stringify({ installSource: "npm-bootstrap", installedAt: "2026-10-20T23:59:59.000Z", appPath: "/Users/me/AO.app" }),
+	);
+	expect(await readTelemetryInstallContext({ ...base, env: { CI: "true" } })).toEqual({
+		arch: "arm64",
+		osVersion: "15.1.2",
+		installSource: "npm-bootstrap",
+		installedAt: "2026-10-20",
+		isCi: true,
+		ciSignal: "ci_env",
+	});
+
+	await writeFile(path.join(dir, "app-state.json"), JSON.stringify({ installSource: "/Users/me/Downloads" }));
+	expect((await readTelemetryInstallContext({ ...base, stateDir: null })).installSource).toBe("unknown");
+	expect((await readTelemetryInstallContext(base)).installSource).toBe("other");
+});
+
+test("buildTelemetryBootstrap carries the install context", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-bootstrap-install-"));
+	tempDirs.push(dir);
+	const install = { arch: "x64", installSource: "exe", isCi: false };
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "win32", "/home/test", true, enabledPolicy, install);
+	expect(bootstrap?.install).toEqual(install);
 });

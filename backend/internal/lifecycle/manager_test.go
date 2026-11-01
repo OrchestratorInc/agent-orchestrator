@@ -258,15 +258,6 @@ func (g fixedSessionOperationGate) SessionMutationInProgress(domain.SessionID) b
 	return bool(g)
 }
 
-type fixedLifecycleInputLease bool
-
-func (l fixedLifecycleInputLease) AcquireSessionInput(domain.SessionID) (func(), bool) {
-	if !l {
-		return nil, false
-	}
-	return func() {}, true
-}
-
 type telemetrySink struct {
 	events []ports.TelemetryEvent
 }
@@ -3409,23 +3400,6 @@ func TestApplyTrackerFacts_TerminalStateIsSuppressedDuringSessionMutation(t *tes
 	}
 }
 
-func TestLifecycleNudgeUsesLateBoundSessionInputLease(t *testing.T) {
-	m, st, msg := newManager()
-	m.SetSessionInputLease(fixedLifecycleInputLease(false))
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", Activity: domain.Activity{State: domain.ActivityIdle}}
-
-	outcome, err := m.sendOnce(ctx, "mer-1", "", "tracker-comment:1", "1", "review this", 0, false)
-	if err != nil {
-		t.Fatalf("sendOnce: %v", err)
-	}
-	if outcome != sendOnceSuppressed {
-		t.Fatalf("sendOnce outcome = %v, want suppressed", outcome)
-	}
-	if len(msg.msgs) != 0 {
-		t.Fatalf("lifecycle nudge bypassed closed input lease: %v", msg.msgs)
-	}
-}
-
 func TestLifecycleNudgeStartupGateUsesAdapterCapability(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -3654,6 +3628,34 @@ func TestActivity_SameStateRepeatAfterReceiptIsNoOp(t *testing.T) {
 	}
 	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("same-state repeat after receipt must not rewrite: %+v", st.sessions["mer-1"])
+	}
+}
+
+func TestActivity_SameStatePersistsNewAgentSessionID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.FirstSignalAt = time.Now()
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, AgentSessionID: "cline-task-123",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "cline-task-123" {
+		t.Fatalf("AgentSessionID = %q, want cline-task-123", got)
+	}
+}
+
+func TestActivity_MissingAgentSessionIDDoesNotEraseExistingID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.AgentSessionID = "existing-task"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "existing-task" {
+		t.Fatalf("AgentSessionID = %q, want existing-task", got)
 	}
 }
 

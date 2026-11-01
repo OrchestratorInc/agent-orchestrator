@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
@@ -15,7 +16,7 @@ import {
 	type WorkspaceFileSummary,
 } from "../../hooks/useSessionWorkspaceFiles";
 import { cn } from "../../lib/utils";
-import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_INITIAL_BATCHES, WORKSPACE_REVIEW_BATCH_WAVE } from "../../lib/workspace-review";
+import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_PAGE_SIZE, WORKSPACE_REVIEW_INITIAL_BATCHES, WORKSPACE_REVIEW_BATCH_WAVE } from "../../lib/workspace-review";
 import { statusLabel, statusTone } from "../../lib/workspace-file-status";
 import { useUiStore } from "../../stores/ui-store";
 import { type FileOpenOptions } from "../FileContentPane";
@@ -29,7 +30,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
-import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./pierreTheme";
 import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
 import { SelectionAskButton } from "./SelectionAskButton";
@@ -117,6 +118,7 @@ function parseGroupPatch(workspaceVersion: string | undefined, scope: WorkspaceD
 }
 
 function isDeferredByDefault(file: WorkspaceFileSummary) {
+	if (file.binary) return false;
 	const name = file.path.split("/").pop()?.toLowerCase() ?? "";
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
@@ -218,6 +220,7 @@ export function WorkspaceReviewPane({
 	const [loadedDeferredPaths, setLoadedDeferredPaths] = useState<Set<string>>(() => new Set());
 	const [activeBatchCount, setActiveBatchCount] = useState(WORKSPACE_REVIEW_INITIAL_BATCHES);
 	const reviewRef = useRef<HTMLDivElement>(null);
+	const fallbackRows = useRef(new Map<string, HTMLDivElement>());
 	const codeViewRef = useRef<CodeViewHandle<"feedback", undefined> | null>(null);
 	const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null);
 	const gutterHover = usePersistentGutterUtility(reviewRef);
@@ -232,12 +235,26 @@ export function WorkspaceReviewPane({
 	const allFiles = useMemo(() => target.files ?? [], [target.files]);
 	const filesKnown = target.files !== undefined;
 	const reviewSelectionKey = target.key;
+	const viewedSessionKey = sessionUiKey(sessionId, hostId);
 	const normalizedFilter = filter.trim().toLowerCase();
-	const files = useMemo(
+	const filteredFiles = useMemo(
 		() => (normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles),
 		[allFiles, normalizedFilter],
 	);
-	const viewedSessionKey = sessionUiKey(sessionId, hostId);
+	// A fresh target/filter starts on its first page in the same render, so it
+	// cannot briefly fetch a previous target's page before an effect resets it.
+	const pageKey = JSON.stringify([viewedSessionKey, reviewSelectionKey, selectionKey, normalizedFilter]);
+	const [page, setPage] = useState({ key: pageKey, index: 0 });
+	const pageCount = Math.max(1, Math.ceil(filteredFiles.length / WORKSPACE_REVIEW_PAGE_SIZE));
+	const pageIndex = page.key === pageKey ? Math.min(page.index, pageCount - 1) : 0;
+	const pageStart = pageIndex * WORKSPACE_REVIEW_PAGE_SIZE;
+	const files = useMemo(() => filteredFiles.slice(pageStart, pageStart + WORKSPACE_REVIEW_PAGE_SIZE), [filteredFiles, pageStart]);
+	useEffect(() => {
+		setPage({ key: pageKey, index: 0 });
+	}, [pageKey]);
+	useEffect(() => {
+		setActiveBatchCount(WORKSPACE_REVIEW_INITIAL_BATCHES);
+	}, [pageKey, pageIndex]);
 	const { viewed, toggle: toggleViewed } = useViewedFiles(viewedSessionKey, reviewSelectionKey, allFiles);
 
 	// Feedback drafted against one review target doesn't apply to the next.
@@ -262,11 +279,12 @@ export function WorkspaceReviewPane({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
 	}, [workspaceVersion, reviewSelectionKey, filesKnown, viewedSessionKey]);
 
-	const requestedFiles = useMemo(
-		() => files.filter((file) => !isDeferredByDefault(file) || loadedDeferredPaths.has(file.path)),
-		[files, loadedDeferredPaths],
-	);
-	const batches = useMemo(() => chunked(requestedFiles.map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [requestedFiles]);
+	// Opening a deferred file must not change the regular batches' query keys.
+	const regularBatches = useMemo(() => chunked(files.filter((file) => !isDeferredByDefault(file)).map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [files]);
+	const batches = useMemo(() => [
+		...regularBatches,
+		...Array.from(loadedDeferredPaths).filter((path) => files.some((file) => file.path === path && isDeferredByDefault(file))).map((path) => [path]),
+	], [files, loadedDeferredPaths, regularBatches]);
 	const patchQueries = useQueries({
 		queries: batches.map((paths, index) => ({
 			...sessionWorkspaceDiffsQueryOptions({
@@ -281,17 +299,17 @@ export function WorkspaceReviewPane({
 				commitShas: target.commitShas,
 				view: target.view,
 			}),
-			enabled: target.state === "ready" && paths.length > 0 && index < activeBatchCount,
+			enabled: target.state === "ready" && paths.length > 0 && (index < activeBatchCount || index >= regularBatches.length),
 			staleTime: Infinity,
 		})),
 	});
 	useEffect(() => {
-		const active = patchQueries.slice(0, activeBatchCount);
-		if (active.length < activeBatchCount || active.some((query) => query.isPending || query.isFetching)) return;
-		if (activeBatchCount < batches.length) {
-			setActiveBatchCount((current) => Math.min(current + WORKSPACE_REVIEW_BATCH_WAVE, batches.length));
+		const active = patchQueries.slice(0, Math.min(activeBatchCount, regularBatches.length));
+		if (active.some((query) => query.isPending || query.isFetching)) return;
+		if (activeBatchCount < regularBatches.length) {
+			setActiveBatchCount((current) => Math.min(current + WORKSPACE_REVIEW_BATCH_WAVE, regularBatches.length));
 		}
-	}, [activeBatchCount, batches.length, patchQueries]);
+	}, [activeBatchCount, regularBatches.length, patchQueries]);
 
 	const { metadataByPath, endOfFilePaths } = useMemo(() => {
 		const result = new Map<string, FileDiffMetadata>();
@@ -339,12 +357,13 @@ export function WorkspaceReviewPane({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
+	const captureSource = fileReferenceSource(target.source, target.sha);
 	const codeSelection = useCodeSelection(reviewRef, (selection) => {
 		// Pierre portals the custom header into this host's light DOM; the selected
 		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
-		if (file) askInChat?.(codeReference(file.path, selection, true));
-	}, askInChat !== undefined);
+		return file && captureSource ? askInChat?.({ ...codeReference(file.path, selection, true), ...captureSource, scope, previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion }) ?? false : false;
+	}, askInChat !== undefined && captureSource !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {
@@ -459,14 +478,21 @@ export function WorkspaceReviewPane({
 			surface: "review",
 		});
 	}, [annotation, workspaceVersion, scope, summaryById]);
-	const toggleCollapsed = useCallback((path: string) => {
+	const toggleCollapsed = useCallback((file: WorkspaceFileSummary) => {
+		const path = file.path;
+		// An explicit expansion opts deferred files into loading, just like
+		// Expand all. Keep that choice when the file is collapsed again.
+		if (collapsedPaths.has(path) && isDeferredByDefault(file) && !loadedDeferredPaths.has(path)) {
+			setLoadedDeferredPaths((current) => current.has(path) ? current : new Set(current).add(path));
+			setPendingScrollPath(path);
+		}
 		setCollapsedPaths((current) => {
 			const next = new Set(current);
 			if (next.has(path)) next.delete(path);
 			else next.add(path);
 			return next;
 		});
-	}, []);
+	}, [collapsedPaths, loadedDeferredPaths]);
 	const collapsePath = useCallback((path: string) => {
 		setCollapsedPaths((current) => {
 			if (current.has(path)) return current;
@@ -480,11 +506,23 @@ export function WorkspaceReviewPane({
 		if (checked) collapsePath(file.path);
 	}, [collapsePath, toggleViewed]);
 	const collapseAll = useCallback(() => {
-		setCollapsedPaths(new Set(files.map((file) => file.path)));
+		setCollapsedPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) next.add(file.path);
+			return next;
+		});
 	}, [files]);
 	const expandAll = useCallback(() => {
-		setLoadedDeferredPaths(new Set(files.filter(isDeferredByDefault).map((file) => file.path)));
-		setCollapsedPaths(new Set());
+		setLoadedDeferredPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) if (isDeferredByDefault(file)) next.add(file.path);
+			return next;
+		});
+		setCollapsedPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) next.delete(file.path);
+			return next;
+		});
 	}, [files]);
 	const allFilesCollapsed = files.length > 0 && files.every((file) => collapsedPaths.has(file.path));
 	useEffect(() => {
@@ -509,8 +547,10 @@ export function WorkspaceReviewPane({
 		if (!scrollRequest || scrollRequest.key === handledScrollKey.current) return;
 		handledScrollKey.current = scrollRequest.key;
 		const { path } = scrollRequest;
-		const file = files.find((entry) => entry.path === path);
-		if (!file) return;
+		const fileIndex = filteredFiles.findIndex((entry) => entry.path === path);
+		if (fileIndex < 0) return;
+		const file = filteredFiles[fileIndex];
+		setPage({ key: pageKey, index: Math.floor(fileIndex / WORKSPACE_REVIEW_PAGE_SIZE) });
 		if (isDeferredByDefault(file)) setLoadedDeferredPaths((current) => (current.has(path) ? current : new Set(current).add(path)));
 		setCollapsedPaths((current) => {
 			if (!current.has(path)) return current;
@@ -519,7 +559,7 @@ export function WorkspaceReviewPane({
 			return next;
 		});
 		setPendingScrollPath(path);
-	}, [files, scrollRequest]);
+	}, [filteredFiles, pageKey, scrollRequest]);
 	useEffect(() => {
 		if (!pendingScrollPath) return;
 		const id = `${reviewSelectionKey}:${pendingScrollPath}`;
@@ -529,15 +569,19 @@ export function WorkspaceReviewPane({
 			return;
 		}
 		const batchIndex = batches.findIndex((paths) => paths.includes(pendingScrollPath));
-		if (batchIndex >= activeBatchCount) {
+		if (batchIndex >= activeBatchCount && batchIndex < regularBatches.length) {
 			setActiveBatchCount(batchIndex + 1);
 			return;
 		}
-		// Still loading; once its batch settles without a diff (a binary or
-		// unavailable file) there is nothing in the list to scroll to.
 		if (batchIndex >= 0 && pendingDiffPaths.has(pendingScrollPath)) return;
-		setPendingScrollPath(null);
-	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, reviewSelectionKey]);
+		// Footer rows are real DOM elements rather than virtualized items. Wait
+		// for CodeView's footer portal to commit before bringing one into view.
+		const frame = requestAnimationFrame(() => {
+			fallbackRows.current.get(pendingScrollPath)?.scrollIntoView({ block: "start" });
+			setPendingScrollPath(null);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, regularBatches.length, reviewSelectionKey]);
 	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
@@ -554,6 +598,67 @@ export function WorkspaceReviewPane({
 	useEffect(() => {
 		if (refMoved) invalidateWorkspaceViews(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, refMoved, sessionId]);
+
+	const fallbackFiles = files.filter((file) => file.binary || !metadataByPath.has(file.path));
+	// Keep non-text rows in Pierre's measured scroll content, including reviews
+	// with no text items. Its ResizeObserver tracks late image loads and collapse.
+	const renderFallbackFiles = () => (
+		<>
+			{fallbackFiles.map((file) => {
+				const collapsed = collapsedPaths.has(file.path);
+				const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
+				const serverDeferredReason = serverDeferredByPath.get(file.path);
+				const pending = pendingDiffPaths.has(file.path);
+				const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
+				const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
+				const isViewed = viewed.has(file.path);
+				return (
+					<div className="bg-background" key={file.path} ref={(node) => { if (node) fallbackRows.current.set(file.path, node); else fallbackRows.current.delete(file.path); }}>
+						<div className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
+							<button
+								aria-expanded={!collapsed}
+								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
+								className="flex h-full min-w-0 flex-1 items-center gap-2 text-left text-[length:var(--font-size-base)] focus-visible:underline"
+								onClick={() => toggleCollapsed(file)}
+								type="button"
+							>
+								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
+								<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
+								<span className="truncate" title={file.path}>{file.path}</span>
+								<span className={cn("shrink-0 text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
+							</button>
+							{onOpenFile ? (
+								<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
+									<Button aria-label={t("files.openFullFileGeneric")} className="size-6 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+								</HeaderActionTooltip>
+							) : null}
+							<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
+								<span className="grid size-6 shrink-0 place-items-center">
+									<Checkbox
+										aria-label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}
+										checked={isViewed}
+										className="size-4 border border-muted-foreground/70 bg-transparent data-[state=checked]:border-foreground data-[state=checked]:bg-foreground data-[state=checked]:text-on-foreground"
+										onCheckedChange={(checked) => markViewed(file, checked === true)}
+									/>
+								</span>
+							</HeaderActionTooltip>
+						</div>
+						{!collapsed ? (
+							<div className={cn("min-w-0", !image && "p-3")}>
+								{image ? (
+									<ImageDiffView path={file.path} sessionId={sessionId} hostId={hostId} split={split} status={file.status} version={workspaceVersion ?? ""} />
+								) : (
+									<p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p>
+								)}
+								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
+								{unavailable ? <RetryButton onClick={retryAll} /> : null}
+							</div>
+						) : null}
+					</div>
+				);
+			})}
+		</>
+	);
 
 	return (
 		<div
@@ -581,6 +686,13 @@ export function WorkspaceReviewPane({
 				</PanelMessage>
 			) : (
 				<>
+			{pageCount > 1 ? (
+				<nav aria-label={t("files.reviewPages")} className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
+					<Button disabled={pageIndex === 0} onClick={() => setPage({ key: pageKey, index: pageIndex - 1 })} size="sm" type="button" variant="outline">{t("files.previousPage")}</Button>
+					<span role="status">{t("files.pageRange", { start: pageStart + 1, end: pageStart + files.length, total: filteredFiles.length })}</span>
+					<Button disabled={pageIndex === pageCount - 1} onClick={() => setPage({ key: pageKey, index: pageIndex + 1 })} size="sm" type="button" variant="outline">{t("files.nextPage")}</Button>
+				</nav>
+			) : null}
 			{firstError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{firstError.message}</PanelMessage> : null}
 			{groupError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{groupError.message}</PanelMessage> : null}
 			{loading && items.length === 0 ? <PanelMessage compact>{t("files.loadingDiff")}</PanelMessage> : null}
@@ -592,12 +704,14 @@ export function WorkspaceReviewPane({
 				/>
 			) : null}
 			<div className={cn("min-h-0 overflow-hidden", files.length > 0 && "flex-1")}>
-				{items.length > 0 ? (
+				{items.length > 0 || fallbackFiles.length > 0 ? (
 					<CodeView<"feedback">
+						key={`${pageKey}:${pageIndex}`}
 						ref={codeViewRef}
 						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-contain"
 						disableWorkerPool={typeof Worker === "undefined"}
 						items={items}
+						renderCodeViewFooter={renderFallbackFiles}
 						options={{
 							collapsedContextThreshold: 8,
 							diffIndicators: "classic",
@@ -615,6 +729,7 @@ export function WorkspaceReviewPane({
 							maxLineDiffLength: 400,
 							onPostRender: gutterHover.restoreAfterRender,
 							overflow: "wrap",
+							preferredHighlighter: PIERRE_HIGHLIGHTER,
 							stickyHeaders: true,
 							theme: REVIEW_CODE_VIEW_THEME,
 							themeType: resolvedTheme,
@@ -622,7 +737,7 @@ export function WorkspaceReviewPane({
 							tokenizeMaxLineLength: 2_000,
 							unsafeCSS: AO_PIERRE_SURFACE_CSS + AO_PIERRE_FILES_REVIEW_CSS,
 						}}
-						renderAnnotation={(line, item) => {
+						renderAnnotation={(line, _file, item) => {
 							const path = summaryById.get(item.id)?.path;
 							const side = "side" in line ? line.side : undefined;
 							const target = annotation.targets.find((open) => open.surface !== "focused" && open.path === path && open.side !== "file" && open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === side);
@@ -656,7 +771,7 @@ export function WorkspaceReviewPane({
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
 										<PopoverAnchor asChild>
-											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file.path)}>
+											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
 												<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/file-header:text-foreground", !isCollapsed && "rotate-90")} />
 												<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 												<div className="flex min-w-0 shrink items-baseline gap-3">
@@ -771,39 +886,6 @@ export function WorkspaceReviewPane({
 					/>
 				) : null}
 				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
-				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
-					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
-					const serverDeferredReason = serverDeferredByPath.get(file.path);
-					const pending = pendingDiffPaths.has(file.path);
-					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
-					// The image preview reads the worktree and its base, so it only fits targets the centre pane can open.
-					const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
-					return (
-					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
-						{image ? (
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-xs">{file.path}</p>
-								<ImageDiffView
-									path={file.path}
-									sessionId={sessionId}
-									hostId={hostId}
-									split={split}
-									status={file.status}
-									version={workspaceVersion ?? ""}
-								/>
-							</div>
-						) : (
-							<>
-								<FileCode2 aria-hidden="true" className="text-passive" />
-								<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
-							</>
-						)}
-						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
-						{unavailable ? <RetryButton onClick={retryAll} /> : null}
-						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
-					</div>
-					);
-				})}
 			</div>
 				</>
 			)}

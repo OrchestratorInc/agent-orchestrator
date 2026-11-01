@@ -10,6 +10,7 @@ Natural-language-to-command mappings for common AO tasks.
 | Show this Markdown or HTML file without a server | `ao preview "<workspace-path>"` |
 | Hand off a newly created browser-displayable artifact | `ao preview "<workspace-path>"` immediately after writing the primary artifact |
 | Inspect and verify this webpage as the agent | `ao browser open "<url>"`, then `ao browser snapshot` |
+| Drive the shared remote browser on a self-hosted host (`AO_AGENT_BROWSER_URL` set) | Read [commands/browser-remote.md](commands/browser-remote.md); `ao browser get url`, `ao browser snapshot` |
 | Click or fill a page element | `ao browser snapshot`, then `ao browser click <ref>` or `ao browser fill <ref> "<text>"` |
 | Check frontend runtime failures | `ao browser errors` and `ao browser console` |
 | Diagnose a request/API/CORS/auth/redirect failure when normal page evidence is insufficient | `ao browser network start`, reproduce once, then `ao browser network stop` |
@@ -30,6 +31,7 @@ Natural-language-to-command mappings for common AO tasks.
 | Clean up terminated sessions | `ao session cleanup` |
 | Make a Docker container this session starts survive AO cleanup | `docker run --label ao.session=$AO_SESSION_ID --label ao.spare=true ...` |
 | See a session's details | `ao session get <id>` |
+| Set up a VM or headless machine so it shows up on the user's devices | Read [commands/remote-host.md](commands/remote-host.md); install over SSH, then `ao remote-host link` |
 | Open the desktop app | `ao start` |
 | Check the daemon is up | `ao status` |
 | Run health checks | `ao doctor` |
@@ -37,7 +39,7 @@ Natural-language-to-command mappings for common AO tasks.
 | List orchestrator sessions | `ao orchestrator ls` |
 | Claim an existing PR for the current session | `ao session claim-pr <pr-ref>` (`AO_SESSION_ID`) |
 | Claim an existing PR for another session | `ao session claim-pr <id> <pr-ref>` |
-| Merge a pull request | `ao pr merge <pr-number>` |
+| Merge a pull request | `ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>` |
 | Resolve pull-request review threads | `ao pr resolve-comments <pr-number> [comment-id...]` |
 | Submit a code review verdict | `ao review submit <session-id> --run <run-id> --verdict approved` |
 | Get an independent / adversarial review of an AO worker's implementation PR | `ao review trigger` (inside the owning worker), or `ao review trigger <worker-session-id>` |

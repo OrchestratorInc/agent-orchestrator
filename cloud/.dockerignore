@@ -1,8 +1,0 @@
-.env
-.git
-.github
-.next
-bin
-coverage.out
-node_modules
-*.test

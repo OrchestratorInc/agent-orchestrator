@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
-	capture: vi.fn(() => ({})),
+	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
 	identify: vi.fn(),
@@ -29,6 +29,24 @@ describe("initTelemetry recovery", () => {
 		vi.resetModules();
 		vi.clearAllMocks();
 	});
+
+	async function initializedUpdateCapture() {
+		localStorage.clear();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => ({
+					appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test",
+					disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+				})) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { captureRendererEvent, initTelemetry } = await import("./telemetry");
+		expect(await initTelemetry()).toBe(true);
+		posthogStub.capture.mockClear();
+		return captureRendererEvent;
+	}
 
 	it("retries init after a transient thrown failure instead of caching it", async () => {
 		let calls = 0;
@@ -93,19 +111,125 @@ describe("initTelemetry recovery", () => {
 		expect(() => clearRendererTelemetryQueues()).not.toThrow();
 		expect(() => applyRendererTelemetryPolicy(false)).not.toThrow();
 	});
+
+	it("deduplicates updater failures at the real capture boundary", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+		expect(await captureRendererEvent("ao.renderer.update_downloaded", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+		expect(posthogStub.capture.mock.calls.map(([name]) => name)).toEqual([
+			"ao.renderer.update_failed", "ao.renderer.update_downloaded", "ao.renderer.update_failed",
+		]);
+	});
+
+	it("does not deduplicate an update failure rejected by the rate limit", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000);
+		try {
+			for (let index = 0; index < 5; index++) {
+				expect(await captureRendererEvent("ao.renderer.update_failed", {
+					phase: "download", error_category: "network", to_version: `2.0.${index}`,
+				})).toBe(true);
+			}
+			const sixth = { phase: "download", error_category: "network", to_version: "2.0.5" };
+			expect(await captureRendererEvent("ao.renderer.update_failed", sixth)).toBe(false);
+			clock.mockReturnValue(1_000_060_001);
+			expect(await captureRendererEvent("ao.renderer.update_failed", sixth)).toBe(true);
+			expect(posthogStub.capture).toHaveBeenCalledTimes(6);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("emits one update failure per streak and one daily count after the UTC day ends", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const failure = { phase: "check", error_category: "network", to_version: "2.0.0" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[0]).toBe("ao.renderer.update_failures_daily");
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ day: "2026-10-20", failure_count: 2 });
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not export updater failures counted while opted out", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			await applyAnalyticsOptOut(true);
+			posthogStub.capture.mockImplementation(() => undefined);
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			posthogStub.capture.mockImplementation(() => ({}));
+			await applyAnalyticsOptOut(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockClear();
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event)).toEqual(["ao.renderer.update_failed"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not restore updater counts when an opt-out lands while a daily count is sending", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockImplementationOnce(() => {
+				void applyAnalyticsOptOut(true);
+				return undefined;
+			});
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(localStorage.getItem("ao.telemetry.updateFailures.v1")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows retry after PostHog rejects or throws while capturing an update failure", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const rejected = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		posthogStub.capture.mockImplementationOnce(() => undefined);
+		expect(await captureRendererEvent("ao.renderer.update_failed", rejected)).toBe(false);
+		expect(await captureRendererEvent("ao.renderer.update_failed", rejected)).toBe(true);
+
+		const thrown = { phase: "download", error_category: "network", to_version: "2.0.1" };
+		posthogStub.capture.mockImplementationOnce(() => { throw new Error("capture failed"); });
+		await expect(captureRendererEvent("ao.renderer.update_failed", thrown)).rejects.toThrow("capture failed");
+		expect(await captureRendererEvent("ao.renderer.update_failed", thrown)).toBe(true);
+	});
 });
 
 describe("PostHog identity and opt-out", () => {
-	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
+	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
 
 	function mockBridge(getBootstrap: () => Promise<unknown>) {
 		mockPosthog();
+		const capture = vi.fn(async () => true);
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null) },
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
+		return capture;
 	}
 
 	beforeEach(() => {
@@ -114,8 +238,8 @@ describe("PostHog identity and opt-out", () => {
 	});
 
 	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
-		mockBridge(async () => bootstrap);
-		const { identifyCloudUser, captureRendererEvent } = await import("./telemetry");
+		const captureToMain = mockBridge(async () => bootstrap);
+		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 
@@ -134,19 +258,42 @@ describe("PostHog identity and opt-out", () => {
 		const captured = posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>];
 		expect(JSON.stringify(captured)).not.toContain("dev@example.com");
 		expect(captured[1]).not.toHaveProperty("$process_person_profile");
+		expect(captured[1].install_id).toBe("ins_test");
+		await captureRendererException(new Error("test"), { install_id: "spoofed" });
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception" }));
+		const init = posthogStub.init.mock.calls[0] as unknown as [string, { before_send: (event: Record<string, unknown>) => Record<string, unknown> }];
+		const sent = init[1].before_send({ event: "ao.test", properties: { install_id: "spoofed" } });
+		expect((sent.properties as Record<string, unknown>).install_id).toBe("ins_test");
+	});
+
+	it("forwards renderer crashes even when PostHog initialization is unavailable", async () => {
+		const captureToMain = mockBridge(async () => null);
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new Error("resume agent ai-sports-coach-113"), { source: "react-error-boundary" });
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception", tags: expect.objectContaining({ category: "render_crash" }) }));
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+	});
+
+	it("honors the remote exception deny list before forwarding to Electron", async () => {
+		const captureToMain = mockBridge(async () => ({ ...bootstrap, disabledEvents: ["$exception"] }));
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new TypeError("private project"));
+		expect(captureToMain).not.toHaveBeenCalled();
 	});
 
 	it("keeps events anonymous before sign-in and after sign-out", async () => {
 		mockBridge(async () => bootstrap);
 		const { identifyCloudUser, clearCloudUser, captureRendererEvent } = await import("./telemetry");
 		await captureRendererEvent("ao.renderer.support_opened");
-		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		clearCloudUser();
 		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
 		await captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: true });
-		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 	});
 
 	it("does not identify a user who signed out while init was still pending", async () => {
@@ -200,7 +347,7 @@ describe("PostHog identity and opt-out", () => {
 
 	it("opt-out stops capture and resets the SDK identity; a later sign-in does not identify", async () => {
 		mockBridge(async () => bootstrap);
-		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut } = await import("./telemetry");
+		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut, captureRendererEvent } = await import("./telemetry");
 		await initTelemetry();
 		await applyAnalyticsOptOut(true);
 		expect(posthogStub.opt_out_capturing).toHaveBeenCalledTimes(1);
@@ -213,6 +360,8 @@ describe("PostHog identity and opt-out", () => {
 		await applyAnalyticsOptOut(false);
 		expect(posthogStub.opt_in_capturing).toHaveBeenLastCalledWith({ captureEventName: false });
 		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", expect.objectContaining({ email: "dev@example.com" }));
+		await captureRendererEvent("ao.renderer.support_opened", { install_id: "spoofed" });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1].install_id).toBe("ins_test");
 	});
 
 	it("a launch that started opted out never builds a client, and opting in initializes one", async () => {

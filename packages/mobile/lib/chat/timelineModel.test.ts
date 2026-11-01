@@ -316,3 +316,35 @@ describe("editable human prompts", () => {
 		expect(editableHumanTurns(value).editable.size).toBe(0);
 	});
 });
+
+describe("turn plans", () => {
+	const list = (status: "pending" | "in_progress" | "completed") => [
+		{ text: "Read the code", status: "completed" as const },
+		{ text: "Write the fix", status },
+	];
+
+	it("shows a list the agent keeps across turns only on the latest turn that carries it", () => {
+		const value = snapshot();
+		value.turns[0].plan = { spansTurns: true, steps: list("in_progress") };
+		value.turns[1].plan = { spansTurns: true, steps: list("completed") };
+		const groups = groupConversationByTurn(value);
+		expect(groups.find((group) => group.turnId === "t1")?.plan).toBeUndefined();
+		expect(groups.find((group) => group.turnId === "t2")?.plan).toBe(value.turns[1].plan);
+		// Newest-first order (iOS) picks the same turn.
+		expect(latestFirstConversationGroups(value).find((group) => group.plan)?.turnId).toBe("t2");
+	});
+
+	it("keeps each turn's own plan", () => {
+		const value = snapshot();
+		value.turns[0].plan = { steps: list("in_progress") };
+		value.turns[1].plan = { steps: list("completed") };
+		const groups = groupConversationByTurn(value);
+		expect(groups.map((group) => group.plan)).toEqual([value.turns[0].plan, value.turns[1].plan]);
+	});
+
+	it("shows no panel for a plan without steps", () => {
+		const value = snapshot();
+		value.turns[0].plan = { steps: [] };
+		expect(groupConversationByTurn(value)[0].plan).toBeUndefined();
+	});
+});

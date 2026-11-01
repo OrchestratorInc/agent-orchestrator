@@ -28,7 +28,11 @@ import {
 } from "../lib/session-presentation";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
-import { useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useSessionParticipants } from "../hooks/useSessionParticipants";
+import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
@@ -103,6 +107,17 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
+	// A Freestyle cloud project's orchestrator starts in place (see
+	// OrchestratorStartingChat); its session does not exist yet, so the
+	// project's provider decides, as the control plane's does.
+	// Only this machine's cloud projects start in place: a remote host's board
+	// never reads this machine's cloud settings (as useCloudCp below).
+	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
+	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
+	const offering = useCloudOffering(localCloudBoard);
+	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
+	const startsInPlace = localCloudBoard && cloudProject !== undefined &&
+		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
@@ -119,6 +134,25 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		hostId,
 	});
 	const { isProjectRestarting, isProvisioning } = projectActions;
+	// A Freestyle cloud project just created starts its orchestrator on its own
+	// (only those are flagged, see CreateProjectFlow), so it opens on the
+	// orchestrator starting in place rather than on an empty board.
+	const autoStartFlagged = useUiStore((state) => !hostId && projectId !== undefined && state.autoStartOrchestratorProjectIds.has(projectId));
+	const autoStartPending = autoStartFlagged && !orchestrator;
+	const { openOrchestrator } = projectActions;
+	useEffect(() => {
+		if (!autoStartFlagged || !projectId) return;
+		if (orchestrator) {
+			useUiStore.getState().setAutoStartOrchestrator(projectId, false);
+			return;
+		}
+		if (workspace?.kind !== CLOUD_PROJECT_KIND || !startsInPlace) return;
+		// Read the store, not this render: the flag is consumed exactly once.
+		const ui = useUiStore.getState();
+		if (!ui.autoStartOrchestratorProjectIds.has(projectId)) return;
+		ui.setAutoStartOrchestrator(projectId, false);
+		openOrchestrator();
+	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
@@ -127,6 +161,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
+	// Who is in each shared cloud session, read without joining any of them.
+	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
+	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
 	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
@@ -227,9 +264,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		<NotificationCenter />
 	) : undefined;
 
-	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
-			cloud={workspace?.kind === CLOUD_PROJECT_KIND}
+			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
+			freestyle={startsInPlace || autoStartPending}
 			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
 		/>;
 	}
@@ -276,7 +314,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}>
+			<div
+				className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}
+				style={hasArchive ? { clipPath: "inset(0 0 var(--sessions-archive-height, 58px) 0)" } : undefined}
+			>
 				{projectId && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -322,6 +363,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						labels={boardLabels}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
+								participants={participantsBySession.get(session.id)}
+								me={cloudUserId}
 								memory={memoryBySession?.get(session.id)}
 								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}

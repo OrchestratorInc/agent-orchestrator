@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { useUiStore } from "../stores/ui-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
 import { CloudCpError } from "../lib/cloud-cp";
@@ -356,6 +357,7 @@ function projectValidation(
 }
 
 beforeEach(() => {
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	bridgeMocks.checkAncestorRepo.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.checkGitRepository.mockReset().mockResolvedValue(true);
 	bridgeMocks.checkGitHubRepositoryAvailability.mockReset().mockResolvedValue({ available: true });
@@ -412,7 +414,7 @@ beforeEach(() => {
 	githubDaemonMocks.saveGitHubPAT.mockReset().mockResolvedValue(undefined);
 	cloudMocks.signIn.mockReset();
 	window.localStorage.clear();
-	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false });
+	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false, autoStartOrchestratorProjectIds: new Set() });
 });
 
 describe("CreateProjectFlow remote host", () => {
@@ -1878,7 +1880,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
 		expect(screen.getByText(/sign in to AO Cloud to create a cloud project/i)).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Sign in to AO Cloud" }));
+		await user.click(screen.getByRole("button", { name: "Sign in to cloud" }));
 		expect(cloudMocks.signIn).toHaveBeenCalledOnce();
 	});
 
@@ -1898,8 +1900,8 @@ describe("CreateProjectFlow project import validation", () => {
 
 		const cloud = screen.getByRole("button", { name: "Clone to the cloud" });
 		const local = screen.getByRole("button", { name: "Open a local folder" });
-		expect(cloud.closest(".rounded-md")).toHaveClass("border-[var(--color-border-import-modal)]", "bg-[var(--color-bg-import-modal)]");
-		expect(local.closest(".rounded-md")).toHaveClass("border-[var(--color-border-import-modal)]", "bg-[var(--color-bg-import-modal)]");
+		expect(cloud.closest(".rounded-md")).toHaveClass("bg-[var(--color-bg-import-modal)]");
+		expect(local.closest(".rounded-md")).toHaveClass("bg-[var(--color-bg-import-modal)]");
 		expect(local).toHaveClass("border-[var(--color-border-import-modal)]");
 		expect(screen.queryByText("Local")).not.toBeInTheDocument();
 		expect(cloud.closest(".rounded-md")).not.toBe(local.closest(".rounded-md"));
@@ -1923,6 +1925,7 @@ describe("CreateProjectFlow project import validation", () => {
 	});
 
 	it("creates a project from a connected GitHub App repository", async () => {
+		useSidebarOrderStore.getState().setProjectOrder(["existing-b", "existing-a", "cp-app-1"]);
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
@@ -1996,6 +1999,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
 		// Like a local project, the new cloud project opens onto its board.
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-app-1", "existing-b", "existing-a"]);
 	});
 
 	it("opens the existing project when the repository already has one, with no conflict error", async () => {
@@ -2617,6 +2621,8 @@ describe("CreateProjectFlow project import validation", () => {
 			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
 			expect(config).not.toHaveProperty("coder");
 			expect(config).not.toHaveProperty("sandboxProvider");
+			// A Freestyle project opens on its orchestrator, already starting.
+			await waitFor(() => expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("cp-1")).toBe(true));
 		});
 
 		it("a B2B org gets the template picker without a sandbox choice", async () => {
@@ -2654,6 +2660,8 @@ describe("CreateProjectFlow project import validation", () => {
 			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
 			expect(config.sandboxProvider).toBe("coder");
 			expect(config.coder.templateId).toBe("tpl-1");
+			// A Coder project opens on its board; nothing starts on its own.
+			expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("cp-1")).toBe(false);
 		});
 	});
 
@@ -2968,6 +2976,7 @@ describe("CreateProjectFlow project import validation", () => {
 	});
 
 	it("creates a project without a repository, with no GitHub connection needed", async () => {
+		useSidebarOrderStore.getState().setProjectOrder(["existing-b", "existing-a"]);
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
@@ -2999,6 +3008,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(body.config).not.toHaveProperty("repos");
 		expect(cloudMocks.createGitHubProject).not.toHaveBeenCalled();
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-standalone"));
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-standalone", "existing-b", "existing-a"]);
 	});
 
 	it("does not offer additional coder session repositories in the Coder dev-kit rows", async () => {

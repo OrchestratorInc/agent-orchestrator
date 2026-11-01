@@ -221,7 +221,7 @@ export function SessionInterfaceSwitchDialog({
 	const targetName = targetTitleLabel(target);
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-md gap-0 overflow-hidden rounded-xl border-border bg-popover p-0">
+			<DialogContent className="max-w-md gap-0 overflow-hidden p-0">
 				<DialogHeader className="border-b border-border px-5 py-4">
 					<DialogTitle className="flex items-center gap-2 text-sm">
 						<ArrowRightLeft aria-hidden="true" className="size-4 text-muted-foreground" />

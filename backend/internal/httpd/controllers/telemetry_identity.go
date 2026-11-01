@@ -31,6 +31,7 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 	resp := TelemetryIdentityResponse{OptedOut: snap.OptedOut}
 	if !snap.OptedOut {
 		resp.DistinctID = snap.DistinctID()
+		resp.InstallID = snap.InstallID
 		resp.CloudUserID, resp.GitHubLogin = snap.CloudUserID, snap.GitHubLogin
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
