@@ -3130,6 +3130,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
