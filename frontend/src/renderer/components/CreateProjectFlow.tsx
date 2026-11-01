@@ -127,10 +127,10 @@ type ProjectSource = "clone" | "local" | "workspace";
 type ProjectOffering = "local" | "cloud";
 type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean } | { kind: "clone_destination" };
 
-function initialCloneDetails(hostId?: string): CloneRepositoryDetails {
+function initialCloneDetails(hostId?: string, firstRun = false): CloneRepositoryDetails {
 	return {
 		remoteUrl: "",
-		destinationParent: hostId ? "" :
+		destinationParent: hostId || firstRun ? "" :
 			typeof window === "undefined" ? "~/ao/projects" : (window.localStorage.getItem(LAST_CLONE_DESTINATION_KEY) || "~/ao/projects"),
 	};
 }
@@ -159,6 +159,9 @@ export function CreateProjectFlow({
 	onCreateProject,
 	onInitializeProject,
 	onCreateStandaloneAgent,
+	firstRunClone = false,
+	onFirstRunDismiss,
+	onFirstRunProgress,
 	onDismiss,
 	onOpenExistingProject,
 	onSelectHost,
@@ -186,6 +189,9 @@ export function CreateProjectFlow({
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
 	onCreateStandaloneAgent?: () => void;
+	firstRunClone?: boolean;
+	onFirstRunDismiss?: () => void;
+	onFirstRunProgress?: () => void;
 	onDismiss?: () => void;
 	onOpenExistingProject?: (path: string) => void | Promise<void>;
 	onSelectHost?: (hostId?: string) => void;
@@ -303,9 +309,10 @@ export function CreateProjectFlow({
 		setValidationScan(null);
 		resetProjectImportState();
 		if (source === "clone") {
-			setCloneDetails(initialCloneDetails(hostId));
+			setCloneDetails(initialCloneDetails(hostId, firstRunClone));
 			setCloneSelection(null);
-			transitionToChild(() => setCloneDialogOpen(true));
+			if (firstRunClone) setCloneDialogOpen(true);
+			else transitionToChild(() => setCloneDialogOpen(true));
 			return;
 		}
 		setCloneSelection(null);
@@ -606,6 +613,7 @@ export function CreateProjectFlow({
 			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
 			setCloneDialogOpen(false);
+			if (firstRunClone) onFirstRunProgress?.();
 			setCloneSelection(next);
 			setSelectedKind("single_repo");
 			setModePickerOpen(false);
@@ -657,7 +665,8 @@ export function CreateProjectFlow({
 		setCloneDialogOpen(false);
 		setCloneSelection(null);
 		setCloneDetails(initialCloneDetails(hostId));
-		if (back) setModePickerOpen(true);
+		if (firstRunClone) onFirstRunDismiss?.();
+		else if (back) setModePickerOpen(true);
 		else onDismiss?.();
 	};
 
@@ -841,6 +850,17 @@ export function CreateProjectFlow({
 					/>
 					{cloneDialogOpen ? (
 						<CloneRepositoryDialog
+							firstRun={firstRunClone}
+							onOpenLocalFolder={() => {
+								onFirstRunDismiss?.();
+								setCloneDialogOpen(false);
+								void selectSource("local");
+							}}
+							onStartStandaloneAgent={() => {
+								onFirstRunDismiss?.();
+								setCloneDialogOpen(false);
+								onCreateStandaloneAgent?.();
+							}}
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}

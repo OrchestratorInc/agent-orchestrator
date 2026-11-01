@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, Link2, LoaderCircle, X } from "lucide-react";
+import { ChevronLeft, Folder, FolderOpen, Link2, LoaderCircle, MessageSquarePlus, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -30,6 +30,9 @@ type DestinationCheck =
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	firstRun = false,
+	onOpenLocalFolder,
+	onStartStandaloneAgent,
 	cloning = false,
 	disabled,
 	error,
@@ -49,6 +52,9 @@ export default function CloneRepositoryDialog({
 	existingProjectPaths = [],
 	value,
 }: {
+	firstRun?: boolean;
+	onOpenLocalFolder?: () => void;
+	onStartStandaloneAgent?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
@@ -203,7 +209,7 @@ export default function CloneRepositoryDialog({
 		try {
 			const selected = await aoBridge.app.chooseDirectory({
 				title: t("createProject.cloneChooseDestination"),
-				defaultPath: "~/ao/projects",
+				...(value.destinationParent ? { defaultPath: value.destinationParent } : {}),
 			});
 			if (requestId !== destinationPickerRequest.current) return;
 			if (!selected) return;
@@ -254,9 +260,9 @@ export default function CloneRepositoryDialog({
 	return (
 		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] ${firstRun ? "w-[min(460px,calc(100vw-24px))]" : "w-[min(560px,calc(100vw-24px))]"} -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-						<Button
+						{!firstRun ? <Button
 							type="button"
 							variant="outline"
 							size="icon"
@@ -265,13 +271,13 @@ export default function CloneRepositoryDialog({
 							onClick={onBack}
 						>
 							<ChevronLeft className="size-4" aria-hidden="true" />
-						</Button>
+						</Button> : null}
 						<div className="min-w-0 flex-1 pr-8">
-							<Dialog.Title className="text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-								{t("createProject.cloneTitle")}
+							<Dialog.Title className={`${firstRun ? "text-[16px]" : "text-[18px]"} text-balance font-semibold text-[var(--color-text-import-title)]`}>
+								{firstRun ? t("firstRun.startProject") : t("createProject.cloneTitle")}
 							</Dialog.Title>
-							<Dialog.Description className="sr-only">
-								{t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
+							<Dialog.Description className={firstRun ? "mt-1 text-xs text-muted-foreground" : "sr-only"}>
+								{firstRun ? t("firstRun.description") : t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
 							</Dialog.Description>
 						</div>
 						<button
@@ -404,15 +410,24 @@ export default function CloneRepositoryDialog({
 							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
 							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
 						</div> : null}
-						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
-							<div className="flex items-center justify-end gap-3">
+						<div className={`flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3 ${firstRun ? "w-full" : ""}`}>
+							<div className={`flex items-center justify-end gap-3 ${firstRun ? "w-full" : ""}`}>
 								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
-								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
+								<Button type="submit" variant="primary" className={firstRun ? "w-full" : undefined} disabled={!canContinue}>
+									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : firstRun ? "firstRun.cloneAndContinue" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>
 					</form>
+					{firstRun && !activity ? (
+						<div className="px-4 pb-4">
+							<div className="mb-3 flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">{t("firstRun.or")}</div>
+							<div className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-2">
+								<Button type="button" variant="outline" disabled={disabled || choosingDestination} onClick={onOpenLocalFolder}><FolderOpen className="size-4" aria-hidden="true" />{t("createProject.openLocal")}</Button>
+								<Button type="button" variant="outline" disabled={disabled || choosingDestination} onClick={onStartStandaloneAgent}><MessageSquarePlus className="size-4" aria-hidden="true" />{t("home.newStandaloneAgent")}</Button>
+							</div>
+						</div>
+					) : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
