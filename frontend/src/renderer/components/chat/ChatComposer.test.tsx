@@ -667,6 +667,22 @@ describe("send keys", () => {
 		expect(onModifierSend).toHaveBeenCalledOnce();
 	});
 
+	it("does not carry a Cmd/Ctrl+Enter that sent nothing into a later plain send", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onModifierSend = vi.fn();
+		render(<ChatComposer onSend={onSend} onModifierSend={onModifierSend} draftSessionId="composer-modifier-empty" />);
+		const field = screen.getByLabelText("Message the agent");
+		fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(onSend).not.toHaveBeenCalled();
+		expect(onModifierSend).not.toHaveBeenCalled();
+
+		await typeInComposer(field, "a plain send");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onModifierSend).not.toHaveBeenCalled();
+	});
+
 	it("does not report a Cmd/Ctrl+Enter that steers a running turn", async () => {
 		const onSteer = vi.fn().mockResolvedValue(undefined);
 		const onModifierSend = vi.fn();

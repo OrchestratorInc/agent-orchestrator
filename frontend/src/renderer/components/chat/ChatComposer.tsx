@@ -1258,7 +1258,10 @@ export const ChatComposer = memo(function ChatComposer({
 		[onCompact, skills, suggestionsFor],
 	);
 
-	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
+	// `sendsNext` is a Cmd/Ctrl+Enter that does not steer. It reaches the parent
+	// through onModifierSend only when this submission actually calls onSend, so
+	// an empty draft or a press that joins an earlier send leaves no stale intent.
+	function submit(event?: FormEvent, forceSteer?: boolean, sendsNext?: boolean): Promise<void> {
 		event?.preventDefault();
 		// React cannot publish the next busy prop until after this event returns. A
 		// second Enter in that gap joins the accepted submission instead of opening a
@@ -1271,7 +1274,7 @@ export const ChatComposer = memo(function ChatComposer({
 			typeof document !== "undefined" &&
 			document.activeElement?.getAttribute("aria-label") === "Message the agent";
 		setSubmitting(true);
-		const pending = performSubmit(forceSteer);
+		const pending = performSubmit(forceSteer, sendsNext);
 		submitInFlight.current = pending;
 		const release = () => {
 			if (submitInFlight.current !== pending) return;
@@ -1282,7 +1285,7 @@ export const ChatComposer = memo(function ChatComposer({
 		return pending;
 	}
 
-	async function performSubmit(forceSteer?: boolean) {
+	async function performSubmit(forceSteer?: boolean, sendsNext?: boolean) {
 		// Own the scoped draft before file reading or staging can yield. A replacement
 		// surface observes this reservation and cannot edit underneath this send.
 		const mutationToken = draftScope && !savingQueuedEdit
@@ -1290,13 +1293,13 @@ export const ChatComposer = memo(function ChatComposer({
 			: undefined;
 		if (draftScope && !savingQueuedEdit && !mutationToken) return;
 		try {
-			await performClaimedSubmit(forceSteer, mutationToken);
+			await performClaimedSubmit(forceSteer, mutationToken, sendsNext);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
 		}
 	}
 
-	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
+	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken, sendsNext?: boolean) {
 		let currentText = textRef.current;
 		let body = currentText.trim();
 		const recoveringDelivery = durableDelivery;
@@ -1460,10 +1463,13 @@ export const ChatComposer = memo(function ChatComposer({
 						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
-				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
-					await onSend(message, sendPayloads(nativePayloads));
 				} else {
-					await onSend(message);
+					if (sendsNext) onModifierSend?.();
+					if (nativePayloads.length > 0 || heldPayloads.length > 0) {
+						await onSend(message, sendPayloads(nativePayloads));
+					} else {
+						await onSend(message);
+					}
 				}
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
@@ -1571,6 +1577,7 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
+				if (sendsNext) onModifierSend?.();
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
       await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
@@ -1659,11 +1666,10 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			const modifier = event.metaKey || event.ctrlKey;
 			const wantsSteer = modifier && canSteerDraft;
-			if (modifier && !wantsSteer) onModifierSend?.();
-			void submit(undefined, wantsSteer);
+			void submit(undefined, wantsSteer, modifier && !wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, onModifierSend, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
