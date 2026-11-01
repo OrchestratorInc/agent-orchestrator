@@ -786,7 +786,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
 				{ params: { path: { sessionId: targetSessionId } } },
 			);
-			if (error) throw error;
+			if (error && apiErrorCode(error) !== "CHAT_NO_ACTIVE_TURN") throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
 		// A failed interrupt (e.g. CHAT_NO_ACTIVE_TURN) means the cached turn
@@ -1151,6 +1151,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
+	const dismissError = () => {
+		for (const mutation of [send, resolve, interrupt, chooseSettings]) {
+			if (mutation.error) mutation.reset();
+		}
+	};
 
 	return {
 		send: (input: string | ConversationSendInput) => {
@@ -1170,6 +1175,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (!claimConversationDispatch(queryClient, stateSessionId as string, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
+			dismissError();
 			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			return send.mutateAsync({
 				targetSessionId: sessionId,
@@ -1344,6 +1350,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		 * answer is a property of the driver, not of the moment.
 		 */
 		steerUnsupported: apiErrorCode(steer.error) === "CHAT_STEER_UNSUPPORTED",
+		dismissError,
 		busy:
 			trackedDispatch?.state === "pending" ||
 			(send.isPending && sendTargetsCurrentSession) ||
