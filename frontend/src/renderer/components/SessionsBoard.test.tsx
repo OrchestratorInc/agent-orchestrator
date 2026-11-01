@@ -559,6 +559,24 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});
 
+	it("renders the summary below the branch", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-order", title: "order worker", status: "working", branch: "feat/login-redirect", summary: "Fixing the login redirect" }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("order worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const branch = within(card).getByText("feat/login-redirect");
+		const summary = within(card).getByTestId("board-session-summary");
+		expect(branch.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("renders a summary without a hover tooltip", async () => {
 		const summary =
 			"Implemented robust filename sanitization across export formats and added coverage for reserved names and unicode input";

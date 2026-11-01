@@ -369,6 +369,13 @@ export function SessionCardView({
 						</div>
 					) : null}
 				</div>
+				{showBranch && (
+					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
+						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
+						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
+						{branchAction}
+					</div>
+				)}
 				{session.summary ? (
 					<div
 						className="mt-1 line-clamp-3 overflow-hidden text-xs leading-snug text-muted-foreground"
@@ -377,13 +384,6 @@ export function SessionCardView({
 						{session.summary}
 					</div>
 				) : null}
-				{showBranch && (
-					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
-						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
-						{branchAction}
-					</div>
-				)}
 			</div>
 			{prs.length > 0 && (
 				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">
