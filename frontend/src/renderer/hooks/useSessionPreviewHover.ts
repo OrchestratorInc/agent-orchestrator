@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent } from "react";
 
 // The first preview waits out a short hover and fades in. Once one is showing,
 // sweeping across the other rows swaps previews instantly with no animation,
@@ -25,6 +25,44 @@ function markHidden() {
 	coolTimer = setTimeout(() => {
 		warm = false;
 	}, COOL_DOWN_MS);
+}
+
+// Rows resolve under a still pointer while the list scrolls: the browser only
+// sends pointerenter once the mouse moves, so the scroll handler looks up the
+// row under the last pointer position itself.
+type RowController = { request: () => void; leave: () => void };
+const rowControllers = new WeakMap<Element, RowController>();
+let hoveredRow: Element | undefined;
+let lastPointer: { x: number; y: number } | undefined;
+let listening = false;
+
+function listenForScroll() {
+	if (listening || typeof window === "undefined") return;
+	listening = true;
+	window.addEventListener(
+		"pointermove",
+		(event) => {
+			lastPointer = { x: event.clientX, y: event.clientY };
+		},
+		{ capture: true, passive: true },
+	);
+	window.addEventListener(
+		"scroll",
+		(event) => {
+			if (!lastPointer || !(warm || activeHide)) return;
+			const scroller = event.target;
+			if (!(scroller instanceof Element)) return;
+			const under = document.elementFromPoint(lastPointer.x, lastPointer.y);
+			// Only the scrolled list decides; a pointer resting on the card stays put.
+			if (!under || !scroller.contains(under)) return;
+			const row = under.closest("[data-session-preview-row]") ?? undefined;
+			if (row === hoveredRow) return;
+			if (hoveredRow) rowControllers.get(hoveredRow)?.leave();
+			hoveredRow = row;
+			if (row) rowControllers.get(row)?.request();
+		},
+		{ capture: true, passive: true },
+	);
 }
 
 /** Test hook: start the next hover from cold. */
@@ -102,18 +140,39 @@ export function useSessionPreviewHover(suppressed: boolean) {
 	}, [hide, suppressed]);
 	useEffect(() => () => hide(), [hide]);
 
+	useEffect(listenForScroll, []);
+	const rowRef = useCallback(
+		(node: HTMLElement | null) => {
+			if (node) rowControllers.set(node, { request, leave });
+		},
+		[leave, request],
+	);
+
 	const triggerProps = useMemo(
 		() => ({
-			onBlur: hide,
+			"data-session-preview-row": "",
+			// Focus moving into the card (a PR link being clicked) must not close it
+			// before the click lands; the card's own pointer handlers take over.
+			onBlur: (event: FocusEvent) => {
+				if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-session-preview-card]")) return;
+				hide();
+			},
 			onFocus: request,
 			onPointerEnter: (event: PointerEvent) => {
+				hoveredRow = event.currentTarget;
 				if (event.pointerType !== "touch") request();
 			},
-			onPointerLeave: leave,
+			onPointerLeave: (event: PointerEvent) => {
+				if (hoveredRow === event.currentTarget) hoveredRow = undefined;
+				leave();
+			},
 		}),
 		[hide, leave, request],
 	);
-	const contentProps = useMemo(() => ({ onPointerEnter: stay, onPointerLeave: leave }), [leave, stay]);
+	const contentProps = useMemo(
+		() => ({ "data-session-preview-card": "", onPointerEnter: stay, onPointerLeave: leave }),
+		[leave, stay],
+	);
 
-	return { open: state.open && !suppressed, animation: state.animation, triggerProps, contentProps };
+	return { open: state.open && !suppressed, animation: state.animation, hide, triggerProps, contentProps, rowRef };
 }

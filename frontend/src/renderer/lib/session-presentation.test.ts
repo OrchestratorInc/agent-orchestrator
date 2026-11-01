@@ -40,7 +40,19 @@ const openPr: WorkspaceSession["prs"][number] = {
 
 describe("session presentation", () => {
 	it.each([
-		["Needs review", "needs_review"],
+		["Draft", null],
+		["Review pending", "review"],
+	] as const)("maps in-review sessions with %s to marker %s", (displayStatus, marker) => {
+		expect(getSessionRowMarker(sessionWith({
+			status: "pr_open",
+			scmStatus: "pr_open",
+			kanbanColumn: "needs_review",
+			displayStatus,
+		}))).toBe(marker);
+	});
+
+	it.each([
+		["Needs review", null],
 		["Review failed", "review"],
 		["Review scheduled", null],
 		["Reviewing", null],

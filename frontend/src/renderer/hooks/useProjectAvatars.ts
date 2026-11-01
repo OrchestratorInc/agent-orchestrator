@@ -5,46 +5,74 @@ import { repositoryOwnerAvatar } from "../lib/repository-avatar";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, type WorkspaceSummary } from "../types/workspace";
 
-type CachedAvatar = { url: string; src: string };
+// Avatar URL -> the image as a data URL, so a launch paints known avatars with
+// no network request.
+type AvatarCache = Record<string, string>;
 
 const cacheKey = "ao.projectAvatarCache";
+// Project id -> its last avatar URL, so the first paint does not wait for
+// project details.
+const urlsKey = "ao.projectAvatarUrls";
 
-function readCache(): Record<string, CachedAvatar> {
+function readStrings(key: string): Record<string, string> {
 	try {
-		return JSON.parse(window.localStorage.getItem(cacheKey) ?? "{}") as Record<string, CachedAvatar>;
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+		if (!parsed || typeof parsed !== "object") return {};
+		return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 	} catch {
 		return {};
 	}
 }
 
-// The image as a data URL, so the next launch paints it with no network
-// request. Hosts without CORS fall back to the plain URL.
-async function toImageSource(url: string): Promise<string> {
+function writeStrings(key: string, value: Record<string, string>) {
 	try {
-		const response = await fetch(url);
-		if (!response.ok) return url;
-		const blob = await response.blob();
-		return await new Promise<string>((resolve) => {
-			const reader = new FileReader();
-			reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : url);
-			reader.onerror = () => resolve(url);
-			reader.readAsDataURL(blob);
-		});
+		window.localStorage.setItem(key, JSON.stringify(value));
 	} catch {
-		return url;
+		// A full localStorage only costs the instant first paint.
 	}
 }
 
-// Fetched once per launch, so an owner's new avatar replaces the cached one.
+function readCache(): AvatarCache {
+	return Object.fromEntries(Object.entries(readStrings(cacheKey)).filter(([, src]) => src.startsWith("data:image/")));
+}
+
+// Draws the avatar through a CORS image and a canvas. Loading it as an image
+// keeps it under the renderer's img-src policy (fetch would need connect-src),
+// and a redirect to a sign-in page fails to decode instead of being cached.
+function loadAsDataUrl(url: string): Promise<string | null> {
+	return new Promise((resolve) => {
+		const image = new Image();
+		image.crossOrigin = "anonymous";
+		image.onload = () => {
+			try {
+				const canvas = document.createElement("canvas");
+				canvas.width = 64;
+				canvas.height = 64;
+				const context = canvas.getContext("2d");
+				if (!context) return resolve(null);
+				context.drawImage(image, 0, 0, 64, 64);
+				resolve(canvas.toDataURL("image/png"));
+			} catch {
+				resolve(null);
+			}
+		};
+		image.onerror = () => resolve(null);
+		image.src = url;
+	});
+}
+
+// Refreshed once per launch, so an owner's new avatar replaces the cached one.
 const refreshedUrls = new Set<string>();
 
 // The image source for each local project's repository owner avatar, keyed by
-// project id. The last known images come from localStorage on first render, so
-// the sidebar paints them instantly; project details then confirm the owner
-// and refresh the cache in the background. Empty when the setting is off.
+// project id. Cached images come from localStorage on first render, so the
+// sidebar paints them instantly; project details then confirm the owner and
+// refresh the cache in the background. A failed refresh keeps the cached
+// image. Empty when the setting is off.
 export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, string> {
 	const enabled = useUiStore((state) => state.projectAvatars);
 	const [cache, setCache] = useState(readCache);
+	const [knownUrls] = useState(() => readStrings(urlsKey));
 	const projects = useMemo(
 		() => workspaces.filter((workspace) => !workspace.hostId && workspace.kind !== CLOUD_PROJECT_KIND && workspace.kind !== STANDALONE_PROJECT_KIND),
 		[workspaces],
@@ -67,7 +95,13 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 	const urls = useMemo(() => {
 		const map = new Map<string, string>();
 		projects.forEach((project, index) => {
-			const detail = details[index]?.data;
+			const query = details[index];
+			if (!query?.isSuccess) {
+				const known = knownUrls[project.id];
+				if (known) map.set(project.id, known);
+				return;
+			}
+			const detail = query.data;
 			const repo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo
 				? detail.repo
 				: project.workspaceRepos?.[0]?.repo;
@@ -75,41 +109,38 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 			if (avatar) map.set(project.id, avatar.url);
 		});
 		return map;
-	}, [details, projects]);
-	const urlKey = [...urls].map(([id, url]) => `${id}=${url}`).join("\n");
+	}, [details, knownUrls, projects]);
+	const urlKey = [...new Set(urls.values())].sort().join("\n");
+	const settled = details.every((query) => !query.isPending);
+	const urlsJson = JSON.stringify(Object.fromEntries(urls));
+	useEffect(() => {
+		if (enabled && settled) window.localStorage.setItem(urlsKey, urlsJson);
+	}, [enabled, settled, urlsJson]);
 
 	useEffect(() => {
 		if (!enabled) return;
-		for (const [projectId, url] of urls) {
+		const current = new Set(urlKey ? urlKey.split("\n") : []);
+		for (const url of current) {
 			if (refreshedUrls.has(url)) continue;
 			refreshedUrls.add(url);
-			void toImageSource(url).then((src) => {
+			void loadAsDataUrl(url).then((src) => {
+				if (!src) return;
 				setCache((previous) => {
-					if (previous[projectId]?.url === url && previous[projectId]?.src === src) return previous;
-					const next = { ...previous, [projectId]: { url, src } };
-					try {
-						window.localStorage.setItem(cacheKey, JSON.stringify(next));
-					} catch {
-						// A full localStorage only costs the instant first paint.
-					}
+					if (previous[url] === src) return previous;
+					// Keep only avatars still in use, so removed projects drop out.
+					const next: AvatarCache = { [url]: src };
+					for (const [key, value] of Object.entries(previous)) if (current.has(key) && key !== url) next[key] = value;
+					writeStrings(cacheKey, next);
 					return next;
 				});
 			});
 		}
-		// urlKey carries the content of urls.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [enabled, urlKey]);
 
 	return useMemo(() => {
 		const map = new Map<string, string>();
 		if (!enabled) return map;
-		for (const project of projects) {
-			const url = urls.get(project.id);
-			const cached = cache[project.id];
-			// Before details load, trust the cache; after, only a cache for the same owner.
-			if (cached && (!url || cached.url === url)) map.set(project.id, cached.src);
-			else if (url) map.set(project.id, url);
-		}
+		for (const [projectId, url] of urls) map.set(projectId, cache[url] ?? url);
 		return map;
-	}, [cache, enabled, projects, urls]);
+	}, [cache, enabled, urls]);
 }

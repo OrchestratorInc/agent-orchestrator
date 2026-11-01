@@ -1322,7 +1322,7 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"group-has-[:focus-visible]/session-row:opacity-0",
 		);
-		expect(openSession).toHaveClass("pl-2.5");
+		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
 	});
 
@@ -2788,7 +2788,7 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("shows actionable status icons and spins only while unmarked sessions work", () => {
+	it("shows a quiet dot when idle, the spinner while working, and markers once the agent stops", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2823,28 +2823,28 @@ describe("Sidebar", () => {
 							...session,
 							id: "proj-1-review",
 							title: "review task",
-							status: "working",
+							status: "idle",
 							scmStatus: "pr_open",
 							kanbanColumn: "needs_review",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR()],
 						},
 						{
 							...session,
 							id: "proj-1-ready",
 							title: "ready task",
-							status: "working",
+							status: "idle",
 							scmStatus: "mergeable",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ mergeability: "mergeable" })],
 						},
 						{
 							...session,
 							id: "proj-1-merged",
 							title: "merged task",
-							status: "working",
+							status: "idle",
 							scmStatus: "merged",
-							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ state: "merged" })],
 						},
 					],
@@ -2854,15 +2854,16 @@ describe("Sidebar", () => {
 		const sessionDot = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<HTMLElement>("[data-session-status]");
 
-		expect(sessionDot("idle task")).not.toBeInTheDocument();
+		expect(sessionDot("idle task")).toHaveAttribute("data-session-idle", "idle");
 
 		const workingDot = sessionDot("working task");
 		expect(workingDot).toHaveAttribute("data-session-spinner");
 		expect(workingDot).toHaveClass("animate-spin");
 
+		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
 		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
-		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
+		expect(sessionDot("review task")).toHaveClass("lucide-eye", "text-status-in-review");
 		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
 		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
 		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
@@ -2904,7 +2905,8 @@ describe("Sidebar", () => {
 		expect(marker("ci task")).toHaveClass("text-destructive");
 	});
 
-	it("shows the pending review warning on the session and keeps its project folder", async () => {
+	it("keeps AO's pending review quiet on the session and its project folder", async () => {
+		useUiStore.setState({ projectAvatars: false });
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [{
@@ -2912,9 +2914,7 @@ describe("Sidebar", () => {
 				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Needs review" }],
 			}],
 		});
-		const marker = screen.getByLabelText("Open fix login").querySelector("[data-session-marker]");
-		expect(marker).toHaveAttribute("data-session-marker", "needs_review");
-		expect(marker).toHaveClass("lucide-circle-alert", "text-status-validating");
+		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
 		expect(document.querySelector("[data-project-folder-icon] .lucide-folder-open")).toBeInTheDocument();
 		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
@@ -2923,6 +2923,7 @@ describe("Sidebar", () => {
 	});
 
 	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
@@ -2932,12 +2933,21 @@ describe("Sidebar", () => {
 	});
 
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
+		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status }] }],
 		});
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
 		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+	});
+
+	it("shows a first-letter tile for a project without a repository avatar", () => {
+		useUiStore.setState({ projectAvatars: true });
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [] }] });
+		const icon = document.querySelector("[data-project-folder-icon]");
+		expect(icon).toHaveTextContent("P");
+		expect(icon?.querySelector(".lucide-folder")).not.toBeInTheDocument();
 	});
 
 	it("previews the board card to the right of a hovered session row", async () => {
@@ -3170,14 +3180,13 @@ describe("Sidebar", () => {
 		});
 
 
-		const idleActivityDot = screen
-			.getByLabelText("Open idle activity task")
-			.querySelector<HTMLElement>("span.rounded-full");
-		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector("[data-session-marker]");
+		const idleActivityDot = screen.getByLabelText("Open idle activity task").querySelector("[data-session-idle]");
+		const idleDraft = screen.getByLabelText("Open idle draft task");
 
-		expect(idleActivityDot).not.toBeInTheDocument();
-		expect(idleDraftDot).toHaveAttribute("data-session-marker", "review");
-		expect(idleDraftDot).not.toHaveClass("animate-spin");
+		expect(idleActivityDot).toHaveAttribute("data-session-idle", "idle");
+		// A draft is still the author's, so it gets the quiet dot, not a review marker.
+		expect(idleDraft.querySelector("[data-session-marker]")).not.toBeInTheDocument();
+		expect(idleDraft.querySelector("[data-session-idle]")).toBeInTheDocument();
 	});
 
 	it("shows sessions on load and hides them once collapsed", async () => {

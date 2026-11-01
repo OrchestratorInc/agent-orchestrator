@@ -112,11 +112,10 @@ export function getSessionStatusDotView(
  *  - "attention", red: the session needs you now (input or blocked, CI failing,
  *    or changes requested)
  *  - "ready", green: a PR you can merge
- *  - "review", orange: a person's review is next
- *  - "needs_review", rose: AO's review has not started yet
+ *  - "review", orange eye: a person's review is next
  *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
  */
-export type SessionRowMarker = "attention" | "ready" | "review" | "needs_review" | "merged";
+export type SessionRowMarker = "attention" | "ready" | "review" | "merged";
 
 /**
  * What a sidebar row says about its session, if anything, from the daemon's
@@ -144,9 +143,10 @@ export function getSessionRowMarker(session: {
 	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
 		case "needs_review":
 			// The review lane is the person's turn, short of the red states above.
-			return "review";
+			// A draft is still the author's, so it stays quiet.
+			return (display ? display === "Draft" : sectionStatus === "draft") ? null : "review";
 		case "validating":
-			if (display === "Needs review") return "needs_review";
+			// AO's own review loop needs nothing from the user unless it failed.
 			return display === "Review failed" ? "review" : null;
 		case "ready":
 			if (display ? display === "Merged" : sectionStatus === "merged") return "merged";

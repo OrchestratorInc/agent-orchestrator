@@ -23,5 +23,7 @@ export function repositoryOwnerAvatar(repo: string): { owner: string; url: strin
 	if (host === "github.com") return { owner, url: `https://avatars.githubusercontent.com/${encodedOwner}?s=64` };
 	if (host === "gitlab.com") return { owner, url: `https://gitlab.com/-/avatar?username=${encodedOwner}` };
 	if (host === "bitbucket.org") return { owner, url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/` };
-	return { owner, url: `https://unavatar.io/${encodeURIComponent(host)}/${encodedOwner}` };
+	// Any other host (self-hosted, an SSH alias, a local path) gets no avatar:
+	// sending it to a third-party lookup would leak internal host and org names.
+	return null;
 }

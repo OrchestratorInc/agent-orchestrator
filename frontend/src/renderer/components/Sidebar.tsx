@@ -24,6 +24,7 @@ import {
 	ChevronRight,
 	CircleAlert,
 	Copy,
+	Eye,
 	GitMerge,
 	GitPullRequest,
 	LoaderCircle,
@@ -606,24 +607,31 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Sessions that need the user sit above the rest. Stable, so the manual order
-// (and the default recency order) still holds within each group.
-function floatAttention(sessions: WorkspaceSession[]): WorkspaceSession[] {
-	const flagged = sessions.filter((session) => getSessionRowMarker(session) === "attention");
+// A row spins while its agent works, ahead of any PR state: it may already be
+// on its next PR, and the hover card has the PR detail.
+function isSessionRowWorking(session: WorkspaceSession): boolean {
+	return isAgentActivityWorking(session.activity) && session.displayStatus !== "Terminated";
+}
+
+// Rows showing the red alert sit above the rest, but only in the default
+// order: once the user has dragged rows into their own order, it wins. Stable,
+// so the order still holds within each group.
+function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
+	if (hasManualOrder) return sessions;
+	const flagged = sessions.filter((session) => !isSessionRowWorking(session) && getSessionRowMarker(session) === "attention");
 	if (flagged.length === 0 || flagged.length === sessions.length) return sessions;
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
 
 // The icons a row or a collapsed project can show, plus the working
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
-// Red needs you now, green is a PR you can merge (GitHub's own green pull
-// request), orange is a person's review next. Everything else is left plain on
-// purpose: a few strong signals read better than an icon on every row.
+// Each state has its own glyph, so colour is never the only difference: a red
+// alert needs you now, an orange eye is a person's review next, a green pull
+// request is ready to merge.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
-	review: { Icon: CircleAlert, tone: "text-status-in-review" },
-	needs_review: { Icon: CircleAlert, tone: "text-status-validating" },
+	review: { Icon: Eye, tone: "text-status-in-review" },
 	// Done, so it sits a step below the colours that ask something of you.
 	merged: { Icon: GitMerge, tone: "text-status-merged opacity-70" },
 } as const satisfies Record<SessionRowMarker, { Icon: unknown; tone: string }>;
@@ -644,14 +652,14 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
-// A row is quiet unless the user has something to do: a red alert when the
-// session needs them, a green check when its PR is ready, and a spinner while
-// its agent is working (a marker wins when a row has both). It sits at the left,
-// and only a row with an icon has the slot: the rest start at the row's inset.
-// A marker that appears after the row is on screen pops in once; one already
+// A row flags only what the user has something to do about, a spinner while
+// its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
 function SessionStatusDot({ session, working, harnessOnly }: { session: WorkspaceSession; working: boolean; harnessOnly: boolean }) {
-	const marker = getSessionRowMarker(session);
+	// A working agent shows the spinner even when its PR has a state to flag:
+	// the agent may be on another PR, and the hover card has the PR detail.
+	// The marker returns once the agent stops.
+	const marker = working ? null : getSessionRowMarker(session);
 	const previous = useRef(marker);
 	const [popped, setPopped] = useState(false);
 	useEffect(() => {
@@ -660,13 +668,21 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 	}, [marker]);
 	if (harnessOnly) {
 		return (
-			// Same 14px box, 10px inset, and 8px gap as a project's avatar.
+			// Same 14px box, 10px inset, and 8px gap as a project's avatar. A session
+			// waiting on the user swaps the logo for the red alert.
 			<span aria-hidden="true" className="relative z-[1] mr-0.5 inline-flex size-icon-md shrink-0 items-center justify-center">
-				<AgentAvatar className="size-icon-md" decorative provider={session.provider} />
+				{!working && sessionNeedsInput(session) ? (
+					<SessionMarkerIcon data-session-status={session.status} marker="attention" />
+				) : (
+					<AgentAvatar className="size-icon-md" decorative provider={session.provider} />
+				)}
 			</span>
 		);
 	}
-	if (!marker && !working) return null;
+	// Rows with nothing to flag still get a quiet dot, so every title starts on
+	// the same column: filled when idle, hollow once the agent has stopped.
+	const stopped =
+		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
 	return (
 		<span
 			aria-hidden="true"
@@ -679,12 +695,25 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 					onPopEnd={() => setPopped(false)}
 					popped={popped}
 				/>
-			) : (
+			) : working ? (
 				<LoaderCircle
 					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
 					data-session-status={session.status}
 					data-session-spinner=""
 				/>
+			) : (
+				<span
+					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+					data-session-idle={stopped ? "stopped" : "idle"}
+					data-session-status={session.status}
+				>
+					<span
+						className={cn(
+							"size-1.5 rounded-full",
+							stopped ? "border border-muted-foreground/50" : "bg-muted-foreground/50",
+						)}
+					/>
+				</span>
 			)}
 		</span>
 	);
@@ -1598,7 +1627,7 @@ const ProjectItem = memo(function ProjectItem({
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
-		() => floatAttention(applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start")),
+		() => floatAttention(applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"), sessionOrder.length > 0),
 		[sessionOrder, visibleSessions],
 	);
 	// Publish the order shown here so keyboard navigation follows it.
@@ -1877,7 +1906,7 @@ const ProjectItem = memo(function ProjectItem({
 										>
 											{!expanded && projectNeedsInput ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
-											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} />}
+											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
 										</span>
 										<span
 											className={cn(
@@ -1891,14 +1920,20 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight strokeWidth={1.75} />
 										</span>
 									</span>
-									{/* Collapsed icon rail: folder icon */}
+									{/* Collapsed icon rail: the project icon, with a red badge when a session
+									    waits on the user. The session list is hidden here, so the badge
+									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
 										className="relative z-[1] hidden size-8 items-center justify-center group-data-[collapsible=icon]:inline-flex"
 									>
-										{!expanded && projectNeedsInput ? (
-											<SessionMarkerIcon data-project-marker="attention" marker="attention" />
-										) : <ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} />}
+										<ProjectIcon avatarUrl={avatarUrl} className="size-5" expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />
+										{projectNeedsInput ? (
+											<span
+												className="absolute right-0.5 top-0.5 size-2 rounded-full bg-destructive ring-2 ring-sidebar"
+												data-project-marker="attention"
+											/>
+										) : null}
 									</span>
 									<span
 										className="sidebar-expanded-chrome relative z-[1] min-w-0 flex-1 translate-y-px truncate group-data-[collapsible=icon]:hidden"
@@ -2572,27 +2607,31 @@ const SessionRow = memo(function SessionRow({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
-	// A working agent gets a spinner and a shimmering title in place of a status
-	// dot. Not once the PR is merged or closed, where the agent may keep running
-	// but nothing is turning. The open row keeps a full-contrast title, so it
-	// gets the spinner without the shimmer.
-	const working =
-		isAgentActivityWorking(session.activity) &&
-		session.displayStatus !== "Merged" &&
-		session.displayStatus !== "Closed without merge" &&
-		session.displayStatus !== "Terminated";
+	// The open row keeps a full-contrast title, so it gets the spinner without
+	// the shimmer.
+	const working = isSessionRowWorking(session);
 	const shimmer = working && !active && !harnessOnly;
-	// Only a row with an icon (a marker or the spinner) has the left slot; the
-	// rest start at the row's inset.
-	const marker = harnessOnly ? null : getSessionRowMarker(session);
-	const hasIcon = harnessOnly || working || marker !== null;
-	const preview = useSessionPreviewHover(Boolean(reorder?.isDragging || listIsDragging));
+	const marker = harnessOnly || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
 		[queryClient, session.hostId],
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
+	const [contextMenuOpen, setContextMenuOpen] = useState(false);
+	// No preview while renaming, dragging, or with the context menu open.
+	const preview = useSessionPreviewHover(
+		Boolean(reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
+	);
+	const setSortableNode = reorder?.setNodeRef;
+	const setPreviewRow = preview.rowRef;
+	const rowNodeRef = useCallback(
+		(node: HTMLElement | null) => {
+			setSortableNode?.(node);
+			setPreviewRow(node);
+		},
+		[setPreviewRow, setSortableNode],
+	);
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -2627,7 +2666,7 @@ const SessionRow = memo(function SessionRow({
 				<div
 					className={cn(
 						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
-						hasIcon && !harnessOnly ? "pl-1.5" : "pl-2.5",
+						harnessOnly ? "pl-2.5" : "pl-1.5",
 						active && "text-foreground",
 					)}
 					data-session-row=""
@@ -2664,14 +2703,16 @@ const SessionRow = memo(function SessionRow({
 	}
 
 	return (
-		<ContextMenu>
-			<HoverCard closeDelay={0} open={preview.open} openDelay={0}>
+		<ContextMenu onOpenChange={setContextMenuOpen}>
+			{/* Controlled by the hover hook; Radix still reports Escape and outside
+			    presses, which close it. */}
+			<HoverCard closeDelay={0} onOpenChange={(open) => !open && preview.hide()} open={preview.open} openDelay={0}>
 			<ContextMenuTrigger asChild>
 				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
 					className={cn(indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
 					data-dragging={reorder?.isDragging ? "true" : undefined}
-					ref={reorder?.setNodeRef}
+					ref={rowNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 					{...preview.triggerProps}
 				>
@@ -2698,7 +2739,7 @@ const SessionRow = memo(function SessionRow({
 							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-								hasIcon && !harnessOnly ? "pl-1.5" : "pl-2.5",
+								harnessOnly ? "pl-2.5" : "pl-1.5",
 								!harnessOnly && (session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
@@ -3476,18 +3517,68 @@ function ShowMoreRow({
 	);
 }
 
-/** A project's repository owner avatar as a 4px-radius squircle. The folder
- *  shows until the image has loaded, and stays when there is no avatar or it
- *  fails to load. */
-function ProjectIcon({ avatarUrl, expanded, className }: { avatarUrl?: string; expanded: boolean; className?: string }) {
+// Tile colours for projects without an avatar. Picked by a hash of the
+// project path, so a project keeps its colour across launches.
+const PROJECT_LETTER_TILE_COLORS = [
+	"bg-red-400/20",
+	"bg-orange-400/20",
+	"bg-amber-400/20",
+	"bg-lime-400/20",
+	"bg-emerald-400/20",
+	"bg-teal-400/20",
+	"bg-sky-400/20",
+	"bg-blue-400/20",
+	"bg-indigo-400/20",
+	"bg-violet-400/20",
+	"bg-fuchsia-400/20",
+	"bg-pink-400/20",
+] as const;
+
+function projectTileColor(seed: string): string {
+	let hash = 0;
+	for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) | 0;
+	return PROJECT_LETTER_TILE_COLORS[Math.abs(hash) % PROJECT_LETTER_TILE_COLORS.length];
+}
+
+/** A project's icon. With repository avatars on: the owner avatar as a 4px-radius
+ *  squircle, or a colour-coded first-letter tile while it loads and when there
+ *  is no avatar or it fails. With them off: a folder. */
+function ProjectIcon({
+	avatarUrl,
+	name,
+	seed,
+	expanded,
+	className,
+}: {
+	avatarUrl?: string;
+	name: string;
+	seed: string;
+	expanded: boolean;
+	className?: string;
+}) {
+	const avatarsEnabled = useUiStore((state) => state.projectAvatars);
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
-	const Icon = expanded ? FolderOpen : Folder;
+	if (!avatarsEnabled) {
+		const Icon = expanded ? FolderOpen : Folder;
+		return <Icon className={className} strokeWidth={1.75} />;
+	}
 	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
 	const loaded = showAvatar && loadedUrl === avatarUrl;
+	const letter = name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?";
 	return (
-		<span className={cn("relative inline-flex items-center justify-center", className ?? "size-icon-md")}>
-			{loaded ? null : <Icon className={className} strokeWidth={1.75} />}
+		<span className={cn("relative inline-flex shrink-0", className ?? "size-icon-md")}>
+			{loaded ? null : (
+				<span
+					className={cn(
+						"inline-flex size-full items-center justify-center rounded-[4px] font-semibold leading-none text-foreground/80",
+						className ? "text-xs" : "text-[9px]",
+						projectTileColor(seed),
+					)}
+				>
+					{letter}
+				</span>
+			)}
 			{showAvatar ? (
 				<img
 					alt=""
