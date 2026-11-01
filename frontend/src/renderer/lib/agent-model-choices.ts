@@ -151,16 +151,16 @@ export function withoutLocalAvailability<T extends ModelAvailability>(models: T[
 
 /**
  * A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead.
- * A model the installed CLI cannot run is never made the default; the newest one it can run stands in for the alias.
+ * When this computer's CLI cannot run that newest model the alias stays the default: each CLI resolves it to a model
+ * it can run, and a cloud worker with a newer CLI still gets the newest one. Folding into an older model would pin that.
  */
 export function foldClaudeAliasDefault<T extends { id: string; label: string; isDefault?: boolean } & ModelAvailability>(models: T[]): T[] {
 	const alias = models.find((model) => model.isDefault && CLAUDE_FAMILIES.includes(model.id));
 	if (!alias) return models;
 	const rest = models.filter((model) => model !== alias);
 	const family = CLAUDE_FAMILIES.indexOf(alias.id);
-	const newest = splitClaudeModels(rest.filter(isModelSelectable))
-		.current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
-	return newest ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
+	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
+	return newest && isModelSelectable(newest) ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
 }
 
 /** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */

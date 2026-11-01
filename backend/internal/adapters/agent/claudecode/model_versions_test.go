@@ -92,6 +92,31 @@ func TestGateCatalogMarksOnlyModelsNewerThanInstalled(t *testing.T) {
 	}
 }
 
+func TestGateCatalogUsesContextVariantLearnedRequirement(t *testing.T) {
+	requirements := NewModelVersionRequirements("")
+	// The variant was taught a higher minimum than its base model's seed.
+	if err := requirements.Record("claude-opus-5-5[1m]", "2.1.281"); err != nil {
+		t.Fatal(err)
+	}
+	// An unseeded variant keeps what it learned.
+	if err := requirements.Record("claude-sonnet-9-9[1m]", "2.1.300"); err != nil {
+		t.Fatal(err)
+	}
+	catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "claude-opus-5-5[1m]"}, {ID: "claude-opus-5-5"}, {ID: "claude-sonnet-9-9[1m]"},
+	}}
+	gated := requirements.GateCatalog(catalog, "2.1.280")
+	if got := gated.Models[0].RequiresVersion; got != "2.1.281" {
+		t.Fatalf("variant requiresVersion = %q, want its learned 2.1.281", got)
+	}
+	if got := gated.Models[1].RequiresVersion; got != "" {
+		t.Fatalf("base requiresVersion = %q, want none on 2.1.280", got)
+	}
+	if got := gated.Models[2].RequiresVersion; got != "2.1.300" {
+		t.Fatalf("unseeded variant requiresVersion = %q, want 2.1.300", got)
+	}
+}
+
 func TestInstalledVersionCachesByExecutableFingerprint(t *testing.T) {
 	name := "claude"
 	if runtime.GOOS == "windows" {

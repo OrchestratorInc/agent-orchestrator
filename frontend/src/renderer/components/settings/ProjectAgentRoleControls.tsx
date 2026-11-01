@@ -110,7 +110,8 @@ export function AgentModelField({
 		...item,
 		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
-		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
+		// Cloud runs the worker's own CLI, so this computer's version limits do not apply.
+		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined, requiresVersion: undefined, unavailableReason: undefined } : {}),
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });

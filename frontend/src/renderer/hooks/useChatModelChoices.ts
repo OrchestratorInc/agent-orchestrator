@@ -81,7 +81,8 @@ export function useChatModelChoices(
 		if (!providerModelOption) return options;
 		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
 		const markUnavailable = (choice: ChatConfigChoice): ChatConfigChoice => {
-			const reason = unavailableReasons?.get(choice.value.replace(/\[.*\]$/, ""));
+			// A context variant may be gated on its own, or through its base model.
+			const reason = unavailableReasons?.get(choice.value) ?? unavailableReasons?.get(choice.value.replace(/\[.*\]$/, ""));
 			return reason ? { ...choice, unavailableReason: reason } : choice;
 		};
 		return options?.map((option) => option === providerModelOption

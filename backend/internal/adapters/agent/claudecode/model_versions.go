@@ -201,15 +201,25 @@ func (r *ModelVersionRequirements) GateCatalog(catalog ports.AgentModelCatalog, 
 }
 
 // tooNew reports the known minimum version for model when current predates it.
-// A context-window suffix ("claude-opus-5-5[1m]") names the same model.
+// A context variant ("claude-opus-5-5[1m]") needs at least what its base model
+// needs, and may have learned a higher minimum of its own, so the higher wins.
 func (r *ModelVersionRequirements) tooNew(model string, current cliVersion) (string, bool) {
-	model, _, _ = strings.Cut(model, "[")
-	required, known := r.Required(model)
-	if !known {
-		return "", false
+	required, minimum, known := "", cliVersion{}, false
+	candidates := []string{model}
+	if base, _, variant := strings.Cut(model, "["); variant {
+		candidates = append(candidates, base)
 	}
-	minimum, valid := parseCLIVersion(required)
-	if !valid || !current.less(minimum) {
+	for _, candidate := range candidates {
+		version, ok := r.Required(candidate)
+		if !ok {
+			continue
+		}
+		parsed, valid := parseCLIVersion(version)
+		if valid && (!known || minimum.less(parsed)) {
+			required, minimum, known = version, parsed, true
+		}
+	}
+	if !known || !current.less(minimum) {
 		return "", false
 	}
 	return required, true

@@ -341,6 +341,8 @@ export function AgentModelPicker({
 	const offered = (favorite: ModelFavorite) => {
 		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
 		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
+		// The id a favourite sends decides: a row it was folded into may be runnable while it is not.
+		if (models.some((model) => model.unavailableReason && (model.sendId ?? model.id) === favorite.model)) return false;
 		return models.length === 0 || models.some((model) => !model.unavailableReason && (names(model).includes(favorite.row) || names(model).includes(favorite.model)));
 	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.

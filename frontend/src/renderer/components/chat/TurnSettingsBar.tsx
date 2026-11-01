@@ -610,10 +610,13 @@ export function TurnSettingsBar({
 	);
 }
 
-function dedupeChoicesByName<T extends { value: string; name: string; group?: string }>(choices: T[], current: string | undefined): (T & { aliases?: string[] })[] {
+function dedupeChoicesByName<T extends { value: string; name: string; group?: string; unavailableReason?: string }>(choices: T[], current: string | undefined): (T & { aliases?: string[] })[] {
 	return choices.flatMap((choice) => {
 		// One model from two providers (Pi's openai and openai-codex) stays two rows.
-		const twins = choices.filter((other) => other.name === choice.name && other.group === choice.group);
+		// So do an alias the CLI can run and a concrete id it is too old for: folding
+		// them would leave only one row, enabled or disabled for both.
+		const twins = choices.filter((other) => other.name === choice.name && other.group === choice.group
+			&& Boolean(other.unavailableReason) === Boolean(choice.unavailableReason));
 		const kept = twins.find((other) => other.value === current) ?? twins[0];
 		if (choice !== kept) return [];
 		// The values folded into this one, so a favourite starred on any of them still shows.

@@ -66,13 +66,12 @@ describe("foldClaudeAliasDefault", () => {
 		expect(foldClaudeAliasDefault(models)).toBe(models);
 	});
 
-	it("never makes a model the installed CLI cannot run the default", () => {
+	it("keeps the alias as the default when this CLI cannot run the family's newest model", () => {
 		const alias = model("Opus", "opus", { isDefault: true });
 		const gated = { ...model("Opus 5.5"), unavailableReason: "Requires Claude Code 2.1.280 or newer." };
-		const folded = foldClaudeAliasDefault([model("Opus 4.6"), gated, alias]);
-		expect(folded.find((item) => item.isDefault)?.label).toBe("Opus 4.6");
-		const onlyGated = [gated, alias];
-		expect(foldClaudeAliasDefault(onlyGated)).toBe(onlyGated);
+		// Folding into Opus 4.6 would pin a cloud worker that can run 5.5 to the older model.
+		const models = [model("Opus 4.6"), gated, alias];
+		expect(foldClaudeAliasDefault(models)).toBe(models);
 	});
 });
 
