@@ -9,7 +9,7 @@
  * as the user's conversation rather than a log of worker traffic.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, LoaderCircle, Tag, Undo2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
@@ -19,7 +19,7 @@ import { isSteer, type ConversationItem, type ConversationMessage } from "../../
 import type { WorkspaceSession } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
-import { formatDuration, formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { formatDuration, formatTime, humanVisibleText, QueuedNote, ResponseSpinner, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
 
 export interface WorkerUpdate {
@@ -633,11 +633,8 @@ function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
 	const phase = phrase && !["working", state.label.toLowerCase()].includes(phrase.toLowerCase()) ? phrase : undefined;
 	return (
 		<div data-testid="spawned-agent" className="cursor-chat-explore-box flex min-w-0 items-start gap-2.5 rounded-lg border px-3 py-2.5">
-			{session?.provider ? (
-				<AgentAvatar provider={session.provider} decorative className="mt-px size-4 shrink-0" />
-			) : (
-				<Bot aria-hidden="true" className="mt-px size-4 shrink-0 text-muted-foreground" />
-			)}
+			{/* The spawn's own mark, as the turn's "Spawned" row had; the worker's avatar heads its answer. */}
+			<Split aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
 			<div className="min-w-0 flex-1">
 				<div className="flex min-w-0 items-center gap-3">
 					<span className="min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium text-foreground">
@@ -645,9 +642,9 @@ function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
 					</span>
 					<span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
 						{working ? (
-							<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />
+							<ResponseSpinner />
 						) : (
-							<span aria-hidden="true" className={cn("mx-[3.5px] size-[7px] shrink-0 rounded-full", state.tone === "attention" ? "bg-status-needs-you" : "bg-status-idle")} />
+							<span aria-hidden="true" className={cn("mx-[2.5px] size-[7px] shrink-0 rounded-full", state.tone === "attention" ? "bg-status-needs-you" : "bg-status-idle")} />
 						)}
 						<span className={cn(state.tone === "attention" && "text-status-needs-you")}>{state.label}</span>
 						{elapsed ? <span className="tabular-nums">· {elapsed}</span> : null}

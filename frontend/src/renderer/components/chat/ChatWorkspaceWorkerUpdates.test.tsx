@@ -90,10 +90,11 @@ describe("orchestrator worker updates", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
 
 		const box = screen.getByTestId("spawned-agent");
+		expect(box.querySelector("svg.lucide-split")).not.toBeNull();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 		expect(within(box).getByRole("link", { name: "Audit usage" })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
 		const idle = within(box).getByText("Idle");
-		expect(idle.parentElement?.querySelector(".animate-spin")).toBeNull();
+		expect(idle.parentElement?.querySelector('[data-testid="lattice-loader"]')).toBeNull();
 	});
 
 	it("keeps a structured spawn action when no command group represents it", () => {
@@ -160,7 +161,7 @@ describe("orchestrator worker updates", () => {
 		};
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
 		const line = within(screen.getByTestId("spawned-agent")).getByText(label).parentElement;
-		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
+		expect(line?.querySelector('[data-testid="lattice-loader"]') !== null).toBe(spinning);
 	});
 
 	it("shows how long a working worker has run and the stage the daemon names", () => {
