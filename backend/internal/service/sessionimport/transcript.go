@@ -350,6 +350,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessPi {
 		return readPiTranscript(ctx, root, paths...)
 	}
+	if harness == domain.HarnessKimchi {
+		return readKimchiTranscript(ctx, root, paths...)
+	}
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
