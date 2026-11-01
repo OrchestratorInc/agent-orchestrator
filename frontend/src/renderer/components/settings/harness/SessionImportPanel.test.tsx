@@ -67,6 +67,7 @@ it("gates importable harnesses to the ones with a verified resume path", () => {
 	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
 	// Kimi chats import and resume by the native session_<uuid> id over ACP session/load.
 	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
 });
 
 it("reports new, existing and failed imports separately", async () => {
