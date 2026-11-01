@@ -109,8 +109,13 @@ func TestRelocateImportedSessionRawSymlinkCWD(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.CWD != rawDir {
 			t.Fatalf("cwd = %q, error = %v; want raw %q", rec.CWD, err, rawDir)
 		}
-		if !strings.Contains(string(rec.Opaque), "1234567890123456789") || !strings.Contains(string(rec.Opaque), "<native>") {
-			t.Fatalf("native fields changed: %s", rec.Opaque)
+		// The fixture's json.Marshal escapes HTML; compare native JSON values.
+		var native struct {
+			Number json.Number `json:"number"`
+			Text   string      `json:"text"`
+		}
+		if err := json.Unmarshal(rec.Opaque, &native); err != nil || native.Number.String() != "1234567890123456789" || native.Text != "<native>" {
+			t.Fatalf("native fields changed: %s (decode error: %v)", rec.Opaque, err)
 		}
 	}
 	if _, err := os.Stat(qwenChatPath(root, realDir, qwenTestID)); !os.IsNotExist(err) {
