@@ -68,8 +68,23 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 	// stampede together. Falling back to head loses at most the events in the gap,
 	// which clients recover from their next snapshot fetch.
 	startAtHead := r.URL.Query().Get("after") == "latest" && r.Header.Get("Last-Event-ID") == ""
+	// A resumed stream whose gap is no longer fully in change_log gets a reset
+	// frame, so the client knows to refetch instead of trusting the replay.
+	reset := !startAtHead && after > latestSeq
 	if startAtHead || after > latestSeq {
 		after = latestSeq
+	}
+	if !reset && !startAtHead && after > 0 {
+		// Retention prunes the oldest rows, so a cursor older than the oldest
+		// retained event has lost the events in between. A deleted session's rows
+		// can also leave a gap; refetching then is merely redundant.
+		next, err := c.Source.EventsAfter(r.Context(), after, 1)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "EVENT_CURSOR_FAILED",
+				"Could not inspect the event cursor", nil)
+			return
+		}
+		reset = len(next) == 1 && next[0].Seq > after+1
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -101,10 +116,17 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	h.Set(eventAfterHeader, strconv.FormatInt(after, 10))
 	w.WriteHeader(http.StatusOK)
-	if startAtHead {
+	switch {
+	case startAtHead:
 		// Give EventSource a Last-Event-ID before the first live change so an
 		// immediate reconnect replays the gap instead of starting at head again.
-		if _, err := fmt.Fprintf(w, "id: %d\nevent: cursor\ndata: {}\n\n", after); err != nil { //nolint:gosec // G705: an int64 formatted with %d cannot inject SSE fields.
+		// "resets" tells the client this daemon sends a reset frame when a resumed
+		// stream lost events, so it can trust replay otherwise.
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: cursor\ndata: {\"resets\":true}\n\n", after); err != nil { //nolint:gosec // G705: an int64 formatted with %d cannot inject SSE fields.
+			return
+		}
+	case reset:
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: reset\ndata: {}\n\n", after); err != nil { //nolint:gosec // G705: an int64 formatted with %d cannot inject SSE fields.
 			return
 		}
 	}
