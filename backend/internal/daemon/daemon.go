@@ -116,6 +116,15 @@ var _ interface {
 	sessionmanager.TerminalInputFencer
 } = (*terminal.Manager)(nil)
 
+// daemonShutdownContext separates worker cancellation from signal cleanup.
+// Keep stopSignals deferred until restoration and all shutdown stages finish:
+// a second SIGTERM must not restore the default process-termination behavior.
+func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals context.CancelFunc) {
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancelWorkers = context.WithCancel(signalCtx)
+	return ctx, cancelWorkers, stopSignals
+}
+
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {
@@ -264,7 +273,8 @@ func Run(buildVersion string) error {
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop, stopSignals := daemonShutdownContext()
+	defer stopSignals()
 	defer stop()
 	var usage *usageTelemetryFlusher
 	if remoteTelemetryActive && telemetryIdentity != nil {
@@ -1314,6 +1324,8 @@ func Run(buildVersion string) error {
 	// their loops exit, then wait for them to drain. Doing this explicitly (not
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
+	// stop only cancels workers; deferred stopSignals keeps a second automatic
+	// SIGTERM from terminating the process while installer restoration runs.
 	stop()
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
