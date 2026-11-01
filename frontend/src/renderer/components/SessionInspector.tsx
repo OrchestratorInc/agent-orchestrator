@@ -72,6 +72,7 @@ import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { SessionLineageFooter } from "./SessionLineage";
 import { PRMergeButton, PRStateActions, PRStateMenu } from "./PRActions";
+import { PRComments } from "./PRComments";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
@@ -81,6 +82,8 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
+import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
@@ -484,6 +487,7 @@ const SummaryView = memo(function SummaryView({
 									{prSummaries.map((pr) => (
 										<PRSummaryCard
 											canOpenReviews={canOpenReviews}
+											comments={session.cloud ? undefined : <PRComments hostId={hostId} pr={pr} session={session} />}
 											current={pr.number === openPRNumber || prSummaries.length === 1}
 											work={pr.number === openPRNumber ? work : undefined}
 											key={pr.url || pr.htmlUrl || pr.number}
@@ -951,6 +955,7 @@ const prStateIcon: Record<InspectorPullRequest["state"], { icon: LucideIcon; cla
 
 export function PRSummaryCard({
 	canOpenReviews,
+	comments,
 	current = false,
 	hostId,
 	cloudOrgId,
@@ -965,6 +970,8 @@ export function PRSummaryCard({
 	work,
 }: {
 	canOpenReviews: boolean;
+	/** The PR's conversation, under the card when it is a section. */
+	comments?: ReactNode;
 	/** As a section, starts open: the PR new commits update, or the session's only PR. */
 	current?: boolean;
 	hostId?: string;
@@ -1155,6 +1162,7 @@ export function PRSummaryCard({
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
 						{cardView}
+						{comments}
 						{work ? (
 							<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div>
 						) : null}
@@ -2207,25 +2215,7 @@ function MergedReviewsSection({
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
-	const sendMessageToWorker = async (message: string, fallbackError: string) => {
-		if (session.cloud) {
-			await cloudClient.sendSessionMessage(session.cloud.orgId, session.id, { text: message });
-			return;
-		}
-		if (session.mode === "chat") {
-			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/conversation/messages", {
-				params: { path: { sessionId: session.id } },
-				body: { text: message, clientMessageId: crypto.randomUUID() },
-			});
-			if (error) throw new Error(apiErrorMessage(error, fallbackError));
-			return;
-		}
-		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
-			params: { path: { sessionId: session.id } },
-			body: { message, userAuthored: true },
-		});
-		if (error) throw new Error(apiErrorMessage(error, fallbackError));
-	};
+	const sendMessageToWorker = useSendToSessionWorker(session, hostId);
 	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
 		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");
 		onWorkerMessageSent?.();
@@ -2593,10 +2583,6 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	];
 	if (url) lines.push("", `Review URL: ${url}`);
 	return lines.join("\n");
-}
-
-function sanitizeWorkerMessagePart(value: string): string {
-	return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 }
 
 function projectConfig(project: components["schemas"]["ProjectOrDegraded"] | undefined): ProjectConfig | undefined {

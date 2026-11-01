@@ -931,6 +931,83 @@ describe("SessionInspector PR section", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/GitHub refused the change|Could not convert PR #7/);
   });
 
+  const conversationPR = () => prSummary(7, "open", {
+    url: "https://example.com/pr/7",
+    detailsObservedAt: "2026-06-15T12:00:00Z",
+    conversation: [
+      { id: "IC_1", author: "grace", isBot: false, body: "Can we keep the old flag?", createdAt: "2026-06-15T09:00:00Z", url: "https://github.com/acme/repo/pull/7#issuecomment-1" },
+      { id: "IC_2", author: "ci-bot", isBot: true, body: "Preview deployed.", createdAt: "2026-06-15T09:30:00Z" },
+    ],
+    threads: [{
+      id: "PRRT_1",
+      path: "src/search.ts",
+      line: 12,
+      resolved: false,
+      comments: [
+        { id: "PRRC_1", author: "linus", isBot: false, body: "Debounce this.", createdAt: "2026-06-15T10:00:00Z", url: "https://github.com/acme/repo/pull/7#discussion_r1" },
+        { id: "PRRC_2", author: "ada", isBot: false, body: "Will do.", createdAt: "2026-06-15T10:05:00Z" },
+      ],
+    }],
+  });
+
+  it("lists the PR's comments and review threads, filtered to humans or bots", async () => {
+    servePR(conversationPR());
+
+    const comments = within(await screen.findByTestId("pr-comments"));
+    expect(comments.getByRole("tab", { name: "All 3" })).toHaveAttribute("aria-selected", "true");
+    expect(comments.getByText("1 unresolved")).toBeInTheDocument();
+    expect(comments.getByText("src/search.ts:12")).toBeInTheDocument();
+    expect(comments.getByText("Will do.")).toBeInTheDocument();
+
+    await userEvent.click(comments.getByRole("tab", { name: "Bots 1" }));
+    expect(comments.getByText("Preview deployed.")).toBeInTheDocument();
+    expect(comments.queryByText("Can we keep the old flag?")).not.toBeInTheDocument();
+
+    await userEvent.click(comments.getByRole("tab", { name: "Humans 2" }));
+    expect(comments.queryByText("Preview deployed.")).not.toBeInTheDocument();
+    expect(comments.getByText("Can we keep the old flag?")).toBeInTheDocument();
+  });
+
+  it("replies inside a review thread, resolves it, and posts a new comment", async () => {
+    servePR(conversationPR());
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = comments.getByText("src/search.ts:12").closest("li") as HTMLElement;
+
+    await userEvent.click(within(thread).getByRole("button", { name: "Reply" }));
+    await userEvent.type(within(thread).getByRole("textbox", { name: "Write a reply…" }), "Done in the next commit");
+    await userEvent.click(within(thread).getAllByRole("button", { name: "Reply" }).at(-1) as HTMLElement);
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/comments", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", body: "Done in the next commit", threadId: "PRRT_1" },
+    }));
+
+    await userEvent.click(within(thread).getByRole("button", { name: "Resolve" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
+      params: { path: { sessionId: "sess-1" } },
+      body: { pullRequestUrl: "https://example.com/pr/7", commentUrl: "https://github.com/acme/repo/pull/7#discussion_r1" },
+    }));
+
+    await userEvent.type(comments.getByRole("textbox", { name: "Add a comment…" }), "Ready for another look{Meta>}{Enter}{/Meta}");
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/comments", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", body: "Ready for another look" },
+    }));
+  });
+
+  it("sends a comment to the session's agent", async () => {
+    servePR(conversationPR());
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = comments.getByText("src/search.ts:12").closest("li") as HTMLElement;
+
+    await userEvent.click(within(thread).getByRole("button", { name: "Send to agent" }));
+    const agentCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
+    await waitFor(() => expect(agentCalls()).toHaveLength(1));
+    const message = agentCalls()[0][1].body.message as string;
+    expect(message).toContain("Location: src/search.ts:12");
+    expect(message).toContain("@linus: Debounce this.");
+    expect(await within(thread).findByRole("button", { name: "Sent to agent" })).toBeDisabled();
+  });
+
   it("offers Merge when the provider requires no review", () => {
     renderWithQuery(
       <SessionInspector session={session([pr(7, "open", { review: "none" })])} />,
