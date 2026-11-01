@@ -432,7 +432,7 @@ describe("CreateProjectFlow remote host", () => {
 			onSelectHost,
 		});
 		await user.click(screen.getByRole("combobox", { name: "Machine" }));
-		await user.click(screen.getByRole("option", { name: "On this computer" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
 		expect(onSelectHost).toHaveBeenCalledWith(undefined);
 	});
 
@@ -1912,12 +1912,13 @@ describe("CreateProjectFlow project import validation", () => {
 
 		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument();
+		// The outgoing step stays mounted while it fades out.
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Cloud" })).not.toBeInTheDocument());
 
 		await user.click(screen.getByRole("button", { name: "Back" }));
 
 		expect(screen.getByRole("button", { name: "Cloud" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Open a local folder" })).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByRole("button", { name: "Open a local folder" })).not.toBeInTheDocument());
 	});
 
 	it("waits for the cloud gate instead of flashing the local sources", () => {

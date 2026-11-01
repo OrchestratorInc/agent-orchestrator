@@ -603,14 +603,15 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "New project" }));
 		const chooser = await screen.findByRole("dialog");
-		await user.click(within(chooser).getByRole("button", { name: "On this computer" }));
+		// Remote machines are connected, so the local tile covers them too.
+		await user.click(within(chooser).getByRole("button", { name: "On your machines" }));
 		expect(screen.queryByRole("button", { name: "New project on Host B" })).not.toBeInTheDocument();
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
 		await user.click(screen.getByRole("option", { name: "Host B" }));
 		expect(screen.getByRole("dialog")).toBe(chooser);
 		expect(within(chooser).getByRole("combobox", { name: "Machine" })).toHaveTextContent("Host B");
 		await user.click(within(chooser).getByRole("combobox", { name: "Machine" }));
-		await user.click(screen.getByRole("option", { name: "On this computer" }));
+		await user.click(screen.getByRole("option", { name: "This computer" }));
 		expect(screen.getByRole("dialog")).toBe(chooser);
 	});
 
