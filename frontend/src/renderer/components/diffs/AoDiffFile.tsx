@@ -1,3 +1,5 @@
+import { useLatestCallback } from "../../hooks/useStable";
+import { useSelectionSnapshot, hasCodeSelection } from "./SelectionStableContent";
 import type { FileAnnotationRange } from "../../../shared/chat-file-reference";
 import { useFileAnnotationReveal } from "./useFileAnnotationReveal";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
@@ -52,7 +54,7 @@ export function AoDiffFile({
 	annotation,
 	annotationRange,
  annotationReady = true,
-	detail,
+	detail: incomingDetail,
 	fallback,
 	onActiveSelectionChange,
 	scope = "combined",
@@ -84,6 +86,8 @@ export function AoDiffFile({
 	const { t } = useTranslation();
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+ const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, split, annotationRange?.requestKey]);
+ const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const metadata = useMemo(() => cachedMetadata(detail), [detail]);
 	const rows = useMemo(() => parseUnifiedDiff(detail.diff), [detail.diff]);
@@ -94,8 +98,7 @@ export function AoDiffFile({
 
 	useEffect(() => {
 		const onSelectionChange = () => {
-			const selection = window.getSelection();
-			onActiveSelectionChange(Boolean(selection && !selection.isCollapsed && selection.anchorNode && containerRef.current?.contains(selection.anchorNode)));
+			onActiveSelectionChange(hasCodeSelection(containerRef.current));
 		};
 		document.addEventListener("selectionchange", onSelectionChange);
 		return () => {
@@ -145,10 +148,11 @@ export function AoDiffFile({
 		refetchOnWindowFocus: false,
 		staleTime: Infinity,
 	});
-	const fileDiff = useMemo(
+	const incomingFileDiff = useMemo(
 		() => ((endsAtEndOfFile || annotationRange) && metadata && endOfFileContents.data ? hydratedCopy(metadata, endOfFileContents.data) : null) ?? metadata,
 		[endOfFileContents.data, endsAtEndOfFile, annotationRange, metadata],
 	);
+ const fileDiff = useSelectionSnapshot(containerRef, incomingFileDiff, selectionIdentity);
  const annotationReveal=useFileAnnotationReveal(containerRef,annotationRange,{ready:annotationReady && (!annotationRange || !metadata || (endOfFileContents.isSuccess && !endOfFileContents.isFetching)),contentKey:fileDiff});
 	const beginLineAnnotation = useCallback((side: "deletions" | "additions", lineNumber: number) => {
 		const { row, rowIndex } = rowForLine(rows, side, lineNumber);
@@ -176,6 +180,8 @@ export function AoDiffFile({
 	const captureSource = fileReferenceSource(source, commitSha);
 	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, true), ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined);
 
+	const onPostRender = useLatestCallback(() => { gutterHover.restoreAfterRender(); annotationReveal.reveal(); });
+	const currentLoadDiffFiles = useLatestCallback(loadDiffFiles);
 	if (!metadata) return <>{fallback}</>;
 
 	return (
@@ -199,10 +205,10 @@ export function AoDiffFile({
 					expansionLineCount: 20,
 					hunkSeparators: "line-info",
 					lineDiffType: "word-alt",
-					loadDiffFiles,
+					loadDiffFiles: currentLoadDiffFiles,
 					maxLineDiffLength: 400,
 					lineHoverHighlight: "line",
-					onPostRender: () => { gutterHover.restoreAfterRender(); annotationReveal.reveal(); },
+					onPostRender,
 					overflow: "wrap",
 					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
@@ -231,7 +237,7 @@ export function AoDiffFile({
 				<span data-file-annotation-retry={annotationRange.requestKey}><RetryButton onClick={() => void endOfFileContents.refetch({cancelRefetch:false})}/></span>
 			</div> : annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
 			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
-			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
+			<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 			{detail.diffTruncated ? (
 				<div className="border-t border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">
 					{t("files.diffTruncated")}

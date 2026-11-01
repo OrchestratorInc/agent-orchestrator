@@ -1,3 +1,4 @@
+import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -164,22 +165,27 @@ export function FileContentPane({
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
+ const selectionPane = useRef<HTMLDivElement>(null);
+ const selectionIdentity = JSON.stringify([sessionId, hostId, path, source, scope, commitSha, mode, editing, initialRequestKey, annotationRange?.requestKey]);
 	// The daemon serves workspace files by relative path only. An absolute path
 	// that reaches here was not inside the session, so say that rather than
 	// sending a request that can only fail.
 	const outsideWorkspace = source.kind === "workspace" && isAbsoluteFileReference(path ?? "");
-	const query = useQuery({
+	const queryResult = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
 		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
-	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
-	const liveText = useQuery({
+	const query = { ...queryResult, data: useSelectionSnapshot(selectionPane, queryResult.data, selectionIdentity) };
+ const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
+	const liveTextResult = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
 		staleTime: 5_000,
 		refetchOnWindowFocus: true,
 	});
+
+ const liveText = { ...liveTextResult, data: useSelectionSnapshot(selectionPane, liveTextResult.data, selectionIdentity) };
 
  // Each annotation open must verify rows from this request's fresh source,
  // rather than a still-mounted pane's previous query cache.
@@ -323,8 +329,8 @@ export function FileContentPane({
 			contentTruncated: false, diff: "", diffTruncated: false, status: "unmodified", additions: 0, deletions: 0,
 			fileFingerprint: revision.revision,
 		};
-		return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-			<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
+		return <div ref={selectionPane} data-selection-toolbar-scope="" className="flex min-h-0 flex-1 flex-col overflow-auto">
+			<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
 				<span className="truncate">{path}</span>
 			</div>
@@ -493,7 +499,7 @@ export function FileContentPane({
 		</div>
 	);
 	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
-		<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
+		<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
 				<span className="flex min-w-0 items-center text-xs">
@@ -546,7 +552,7 @@ export function FileContentPane({
 			/>
 		);
 		return (
-			<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+			<div ref={selectionPane} data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 				{toolbarNode}
 				<EditProvider createEditor={createReviewEditor}>
 				{effectiveMode === "diff" ? (
@@ -578,7 +584,7 @@ export function FileContentPane({
 		);
 	}
 	return (
-		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+		<div ref={selectionPane} data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}
