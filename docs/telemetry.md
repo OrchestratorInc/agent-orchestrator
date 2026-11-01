@@ -117,11 +117,11 @@ Orchestrator.inc sends structured events in a few broad categories:
   `exe`, `appimage`, `deb`, `rpm`, `dev`, `unknown`, or `other`, and
   `installed_at` is the UTC day the app first ran. Both come from
   `~/.ao/app-state.json`; no download path or file name is sent
-- Whether the app is running in CI or a container (`is_ci`, plus `ci_signal`
-  of `ci_env` or `container`), detected from well-known CI environment
-  variables and container marker files. Only the boolean and the category are
-  sent, never the variables themselves, so automated runs can be excluded from
-  usage counts
+- Whether the app is running in CI (`is_ci`) or a container (`is_container`),
+  detected independently from well-known CI environment variables and
+  container marker files. A development container has `is_ci: false` and
+  `is_container: true`; CI inside a container has both true. Only the booleans
+  are sent, never the variables themselves
 - If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
   address, AO Cloud user ID, and GitHub username. The email is set at sign-in
@@ -133,9 +133,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   session-start events)
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
-- One-time lifecycle markers: `ao.app.first_open` is sent once per
+- One-time lifecycle markers: `ao.install.created` is sent once per
   installation identifier on any build, including installations that predate
-  the install event, and `ao.app.installed` and `ao.app.first_open` say
+  the install event, and `ao.app.installed` and `ao.install.created` say
   whether the desktop app or the CLI started the daemon (`launcher`).
   `ao.session.spawned` and `ao.projects.created` carry `first_for_install`,
   true only for the installation's first session or project. These are
@@ -156,7 +156,7 @@ Orchestrator.inc sends structured events in a few broad categories:
   names, or URLs. See "Usage counts by project" and "How sessions start and
   end" below
 - Desktop onboarding milestones separately record an app open on the install
-  day, first human CLI command, and return on a later UTC day.
+  day, first eligible user CLI invocation, and return on a later UTC day.
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -216,7 +216,7 @@ no error message, project name, or request ID.
 The onboarding milestones use durable local reservations. A first app open is
 recorded only on the install day.
 The next-day return requires a prior desktop active day and a later UTC day.
-The first human CLI command reserves a local marker before export. None of
+The first eligible user CLI invocation reserves a local marker before export. None of
 these milestones treats an idle session as a successful session.
 The first project and first session are identified by `first_for_install` on
 the committed project and session events. The old `ao.onboarding.first_*`
@@ -225,14 +225,14 @@ events remain deprecated until the separate event rename.
 
 | Event | Authoritative source | Deduplication |
 | --- | --- | --- |
-| `ao.onboarding.app_opened` | Desktop opens on the installation day | Desktop local reservation |
-| `ao.onboarding.cli_detected` | First human CLI command accepted by the daemon | Install marker file |
+| `ao.app.first_opened` | Desktop opens on the installation day | Desktop local reservation |
+| `ao.cli.first_used` | First eligible user CLI invocation, before command execution; the command may later fail | Install marker file |
 | `ao.projects.created` with `first_for_install` | First committed project registration | Durable project registry |
 | `ao.session.spawned` with `first_for_install` | First committed session | Durable install milestone |
 | `ao.session.spawned` with `lifetime_sessions: 2` | Second committed session | Durable lifetime counter |
-| `ao.onboarding.next_day_return` | Desktop active on a previous UTC day and opened again later | Desktop local reservation |
-| `ao.setup.agent_missing` | Agent readiness reports zero installed agents | Once per desktop launch |
-| `ao.setup.agent_install_clicked` | User starts an agent install from Settings | One event per accepted click |
+| `ao.app.next_day_returned` | Desktop active on a previous UTC day and opened again later | Desktop local reservation |
+| `ao.agents.missing` | Agent readiness reports zero installed agents | Once per desktop launch |
+| `ao.agents.install_clicked` | User starts an agent install from Settings | One event per accepted click |
 
 `ao.renderer.agents_available` continues to report bounded installed,
 authorized, and supported agent inventory once per desktop launch.

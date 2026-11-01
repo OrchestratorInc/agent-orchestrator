@@ -271,7 +271,7 @@ export function buildTelemetryContext(
 					install_source: install.installSource,
 					...(install.installedAt ? { installed_at: install.installedAt } : {}),
 					is_ci: install.isCi,
-					...(install.ciSignal ? { ci_signal: install.ciSignal } : {}),
+					is_container: install.isContainer,
 				}
 			: {}),
 		// Classifies this install as the desktop app across every event, so a
@@ -901,10 +901,10 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.loaded":
 			break;
-		case "ao.setup.agent_missing":
+		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
 			break;
-		case "ao.setup.agent_install_clicked":
+		case "ao.agents.install_clicked":
 			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
 			break;
 		case "ao.renderer.project_add_succeeded":
@@ -1262,11 +1262,11 @@ export async function initTelemetry(): Promise<boolean> {
 		});
 		bindRendererErrorHandlers();
 		const storage = telemetryStorage();
-		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.onboarding.app_opened") && claimOnboardingMilestone(storage, "app_opened")) {
-			posthog.capture("ao.onboarding.app_opened", withTelemetryContext({}));
+		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.app.first_opened") && claimOnboardingMilestone(storage, "app_opened")) {
+			posthog.capture("ao.app.first_opened", withTelemetryContext({}));
 		}
-		if (hadEarlierActiveDay(storage) && !isDeniedEvent("ao.onboarding.next_day_return") && claimOnboardingMilestone(storage, "next_day_return")) {
-			posthog.capture("ao.onboarding.next_day_return", withTelemetryContext({}));
+		if (hadEarlierActiveDay(storage) && !isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
+			posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
 		}
 		startDailyActiveHeartbeat({
 			storage,

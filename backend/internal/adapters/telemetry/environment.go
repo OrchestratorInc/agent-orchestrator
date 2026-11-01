@@ -65,12 +65,12 @@ func NormalizeInstallSource(raw string) string {
 // staticEnvironment is computed once per process: none of it changes while
 // the daemon runs.
 type staticEnvironment struct {
-	os        string
-	osVersion string
-	platform  string
-	arch      string
-	isCI      bool
-	ciSignal  string
+	os          string
+	osVersion   string
+	platform    string
+	arch        string
+	isCI        bool
+	isContainer bool
 }
 
 func (e staticEnvironment) stamp(props map[string]any) {
@@ -86,20 +86,18 @@ func (e staticEnvironment) stamp(props map[string]any) {
 	props["platform"] = e.platform
 	props["arch"] = e.arch
 	props["is_ci"] = e.isCI
-	if e.ciSignal != "" {
-		props["ci_signal"] = e.ciSignal
-	}
+	props["is_container"] = e.isContainer
 }
 
 func detectStaticEnvironment() staticEnvironment {
-	isCI, signal := detectCI(os.Getenv, fileExists)
+	isCI, isContainer := detectCI(os.Getenv, fileExists)
 	return staticEnvironment{
-		os:        posthogOSName(runtime.GOOS),
-		osVersion: safeOSVersion(osVersion()),
-		platform:  nodePlatform(runtime.GOOS),
-		arch:      nodeArch(runtime.GOARCH),
-		isCI:      isCI,
-		ciSignal:  signal,
+		os:          posthogOSName(runtime.GOOS),
+		osVersion:   safeOSVersion(osVersion()),
+		platform:    nodePlatform(runtime.GOOS),
+		arch:        nodeArch(runtime.GOARCH),
+		isCI:        isCI,
+		isContainer: isContainer,
 	}
 }
 
@@ -159,24 +157,21 @@ var ciEnvVars = []string{
 	"BUILDKITE_AGENT_ID", "WOODPECKER", "HARNESS_BUILD_ID",
 }
 
-// detectCI flags a CI runner or a container. ci_signal says which, so a
-// dashboard can drop CI runs and decide separately about containers (a dev
-// container can be a real person). The frontend mirror is
+// detectCI classifies CI runners and containers independently. A development
+// container is not a CI runner. The frontend mirror is
 // frontend/src/shared/install-environment.ts.
-func detectCI(getenv func(string) string, exists func(string) bool) (bool, string) {
+func detectCI(getenv func(string) string, exists func(string) bool) (bool, bool) {
+	isContainer := getenv("KUBERNETES_SERVICE_HOST") != "" || getenv("container") != "" ||
+		exists("/.dockerenv") || exists("/run/.containerenv")
 	if v := strings.ToLower(strings.TrimSpace(getenv("CI"))); v != "" && v != "false" && v != "0" {
-		return true, "ci_env"
+		return true, isContainer
 	}
 	for _, name := range ciEnvVars {
 		if strings.TrimSpace(getenv(name)) != "" {
-			return true, "ci_env"
+			return true, isContainer
 		}
 	}
-	if getenv("KUBERNETES_SERVICE_HOST") != "" || getenv("container") != "" ||
-		exists("/.dockerenv") || exists("/run/.containerenv") {
-		return true, "container"
-	}
-	return false, ""
+	return false, isContainer
 }
 
 func fileExists(path string) bool {

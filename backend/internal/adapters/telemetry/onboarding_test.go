@@ -24,7 +24,7 @@ func TestCLIOnboardingMilestoneIsDurableAndHonorsOptOut(t *testing.T) {
 	restarted.Emit(context.Background(), event)
 	var milestones int
 	for _, got := range rec.snapshot() {
-		if got.Name == "ao.onboarding.cli_detected" {
+		if got.Name == "ao.cli.first_used" {
 			milestones++
 		}
 	}
@@ -38,7 +38,7 @@ func TestCLIOnboardingMilestoneIsDurableAndHonorsOptOut(t *testing.T) {
 	other.Emit(context.Background(), event)
 	milestones = 0
 	for _, got := range rec.snapshot() {
-		if got.Name == "ao.onboarding.cli_detected" {
+		if got.Name == "ao.cli.first_used" {
 			milestones++
 		}
 	}

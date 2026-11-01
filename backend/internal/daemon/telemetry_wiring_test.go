@@ -215,7 +215,7 @@ func TestEmitInstallLifecycleEventsFirstOpenOncePerInstall(t *testing.T) {
 	}
 	sink := &lifecycleCaptureSink{}
 	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
-	want := []string{"ao.app.installed:desktop", "ao.app.first_open:desktop"}
+	want := []string{"ao.app.installed:desktop", "ao.install.created:desktop"}
 	if !reflect.DeepEqual(sink.names, want) {
 		t.Fatalf("first start = %v, want %v", sink.names, want)
 	}
@@ -242,7 +242,7 @@ func TestEmitInstallLifecycleEventsKeepsFirstOpenWhenNotExported(t *testing.T) {
 	sink := &lifecycleCaptureSink{}
 	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
 	for _, n := range sink.names {
-		if strings.HasPrefix(n, "ao.app.first_open") {
+		if strings.HasPrefix(n, "ao.install.created") {
 			t.Fatalf("first_open spent on a local-only run: %v", sink.names)
 		}
 	}

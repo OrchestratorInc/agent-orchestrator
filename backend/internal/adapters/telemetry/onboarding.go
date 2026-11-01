@@ -31,7 +31,7 @@ func (s *OnboardingSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 		return
 	}
 	_ = file.Close()
-	s.next.Emit(ctx, ports.TelemetryEvent{Name: "ao.onboarding.cli_detected", Source: "cli", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo})
+	s.next.Emit(ctx, ports.TelemetryEvent{Name: "ao.cli.first_used", Source: "cli", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo})
 }
 
 // Close closes the wrapped sink.

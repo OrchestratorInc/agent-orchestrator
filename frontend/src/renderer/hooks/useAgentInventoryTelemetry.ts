@@ -22,6 +22,6 @@ export function useAgentInventoryTelemetry(): void {
     reported.current = true;
     const inventory = buildAgentInventory(data);
     void captureRendererEvent("ao.renderer.agents_available", inventory);
-    if (inventory.installed_count === 0) void captureRendererEvent("ao.setup.agent_missing", { reason: "none_installed" });
+    if (inventory.installed_count === 0) void captureRendererEvent("ao.agents.missing", { reason: "none_installed" });
   }, [data]);
 }
