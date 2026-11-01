@@ -3106,7 +3106,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "Partager",
 	"artifacts.share.signInTitle": "Se connecter pour partager",
-	"artifacts.share.signInDescription": "Partager un fichier nécessite un compte AO gratuit.",
+	"artifacts.share.signInDescription": "Partager un fichier nécessite d’être connecté à un compte.",
 	"artifacts.share.signIn": "Se connecter",
 	"artifacts.share.title": "Partager {{name}}",
 	"artifacts.share.public": "Toute personne disposant du lien peut voir ce fichier.",

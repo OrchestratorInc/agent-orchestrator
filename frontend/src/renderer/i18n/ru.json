@@ -3156,7 +3156,7 @@
 	"artifacts.noAgent.action": "Открыть настройки агентов",
 	"artifacts.share.menu": "Поделиться",
 	"artifacts.share.signInTitle": "Войдите, чтобы поделиться",
-	"artifacts.share.signInDescription": "Чтобы поделиться файлом, нужна бесплатная учётная запись AO.",
+	"artifacts.share.signInDescription": "Чтобы поделиться файлом, нужно войти в учётную запись.",
 	"artifacts.share.signIn": "Войти",
 	"artifacts.share.title": "Поделиться {{name}}",
 	"artifacts.share.public": "Любой, у кого есть ссылка, может просмотреть этот файл.",

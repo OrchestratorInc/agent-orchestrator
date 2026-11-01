@@ -3048,7 +3048,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "Teilen",
 	"artifacts.share.signInTitle": "Zum Teilen anmelden",
-	"artifacts.share.signInDescription": "Zum Teilen einer Datei brauchst du ein kostenloses AO-Konto.",
+	"artifacts.share.signInDescription": "Zum Teilen einer Datei musst du angemeldet sein.",
 	"artifacts.share.signIn": "Anmelden",
 	"artifacts.share.title": "{{name}} teilen",
 	"artifacts.share.public": "Jede Person mit dem Link kann diese Datei sehen.",

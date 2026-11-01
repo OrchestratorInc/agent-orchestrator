@@ -3032,7 +3032,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "Share",
 	"artifacts.share.signInTitle": "Sign in to share",
-	"artifacts.share.signInDescription": "Sharing a file needs a free AO account.",
+	"artifacts.share.signInDescription": "Sharing a file needs a signed-in account.",
 	"artifacts.share.signIn": "Sign in",
 	"artifacts.share.title": "Share {{name}}",
 	"artifacts.share.public": "Anyone with the link can view this file.",

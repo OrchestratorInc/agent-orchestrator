@@ -3048,7 +3048,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "공유",
 	"artifacts.share.signInTitle": "공유하려면 로그인",
-	"artifacts.share.signInDescription": "파일을 공유하려면 무료 AO 계정이 필요합니다.",
+	"artifacts.share.signInDescription": "파일을 공유하려면 로그인해야 합니다.",
 	"artifacts.share.signIn": "로그인",
 	"artifacts.share.title": "{{name}} 공유",
 	"artifacts.share.public": "링크가 있는 사람은 누구나 이 파일을 볼 수 있습니다.",

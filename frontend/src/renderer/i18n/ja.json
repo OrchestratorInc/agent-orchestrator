@@ -3048,7 +3048,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "共有",
 	"artifacts.share.signInTitle": "共有するにはサインイン",
-	"artifacts.share.signInDescription": "ファイルを共有するには無料の AO アカウントが必要です。",
+	"artifacts.share.signInDescription": "ファイルを共有するにはサインインが必要です。",
 	"artifacts.share.signIn": "サインイン",
 	"artifacts.share.title": "{{name}} を共有",
 	"artifacts.share.public": "リンクを知っている人は誰でもこのファイルを閲覧できます。",

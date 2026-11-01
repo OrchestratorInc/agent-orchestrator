@@ -3030,7 +3030,7 @@
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "分享",
 	"artifacts.share.signInTitle": "登录后分享",
-	"artifacts.share.signInDescription": "分享文件需要一个免费的 AO 账号。",
+	"artifacts.share.signInDescription": "分享文件需要先登录账号。",
 	"artifacts.share.signIn": "登录",
 	"artifacts.share.title": "分享 {{name}}",
 	"artifacts.share.public": "任何拥有链接的人都可以查看此文件。",
