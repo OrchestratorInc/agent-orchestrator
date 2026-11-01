@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
  *
@@ -163,6 +164,9 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+	fileReference?: ChatFileReference;
+	annotationId?: string;
+	annotationOrder?: number;
 	type: string;
 	mimeType?: string;
 	uri?: string;
@@ -197,9 +201,13 @@ export interface ConversationMessage {
 	editAvailable?: boolean;
 	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
 	continuation?: boolean;
+	/** User-written content AO delivered as automation, e.g. Browser-panel annotations. */
+	authoredByUser?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
+	/** Set on a human message another participant in a shared session sent. */
+	authorName?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -474,7 +482,9 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "workspace.script.run"
-		| "account.switched";
+		| "account.switched"
+		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
+		| "approval_mode.substituted";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
@@ -848,6 +858,7 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	supportsFileReferences?: boolean;
 	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
 	continueTurnId?: string;
 	conversationId: string;
@@ -968,21 +979,25 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 /**
- * Turn ids whose human prompt is represented in the queue dock instead.
+ * A prompt the user owns in the queue dock: their typed message, or their own
+ * words AO relayed as automation, such as Browser-panel annotations.
+ */
+export function isUserQueuePrompt(item: ConversationItem): item is ConversationMessage {
+	return item.kind === "message" && item.role === "user" &&
+		(item.origin === "human" || (item.origin === "automation" && Boolean(item.authoredByUser)));
+}
+
+/**
+ * Turn ids whose user prompt is represented in the queue dock instead.
  *
- * Human prompts for queued turns live in the dock until dispatch. Automation
- * messages have no dock row, so their queued feedback stays visible in the
- * timeline. Human turns cancelled from the dock must not reappear after refresh.
+ * The user's prompts for queued turns live in the dock until dispatch. Other
+ * automation messages have no dock row, so their queued feedback stays visible
+ * in the timeline. Turns cancelled from the dock must not reappear after refresh.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
 	for (const item of snapshot.items) {
-		if (
-			item.kind === "message" &&
-			item.role === "user" &&
-			item.origin === "human" &&
-			item.turnId
-		) {
+		if (isUserQueuePrompt(item) && item.turnId) {
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
@@ -995,6 +1010,23 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 			)
 			.map((turn) => turn.id),
 	);
+}
+
+/**
+ * The daemon reorders the whole queue, but the dock shows only the user's own
+ * prompts. Keep every other queued turn in its slot and fill the dock's slots
+ * with its new order.
+ */
+export function fullQueuedTurnOrder(snapshot: ConversationSnapshot, dockOrder: readonly string[]): string[] {
+	const queue = snapshot.turns
+		.map((turn, index) => ({ turn, index }))
+		.filter(({ turn }) => turn.state === "queued")
+		.sort((a, b) => a.turn.requestedAt.localeCompare(b.turn.requestedAt) || a.index - b.index)
+		.map(({ turn }) => turn.id);
+	const docked = new Set(dockOrder);
+	if (!dockOrder.every((turnId) => queue.includes(turnId))) return [...dockOrder];
+	let next = 0;
+	return queue.map((turnId) => (docked.has(turnId) ? dockOrder[next++]! : turnId));
 }
 
 /**

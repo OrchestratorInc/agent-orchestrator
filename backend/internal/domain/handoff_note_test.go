@@ -143,3 +143,79 @@ func TestQuotedTextCannotAddToTheHandoffNotesStructure(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildHandoffNoteListsTheSessionArtifacts(t *testing.T) {
+	artifacts := make([]SessionArtifactFile, 0, handoffArtifactLimit+2)
+	for index := range handoffArtifactLimit + 2 {
+		artifacts = append(artifacts, SessionArtifactFile{Path: fmt.Sprintf("doc-%02d.md", index), Size: 42, UpdatedAt: time.Unix(1_700_000_000, 0)})
+	}
+	got := BuildHandoffNote(HandoffNoteInput{
+		SourceHarness: HarnessClaudeCode, TargetHarness: HarnessCodex,
+		ArtifactDir: "/data/artifacts/s-1", Artifacts: artifacts, Turns: handoffTestTurns(1),
+	})
+	for _, want := range []string{
+		"## Session artifacts", "`/data/artifacts/s-1` (52)", "- doc-00.md (42 bytes, updated 2023-11-14T22:13:20Z)", "(2 more not listed; list the directory to see them)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "doc-50.md") {
+		t.Errorf("note lists more than %d artifacts", handoffArtifactLimit)
+	}
+
+	if got := BuildHandoffNote(HandoffNoteInput{ArtifactDir: "/data/artifacts/s-1", Turns: handoffTestTurns(1)}); strings.Contains(got, "## Session artifacts") {
+		t.Errorf("note has an artifacts section with no artifacts:\n%s", got)
+	}
+}
+
+func TestHandoffNoteDropsArtifactsBeforeClippingTheLatestTurn(t *testing.T) {
+	saved := handoffNoteMaxChars
+	handoffNoteMaxChars = handoffNoteCharLimit("windows")
+	t.Cleanup(func() { handoffNoteMaxChars = saved })
+	artifacts := make([]SessionArtifactFile, 0, handoffArtifactLimit)
+	for index := range handoffArtifactLimit {
+		artifacts = append(artifacts, SessionArtifactFile{Path: fmt.Sprintf("%02d-%s.md", index, strings.Repeat("x", 145))})
+	}
+	note := BuildHandoffNote(HandoffNoteInput{
+		ArtifactDir: "/data/artifacts/s-1", Artifacts: artifacts,
+		Turns: []HandoffTurn{{UserRequest: "LATEST_USER_REQUEST_SENTINEL", AgentResponse: strings.Repeat("a", 10_000)}},
+	})
+	if got := utf8.RuneCountInString(note); got > handoffNoteMaxChars {
+		t.Fatalf("note is %d characters, want at most %d", got, handoffNoteMaxChars)
+	}
+	for _, want := range []string{"LATEST_USER_REQUEST_SENTINEL", "## Session artifacts", "- 00-", "more not listed"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note is missing %q", want)
+		}
+	}
+}
+
+func TestHandoffNoteKeepsArtifactsWithinTheByteCap(t *testing.T) {
+	path := strings.Repeat("📄", 60) + "/" + strings.Repeat("📄", 60) + "/" + strings.Repeat("📄", 36)
+	changed := make([]string, 0, handoffChangedFileLimit)
+	artifacts := make([]SessionArtifactFile, 0, handoffArtifactLimit)
+	for index := range handoffArtifactLimit {
+		name := fmt.Sprintf("%s%02d", path, index)
+		changed = append(changed, name)
+		artifacts = append(artifacts, SessionArtifactFile{Path: name})
+	}
+	note := BuildHandoffNote(HandoffNoteInput{
+		ChangedFiles: changed, ArtifactDir: "/data/artifacts/s-1", Artifacts: artifacts,
+		Turns: []HandoffTurn{{UserRequest: "request", AgentResponse: strings.Repeat("📄", 10_000)}},
+	})
+	if len(note) > handoffNoteMaxBytes {
+		t.Fatalf("note is %d bytes, want at most %d", len(note), handoffNoteMaxBytes)
+	}
+	if !strings.Contains(note, "request") || !strings.Contains(note, "more not listed") {
+		t.Errorf("note must keep the latest request and count the artifacts it left out")
+	}
+}
+
+func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
+	note := clipHandoffNote(strings.Repeat("📄", handoffNoteMaxChars*2))
+	if len(note) > handoffNoteMaxBytes || utf8.RuneCountInString(note) > handoffNoteMaxChars {
+		t.Fatalf("clipped note is %d bytes / %d characters, want at most %d / %d",
+			len(note), utf8.RuneCountInString(note), handoffNoteMaxBytes, handoffNoteMaxChars)
+	}
+}

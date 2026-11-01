@@ -49,8 +49,13 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
 	}, []);
 	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
+	// Not on mount: the list opens at the top, and reading scrollTop then forces a
+	// style pass over the whole page while the menu is still being inserted.
+	const searchedQuery = useRef(normalizedQuery);
 	useLayoutEffect(() => {
-		if (scrollRef.current && scrollRef.current.scrollTop !== 0) scrollRef.current.scrollTop = 0;
+		if (searchedQuery.current === normalizedQuery) return;
+		searchedQuery.current = normalizedQuery;
+		if (scrollRef.current) scrollRef.current.scrollTop = 0;
 	}, [normalizedQuery]);
 	// Measured after paint: reading scrollHeight in a layout effect reflows every row per keystroke.
 	useEffect(() => {

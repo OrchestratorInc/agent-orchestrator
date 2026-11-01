@@ -91,6 +91,7 @@ type checkpointRecord struct {
 		Type      string          `json:"type"`
 		HookEvent string          `json:"hookEvent"`
 		Content   json.RawMessage `json:"content"`
+		Prompt    json.RawMessage `json:"prompt"`
 	} `json:"attachment"`
 	Message struct {
 		Content    json.RawMessage `json:"content"`
@@ -113,16 +114,22 @@ type checkpointTurn struct {
 // reply it adds after an interrupt marker when the conversation resumes.
 const claudeSyntheticModel = "<synthetic>"
 
+// claudeCompactionSummary opens the summary Claude Code writes as a user
+// message when it compacts a conversation that ran out of context.
+const claudeCompactionSummary = "This session is being continued from a previous conversation that ran out of context."
+
 // claudeTranscriptNotice reports a note Claude Code writes into its transcript
 // as a user message: a background task's <task-notification>, which can carry
-// text after its closing tag, or the marker for a stopped turn. Chat never
-// shows either as a user message.
+// text after its closing tag, the marker for a stopped turn, or a compaction
+// summary. Chat never shows any of them as a user message.
 // ponytail: replay sees only the text, because getSessionMessages drops the
-// record's origin, so a human prompt that starts with the same tag is skipped
-// too. Reading origin from the transcript in the bridge would remove the guess.
+// record's origin and isCompactSummary flag, so a human prompt that starts the
+// same way is skipped too. Reading them from the transcript in the bridge would
+// remove the guess.
 func claudeTranscriptNotice(text string) bool {
 	text = strings.TrimSpace(text)
 	return strings.HasPrefix(text, "<task-notification>") ||
+		strings.HasPrefix(text, claudeCompactionSummary) ||
 		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
@@ -187,6 +194,12 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	slices.Reverse(chain)
 	var turns []checkpointTurn
 	submissions := make(map[string]int)
+	// Input sent while Claude is mid-turn is written as a queued_command
+	// attachment inside that turn, followed by its submission hook, rather
+	// than as a new user record. The hook's parent is that queued record, so
+	// the pair is bound by ancestry, never by position in the chain.
+	queuedTexts := make(map[string]string)
+	queuedByUUID := make(map[string]string)
 	for _, record := range chain {
 		if record.Type == "user" {
 			if record.Meta && record.TurnCompanion {
@@ -232,6 +245,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		turn := &turns[len(turns)-1]
 		switch record.Type {
 		case "attachment":
+			if record.Attachment.Type == "queued_command" {
+				text, err := checkpointContent(record.Attachment.Prompt)
+				if err != nil {
+					return ports.NativeCheckpointBoundary{}, err
+				}
+				queuedByUUID[record.UUID] = text
+				continue
+			}
 			if record.Attachment.Type == "hook_additional_context" && record.Attachment.HookEvent == "UserPromptSubmit" {
 				var contents []string
 				if json.Unmarshal(record.Attachment.Content, &contents) != nil {
@@ -245,6 +266,9 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 						return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native submission attachment")
 					}
 					submissions[content] = len(turns) - 1
+					if queued, ok := queuedByUUID[record.ParentUUID]; ok {
+						queuedTexts[content] = queued
+					}
 				}
 			}
 		case "assistant":
@@ -283,9 +307,17 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		index, found := byPrompt[observation.PromptID]
 		if observation.Submission {
-			index, found = submissions[domain.NativeSubmissionContext(observation.SubmissionID)]
+			submission := domain.NativeSubmissionContext(observation.SubmissionID)
+			index, found = submissions[submission]
+			submitted := ""
+			if found {
+				submitted = turns[index].user
+				if text, ok := queuedTexts[submission]; ok {
+					submitted = text
+				}
+			}
 			if observation.SubmissionID == "" || !found ||
-				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, turns[index].user)) {
+				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, submitted)) {
 				return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native submission attachment not flushed")
 			}
 		} else if !found {

@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { UpdatesSection } from "./UpdatesSection";
 import { useUiStore } from "../../stores/ui-store";
 import type { UpdateStatus } from "../../../main/update-settings";
+import { appI18n } from "../../i18n";
 
 const {
 	updGetStatus,
@@ -112,6 +113,77 @@ it("links PRs and commits in downloaded notes from the renamed repository", asyn
 	expect(await screen.findByRole("link", { name: "#6228" })).toHaveAttribute("href", `${repo}/pull/6228`);
 	expect(screen.getByRole("link", { name: "7b7db96" })).toHaveAttribute("href", `${repo}/commit/${commit}`);
 	expect(screen.queryByText(/@illegalcall/)).toBeNull();
+});
+
+it("names the newer build when a full disk holds it back (#6607)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "error",
+		message: "Not enough disk space to install the update. Free up space, then retry.",
+		version: "0.13.8-nightly.202610121355",
+		staged: { version: "0.13.7-nightly.202610101220", stagedAt: 1, escalated: false, ready: false },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText(/Not enough disk space to install the update/)).toBeVisible();
+	expect(screen.getByText("v0.13.8-nightly.202610121355 is available")).toBeVisible();
+});
+
+// A dump the main process has not learned to rewrite yet must still stay out
+// of Settings: no response body, headers or app.asar paths (#5755).
+const UPDATER_DUMP =
+	'Cannot parse releases feed: HttpError: 504 Gateway Time-out\nHeaders: {"set-cookie": "_gh_sess=abc123"}\n    at createHttpError (C:\\AO\\resources\\app.asar\\httpExecutor.js:53:12)';
+
+it("shows a short failure instead of an updater dump in the status line (#5755)", async () => {
+	updGetStatus.mockResolvedValue({ state: "error", message: UPDATER_DUMP } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText("Update failed.")).toBeVisible();
+	expect(screen.queryByText(/set-cookie|app\.asar|HttpError/)).toBeNull();
+});
+
+it("shows a short failure instead of an updater dump beside a staged build (#5755)", async () => {
+	updGetStatus.mockResolvedValue({ state: "downloaded", version: "1.2.3", checkError: UPDATER_DUMP } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText("Update failed.")).toBeVisible();
+	expect(screen.queryByText(/set-cookie|app\.asar|HttpError/)).toBeNull();
+});
+
+it("shows a rewritten failure in the person's language (#5755)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "1.2.3",
+		checkError: "Couldn't check for updates — the update server timed out. Try again in a few minutes.",
+		checkErrorInfo: { kind: "timeout", phase: "check" },
+	} satisfies UpdateStatus);
+	await appI18n.changeLanguage("ja");
+	try {
+		renderUpdates();
+
+		expect(await screen.findByText(
+			"アップデートを確認できませんでした — アップデートサーバーの応答がタイムアウトしました。数分後にもう一度お試しください。",
+		)).toBeVisible();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
+});
+
+it("shows a rewritten error status in the person's language (#5755)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "error",
+		message: "Download failed — the update server isn't available right now. Try again in a few minutes.",
+		errorInfo: { kind: "unavailable", phase: "download" },
+	} satisfies UpdateStatus);
+	await appI18n.changeLanguage("de");
+	try {
+		renderUpdates();
+
+		expect(await screen.findByText(
+			"Download fehlgeschlagen — der Update-Server ist gerade nicht verfügbar. Bitte in einigen Minuten erneut versuchen.",
+		)).toBeVisible();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {

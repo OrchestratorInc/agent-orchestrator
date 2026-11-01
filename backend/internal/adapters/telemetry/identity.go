@@ -24,6 +24,9 @@ const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
+	// firstOpenEventFile holds the install ID that ao.app.first_open was sent
+	// for, so each install ID sends it exactly once, on any build.
+	firstOpenEventFile = "telemetry_first_open_emitted"
 	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
 	// be linked to. A sign-out or account switch retires that ID.
 	boundUserFile = "telemetry_bound_user"
@@ -48,6 +51,7 @@ type Identity struct {
 	mu          sync.RWMutex
 	installID   string
 	anonymousID string
+	onRetired   func()
 	cloudUserID string
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
@@ -84,6 +88,17 @@ func NewIdentity(dataDir string) (*Identity, error) {
 // install, the one moment ao.app.installed is emitted.
 func (i *Identity) FreshInstall() bool { return i.fresh }
 
+// OnInstallRetired runs after the anonymous ID is replaced. The CLI usage
+// summary uses it to drop in-memory counts for the retired install.
+func (i *Identity) OnInstallRetired(fn func()) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.onRetired = fn
+	i.mu.Unlock()
+}
+
 // MarkInstalledEvent reserves the one install event before it enters the
 // best-effort queue. A restart cannot emit it again if the queued send is lost.
 func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
@@ -107,6 +122,34 @@ func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("close telemetry install event marker: %w", err)
 	}
 	i.fresh = false
+	return true, nil
+}
+
+// MarkFirstOpenEvent reserves ao.app.first_open for the current install ID.
+// Unlike ao.app.installed it does not depend on the install being fresh, so an
+// install that predates ao.app.installed (or whose CLI wrote tenure before the
+// daemon first started) is still counted once. An opted-out install reserves
+// nothing: it has never sent the event, so it sends it after opting back in.
+func (i *Identity) MarkFirstOpenEvent(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.OptedOut() {
+		return false, nil
+	}
+	path := filepath.Join(i.dataDir, firstOpenEventFile)
+	recorded, err := readTrimmed(path)
+	if err != nil {
+		return false, err
+	}
+	if recorded == i.installID {
+		return false, nil
+	}
+	if err := i.writeFile(path, []byte(i.installID+"\n")); err != nil {
+		return false, fmt.Errorf("mark telemetry first open event: %w", err)
+	}
 	return true, nil
 }
 
@@ -182,6 +225,13 @@ func (i *Identity) bindLocked(id string) error {
 			return fmt.Errorf("retire telemetry anonymous id: %w", err)
 		}
 		i.anonymousID = next
+		_ = os.Remove(filepath.Join(i.dataDir, "telemetry", "cli-usage-daily.json"))
+		if i.onRetired != nil {
+			retired := i.onRetired
+			i.mu.Unlock()
+			retired()
+			i.mu.Lock()
+		}
 	}
 	switch {
 	case id == "" && bound != "":

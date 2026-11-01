@@ -80,12 +80,20 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByText("Thinking")).toBeInTheDocument();
 	});
 
-	it("shows the settings as loading while the agent answers a change", async () => {
+	it("keeps the settings in place while the agent answers a change", async () => {
 		const user = userEvent.setup();
 		open(undefined, false, "cursor", { thinking: true, onToggleThinking: vi.fn() }, true);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.queryByText("Loading settings")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
+		expect(screen.getByText("Thinking")).toBeInTheDocument();
+	});
+
+	it("shows the settings as loading while the agent has none to show yet", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "codex", { efforts: [] }, true);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(screen.getByText("Loading settings")).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /Effort/ })).not.toBeInTheDocument();
 		expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
 	});
 

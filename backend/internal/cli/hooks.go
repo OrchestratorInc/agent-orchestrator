@@ -51,8 +51,9 @@ const (
 // POST /api/v1/sessions/{id}/activity. The CLI keeps its own copy so it need
 // not import httpd. Event carries the AO hook sub-command that produced the
 // state; ToolName/ToolUseID are the tool-use correlation facts lifted from the
-// native payload when present. All four are optional: an old daemon decodes
-// the body leniently and simply ignores them.
+// native payload when present. AgentSessionID is a native resumable-session id
+// lifted from the payload when present. All four are optional: an old daemon
+// decodes the body leniently and simply ignores them.
 type setActivityAPIRequest struct {
 	ObservedAt                   time.Time                           `json:"observedAt,omitempty"`
 	State                        string                              `json:"state,omitempty"`
@@ -222,6 +223,19 @@ func isCodexSpawnToolName(name string) bool {
 // that surfaces to the child with a BOM prefix) still decode as JSON.
 func normalizeHookPayload(payload []byte) []byte {
 	return bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf"))
+}
+
+// hookAgentSessionIDForHarness is shared by worker and reviewer hooks. Cline
+// must not inherit generic task/conversation aliases when its parser rejects them.
+func hookAgentSessionIDForHarness(agent string, payload []byte) string {
+	if agent == "cline" {
+		id, _ := activitydispatch.AgentSessionID(agent, payload)
+		return id
+	}
+	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
+		return hookAgentSessionID(payload)
+	}
+	return ""
 }
 
 // hookAgentSessionID extracts the native resume handle shared by Agy, Copilot,
@@ -523,6 +537,58 @@ type claudePermissionHookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
+// claudePreToolUseDenyOutput is Claude Code's PreToolUse decision: the hook
+// blocks the tool call and hands the reason back to the model.
+type claudePreToolUseDenyOutput struct {
+	HookSpecificOutput struct {
+		HookEventName            string `json:"hookEventName"`
+		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecisionReason string `json:"permissionDecisionReason"`
+	} `json:"hookSpecificOutput"`
+}
+
+const artifactToolName = "Artifact"
+
+const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
+	"in a chat session, use html_render."
+
+// claimArtifactNudge reports whether this is the session's first Artifact tool
+// use, by atomically creating a marker file under AO_DATA_DIR. Any failure
+// reports false so the tool call is allowed.
+func claimArtifactNudge(sessionID string) bool {
+	dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+	if dataDir == "" {
+		return false
+	}
+	dir := filepath.Join(dataDir, "hooks", sessionID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "artifact-nudge"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// emitArtifactNudge denies the first Claude Code Artifact tool use in a session.
+func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, payload []byte) {
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode || event != "pre-tool-use" {
+		return
+	}
+	if toolName, _ := activityMeta(payload); toolName != artifactToolName || !claimArtifactNudge(sessionID) {
+		return
+	}
+	var out claudePreToolUseDenyOutput
+	out.HookSpecificOutput.HookEventName = "PreToolUse"
+	out.HookSpecificOutput.PermissionDecision = "deny"
+	out.HookSpecificOutput.PermissionDecisionReason = artifactNudgeReason
+	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write artifact nudge: %w", err))
+	}
+}
+
 // reviewerSubmitCommandPattern matches the exact command shapes the review
 // prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
 // either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
@@ -649,15 +715,13 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
+	c.emitArtifactNudge(agent, event, sessionID, payload)
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
 
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if agent == "memcode" && event == "session-start" {
 		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
@@ -880,10 +944,7 @@ func (c *commandContext) runReviewHook(ctx context.Context, agent, event, review
 		return nil
 	}
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if !hasActivity && agentSessionID == "" {
 		return nil
 	}

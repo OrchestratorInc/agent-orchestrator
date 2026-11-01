@@ -152,28 +152,68 @@ function count(value: string, character: string): number {
 }
 
 type MarkdownNode = { type: string; value?: string; url?: string; children?: MarkdownNode[] };
+type TextMatch = { start: number; end: number; node: MarkdownNode };
+
+const linkNode = (url: string, text: string): MarkdownNode => ({ type: "link", url, children: [{ type: "text", value: text }] });
 
 /** remark plugin that linkifies only raw canonical session and artifact URLs outside code. */
 export function remarkSessionLinks() {
-	return (tree: MarkdownNode) => visitMarkdown(tree);
+	return (tree: MarkdownNode) =>
+		visitMarkdown(tree, (text) => findSessionLinks(text).map((link) => ({ ...link, node: linkNode(link.text, link.text) })));
 }
 
-function visitMarkdown(node: MarkdownNode): void {
-	if (!node.children || node.type === "code" || node.type === "inlineCode" || node.type === "link") return;
+// Quotes and brackets around a word, and the prose punctuation after it.
+const LEADING_WRAP = /^[("'“‘[<]+/;
+const TRAILING_WRAP = /[)"'”’\]>.,;:!?]+$/;
+// `~/x`, `./x`, `/a/b`; a bare `/word` reads as a slash command, not a path.
+const ROOTED_PATH = /^(?:~|\.{1,2})\/\S|^\/[^\s/]+\//;
+// `a/b/c`, or `a/b.ext` (`a/b.test.tsx`, `a/.env.local`), optionally with `:line[:col]`. A single `and/or` is prose.
+const RELATIVE_PATH = /^[\w.-]+(?:\/[\w.@+-]+){2,}(?::\d+){0,2}$|^[\w.-]+\/[\w@+-]*(?:\.[\w@+-]+)+(?::\d+){0,2}$/;
+
+/**
+ * Plain-text references in prose nobody formatted: file paths become inline code,
+ * and words that are ids of `sessionProjects` become links to those sessions.
+ */
+export function findPlainReferences(text: string, sessionProjects: ReadonlyMap<string, string>): TextMatch[] {
+	const matches: TextMatch[] = [];
+	for (const word of text.matchAll(/\S+/g)) {
+		const lead = LEADING_WRAP.exec(word[0])?.[0].length ?? 0;
+		const token = word[0].slice(lead).replace(TRAILING_WRAP, "");
+		if (!token) continue;
+		const projectId = sessionProjects.get(token);
+		const node = projectId
+			? linkNode(`${SESSION_LINK_PREFIX}${encodeURIComponent(projectId)}/${encodeURIComponent(token)}`, token)
+			: ROOTED_PATH.test(token) || RELATIVE_PATH.test(token)
+				? { type: "inlineCode", value: token }
+				: undefined;
+		const start = word.index + lead;
+		if (node) matches.push({ start, end: start + token.length, node });
+	}
+	return matches;
+}
+
+/** remark plugin for `findPlainReferences`, outside code and links. */
+export function remarkPlainReferences(sessionProjects: ReadonlyMap<string, string>) {
+	return (tree: MarkdownNode) => visitMarkdown(tree, (text) => findPlainReferences(text, sessionProjects));
+}
+
+function visitMarkdown(node: MarkdownNode, find: (text: string) => TextMatch[]): void {
+	// An authored link, inline or by reference, keeps its own target; a link inside it would fire both.
+	if (!node.children || node.type === "code" || node.type === "inlineCode" || node.type === "link" || node.type === "linkReference") return;
 	for (let index = 0; index < node.children.length; index += 1) {
 		const child = node.children[index]!;
 		if (child.type !== "text" || !child.value) {
-			visitMarkdown(child);
+			visitMarkdown(child, find);
 			continue;
 		}
-		const links = findSessionLinks(child.value);
-		if (links.length === 0) continue;
+		const matches = find(child.value);
+		if (matches.length === 0) continue;
 		const replacement: MarkdownNode[] = [];
 		let cursor = 0;
-		for (const link of links) {
-			if (link.start > cursor) replacement.push({ type: "text", value: child.value.slice(cursor, link.start) });
-			replacement.push({ type: "link", url: link.text, children: [{ type: "text", value: link.text }] });
-			cursor = link.end;
+		for (const match of matches) {
+			if (match.start > cursor) replacement.push({ type: "text", value: child.value.slice(cursor, match.start) });
+			replacement.push(match.node);
+			cursor = match.end;
 		}
 		if (cursor < child.value.length) replacement.push({ type: "text", value: child.value.slice(cursor) });
 		node.children.splice(index, 1, ...replacement);

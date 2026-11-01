@@ -85,6 +85,57 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	// count is direct human Chat messages; steer_count and send_count are the
+	// other human sends; the surface counts split all three by client.
+	"ao.usage.messages_sent": {
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"count":                {},
+		"steer_count":          {},
+		"send_count":           {},
+		"desktop_count":        {},
+		"mobile_count":         {},
+		"cli_count":            {},
+		"kind":                 {},
+		"harness":              {},
+	},
+	// Historical backfill is grouped; new outcomes are one per PR with detail.
+	"ao.usage.worker_pr_associated": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"first_for_install":    {},
+	},
+	"ao.usage.worker_pr_merged": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
+		"merged_via":           {},
+		"first_for_install":    {},
+	},
+	"ao.prs.closed": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"kind":                 {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
+	},
 	// Reported by the LAN listener on the first authenticated request per
 	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
 	// closed vocabulary — lan / tailscale / loopback / other — never an address.
@@ -114,6 +165,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		// existing - the true occurrence count of a burst - is silently
 		// stripped before it ever reaches PostHog.
 		"count":        {},
+		"day":          {},
 		"window_start": {},
 		"window_end":   {},
 	},
@@ -128,6 +180,15 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"count":             {},
 		"window_start":      {},
 		"window_end":        {},
+	},
+	// Install lifecycle anchors. Segmentation (install_source, installed_at,
+	// $os, arch, is_ci, ...) rides every event as a common property; launcher
+	// says whether the desktop app or the CLI started the daemon that sent it.
+	"ao.app.installed": {
+		"launcher": {},
+	},
+	"ao.app.first_open": {
+		"launcher": {},
 	},
 	"ao.daemon.started": {
 		"agent": {},
@@ -165,8 +226,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"created_runs": {},
 		"harness":      {},
 		"rerun":        {},
-		"reused":       {},
-		"trigger":      {},
+
+		"trigger": {},
 	},
 	"ao.review.trigger_failed": {
 		"error_kind": {},
@@ -185,10 +246,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"cancelled_runs": {},
 	},
 	"ao.projects.created": {
-		"has_git_remote": {},
-		"kind":           {},
-		"github_org":     {},
-		"scm_provider":   {},
+		"first_for_install": {},
+		"has_git_remote":    {},
+		"kind":              {},
+		"github_org":        {},
+		"scm_provider":      {},
 	},
 	"ao.session.spawn_failed": {
 		"component":   {},
@@ -200,11 +262,37 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":        {},
 		"operation":   {},
 	},
+	"ao.session.relaunch_failed": {
+		"cause_type":  {},
+		"component":   {},
+		"error_code":  {},
+		"fingerprint": {},
+		"harness":     {},
+		"kind":        {},
+		"operation":   {},
+		"step":        {},
+	},
 	"ao.session.spawned": {
-		"duration_ms":  {},
-		"harness":      {},
-		"kind":         {},
-		"github_actor": {},
+		"created_by":        {},
+		"duration_ms":       {},
+		"first_for_install": {},
+		"harness":           {},
+		"kind":              {},
+		"github_actor":      {},
+		"surface":           {},
+	},
+	// Whether a session delivered: outcome is pr_opened, completed, killed,
+	// failed or abandoned (internal/deliverytelemetry).
+	"ao.sessions.ended": {
+		"created_by":           {},
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"duration_ms":          {},
+		"had_pr":               {},
+		"harness":              {},
+		"kind":                 {},
+		"outcome":              {},
+		"waiting_input_count":  {},
 	},
 	"ao.session.waiting_input_entered": {
 		"state": {},
@@ -247,6 +335,14 @@ type PostHogSink struct {
 	host         string
 	defaultAgent string
 	tenure       *tenureTracker
+	// env and install carry the segmentation context (OS, arch, CI, install
+	// source, release channel) stamped on every event. See environment.go.
+	env     staticEnvironment
+	install *installContext
+	// experimentCohort is this install's fixed 0-99 bucket (cohort.go). Unset
+	// when it could not be read or assigned, which omits the property.
+	experimentCohort    int
+	hasExperimentCohort bool
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
@@ -296,6 +392,8 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
+		env:          detectStaticEnvironment(),
+		install:      newInstallContext("", time.Now),
 		client:       client,
 		log:          telemetryLogger(log),
 		appVersion:   strings.TrimSpace(appVersion),
@@ -303,9 +401,23 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	s.experimentCohort, s.hasExperimentCohort = loadOrAssignExperimentCohort(dataDir)
 	s.wg.Add(1)
 	go s.loop()
 	return s, nil
+}
+
+// SetInstallStateDir points the sink at the directory holding the desktop
+// app's app-state.json and update-settings.json (dirname of running.json).
+// Unset, install_source and release_channel report "unknown".
+func (s *PostHogSink) SetInstallStateDir(dir string) {
+	if s.install == nil {
+		return
+	}
+	s.install.mu.Lock()
+	s.install.stateDir = dir
+	s.install.loadedAt = time.Time{}
+	s.install.mu.Unlock()
 }
 
 // Identity returns the live identity (install ID, signed-in user, opt-out).
@@ -316,7 +428,7 @@ func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.Expor
 
 // Emit enqueues an event for best-effort export. An opted-out install exports
 // nothing, so the stream stops the moment the user flips the switch.
-func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
 		return
 	}
@@ -326,13 +438,26 @@ func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 		return
 	}
 	queued := false
-	select {
-	case s.ch <- ev:
-		queued = true
-	default:
+	if strings.HasPrefix(ev.Name, "ao.usage.") || ev.Name == "ao.prs.closed" {
+		// Usage summaries have already been reserved in SQLite. Wait for queue
+		// capacity so a burst cannot discard them behind the caller's back.
+		select {
+		case s.ch <- ev:
+			queued = true
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case s.ch <- ev:
+			queued = true
+		default:
+		}
 	}
 	s.queueMu.RUnlock()
 	if !queued {
+		if ctx.Err() != nil {
+			return
+		}
 		s.log.Warn("telemetry posthog sink buffer full; dropping event", "name", ev.Name, "source", ev.Source)
 	}
 }
@@ -519,6 +644,13 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		props["active_days"] = activeDays
 		props["tenure"] = string(bucket)
 	}
+	if s.env.platform != "" {
+		s.env.stamp(props)
+	}
+	s.install.stamp(props)
+	if s.hasExperimentCohort {
+		props["experiment_cohort"] = s.experimentCohort
+	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}
@@ -628,6 +760,9 @@ func isAllowedCommandValue(key, value string) bool {
 		_, ok := remoteCommandTokens[value]
 		return ok
 	}
+	if key == "command_path" && value == "other" {
+		return true
+	}
 	if key != "command_path" || tokens[0] != "ao" {
 		return false
 	}
@@ -650,6 +785,19 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 	case string:
 		value = strings.TrimSpace(value)
 		if value == "" {
+			return nil, false
+		}
+		if key == "merged_via" {
+			switch value {
+			case "desktop", "mobile", "cli", "github":
+			default:
+				return nil, false
+			}
+		}
+		if key == "project_telemetry_id" && !uuidPattern.MatchString(value) {
+			return nil, false
+		}
+		if key == "session_telemetry_id" && !sessionTelemetryIDPattern.MatchString(value) {
 			return nil, false
 		}
 		if (key == "command" || key == "command_path") && !isAllowedCommandValue(key, value) {
@@ -692,6 +840,9 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		return nil, false
 	}
 }
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var sessionTelemetryIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // agentSlugPattern is the shape of a real adapter id (claude-code, codex, ...).
 // AO_AGENT is free text and cfg.Agent is only validated against the registry

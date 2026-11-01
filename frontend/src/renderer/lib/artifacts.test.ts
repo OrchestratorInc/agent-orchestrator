@@ -51,7 +51,6 @@ describe("groupArtifactsByProject", () => {
 			projectId: "ao",
 			kind: "html",
 			previewUrl: "http://preview/flow.html",
-			generating: false,
 		});
 		expect(artifactCount(groups)).toBe(4);
 	});
@@ -100,18 +99,9 @@ describe("groupArtifactsByProject", () => {
 		]);
 
 		expect(group).toMatchObject({ id: "cloud", isScratchpad: false });
-		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud" });
+		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud", cloud: { orgId: "org-1" } });
 	});
 
-	it("marks rows from a working session as generating", () => {
-		const [group] = groupArtifactsByProject([
-			workspace("ao", "agent-orchestrator", [
-				session("ao-1", [artifact("draft.md", "2026-10-09T10:00:00Z")], { activity: { state: "active", lastActivityAt: "2026-10-09T10:00:00Z" } }),
-			]),
-		]);
-
-		expect(group.rows[0].generating).toBe(true);
-	});
 });
 
 describe("filterArtifactGroups", () => {

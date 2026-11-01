@@ -12,12 +12,14 @@
 import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { Options } from "react-markdown";
+import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
-import { formatTime, humanVisibleText, stripSteerSenderPrefix } from "./ChatTimelineItems";
+import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { CopyButton } from "./CopyButton";
 
 export interface WorkerUpdate {
@@ -41,6 +43,9 @@ const ARTIFACT_LINE = /^artifact: (\S+)$/;
 // The `[from <session> "<name>"]` prefix `ao send` puts on a worker's message. Messages from before AO
 // stored the sender alongside carry only this.
 const SENDER_PREFIX = /^\[from (?:worker\s+)?([\w.-]+)(?:\s+"([^"]*)")?\]/;
+// The `[via <tool>]` or `[via <tool> #<tag>]` prefix an outside tool puts on what it sends through AO's API,
+// as integrations/grok-bot does. The tag only lets the tool find its reply.
+const VIA_PREFIX = /^\[via ([^\]#\n]{1,60}?)(?: #[^\]\n]*)?\]\s*/;
 // The prompt AO used to send the orchestrator to name a new task, and the command it answered with.
 const TITLE_UPDATE = "AO TASK TITLE UPDATE";
 const RENAME_COMMAND = /\bao'?\s+session\s+rename\s+\S+\s+(["'])(.+?)\1/;
@@ -77,7 +82,7 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 }
 
 /** Items never change in place, so each is parsed once however often the timeline renders. */
-function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
+export function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
 	const cache = new WeakMap<ConversationItem, T>();
 	return (item) => {
 		if (!cache.has(item)) cache.set(item, read(item));
@@ -116,6 +121,19 @@ export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 		}];
 	}
 	return parseReports(item.text, item.createdAt, item.id);
+});
+
+/** The outside tool a message or steer came through and what it said, when no AO session sent it. */
+// ponytail: reads the tool's text prefix, so anyone can type one; a sender name on the send API would replace it.
+export const relayedVia = cachedBy((item): { name: string; body: string } | null => {
+	// A message's piggybacked reports draw as their own rows, as under a human message.
+	const text = item.kind === "message"
+		? item.role === "user" && !item.senderSessionId ? humanVisibleText(item.text) : undefined
+		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text ?? item.summary : undefined;
+	if (text === undefined) return null;
+	const via = VIA_PREFIX.exec(text);
+	const name = via?.[1]?.trim();
+	return via && name ? { name, body: text.slice(via[0].length) } : null;
 });
 
 export function isTaskTitleUpdate(item: ConversationItem): boolean {
@@ -257,6 +275,38 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
+// Keyed on which sessions exist, not on the workspace list: that list changes with every session
+// event, and a new plugin list re-parses every message that renders it.
+// ponytail: one cached session set; chats on two hosts at once rebuild in turn, key the cache by set if that shows up.
+type References = { sessions: string; plugins: Options["remarkPlugins"] };
+const referencesByWorkspaces = new WeakMap<object, References>();
+let latestReferences: References | undefined;
+
+/**
+ * Agents message each other in plain prose; their paths read as code and the
+ * sessions they name link to them. Built once per workspace list and shared by
+ * every message, and the same list until a session is added or removed.
+ */
+export function usePlainReferences(): Options["remarkPlugins"] {
+	const workspaces = useChatLinkWorkspaces();
+	let references = referencesByWorkspaces.get(workspaces);
+	if (!references) {
+		const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
+		references = latestReferences?.sessions === sessions
+			? latestReferences
+			: { sessions, plugins: [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]] };
+		referencesByWorkspaces.set(workspaces, references);
+	}
+	latestReferences = references;
+	return references.plugins;
+}
+
+/** Prose one agent sent another, with its plain references highlighted. Its own component, so only drawn prose reads them. */
+function AgentProse({ text, muted, className }: { text: string; muted?: boolean; className?: string }) {
+	const references = usePlainReferences();
+	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
+}
+
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);
 	const session = useWorkerSession(update.sessionId, update.projectId);
@@ -315,7 +365,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 			))}
 			{open ? (
 				<div className="mb-2 ml-6 mt-1 min-w-0">
-					<ChatMarkdown text={detail} muted safeOrigin className="whitespace-pre-wrap text-xs leading-relaxed" />
+					<AgentProse text={detail} muted className="whitespace-pre-wrap text-xs leading-relaxed" />
 				</div>
 			) : null}
 		</div>
@@ -339,24 +389,73 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 }
 
 /**
- * In a worker's chat, a message from its orchestrator, drawn the way the
- * orchestrator chat draws a worker: avatar, linked name and time, with what it
- * sent open beneath at the row's indent. Any other message draws as `children`.
+ * In a worker's chat, a message another agent sent it (its orchestrator, or a
+ * sibling worker), drawn the way the orchestrator chat draws a worker: avatar,
+ * linked name and time, with what it sent open beneath at the row's indent.
+ * What an outside tool relayed through AO's API (`[via Grok Bot] …`) draws the
+ * same way under the tool's name, in any chat. Any other message draws as `children`.
  */
-export function FromOrchestrator({ item, children }: { item: ConversationItem; children: ReactNode }) {
+export function FromAgent({ item, queued, children }: { item: ConversationItem; queued?: boolean; children: ReactNode }) {
+	const { t } = useTranslation();
 	const updates = workerUpdatesOf(item);
 	const update = updates.length === 1 && !updates[0]!.state ? updates[0] : undefined;
 	const session = useWorkerSession(update?.sessionId, update?.projectId);
-	if (!update || session?.kind !== "orchestrator") return <>{children}</>;
-	return <OrchestratorMessage update={update} session={session} />;
+	const via = relayedVia(item);
+	if (via) {
+		return (
+			<SenderRow
+				avatar={<Bot aria-hidden="true" className="absolute left-0 top-[3px] size-4 text-muted-foreground" />}
+				createdAt={item.createdAt}
+				body={via.body}
+				queued={queued}
+			>
+				<span className={SENDER_NAME}>{via.name}</span>
+			</SenderRow>
+		);
+	}
+	if (!update || !session) return <>{children}</>;
+	const name = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title || update.name;
+	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
+	return (
+		<SenderRow avatar={<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />} createdAt={update.createdAt} body={update.body}>
+			{href ? (
+				<SessionLabelLink href={href} className={cn(SENDER_NAME, "decoration-foreground/40 underline-offset-2 hover:underline")}>
+					{name}
+				</SessionLabelLink>
+			) : null}
+		</SenderRow>
+	);
 }
 
-function OrchestratorMessage({ update, session }: { update: WorkerUpdate; session: WorkspaceSession }) {
+const SENDER_NAME = "float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground";
+
+function SenderRow({ avatar, createdAt, body, queued, children }: { avatar: ReactNode; createdAt: string; body: string; queued?: boolean; children: ReactNode }) {
+	return (
+		<div className="relative min-w-0 pl-6" data-testid="agent-message">
+			{avatar}
+			<Folded watch={body}>
+				{/* The name and time float into the message's first line; the rest wraps under the name. */}
+				<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
+					{formatTime(createdAt)}
+				</span>
+				{children}
+				<AgentProse text={body} />
+			</Folded>
+			{queued ? <div className="mt-1"><QueuedNote /></div> : null}
+		</div>
+	);
+}
+
+/**
+ * Content folded after five lines, with "Show more" whenever the fold hides
+ * something. Re-measured as the chat resizes, so hidden text always comes with a
+ * way to open it.
+ */
+export function Folded({ watch, children }: { watch: unknown; children: ReactNode }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [folds, setFolds] = useState(false);
 	const body = useRef<HTMLDivElement>(null);
-	// Re-measured as the chat resizes, so text the fold hides always comes with a way to open it.
 	useLayoutEffect(() => {
 		const element = body.current;
 		if (!element || open) return;
@@ -365,27 +464,11 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [open, update.body]);
-	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
+	}, [open, watch]);
 	return (
-		<div className="relative min-w-0 pl-6" data-testid="orchestrator-message">
-			<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />
-			{/* The name and time float into the message's first line; the rest wraps under the name. */}
+		<>
 			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
-				<div>
-					<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
-						{formatTime(update.createdAt)}
-					</span>
-					{href ? (
-						<SessionLabelLink
-							href={href}
-							className="float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground decoration-foreground/40 underline-offset-2 hover:underline"
-						>
-							{t("shell.orchestrator")}
-						</SessionLabelLink>
-					) : null}
-					<ChatMarkdown text={update.body} safeOrigin />
-				</div>
+				<div>{children}</div>
 			</div>
 			{folds || open ? (
 				<button
@@ -398,7 +481,7 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 					<ChevronDown aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-180")} />
 				</button>
 			) : null}
-		</div>
+		</>
 	);
 }
 
@@ -498,7 +581,7 @@ const SPAWNED = /\bspawned\s+session\s+([\w.-]+)/i;
 export function spawnedSessionIds(items: readonly ConversationItem[]): string[] {
 	const ids: string[] = [];
 	for (const item of items) {
-		if (item.kind !== "activity" || item.activityKind !== "command") continue;
+		if (item.kind !== "activity" || item.activityKind !== "command" || item.status !== "completed") continue;
 		if (!/\bao'?\s+spawn\b/.test(item.detail?.command ?? item.summary)) continue;
 		const match = SPAWNED.exec(item.detail?.output ?? "");
 		if (match) ids.push(match[1]!);
@@ -506,9 +589,17 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
+export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
+	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
+		&& item.detail?.action === "session.spawned"
+		&& typeof item.detail.targetSessionId === "string"
+		&& item.detail.operationId === item.detail.targetSessionId
+		&& spawnedIds.has(item.detail.targetSessionId);
+}
+
 /** The workers a turn started, each showing where it is now. */
 export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(false);
 	return (
 		<div className="min-w-0 text-xs">
 			<button
@@ -540,19 +631,45 @@ function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
 	const href = session?.workspaceId ? sessionHref({ sessionId, projectId: session.workspaceId }) : latest ? sessionHref(latest) : undefined;
 	let lead: ReactNode;
 	let status: ReactNode;
-	if (pr) {
+	if (latest?.state === "needs_input" || latest?.state === "stuck"
+		|| session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
+		status = <span className="text-status-needs-you">{latest?.state === "stuck" ? "Stuck" : "Needs input"}</span>;
+	} else if (pr) {
 		const ready = readyToMerge(pr);
 		lead = <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", ready ? "text-status-ready" : "text-muted-foreground")} />;
 		status = ready ? `#${pr.number} · ready to merge` : `#${pr.number}`;
 	} else if (latest?.state === "done") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-ready" />;
 		status = "Done";
-	} else if (latest?.state === "needs_input" || latest?.state === "stuck") {
+	} else if (session?.isTerminated || session?.status === "terminated") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Terminated";
+	} else if (session?.provisionState === "provisioning") {
+		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
+		status = "Spawning";
+	} else if (session?.provisionState === "failed") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = <span className="text-status-needs-you">{latest.state === "stuck" ? "Stuck" : "Needs input"}</span>;
-	} else {
+		status = "Start failed";
+	} else if (session?.activity?.state === "exited" || session?.status === "exited") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Exited";
+	} else if (session?.statusReadiness === "checking") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Checking status";
+	} else if (!session || session.statusReadiness === "unavailable"
+		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Status unavailable";
+	} else if (session.activity?.state === "idle" || session.status === "idle") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Idle";
+	} else if (session.activity?.state === "active" || session.status === "working") {
 		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
 		status = latest ? splitHeadline(splitArtifacts(latest.body).text).headline : "Working";
+	} else {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Status unavailable";
 	}
 	return (
 		<div className="flex min-w-0 items-center gap-2 py-0.5 pl-5">

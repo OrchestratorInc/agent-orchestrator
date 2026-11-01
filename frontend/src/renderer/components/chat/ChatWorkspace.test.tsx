@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { captureFileReference } from "../../../shared/chat-file-reference";
+import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -6,6 +8,7 @@ import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
+import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import {
 	chatFixture,
@@ -204,6 +207,14 @@ beforeEach(() => {
 });
 
 describe("ChatWorkspace prompt suggestions", () => {
+	it("shows cloud captured previews without querying the local daemon", async () => {
+		const snapshot={...chatFixtureEmpty,sessionId:"cloud-preview"};
+		const reference=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_STATIC_PREVIEW"}]},snapshot.sessionId);
+		const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+		render(<QueryClientProvider client={client}><ChatWorkspace snapshot={snapshot} fileReferenceDelivery="text" headerActions={<FileAnnotationPreview reference={reference}/>}/></QueryClientProvider>);
+		expect(await screen.findByText("CLOUD_STATIC_PREVIEW")).toBeInTheDocument();
+		expect(client.getQueryCache().findAll({queryKey:["file-annotation-source"]})).toHaveLength(0);
+	});
 	it("inserts a contextual suggestion into the normal draft on Tab without sending it", async () => {
 		const onSend = vi.fn();
 		const promptSuggestion = { id: "context-1", text: "Explain the fix." };
@@ -560,6 +571,50 @@ describe("ChatWorkspace timeline", () => {
 		log.scrollTop = 3190;
 		fireEvent.scroll(log);
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+	});
+
+	// Folding a panel at the end (a finished plan) releases the follow, but the reader
+	// is still at the bottom: a jump would go nowhere, and no scroll down exists that
+	// could retire it, so it must not appear until there is something below.
+	it("offers no jump when a fold at the end releases the follow, until the reader scrolls away", () => {
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+
+		const fold = document.createElement("button");
+		fold.setAttribute("aria-expanded", "true");
+		log.firstElementChild!.appendChild(fold);
+		fireEvent.pointerDown(fold);
+		// The panel folds: the content shrinks and the scroll clamps to the new end.
+		stubGeometry(log, { scrollHeight: 3900, clientHeight: 800, scrollTop: 3100 });
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+
+		log.scrollTop = 1000;
+		fireEvent.scroll(log);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
+	it("loads older history as the reader scrolls up within a screen of the top", () => {
+		const onLoadOlder = vi.fn();
+		const snapshot = chatFixtureLongHistory(8);
+		const view = render(<ChatWorkspace snapshot={snapshot} hasOlder onLoadOlder={onLoadOlder} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		log.scrollTop = 1500;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).not.toHaveBeenCalled();
+
+		log.scrollTop = 600;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+		view.rerender(<ChatWorkspace snapshot={snapshot} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+		log.scrollTop = 300;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
@@ -994,7 +1049,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByTestId("live-turn-status")).not.toBeInTheDocument();
 		// One Working row for the turn, owned by the turn group, never one per message.
 		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		expect(screen.getAllByTestId("response-spinner")).toHaveLength(1);
 
 		const stop = screen.getByRole("button", { name: "Stop turn" });
@@ -1013,7 +1068,7 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		expect(screen.getByTestId("response-spinner")).toBeInTheDocument();
 	});
 
@@ -1075,9 +1130,49 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
+		// The fold names the time, so the answer's own row does not repeat it.
+		expect(document.querySelector("[data-turn-duration]")).toBeNull();
 
 		await user.click(worked);
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
+	});
+
+	it("puts the turn's duration on the action row when there is no work to fold", () => {
+		const turnId = "turn-straight-to-answer";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 2,
+			turns: [
+				{
+					id: turnId,
+					state: "completed",
+					requestedAt: "2026-08-11T10:01:00Z",
+					startedAt: "2026-08-11T10:01:01Z",
+					completedAt: "2026-08-11T10:02:05Z",
+				},
+			],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "hi",
+					streaming: false, createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message", id: "answer", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Hi! What would you like to work on?",
+					streaming: false, createdAt: "2026-08-11T10:02:05Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
+		const duration = screen.getByText("1m");
+		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
+		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
+		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -1162,18 +1257,22 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 
 		// Read the transcript in document order: the work before the steer settles into
-		// its own Worked row, and the steer opens a fresh Working row for the reply.
+		// its own Worked row, and the steer opens a fresh live turn for the reply.
 		const text = screen.getByRole("log").textContent ?? "";
 		const positions = [
 			"Run the unit tests",
 			"Worked for",
 			"Starting with the test suite.",
 			"Only the unit ones, please",
-			"Working for",
 			"Switching to the unit tests.",
 		].map((fragment) => text.indexOf(fragment));
 		expect(positions.every((position) => position >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+		// The live row closes the turn, under everything the agent has written so far.
+		const live = screen.getByTestId("live-working-label");
+		expect(
+			screen.getByText("Switching to the unit tests.").compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 
 	it("keeps a steer visible outside the folded work once the turn settles", async () => {
@@ -1220,7 +1319,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
 	});
 
-	it("replaces the generic working label with Claude's live retry count and backoff", () => {
+	it("names Claude's live retry in the live row, with its backoff beneath", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
 			(item) =>
@@ -1250,11 +1349,12 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} onInterrupt={vi.fn()} />);
 
-		const status = screen.getByTestId("live-turn-status");
-		expect(status).toHaveTextContent("Reconnecting to Claude, attempt 2 of 10.");
-		expect(status).toHaveTextContent("The API request failed. Trying again in 4s.");
-		expect(status).not.toHaveTextContent("Working for");
-		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		const status = screen.getByTestId("live-working-label");
+		expect(status).toHaveTextContent("Reconnecting… 2/10");
+		expect(status).not.toHaveTextContent("Reconnecting to Claude");
+		expect(screen.getByTestId("live-turn-status")).toHaveTextContent("The API request failed. Trying again in 4s.");
+		// The retry replaces the step label, not the timer.
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 	});
 
 	it("interrupts the active turn when Escape is pressed", () => {
@@ -1339,7 +1439,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.mouseUp(log);
 		const button = screen.getByRole("button", { name: "Add to chat" });
 		expect(button).toHaveClass("shrink-0", "whitespace-nowrap", "hover:bg-interactive-hover");
-		expect(button.parentElement).toHaveClass("bg-card", "border-border", "rounded-lg", "w-max");
+		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
 		fireEvent.mouseDown(button);
 		expect(selection.toString().trim()).toBe(selectedText);
 		fireEvent.click(button);
@@ -1347,6 +1447,30 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		expect(screen.getByRole("button", { name: selectedText })).toBeInTheDocument();
 		selection.removeAllRanges();
+	});
+
+	it("scrolls to and highlights a navigated message even when its text does not match the rendered body", async () => {
+		const { rerender } = render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector<HTMLElement>("[data-chat-message-id]")!;
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this === log) return new DOMRect(0, 0, 600, 500);
+			if (this === source) return new DOMRect(0, 900, 600, 80);
+			return bounds.call(this);
+		});
+		const scrollIntoView = vi.fn();
+		source.scrollIntoView = scrollIntoView;
+		rerender(<ChatWorkspace
+			snapshot={chatFixtureSettled}
+			annotationNavigationRequest={{ id: "palette:1", text: "- **raw** `markdown` line", messageId: source.dataset.chatMessageId }}
+		/>);
+		try {
+			await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" }));
+			expect(source.querySelector("[data-chat-message-body]")).toHaveClass("chat-annotation-target");
+		} finally {
+			geometry.mockRestore();
+		}
 	});
 
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
@@ -1442,7 +1566,18 @@ describe("ChatWorkspace timeline", () => {
 		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} onResolveInput={onResolveInput} />);
 		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
 		const history = within(screen.getByRole("region", { name: "Agent question history" }));
-		expect(history.getByText("Native — Use the native protocol")).toBeVisible();
+		expect(history.getByText("Which direction should we take?")).toBeVisible();
+		const header = history.getByText("Direction");
+		expect(header).toBeVisible();
+		const field = header.parentElement;
+		if (!field) throw new Error("missing answered Direction field");
+		const answer = within(field).getByRole("definition");
+		expect(answer).toBeVisible();
+		expect(answer.textContent).toBe("Native");
+		expect(history.queryByText("Bridge", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Use the native protocol", { exact: false })).not.toBeInTheDocument();
+		expect(history.queryByText("Keep the bridge", { exact: false })).not.toBeInTheDocument();
+		expect(onResolveInput).toHaveBeenCalledExactlyOnceWith("input-1", "accept", { first_value: "Native" });
 	});
 
 	it.each(["running", "completed"] as const)("keeps answered questions and feedback readable during a %s turn", async (state) => {
@@ -1595,7 +1730,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Do you want to run this command?")).toBeInTheDocument();
 		expect(screen.queryByText("Waiting for your decision")).not.toBeInTheDocument();
 		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		const approval = screen.getByRole("group", {
 			name: "Approval request approval-1",
 		});
@@ -2036,7 +2171,8 @@ describe("ChatWorkspace timeline", () => {
 
 		const startup = screen.getByTestId("session-startup");
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
-		expect(screen.getByTestId("live-working-label").previousElementSibling?.querySelector("svg")).toBeInTheDocument();
+		const workingMark = screen.getByTestId("live-working-label").previousElementSibling as HTMLElement;
+		expect(within(workingMark).getByTestId("response-spinner")).toBeInTheDocument();
 		// It takes the Working row's slot inside the brief's turn, so the handoff moves nothing.
 		expect(startup.closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
 		const steps = within(startup).getAllByRole("listitem");
@@ -2045,14 +2181,13 @@ describe("ChatWorkspace timeline", () => {
 			["worktree", "done"],
 			["agent", "running"],
 		]);
-		expect(steps[1]).toHaveTextContent("Create worktree");
-		expect(steps[1]).toHaveTextContent("ao/mer-1");
-		expect(steps[2]).toHaveTextContent("Start Codex");
+		expect(within(steps[1]).getByText("Workspace created")).toBeInTheDocument();
+		expect(within(steps[2]).getByText("Getting Codex ready")).toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
-		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
-		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+		expect(screen.getByText("Queue a follow-up while Codex gets ready")).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
@@ -2067,7 +2202,7 @@ describe("ChatWorkspace timeline", () => {
 				onResumeAgent={vi.fn()}
 			/>,
 		);
-		expect(screen.getByText("Codex 正在启动. 消息将按顺序发送")).toBeInTheDocument();
+		expect(screen.getByText("Codex 准备期间可先排队发送消息")).toBeInTheDocument();
 	});
 
 	// The checklist keeps the working slot until the agent is up and its first
@@ -2081,7 +2216,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
 		const label = screen.getByTestId("live-working-label");
-		const spinner = label.previousElementSibling?.querySelector("svg");
+		const spinner = label.previousElementSibling?.querySelector("canvas, svg");
 		view.rerender(
 			<ChatWorkspace
 				snapshot={startingSnapshot("queued")}
@@ -2090,7 +2225,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("live-working-label")).toBe(label);
 		expect(label).toHaveTextContent(/^Setting up session$/);
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 
 		view.rerender(
 			<ChatWorkspace
@@ -2099,9 +2234,9 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(screen.getByTestId("live-working-label")).toBe(label);
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 		await waitFor(() => expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument());
-		expect(screen.getByText(/^Working for /)).toBeInTheDocument();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -2111,7 +2246,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 	});
 
 	it("keeps follow-up messages queued when the opening brief starts running", () => {
@@ -2137,7 +2272,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
-		expect(within(screen.getByTestId("session-startup")).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(screen.getByTestId("session-startup")).getByText("Preparing your workspace")).toHaveClass("chat-working-shimmer");
 		expect(screen.queryByText("ao/mer-1/root")).not.toBeInTheDocument();
 	});
 
@@ -2185,6 +2320,30 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
 	});
 
+	it("shimmers the composer and queues messages while a Freestyle Chat session starts or wakes", () => {
+		const cloudSession = (role: "orchestrator" | "worker", observedState: string, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: role, mode: "chat" as const, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		for (const [role, observedState] of [["orchestrator", "provisioning"], ["worker", "bootstrapping"], ["worker", "stopped"]] as const) {
+			const view = render(<ChatWorkspace sessionRole={role} snapshot={chatFixtureEmpty} session={cloudSession(role, observedState)} />);
+			const composer = screen.getByRole("combobox", { name: "Message the agent" });
+			expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+			expect(composer).toHaveAttribute("contenteditable", "true");
+			expect(screen.getByText(/Queue a follow-up while .* gets ready/)).toBeInTheDocument();
+			// No startup checklist in the conversation: the composer carries the start.
+			expect(screen.queryByText("Preparing your workspace")).not.toBeInTheDocument();
+			view.unmount();
+		}
+		// Once its worker connects the composer settles.
+		const connected = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={{ ...cloudSession("worker", "running"), runtimeConnected: true }} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" }).closest("form")).not.toHaveAttribute("data-starting");
+		connected.unmount();
+		// A Coder orchestrator still opens its composer only once it is up.
+		render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} session={cloudSession("orchestrator", "provisioning", "coder")} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
 	it.each([
 		["fetch", "Getting the latest code"],
 		["worktree", "Preparing your workspace"],
@@ -2203,9 +2362,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Write a one-page plan for a new feature",
-			"Build an HTML page comparing three options side by side",
-			"Turn my rough notes into a polished Markdown document",
+			"Write a plan",
+			"Compare options",
+			"Polish my notes",
+			"Make slides",
 		]);
 
 		await user.click(prompts[1]);
@@ -2222,9 +2382,10 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
 		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
 		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
-			"Review my recent changes for bugs",
-			"Add tests for the code I am working on",
-			"Walk me through how a request flows through this code",
+			"Review my changes",
+			"Add tests",
+			"Trace a request",
+			"Simplify my code",
 		]);
 
 		await user.click(prompts[0]);
@@ -2719,6 +2880,48 @@ describe("ChatWorkspace timeline", () => {
 		} finally {
 			window.ResizeObserver = originalObserver;
 		}
+	});
+
+	// A nudge up near the end is a pause, not a departure: the follow comes back on
+	// its own once the reader has been still for a moment while the turn is live.
+	it("resumes following after a short pause when the reader only nudged up a little", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.wheel(log, { deltaY: -150 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
+	});
+
+	it("does not pull back a view that moved without the reader's own input", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(3050);
+	});
+
+	it("stays put when the reader scrolled well above the end", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 600;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(2600);
 	});
 
 	it("does not follow a streaming resize of the latest row while the reader is unpinned", async () => {
@@ -3270,12 +3473,13 @@ describe("automation reports", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Example")).toBeInTheDocument();
-		expect(screen.getByText("Make this clearer.")).toBeInTheDocument();
+		const feedback = screen.getByTestId("your-action");
+		expect(feedback).toHaveTextContent("Example");
+		expect(feedback).toHaveTextContent("Make this clearer.");
+		expect(feedback).toHaveTextContent("Queued · sends when the agent finishes");
 	});
 
-	it("renders browser annotation transport as a compact feedback card", () => {
+	it("renders browser annotation transport as the user's feedback, without its transport details", () => {
 		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
 		const message: ConversationMessage = {
 			...source,
@@ -3301,10 +3505,9 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 </browser_annotations>`,
 		};
 
-		render(<OriginMessage message={message} />);
+		render(<AutomationMessage message={message} fallback={null} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Google")).toBeInTheDocument();
+		expect(screen.getByText("Google")).toBeInTheDocument();
 		expect(screen.getByText("2 visual changes")).toBeInTheDocument();
 		expect(screen.getByText("div.badge")).toBeInTheDocument();
 		expect(screen.getByText("New")).toBeInTheDocument();
@@ -4392,15 +4595,16 @@ describe("ChatWorkspace message actions", () => {
 			},
 		});
 		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
+		expect(screen.queryByText(/Saving attachments/)).toBeNull();
 		firstView.unmount();
 
 		render(<ChatWorkspace {...common} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
 		await act(async () => finishStaging([".ao/attachments/attachment-pending.txt"]));
 
 		expect(await screen.findByLabelText("Remove pending.txt")).toBeInTheDocument();
-		await waitFor(() => expect(screen.queryByText("Saving attachments… Wait before leaving this chat.")).toBeNull());
+		await waitFor(() => expect(screen.queryByRole("status", { name: "Attaching pending.txt" })).toBeNull());
 		expect(readChatSessionDraft(snapshot.sessionId).composer.attachments).toEqual([
 			expect.objectContaining({
 				name: "pending.txt",
@@ -4784,12 +4988,8 @@ describe("ChatWorkspace reviewer tabs", () => {
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
 		expect(chatTab).toHaveClass("px-2", "cursor-pointer");
 		expect(chatTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch");
-		expect(reviewerTab).toHaveClass(
-			"self-stretch",
-			"px-3",
-			"cursor-pointer",
-			"focus-visible:outline-2",
-		);
+		expect(reviewerTab).toHaveClass("h-full", "px-2", "cursor-pointer");
+		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch");
 		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 
 		fireEvent.click(reviewerTab);
@@ -5285,6 +5485,15 @@ describe("durable queued edits", () => {
 			items: [{ kind: "message", id: "queued-message", turnId: "queued", role: "user", origin: "human", streaming: false, text: "queued text", sequence: 1, revision: 0, createdAt: "2026-09-07T00:00:00Z" }],
 		};
 	}
+
+	it("keeps the sharing notice directly above the locked form and below the queue", () => {
+		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
+		const notice = screen.getByText("Live draft stays visible");
+		expect(notice.previousElementSibling).toHaveAttribute("data-testid", "queued-composer-dock");
+		expect(notice.nextElementSibling?.tagName).toBe("FORM");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "");
+	});
 
 	it("restores the queue target across remount and keeps the independent composer after accepted save", async () => {
 		const snapshot = queuedSnapshot();

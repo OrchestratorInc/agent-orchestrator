@@ -591,7 +591,13 @@ func (m *Manager) runInterfaceTransition(
 	// Native-history replay is the TUI -> Chat barrier; an account move resumes
 	// the same controller kind, so ordinary context resume applies.
 	replayHistory := !transition.AccountMove()
-	err = m.startTransitionTarget(ctx, rec.ID, transition.NativeConversationID == "", replayHistory, transition.HistoryPolicy)
+	// As in rollback: without an epoch commit (an account move) a Chat still owns
+	// its provider id durably, so it resumes, replacing a never-messaged provider
+	// in place. A fresh start would present an owner the database does not hold.
+	fresh := transition.NativeConversationID == "" &&
+		(modeChanged || transition.SourceMode != domain.SessionModeChat ||
+			!m.chatHoldsProviderConversation(ctx, rec.ID))
+	err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
 	if errors.Is(err, ports.ErrChatHistoryUnsettled) &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
 		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
@@ -608,7 +614,7 @@ func (m *Manager) runInterfaceTransition(
 			_ = m.retainUnconfirmedTransitionTarget(transition, errors.Join(err, stopErr))
 			return
 		}
-		err = m.startTransitionTarget(ctx, rec.ID, transition.NativeConversationID == "", replayHistory, transition.HistoryPolicy)
+		err = m.startTransitionTarget(ctx, rec.ID, fresh, replayHistory, transition.HistoryPolicy)
 	}
 	if err != nil {
 		code := "TARGET_RESUME_FAILED"

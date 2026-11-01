@@ -1202,6 +1202,7 @@ function setupTabHost(
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
 	overrides?: { entryReadyTimeoutMs?: number },
+	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
 		webPreferences: Electron.WebPreferences;
@@ -1429,6 +1430,7 @@ function setupTabHost(
 		browserProfileStore,
 		browserHistoryStore,
 		clearBrowserProfileData,
+		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		onNativeViewAdded,
 		onTabCloseFailure,
@@ -2616,6 +2618,22 @@ describe("browser profile partitions and replacement", () => {
 		expect(firstPartition).not.toBe(secondPartition);
 		expect(firstTabPartition).toBe(firstPartition);
 		expect(constructorOptions.every(({ webPreferences }) => webPreferences.plugins === true)).toBe(true);
+	});
+
+	it("prepares each tab's partition before its page is constructed", async () => {
+		const order: string[] = [];
+		const prepare = vi.fn((partition: string) => order.push(`prepare ${partition}`));
+		const { constructorOptions, invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, undefined, prepare);
+		const recordConstruction = constructorOptions.push.bind(constructorOptions);
+		constructorOptions.push = (...items) => {
+			for (const item of items) order.push(`construct ${item.webPreferences.partition}`);
+			return recordConstruction(...items);
+		};
+
+		await invoke("browser:ensure", "worker-1");
+
+		const partition = constructorOptions[0]!.webPreferences.partition!;
+		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
 	});
 
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {
@@ -5892,6 +5910,81 @@ describe("browser annotation IPC", () => {
 			channel: "browser:annotation:state",
 			payload: { viewId: ensured.viewId, count: 0, screenshotCount: 0, hasDraft: false },
 		});
+	});
+
+	it("hands the page an empty batch once its annotations are sent", async () => {
+		const { invoke, invokeFromTab, sent, webContents } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		const session = submittedAnnotationSession("http://localhost:5173/", [
+			{ body: "First", selector: "h1" },
+			{ body: "Second", selector: "p" },
+		]);
+		await invokeFromTab("browser:annotation:submit", 99, { session });
+		const submitted = sent.find(({ channel }) => channel === "browser:annotation:submitted")
+			?.payload as BrowserAnnotationSubmitPayload;
+		webContents.send.mockClear();
+
+		await invoke("browser:annotation:complete", {
+			viewId: submitted.viewId,
+			tabId: submitted.tabId,
+			pageKey: submitted.pageKey,
+			sessionToken: submitted.sessionToken,
+			success: true,
+		});
+
+		expect(webContents.send).toHaveBeenCalledWith("browser:annotation:setMode", {
+			enabled: false,
+			session: { version: 1, page: { url: "http://localhost:5173/", title: "Preview" }, annotations: [], screenshots: [] },
+		});
+	});
+
+	it("hands a background tab's page an empty batch once its annotations are sent", async () => {
+		const { invoke, invokeFromTab, sent, views } = setupTabHost();
+		const ensured = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId: ensured.viewId, url: "https://a.example.test/" });
+		const sessionA = submittedAnnotationSession("https://a.example.test/");
+		await invokeFromTab("browser:annotation:submit", views[0]!.webContents.id, { session: sessionA });
+		const submitted = sent.find(({ channel }) => channel === "browser:annotation:submitted")
+			?.payload as BrowserAnnotationSubmitPayload;
+		await invoke("browser:openTab", { viewId: ensured.viewId, url: "https://b.example.test/" });
+		views[0]!.webContents.send.mockClear();
+
+		await invoke("browser:annotation:complete", {
+			viewId: submitted.viewId,
+			tabId: submitted.tabId,
+			pageKey: submitted.pageKey,
+			sessionToken: submitted.sessionToken,
+			success: true,
+		});
+
+		expect(views[0]!.webContents.send).toHaveBeenCalledWith("browser:annotation:setMode", {
+			enabled: false,
+			session: { version: 1, page: { url: "https://a.example.test/", title: "Preview" }, annotations: [], screenshots: [] },
+		});
+	});
+
+	it("keeps the page's batch for retry when sending fails", async () => {
+		const { invoke, invokeFromTab, sent, webContents } = setupHost();
+		await invoke("browser:ensure", "sess-1");
+		const session = submittedAnnotationSession();
+		await invokeFromTab("browser:annotation:submit", 99, { session });
+		const submitted = sent.find(({ channel }) => channel === "browser:annotation:submitted")
+			?.payload as BrowserAnnotationSubmitPayload;
+		webContents.send.mockClear();
+
+		await invoke("browser:annotation:complete", {
+			viewId: submitted.viewId,
+			tabId: submitted.tabId,
+			pageKey: submitted.pageKey,
+			sessionToken: submitted.sessionToken,
+			success: false,
+		});
+
+		// Without a replacement the page keeps its own batch for the retry.
+		const modes = webContents.send.mock.calls.filter(([channel]) => channel === "browser:annotation:setMode");
+		expect(modes).not.toContainEqual(["browser:annotation:setMode", expect.objectContaining({
+			session: expect.objectContaining({ annotations: [] }),
+		})]);
 	});
 
 	it("resizes a captured snapshot that exceeds the longest-edge cap", async () => {

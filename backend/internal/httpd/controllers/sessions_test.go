@@ -91,6 +91,7 @@ type fakeSessionService struct {
 	workspaceSearchQuery       string
 	workspaceSearchCursor      string
 	workspaceSearchLimit       int
+	workspaceContentHits       []sessionsvc.WorkspaceContentHit
 	workspaceResolvePath       string
 	workspaceResolution        sessionsvc.WorkspacePathResolution
 	workspaceTree              sessionsvc.WorkspaceTree
@@ -825,6 +826,14 @@ func (f *fakeSessionService) ResolveWorkspacePath(_ context.Context, id domain.S
 		return sessionsvc.WorkspacePathResolution{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	return f.workspaceResolution, nil
+}
+
+func (f *fakeSessionService) SearchWorkspaceContent(_ context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error) {
+	f.workspaceSearchQuery = query
+	if _, ok := f.sessions[id]; !ok {
+		return nil, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	return f.workspaceContentHits, nil
 }
 
 func (f *fakeSessionService) SearchWorkspaceFiles(_ context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error) {
@@ -4339,6 +4348,22 @@ func TestSessionsAPI_SearchWorkspaceFiles(t *testing.T) {
 	var got controllers.WorkspaceFileSearchResponse
 	mustJSON(t, body, &got)
 	if len(got.Results) != 1 || got.Results[0].Path != "README.md" || got.NextCursor != "1" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestSessionsAPI_SearchWorkspaceContent(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceContentHits = []sessionsvc.WorkspaceContentHit{{Path: "src/a.ts", Line: 7, Text: "\x02close\x03Palette()"}}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/search/content?query=close", "")
+	if status != http.StatusOK || svc.workspaceSearchQuery != "close" {
+		t.Fatalf("GET content search = %d query=%q body=%s", status, svc.workspaceSearchQuery, body)
+	}
+	var got controllers.WorkspaceContentSearchResponse
+	mustJSON(t, body, &got)
+	if len(got.Results) != 1 || got.Results[0] != (controllers.WorkspaceContentSearchHitResponse{Path: "src/a.ts", Line: 7, Text: "\x02close\x03Palette()"}) {
 		t.Fatalf("response = %#v", got)
 	}
 }

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
@@ -47,7 +47,7 @@ export function ElicitationDock({
 			role="group"
 			aria-label="Agent question"
 			data-testid="elicitation-dock"
-			className="elicitation-dock animate-in fade-in-0 slide-in-from-bottom-1 duration-200 overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
+			className="elicitation-dock animate-in fade-in-0 slide-in-from-bottom-1 duration-200 flex max-h-[min(65vh,32rem)] flex-col overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
 		>
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
@@ -56,7 +56,7 @@ export function ElicitationDock({
 			)}
 
 			{error ? (
-				<p role="alert" className="px-3 pb-2 text-xs leading-snug text-destructive">
+				<p role="alert" className="shrink-0 px-3 pb-2 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
@@ -76,11 +76,14 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 	const groups = claudeQuestionGroups(properties);
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
+	// The line under the question is the answer, or how the question ended when
+	// there is no answer to show. An answer needs no "Answered" label above it.
+	const showsAnswers = answered && properties.length > 0;
+	const ending = showsAnswers ? null : <p className="text-muted-foreground">{outcome}</p>;
 
 	return (
 		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
-			<p className="font-medium text-muted-foreground">{outcome}</p>
-			{groups ? groups.map((group) => {
+			{groups ? groups.map((group, index) => {
 				const question = group[0];
 				if (!question) return null;
 				return (
@@ -88,24 +91,34 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
 							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
 						</p>
-						{answered ? <HistoryAnswers properties={group} content={content} /> : null}
+						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
 				);
 			}) : (
 				<div className="space-y-1">
 					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
 					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
-					{answered && properties.length > 0 ? <HistoryAnswers properties={properties} content={content} /> : null}
+					{activity.detail?.inputMode === "url" && activity.detail.url ? (
+						<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+					) : null}
+					{showsAnswers ? <HistoryAnswers properties={properties} content={content} labelled /> : ending}
 				</div>
 			)}
-			{activity.detail?.inputMode === "url" && activity.detail.url ? (
-				<p className="break-all text-muted-foreground">{activity.detail.url}</p>
-			) : null}
 		</section>
 	);
 }
 
-function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; content?: Record<string, unknown> }) {
+/**
+ * Only what was picked or typed. A Claude question already reads as the answer's
+ * label, so its answers drop the field name; generic forms keep it to tell their
+ * fields apart. Option descriptions and the "(Recommended)" tag only help while
+ * choosing, so neither is repeated here.
+ */
+function HistoryAnswers({ properties, content, labelled = false }: {
+	properties: PropertyEntry[];
+	content?: Record<string, unknown>;
+	labelled?: boolean;
+}) {
 	const answers = properties.filter(([name]) => {
 		const value = content?.[name];
 		return value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0);
@@ -113,35 +126,37 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 	if (answers.length === 0) {
 		return <p className="text-muted-foreground">{content ? "No answer provided" : "Answer unavailable"}</p>;
 	}
+	if (!labelled) {
+		return (
+			<>
+				{answers.map(([name, property]) => (
+					<p key={name} className="whitespace-pre-wrap break-words text-muted-foreground">{answerText(property, content?.[name])}</p>
+				))}
+			</>
+		);
+	}
 	return (
 		<dl className="space-y-1">
-			{answers.map(([name, property]) => {
-				const value = content?.[name];
-				const options = enumOptions(property);
-				function label(value: unknown): string {
-					if (typeof value === "boolean") return value ? "Yes" : "No";
-					if (typeof value === "number") return String(value);
-					if (typeof value !== "string") return "Answer unavailable";
-					const option = options.find((option) => option.value === value);
-					return option ? [option.label, option.description].filter(Boolean).join(" — ") : value;
-				}
-				return (
-					<div key={name} className="min-w-0">
-						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
-						<dd className="mt-0.5 flex min-w-0 items-start gap-2 text-foreground">
-							{/* The same tile the dock marks a picked choice with. */}
-							<span aria-hidden="true" className="mt-0.5 grid size-4 shrink-0 place-items-center rounded bg-logo-accent text-logo-accent-foreground">
-								<Check className="size-3" />
-							</span>
-							<span className="min-w-0 whitespace-pre-wrap break-words">
-								{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
-							</span>
-						</dd>
-					</div>
-				);
-			})}
+			{answers.map(([name, property]) => (
+				<div key={name} className="min-w-0">
+					<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
+					<dd className="mt-0.5 whitespace-pre-wrap break-words text-foreground">{answerText(property, content?.[name])}</dd>
+				</div>
+			))}
 		</dl>
 	);
+}
+
+function answerText(property: Record<string, unknown>, value: unknown): string {
+	const options = enumOptions(property);
+	function label(value: unknown): string {
+		if (typeof value === "boolean") return value ? "Yes" : "No";
+		if (typeof value === "number") return String(value);
+		if (typeof value !== "string") return "Answer unavailable";
+		const option = options.find((option) => option.value === value);
+		return option ? option.label.replace(/\s*\(recommended\)\s*$/i, "") : value;
+	}
+	return Array.isArray(value) ? value.map(label).join(", ") : label(value);
 }
 
 /** The full question stays visible above its answers, alongside the step count. */
@@ -165,12 +180,17 @@ function DockHeader({
 	onToggleCollapsed?: () => void;
 }) {
 	return (
-		<div className="flex items-start gap-2 px-4 pb-2 pt-3">
+		<div className="flex shrink-0 items-start gap-2 px-4 pb-2 pt-3">
 			<div className="min-w-0 flex-1">
 				<p className="text-caption leading-snug text-muted-foreground">
 					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
 				</p>
-				<p id={id} className="mt-0.5 whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground">
+				{/* A long question scrolls inside its own cap so the answers and actions below keep their room. */}
+				<p
+					id={id}
+					data-testid="elicitation-question"
+					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground"
+				>
 					{title}
 				</p>
 			</div>
@@ -203,7 +223,7 @@ function DockHeader({
 }
 
 function DockFooter({ children }: { children: ReactNode }) {
-	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-4 pb-3 pt-1.5">{children}</div>;
+	return <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 px-4 pb-3 pt-1.5">{children}</div>;
 }
 
 function URLRequest({
@@ -237,24 +257,30 @@ function URLRequest({
 	}
 
 	return (
-		<>
+		<div className="flex min-h-0 flex-1 flex-col">
 			<DockHeader title={activity.detail?.message || activity.summary} />
-			{parsed ? (
-				<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
-						<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
-							{parsed.href}
-						</p>
+			<div
+				data-testid="elicitation-scroll-body"
+				className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+			>
+				{parsed ? (
+					<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
+							<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
+								{parsed.href}
+							</p>
+						</div>
 					</div>
-				</div>
-			) : (
-				<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
-					The provider supplied an unsafe or invalid URL. It was not opened.
-				</p>
-			)}
+				) : (
+					<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
+						The provider supplied an unsafe or invalid URL. It was not opened.
+					</p>
+				)}
+			</div>
+			{/* Pinned beside the actions it reports on, so a long URL cannot scroll it out of view. */}
 			{openError ? (
-				<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
+				<p role="alert" className="shrink-0 px-3 pb-1 pt-1.5 text-xs leading-snug text-destructive">
 					{openError}
 				</p>
 			) : null}
@@ -281,7 +307,7 @@ function URLRequest({
 					Open {parsed?.hostname ?? "link"}
 				</button>
 			</DockFooter>
-		</>
+		</div>
 	);
 }
 
@@ -379,7 +405,7 @@ function FormRequest({
 	}
 
 	return (
-		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber}>
+		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber} className="flex min-h-0 flex-1 flex-col">
 			<DockHeader
 				id={headerId}
 				title={title}
@@ -391,44 +417,53 @@ function FormRequest({
 			/>
 			{collapsed ? null : (
 				<>
-				{!questionGroups && schema?.description ? (
-					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
-				) : null}
-				<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
-					{visibleProperties.map(([name, property], index) => (
-						<FormField
-							key={name}
-							name={name}
-							property={property}
-							value={values[name]}
-							required={required.has(name)}
-							invalid={missing.has(name)}
-							disabled={disabled}
-							// Inside a Claude question the header is the prompt, so the first
-							// field borrows it as its accessible name instead of printing it.
-							labelledBy={questionGroups && index === 0 ? headerId : undefined}
-							rows={Boolean(questionGroups)}
-							onChange={(value) => {
-								// A choice and its marked "Other" answer are alternatives: picking
-								// one clears the other so it is always clear which one is sent.
-								// Unmarked fields are independent, whatever their names.
-								const question = [...otherAnswers].find(([, other]) => other === name)?.[0];
-								const sibling = question ?? otherAnswers.get(name);
-								setValues((current) => {
-									const next: Record<string, InputValue> = { ...current, [name]: value };
-									const singleChoice = sibling && !Array.isArray(current[question ?? name]) && !Array.isArray(value);
-									if (singleChoice && !isBlank(value) && sibling in current) delete next[sibling];
-									return next;
-								});
-								setMissing((current) => {
-									if (!current.has(name)) return current;
-									const next = new Set(current);
-									next.delete(name);
-									return next;
-								});
-							}}
-						/>
-					))}
+				{/* A focused row's ring draws 2px outside it, and the Other row's field sits 4px
+				    inside its row. The padding keeps that ring clear at either end of the list, and
+				    the scroll padding wherever focus scrolls a row in. Both leave room to spare,
+				    because scroll offsets round to whole pixels. */}
+				<div
+					data-testid="elicitation-scroll-body"
+					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
+				>
+					{!questionGroups && schema?.description ? (
+						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
+					) : null}
+					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3")}>
+						{visibleProperties.map(([name, property], index) => (
+							<FormField
+								key={name}
+								name={name}
+								property={property}
+								value={values[name]}
+								required={required.has(name)}
+								invalid={missing.has(name)}
+								disabled={disabled}
+								// Inside a Claude question the header is the prompt, so the first
+								// field borrows it as its accessible name instead of printing it.
+								labelledBy={questionGroups && index === 0 ? headerId : undefined}
+								rows={Boolean(questionGroups)}
+								onChange={(value) => {
+									// A choice and its marked "Other" answer are alternatives: picking
+									// one clears the other so it is always clear which one is sent.
+									// Unmarked fields are independent, whatever their names.
+									const question = [...otherAnswers].find(([, other]) => other === name)?.[0];
+									const sibling = question ?? otherAnswers.get(name);
+									setValues((current) => {
+										const next: Record<string, InputValue> = { ...current, [name]: value };
+										const singleChoice = sibling && !Array.isArray(current[question ?? name]) && !Array.isArray(value);
+										if (singleChoice && !isBlank(value) && sibling in current) delete next[sibling];
+										return next;
+									});
+									setMissing((current) => {
+										if (!current.has(name)) return current;
+										const next = new Set(current);
+										next.delete(name);
+										return next;
+									});
+								}}
+							/>
+						))}
+					</div>
 				</div>
 				<DockFooter>
 					<div className="flex items-center gap-1">

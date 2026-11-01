@@ -5,6 +5,7 @@ import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
+import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
@@ -15,6 +16,7 @@ const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
+const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -34,11 +36,11 @@ let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
 
-// Bounds how many captures of a single event (or exception) name reach
-// PostHog. Mirrors the daemon-side RateLimitedSink: a re-render loop or
-// repeatedly-thrown exception must not turn into an unbounded PostHog bill.
-// A per-minute cap alone doesn't bound the daily total — a loop paced just
-// under it would sit under the ceiling forever — so this pairs a small burst
+// Bounds how many captures of a single event or exception name leave the
+// renderer. Mirrors the daemon-side RateLimitedSink: a re-render loop or
+// repeatedly-thrown exception must not create an unbounded error stream.
+// A per-minute cap alone doesn't bound the daily total. A loop paced just
+// under it would sit under the ceiling forever, so this pairs a small burst
 // allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
@@ -69,8 +71,134 @@ export function reserveCapture(name: string, now = Date.now()): boolean {
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
 }
 
+type PendingUpdateDay = { day: string; failure_count: number };
+
+type UpdateFailureState = {
+	streaks?: Record<string, number>;
+	day?: string;
+	dayCount?: number;
+	pendingDays?: PendingUpdateDay[];
+	pendingDay?: string;
+	pendingCount?: number;
+};
+
+const PENDING_UPDATE_DAY_CAP = 14;
+
+function utcDay(now: number): string {
+	return new Date(now).toISOString().slice(0, 10);
+}
+
+function readUpdateFailureState(storage: DailyActiveStorage): UpdateFailureState {
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		if (parsed && typeof parsed.streaks === "object" && parsed.streaks !== null) return parsed as UpdateFailureState;
+		const streaks: Record<string, number> = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (typeof value === "number" && Number.isFinite(value)) streaks[key] = value;
+		}
+		return { streaks };
+	} catch {
+		return { streaks: {} };
+	}
+}
+
+// One streak event until a successful download of that target clears it, plus
+// one daily count after the UTC day that accumulated the retries has ended.
+export function claimUpdateFailure(
+	storage: DailyActiveStorage,
+	properties: TelemetryProperties,
+	now = Date.now(),
+): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; dailies?: TelemetryProperties[]; ackDaily: (day: string) => void; rollback: () => void } {
+	const none = { emit: false, extra: {}, streak: false, ackDaily: () => undefined, rollback: () => undefined };
+	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
+	let restore = snapshot;
+	const rollback = () => {
+		if (restore === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		else storage.setItem(UPDATE_FAILURE_STORAGE_KEY, restore);
+	};
+	const ackDaily = (day: string) => {
+		const state = restore === null ? {} : JSON.parse(restore) as UpdateFailureState;
+		state.pendingDays = (state.pendingDays ?? []).filter((pending) => pending.day !== day);
+		if (state.pendingDay === day) {
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		if (state.day === day) state.dayCount = 0;
+		restore = JSON.stringify(state);
+	};
+	try {
+		const state = readUpdateFailureState(storage);
+		state.streaks ??= {};
+		const day = utcDay(now);
+		state.pendingDays ??= [];
+		if (state.pendingDay && (state.pendingCount ?? 0) > 0) {
+			state.pendingDays.push({ day: state.pendingDay, failure_count: state.pendingCount ?? 0 });
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		if (state.day && state.day !== day) {
+			if ((state.dayCount ?? 0) > 0) {
+				state.pendingDays.push({ day: state.day, failure_count: state.dayCount ?? 0 });
+			}
+			if (state.pendingDays.length > PENDING_UPDATE_DAY_CAP) {
+				state.pendingDays = state.pendingDays.slice(-PENDING_UPDATE_DAY_CAP);
+			}
+			state.day = day;
+			state.dayCount = 0;
+		}
+		if (!state.day) state.day = day;
+		const key = updateFailureKey(properties);
+		const streakOpen = state.streaks[key] !== undefined;
+		state.dayCount = (state.dayCount ?? 0) + 1;
+		if (!streakOpen) state.streaks[key] = now;
+		const dailies = state.pendingDays.map((pending) => ({
+			report: "daily" as const,
+			day: pending.day,
+			failure_count: pending.failure_count,
+		}));
+		const daily = dailies[0];
+		if (dailies.length > 0) state.pendingDays = [];
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+		if (streakOpen && dailies.length === 0) return none;
+		return { emit: true, extra: {}, streak: !streakOpen, daily, dailies, ackDaily, rollback };
+	} catch {
+		return { emit: true, extra: {}, streak: true, ackDaily: () => undefined, rollback: () => undefined };
+	}
+}
+
+function updateFailureKey(properties: TelemetryProperties): string {
+	return [properties.phase, properties.error_category, properties.to_version ?? ""].join("|");
+}
+
+
+
+export function clearUpdateFailures(storage: DailyActiveStorage, version: unknown): void {
+	try {
+		const state = readUpdateFailureState(storage);
+		const suffix = `|${version ?? ""}`;
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.endsWith(suffix)) delete state.streaks?.[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
+export function clearCheckUpdateFailures(storage: DailyActiveStorage): void {
+	try {
+		const state = readUpdateFailureState(storage);
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.startsWith("check|")) delete state.streaks?.[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
 type TelemetryProperties = Record<string, unknown>;
-type DailyActiveStorage = Pick<Storage, "getItem" | "setItem">;
+type DailyActiveStorage = Pick<Storage, "getItem" | "setItem"> & { removeItem?: Storage["removeItem"] };
 type DailyActiveEventTarget = {
 	addEventListener: (type: string, listener: EventListener, options?: AddEventListenerOptions) => void;
 	removeEventListener: (type: string, listener: EventListener, options?: EventListenerOptions) => void;
@@ -123,9 +251,28 @@ export function buildTelemetryContext(
 	appVersion: string,
 	platform: string,
 	channel: ReleaseChannel = "unknown",
+	install?: TelemetryInstallContext,
+	experimentCohort?: number,
 ): TelemetryProperties {
 	const version = appVersion.trim() || "unknown";
 	return {
+		// The install's fixed 0-99 bucket, shared with the daemon, so an
+		// onboarding test can split installs by range without feature flags.
+		...(experimentCohort === undefined ? {} : { experiment_cohort: experimentCohort }),
+		// Same names and values as the daemon stamps (backend/internal/adapters/
+		// telemetry/environment.go), so desktop and CLI events segment alike.
+		...(install
+			? {
+					arch: install.arch,
+					// posthog-js reads the OS version from Chromium's user agent,
+					// which freezes macOS at 10.15.7; the real one replaces it.
+					...(install.osVersion ? { $os_version: install.osVersion } : {}),
+					install_source: install.installSource,
+					...(install.installedAt ? { installed_at: install.installedAt } : {}),
+					is_ci: install.isCi,
+					...(install.ciSignal ? { ci_signal: install.ciSignal } : {}),
+				}
+			: {}),
 		// Classifies this install as the desktop app across every event, so a
 		// shared event like ao.app.active splits cleanly by `client` alongside
 		// the mobile app (client="mobile") and the CLI (client="cli"), rather
@@ -232,6 +379,13 @@ export function clearCloudUser(): void {
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
+		// Updater failures counted before the opt-out must not be exported
+		// after a later opt-in, so the streak and pending daily counts go too.
+		try {
+			telemetryStorage()?.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		} catch {
+			// Storage is best-effort; capture is already gated on the flag.
+		}
 		if (posthogReady) {
 			posthog.opt_out_capturing();
 			posthog.reset();
@@ -411,7 +565,7 @@ export function reserveRouteViewCapture(
 	}
 }
 
-function telemetryStorage(): DailyActiveStorage | undefined {
+export function telemetryStorage(): DailyActiveStorage | undefined {
 	try {
 		return window.localStorage;
 	} catch {
@@ -719,23 +873,22 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
-		case "ao.renderer.project_add_requested":
 		case "ao.renderer.loaded":
 			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
 		case "ao.renderer.orchestrator_open_requested":
-		case "ao.renderer.task_create_requested":
 		case "ao.renderer.task_create_succeeded":
 		case "ao.renderer.task_create_failed":
-		case "ao.renderer.session_kill_requested":
 		case "ao.renderer.session_kill_succeeded":
 		case "ao.renderer.session_kill_failed":
-		case "ao.renderer.settings_save_requested":
 		case "ao.renderer.settings_save_succeeded":
 		case "ao.renderer.settings_save_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if ((event === "ao.renderer.task_create_failed" || event === "ao.renderer.task_create_succeeded") && properties?.scope === "standalone") {
+				safe.scope = "standalone";
+			}
 			break;
 		}
 		case "ao.renderer.cloud_orchestrator_spawn_succeeded":
@@ -756,7 +909,6 @@ export async function sanitizeRendererProperties(
 			// separates "checking on a worker" from "reviewing its output".
 			if (typeof properties?.has_pr === "boolean") safe.has_pr = properties.has_pr;
 			break;
-		case "ao.renderer.orchestrator_spawn_requested":
 		case "ao.renderer.orchestrator_spawn_succeeded":
 		case "ao.renderer.orchestrator_spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
@@ -768,7 +920,6 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.automation_create_opened":
 			break;
-		case "ao.renderer.automation_create_requested":
 		case "ao.renderer.automation_create_succeeded":
 		case "ao.renderer.automation_create_failed": {
 			// Which kind of automation a prompt describes stays on the machine;
@@ -783,7 +934,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.artifact_create_requested":
 		case "ao.renderer.artifact_create_succeeded":
 		case "ao.renderer.artifact_create_failed":
 			// Where the session lives, never which project.
@@ -792,7 +942,6 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
-		case "ao.renderer.notification_mark_read_requested":
 		case "ao.renderer.notification_mark_read_succeeded":
 		case "ao.renderer.notification_mark_read_failed":
 			if (properties?.scope === "single" || properties?.scope === "all") safe.scope = properties.scope;
@@ -824,17 +973,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.open_in_editor_requested": {
-			const projectIDHash = await hashedTelemetryID(properties?.project_id);
-			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if (typeof properties?.editor_id === "string" && EDITOR_ID_SET.has(properties.editor_id)) {
-				safe.editor_id = properties.editor_id;
-			}
-			if (typeof properties?.target_kind === "string" && OPEN_TARGET_KIND_SET.has(properties.target_kind)) {
-				safe.target_kind = properties.target_kind;
-			}
-			break;
-		}
 		case "ao.renderer.open_in_editor_succeeded": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
@@ -855,12 +993,29 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
+		case "ao.renderer.project_add_failed":
+		case "ao.renderer.project_clone_failed":
+			if (typeof properties?.error_code === "string" && (/^[A-Z0-9_]+$/.test(properties.error_code) || properties.error_code === "unknown")) {
+				safe.error_code = properties.error_code;
+			}
+			break;
+		case "ao.renderer.update_failures_daily":
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
+			break;
 		case "ao.renderer.update_failed":
 		case "ao.renderer.update_downloaded":
 		case "ao.renderer.update_unsupported":
 			// Version strings are release identifiers, not user data. The updater's
 			// raw error message is deliberately absent: it can carry feed URLs and
 			// local paths, so update-telemetry.ts maps it to error_category first.
+			if (properties?.report === "daily") safe.report = "daily";
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
 			if (typeof properties?.to_version === "string") safe.to_version = properties.to_version;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (properties?.phase === "check" || properties?.phase === "download") safe.phase = properties.phase;
@@ -964,7 +1119,7 @@ export async function sanitizeRendererExceptionProperties(
 	return { ...safe, ...(await sanitizeRendererContextProperties(properties)) };
 }
 
-function bindErrorHandlers() {
+export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
 	window.addEventListener("error", (event) => {
@@ -1053,7 +1208,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
-		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
+		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install, bootstrap.experimentCohort);
 		posthog = await loadPostHog();
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
@@ -1073,7 +1228,7 @@ export async function initTelemetry(): Promise<boolean> {
 			platform: bootstrap.platform,
 			distinctId: bootstrap.distinctId,
 		});
-		bindErrorHandlers();
+		bindRendererErrorHandlers();
 		startDailyActiveHeartbeat({
 			storage: telemetryStorage(),
 			window,
@@ -1125,33 +1280,76 @@ export function clearRendererTelemetryQueues(): void {}
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
-export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
+	// An opted-out renderer must not touch rate-limit slots or the persisted
+	// updater counts, which would otherwise be exported after an opt-in.
+	if (analyticsOptedOut) return false;
 	// Checked before the reservations so a silenced stream does not consume a
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
-	if (isDeniedEvent(event)) return;
+	if (isDeniedEvent(event)) return false;
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (event === "ao.renderer.route_viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
-		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return;
-	} else if (!reserveCapture(event)) {
-		return;
+		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
+	} else if (event !== "ao.renderer.update_failed" && !reserveCapture(event)) {
+		return false;
 	}
-	if (!(await initTelemetry())) return;
+	if (!(await initTelemetry()) || analyticsOptedOut) return false;
+	const storage = telemetryStorage();
+	let releaseUpdateFailureClaim: (() => void) | undefined;
+	if (event === "ao.renderer.update_failed") {
+		if (!reserveCapture(event)) return false;
+		if (storage) {
+			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
+			if (!decision.emit) return false;
+			// A rollback after an opt-out would restore the counts the opt-out discarded.
+			releaseUpdateFailureClaim = () => {
+				if (!analyticsOptedOut) decision.rollback();
+			};
+			const dailyName = "ao.renderer.update_failures_daily";
+			for (const daily of decision.dailies ?? []) {
+				if (isDeniedEvent(dailyName)) continue;
+				if (!reserveCapture(dailyName)) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
+				let sent = false;
+				try {
+					sent = Boolean(posthog.capture(dailyName, withTelemetryContext(await sanitizeRendererProperties(dailyName, daily))));
+				} catch {
+					sent = false;
+				}
+				if (!sent) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
+				if (typeof daily.day === "string") decision.ackDaily(daily.day);
+			}
+			if (!decision.streak) return true;
+		}
+	}
+	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
-	posthog.capture(postHogEventName(event), safeProperties);
+	let captured = false;
+	try {
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		return captured;
+	} finally {
+		if (!captured && releaseUpdateFailureClaim) releaseUpdateFailureClaim();
+	}
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
-	// "$exception" is the name this lands under in PostHog, so that is what an
-	// operator would type to silence a crash loop.
+	try {
+		await initTelemetry();
+	} catch {
+		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
+	}
 	if (isDeniedEvent("$exception")) return;
 	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
-	if (!(await initTelemetry())) return;
-	const safeProperties = withTelemetryContext(await sanitizeRendererExceptionProperties(error, properties));
-	posthog.captureException(normalizeException(error), safeProperties);
-	// Mirror into Sentry (no-op unless a DSN is configured). Source drives the
-	// category so a boundary crash classifies as render_crash.
+	// The main-owned policy gate decides whether this reaches Sentry. Renderer
+	// exceptions no longer enter the PostHog product-analytics path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

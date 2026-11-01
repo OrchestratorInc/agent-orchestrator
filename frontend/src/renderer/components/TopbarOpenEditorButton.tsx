@@ -58,7 +58,7 @@ const editorColors: Record<string, string> = {
 	"android-studio": "#3DDC84",
 };
 
-function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
+export function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
 	const [failedIcon, setFailedIcon] = useState<string>();
 	if (target?.kind === "file_manager") {
 		const Icon = target.name === "Finder" ? FinderIcon : FolderOpen;
