@@ -2411,6 +2411,69 @@ describe("attachments", () => {
 		]);
 	});
 
+	it("allows dropping plain text into composer", async () => {
+		const { field } = renderComposer();
+
+		await act(async () => {
+			fireEvent.drop(field, {
+				dataTransfer: {
+					types: ["text/plain"],
+					getData: (format: string) => (format === "text/plain" ? "dropped hello world" : ""),
+					files: [],
+				},
+			});
+		});
+
+		expect(lexicalEditorText(field)).toBe("dropped hello world");
+	});
+
+	it("allows dropping plain text onto composer form surface", async () => {
+		const { field } = renderComposer();
+		const form = field.closest("form")!;
+
+		await act(async () => {
+			fireEvent.drop(form, {
+				dataTransfer: {
+					types: ["text/plain"],
+					getData: (format: string) => (format === "text/plain" ? "dropped onto form" : ""),
+					files: [],
+				},
+			});
+		});
+
+		expect(lexicalEditorText(field)).toBe("dropped onto form");
+	});
+
+	it("does not activate dragging visual style on text drag over", () => {
+		const { field } = renderComposer({ onStageAttachments: vi.fn() });
+		const form = field.closest("form")!;
+
+		const dragOverEvent = new Event("dragover", { bubbles: true, cancelable: true });
+		Object.defineProperty(dragOverEvent, "dataTransfer", {
+			value: { types: ["text/plain"] },
+		});
+		form.dispatchEvent(dragOverEvent);
+
+		expect(form).not.toHaveAttribute("data-dragging");
+		expect(dragOverEvent.defaultPrevented).toBe(true);
+	});
+
+	it("activates dragging visual style on file drag over", () => {
+		const { field } = renderComposer({ onStageAttachments: vi.fn() });
+		const form = field.closest("form")!;
+
+		const dragOverEvent = new Event("dragover", { bubbles: true, cancelable: true });
+		Object.defineProperty(dragOverEvent, "dataTransfer", {
+			value: { types: ["Files"] },
+		});
+		act(() => {
+			form.dispatchEvent(dragOverEvent);
+		});
+
+		expect(form).toHaveAttribute("data-dragging", "true");
+		expect(dragOverEvent.defaultPrevented).toBe(true);
+	});
+
 	// A message claiming an attachment the agent cannot open is worse than a refusal.
 	it("does not accept a chip when durable staging fails, and says so", async () => {
 		const stage = vi.fn().mockRejectedValue(new Error("disk full"));
