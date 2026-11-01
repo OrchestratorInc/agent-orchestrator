@@ -73,7 +73,7 @@ describe("EnvironmentPicker on iOS", () => {
 		expect(toggles.map((toggle) => [toggle.props.label, toggle.props.systemImage, toggle.props.isOn])).toEqual([
 			["All machines", "server.rack", false],
 			["Mac", "laptopcomputer", true],
-			["Dev box", "server.rack", false],
+			["Dev box", "laptopcomputer", false],
 		]);
 	});
 
@@ -113,7 +113,7 @@ describe("EnvironmentPicker on Android", () => {
 	it("leads every environment with its machine's symbol", () => {
 		const items = render(<AndroidEnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findAllByType("DropdownMenuItem" as never);
 		const glyphs = items.map((item) => item.findByType("LeadingIconSlot" as never).findByType("Icon" as never).props);
-		expect(glyphs.map((glyph) => glyph.source)).toEqual(["machine:server", "machine:laptop", "machine:server"]);
+		expect(glyphs.map((glyph) => glyph.source)).toEqual(["machine:server", "machine:laptop", "machine:laptop"]);
 		expect(glyphs.every((glyph) => glyph.contentDescription === undefined)).toBe(true);
 	});
 

@@ -8,14 +8,9 @@ describe("machineAppearance", () => {
 		});
 	});
 
-	it("gives existing machines a stable identity when no appearance was saved", () => {
-		const first = machineAppearance({ id: "host-a", name: "Studio Mac" });
-		const repeated = machineAppearance({ id: "host-a", name: "Studio Mac" });
-		const second = machineAppearance({ id: "host-b", name: "Build Linux" });
-
-		expect(repeated).toEqual(first);
-		expect(second).not.toEqual(first);
-		expect(machineAppearancePalette.symbols).toContain(first.symbol);
+	it("draws a machine with no saved appearance as a laptop", () => {
+		expect(machineAppearance({ id: "host-a", name: "Studio Mac" })).toEqual({ symbol: "laptop" });
+		expect(machineAppearance({ id: "host-b", name: "Build Linux" })).toEqual({ symbol: "laptop" });
 	});
 
 	it("normalizes legacy saved symbols into the curated machine shapes", () => {

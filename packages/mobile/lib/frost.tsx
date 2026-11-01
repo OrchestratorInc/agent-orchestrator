@@ -6,13 +6,12 @@ import { useTheme } from "./ThemeProvider";
 
 /**
  * Android's answer to iOS 26's scroll edge: the page's own colour laid over
- * the content under a bar, near-solid at the screen's edge and thinning
- * towards the bar's inner edge, where it lets a trace of the content through,
- * then dissolving into the page over a short tail. Content passing under a bar
- * reads as frosted out rather than cut off at a hard line.
+ * the content under a bar, solid across the bar itself, then dissolving into
+ * the page over a short tail. Content passing under a bar reads as frosted out
+ * rather than cut off at a hard line.
  *
- * Without a blur to soften what shows through, the bar keeps most of its
- * cover: just enough of the rows comes through to say they are under it.
+ * Without a blur to soften what shows through, the bar keeps full cover: rows
+ * showing through it fought the bar's title and items.
  */
 
 /** One step of the gradient: where it sits (0 at the screen edge) and how much of the page colour it lays down. */
@@ -22,17 +21,16 @@ export type FrostStop = readonly [offset: number, opacity: number];
 export const FROST_TAIL = 32;
 
 /**
- * The frost for a bar `barHeight` tall: solid at the screen's edge, a trace of
- * the content through the bar, then an eased fade over the tail, with enough
+ * The frost for a bar `barHeight` tall: solid through the bar, then an eased
+ * fade over the tail, with enough
  * stops that the fade shows no band.
  */
 export function frostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
 	const bar = barHeight / (barHeight + tail);
 	const fade = (at: number) => bar + (1 - bar) * at;
 	return [
-		[0, 0.98],
-		[bar * 0.6, 0.96],
-		[bar, 0.93],
+		[0, 1],
+		[bar, 1],
 		[fade(0.2), 0.72],
 		[fade(0.45), 0.4],
 		[fade(0.7), 0.15],

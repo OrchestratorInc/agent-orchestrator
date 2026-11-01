@@ -48,11 +48,12 @@ export default function BoardTabsLayout() {
 				selected: { ...labelFont, color: t.accent },
 			}}
 			// iOS keeps the system material behind the bar (glass on iOS 26), which
-			// already follows the theme's light or dark. Android's bar is clear:
-			// each tab runs its page on under it and lays the bar's frost over
-			// the rows there (see `frost`), so they dissolve into the bar as they
-			// pass under it, as iOS's do into its glass.
-			backgroundColor={Platform.OS === "android" ? "transparent" : undefined}
+			// already follows the theme's light or dark. Android's bar takes the
+			// page's own colour, solid: without a blur, rows showing through a
+			// clear bar fight its labels. Each tab still runs its page on under it
+			// and lays the bar's frost over the rows (see `frost`), so they
+			// dissolve into the bar as they reach it.
+			backgroundColor={Platform.OS === "android" ? t.bgBase : undefined}
 			indicatorColor={t.accentTint}
 			// Every destination keeps its label, as Material 3's bar specifies:
 			// past three tabs the platform's bar otherwise labels only the

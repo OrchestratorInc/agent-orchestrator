@@ -117,7 +117,7 @@ describe("board tabs", () => {
 			labelStyle: { default: { color: "#textSecondary" }, selected: { color: "#accent" } },
 			indicatorColor: "#accentTint",
 			labelVisibilityMode: "labeled",
-			backgroundColor: os === "android" ? "transparent" : undefined,
+			backgroundColor: os === "android" ? "#bgBase" : undefined,
 		});
 	});
 

@@ -23,11 +23,11 @@ afterEach(() => {
 });
 
 describe("frostStops", () => {
-	it("is near-solid at the screen's edge, keeps cover through the bar, and dissolves over the tail", () => {
+	it("is solid through the bar and dissolves over the tail", () => {
 		const stops = frostStops(104);
 		const bar = 104 / (104 + FROST_TAIL);
-		expect(stops[0]).toEqual([0, 0.98]);
-		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(0.93);
+		expect(stops[0]).toEqual([0, 1]);
+		expect(stops.find(([offset]) => offset === bar)?.[1]).toBe(1);
 		expect(stops.at(-1)).toEqual([1, 0]);
 		// Never thickens on the way out, and never jumps back.
 		for (let index = 1; index < stops.length; index++) {

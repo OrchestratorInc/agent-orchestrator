@@ -48,22 +48,15 @@ type MachineIdentity = {
 	appearance?: { symbol: string };
 };
 
-function identityHash(value: string): number {
-	let hash = 2166136261;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return hash >>> 0;
-}
+/** What a machine with no saved icon draws as: most paired machines are someone's laptop. */
+const DEFAULT_SYMBOL: MachineSymbol = "laptop";
 
 export function machineAppearance(machine: MachineIdentity): MachineAppearance {
 	if (machine.appearance) {
 		const symbol = machineAppearancePalette.symbols.find((candidate) => candidate === machine.appearance?.symbol) ?? legacySymbols[machine.appearance.symbol] ?? "server";
 		return { symbol };
 	}
-	const symbols = machineAppearancePalette.symbols;
-	return { symbol: symbols[identityHash(machine.id || machine.name) % symbols.length] };
+	return { symbol: DEFAULT_SYMBOL };
 }
 
 /** The preferred icon unless another machine already has it; then the first free one. */

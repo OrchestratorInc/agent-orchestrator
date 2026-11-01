@@ -15,7 +15,7 @@ vi.mock("./frost", () => ({ Frost: "Frost", FROST_TAIL: 32, frostStops: (height:
 vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5 },
-	Text: "Text",
+	View: "View",
 }));
 vi.mock("react-native-reanimated", async () => {
 	const React = await import("react");
@@ -73,7 +73,7 @@ afterEach(() => {
 });
 
 describe("largeTitleCollapsed", () => {
-	it("hands the name to the bar once the big title has scrolled under it", () => {
+	it("scales the title down once the list is past the threshold", () => {
 		expect(largeTitleCollapsed(0)).toBe(false);
 		expect(largeTitleCollapsed(LARGE_TITLE_COLLAPSE_AT)).toBe(false);
 		expect(largeTitleCollapsed(LARGE_TITLE_COLLAPSE_AT + 1)).toBe(true);
@@ -93,22 +93,20 @@ describe("useLargeTitle", () => {
 		expect(fixtures.setOptions).not.toHaveBeenCalled();
 	});
 
-	it("sets the large title in the list, clear of the bar, and gives the bar a title of its own on Android", () => {
+	it("sets the large title in the bar itself and holds the list clear of the bar on Android", () => {
 		const result = renderHook();
 		expect(result.current.topInset).toBe(80);
 		const header = mount(<>{result.current.header}</>);
-		const large = header.root.findByType("Text" as never);
-		expect(large.props).toMatchObject({ accessibilityRole: "header", children: "Workers" });
-		expect(Object.assign({}, ...large.props.style).paddingTop).toBe(80 + 4);
+		expect(header.root.findByType("View" as never).props.style).toEqual({ height: 80 });
 		expect(fixtures.setOptions).toHaveBeenCalledOnce();
 		expect(fixtures.setOptions.mock.calls[0][0]).toMatchObject({ headerTransparent: true, headerStyle: { backgroundColor: "transparent" } });
 		const BarTitle = fixtures.setOptions.mock.calls[0][0].headerTitle;
 		const bar = mount(<BarTitle />);
-		expect(bar.root.findByType("AnimatedText" as never).props).toMatchObject({ children: "Workers", importantForAccessibility: "no" });
+		expect(bar.root.findByType("AnimatedText" as never).props).toMatchObject({ children: "Workers", accessibilityRole: "header" });
 	});
 
-	// The frost comes up on the first move and goes at rest; the bar's title
-	// takes over only once the big one is under it.
+	// The frost comes up on the first move and goes at rest; the title scales
+	// down only once the list is past the threshold.
 	it("moves the frost and the title on their crossings alone, and still calls the page's own handler on every move", () => {
 		const onScroll = vi.fn();
 		const result = renderHook(onScroll);
