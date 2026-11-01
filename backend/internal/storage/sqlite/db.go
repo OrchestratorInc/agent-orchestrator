@@ -371,6 +371,9 @@ func migrate(db *sql.DB) error {
 	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
+	if err := repairOffsetOnlyTimestamps(db); err != nil {
+		return fmt.Errorf("repair offset-only timestamps: %w", err)
+	}
 	return reconcileSchema(db)
 }
 

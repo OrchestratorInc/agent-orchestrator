@@ -284,7 +284,7 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, fmt.Errorf("begin controller epoch for %s: %w", id, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	var rows int64
 	if restore {
 		rows, err = q.RestoreSessionControllerEpoch(ctx, gen.RestoreSessionControllerEpochParams{
