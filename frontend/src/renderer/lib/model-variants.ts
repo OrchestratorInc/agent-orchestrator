@@ -192,6 +192,7 @@ export function providerQualifiedChoice<T extends { value: string; name: string;
 		// OpenCode's provider IDs are distinct routes, even its own opencode and
 		// opencode-go. Suppressing either group lets same-name choices collapse.
 		group: isOpenCode ? provider : modelGroupLabel(provider, harness),
+		...(isOpenCode ? { groupName: modelGroupLabel(provider, "") } : {}),
 	};
 }
 

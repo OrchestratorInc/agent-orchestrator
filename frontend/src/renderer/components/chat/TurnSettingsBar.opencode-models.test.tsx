@@ -33,8 +33,8 @@ describe.each(["opencode", "opencode-v2"])("%s provider model choices", (harness
 
 		await user.click(screen.getByRole("button", { name: "Model" }));
 		expect(screen.getAllByRole("menuitemradio", { name: "DeepSeek V4 Flash" })).toHaveLength(2);
-		expect(screen.getByText("opencode", { exact: true })).toBeInTheDocument();
-		expect(screen.getByText("opencode-go", { exact: true })).toBeInTheDocument();
+		expect(screen.getByText("Opencode", { exact: true })).toBeInTheDocument();
+		expect(screen.getByText("Opencode Go", { exact: true })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitemradio", { name: "DeepSeek V4 Flash", checked: false }));
 		expect(change).toHaveBeenCalledWith("model", { value: current === direct ? go : direct });
 	});
@@ -46,8 +46,8 @@ describe.each(["opencode", "opencode-v2"])("%s provider model choices", (harness
 			agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }} />);
 
 		expect(picker.current?.models).toEqual([
-			{ id: direct, label: "DeepSeek V4 Flash", group: "opencode", aliases: undefined },
-			{ id: go, label: "DeepSeek V4 Flash", group: "opencode-go", aliases: undefined },
+			{ id: direct, label: "DeepSeek V4 Flash", group: "Opencode", aliases: undefined },
+			{ id: go, label: "DeepSeek V4 Flash", group: "Opencode Go", aliases: undefined },
 		]);
 		picker.current?.onPickModel?.(go);
 		expect(change).toHaveBeenCalledWith("model", { value: go });
