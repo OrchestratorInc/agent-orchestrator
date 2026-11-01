@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseShareLink, shareLinkUrl } from "./share-links";
+import { parseShareLink, shareCodeLinkUrl, shareLinkUrl } from "./share-links";
 
 const ORG = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 
@@ -20,8 +20,21 @@ describe("share links", () => {
 		expect(parseShareLink(`  http://127.0.0.1:8081/share/${ORG}/tok  `)).toEqual({ orgId: ORG, token: "tok" });
 	});
 
+	it("shares a short link with one code, and opens it from the web or the deep link", () => {
+		const link = shareCodeLinkUrl("https://cp.example.test/", "k7Hq2x9PmB4w");
+		expect(link).toBe("https://cp.example.test/s/k7Hq2x9PmB4w");
+		expect(parseShareLink(link)).toEqual({ code: "k7Hq2x9PmB4w" });
+		expect(parseShareLink("ao-app://share/k7Hq2x9PmB4w")).toEqual({ code: "k7Hq2x9PmB4w" });
+		expect(parseShareLink("  https://api.aoagents.dev/s/k7Hq2x9PmB4w/  ")).toEqual({ code: "k7Hq2x9PmB4w" });
+	});
+
 	it("rejects anything that does not name one share", () => {
 		for (const text of [
+			"ao-app://share/short",
+			"ao-app://share/k7Hq2x9PmB4w!",
+			"https://cp.example.test/s/k7Hq2x9P-B4w",
+			"https://cp.example.test/s/k7Hq2x9PmB4w/extra",
+			"https://cp.example.test/s",
 			"",
 			"not a link",
 			`ao-app://billing/${ORG}/tok`,

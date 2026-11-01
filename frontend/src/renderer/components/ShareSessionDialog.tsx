@@ -7,7 +7,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpShareLink } from "../lib/cloud-cp";
-import { shareLinkUrl } from "../lib/share-links";
+import { shareCodeLinkUrl, shareLinkUrl } from "../lib/share-links";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -53,6 +53,16 @@ export function shareLinkRequest({ scope, access, modeCap, expiry, sessionId }: 
 }
 
 /** What an active link lets people do, naming a whole-project link as such. */
+/**
+ * The link to copy for a link just created: its short link when the control
+ * plane minted a code, else the token link an older control plane returns, or
+ * undefined when the response carries neither.
+ */
+export function createdShareLinkUrl(baseUrl: string, orgId: string, link: Pick<CloudCpShareLink, "code" | "token">): string | undefined {
+	if (link.code) return shareCodeLinkUrl(baseUrl, link.code);
+	return link.token ? shareLinkUrl(baseUrl, orgId, link.token) : undefined;
+}
+
 export function shareLinkLabel(link: Pick<CloudCpShareLink, "role" | "sessionId">, t: (key: "share.accessEditor" | "share.accessViewer" | "share.accessStartSessions" | "share.wholeProject") => string): string {
 	if (link.sessionId) return link.role === "editor" ? t("share.accessEditor") : t("share.accessViewer");
 	return `${t("share.wholeProject")} · ${link.role === "editor" ? t("share.accessStartSessions") : t("share.accessViewer")}`;
@@ -96,8 +106,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const create = useMutation({
 		mutationFn: async () => {
 			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
-			if (!link.token) throw new Error(t("share.noToken"));
-			return shareLinkUrl(baseUrl, orgId, link.token);
+			const url = createdShareLinkUrl(baseUrl, orgId, link);
+			if (!url) throw new Error(t("share.noToken"));
+			return url;
 		},
 		onSuccess: (url) => {
 			setCreated(url);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appI18n } from "../i18n";
-import { shareLinkLabel, shareLinkRequest } from "./ShareSessionDialog";
+import { createdShareLinkUrl, shareLinkLabel, shareLinkRequest } from "./ShareSessionDialog";
 
 const t = appI18n.t.bind(appI18n);
 
@@ -18,6 +18,13 @@ describe("share links", () => {
 		expect(shareLinkRequest({ scope: "project", access: "viewer", modeCap: "trusted", expiry: "168", sessionId: "s1" })).toMatchObject({
 			role: "viewer", interaction: "view", modeCap: "read-only", expiresInHours: 168,
 		});
+	});
+
+	it("copies the short link when the control plane minted a code, else the token link", () => {
+		const org = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+		expect(createdShareLinkUrl("https://cp.example.test", org, { code: "k7Hq2x9PmB4w", token: "tok" })).toBe("https://cp.example.test/s/k7Hq2x9PmB4w");
+		expect(createdShareLinkUrl("https://cp.example.test", org, { token: "tok" })).toBe(`https://cp.example.test/app/share#${org}/tok`);
+		expect(createdShareLinkUrl("https://cp.example.test", org, {})).toBeUndefined();
 	});
 
 	it("names a whole-project link and what it lets people do", () => {
