@@ -2463,7 +2463,7 @@ describe("TaskComposer", () => {
 			expect(screen.queryByText(detail)).not.toBeInTheDocument();
 			await userEvent.click(screen.getByRole("button", { name: "Details" }));
 			expect(screen.getByText(detail)).toBeInTheDocument();
-			await userEvent.click(screen.getByRole("button", { name: "Install" }));
+			await userEvent.click(screen.getByRole("button", { name: "Install Codex" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({
 				scope: "global", section: "harness", focusAgentId: "codex", harnessView: "local",
 			}));

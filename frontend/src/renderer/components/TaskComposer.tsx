@@ -48,7 +48,7 @@ import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQue
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
-	modelCatalogAuthIssue,
+	modelCatalogIssue,
 	refreshAgentModels,
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
@@ -561,11 +561,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				? localModelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
-	// A login problem behind the catalog warning gets a plain-language notice
+	// An installation or login problem gets a plain-language catalog notice
 	// with the fix in place. A cloud task never runs on this computer's login,
 	// so its composer never asks for it.
-	const modelNotInstalled = !isCloudProject && revalidationWarning === undefined && localCatalog?.warningCode === "not_installed";
-	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
+	const modelIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogIssue(localCatalog) : undefined;
+	const modelNotInstalled = modelIssue === "not_installed";
+	const modelAuthIssue = modelNotInstalled ? undefined : modelIssue;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
 	const { models: offeredModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
@@ -814,19 +815,22 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
-	const modelIssue = modelNotInstalled ? "not_installed" : modelAuthIssue;
+	const startAgentInstall = useCallback(() => {
+		openGlobalSettings("harness", {
+			focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
+			harnessView: "local", preserveProject: true,
+		});
+	}, [hostId, openGlobalSettings, selectedAgent]);
+	const noticeAction = modelIssue === "not_installed"
+		? { issue: modelIssue, onInstall: startAgentInstall }
+		: modelIssue ? { issue: modelIssue, onLogin: startAgentLogin } : undefined;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelIssue ? (
+		: noticeAction ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelIssue}
+			{...noticeAction}
 			detail={modelWarningText}
-			onLogin={startAgentLogin}
-			onInstall={() => openGlobalSettings("harness", {
-				focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
-				harnessView: "local", preserveProject: true,
-			})}
 			onRetry={refreshSelectedModels}
 		/>
 	) : modelWarningText;

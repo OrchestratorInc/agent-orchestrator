@@ -976,8 +976,10 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 // readiness recovery must not leave a persisted missing-install warning behind.
 func missingAgentModelCatalog(catalog ports.AgentModelCatalog, agentName string) ports.AgentModelCatalog {
 	catalog.Stale = true
+	if catalog.WarningCode != ports.ModelCatalogWarningNotInstalled || catalog.Warning == "" {
+		catalog.Warning = agentName + ": installation check did not find the CLI on this host."
+	}
 	catalog.WarningCode = ports.ModelCatalogWarningNotInstalled
-	catalog.Warning = fmt.Sprintf("%s: %s", agentName, ports.ErrAgentBinaryNotFound)
 	return catalog
 }
 

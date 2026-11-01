@@ -116,17 +116,25 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 }
 
 export type ModelCatalogAuthIssue = "required" | "expired";
+export type ModelCatalogIssue = ModelCatalogAuthIssue | "not_installed";
 
 // Older or remote daemons predate warningCode; their wording for the same
 // conditions is stable enough to recognize.
 const AUTH_WARNING_PATTERN = /not signed in|sign in to load|rejected the credential|access token has expired|re-?authenticate|unauthori[sz]ed|\b401\b/i;
 
-/** Whether a catalog warning is an agent login problem the user can fix by logging in. */
-export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning" | "warningCode"> | undefined): ModelCatalogAuthIssue | undefined {
+/** Classifies catalog warnings that installation or login can resolve. */
+export function modelCatalogIssue(catalog: Pick<AgentModelCatalog, "warning" | "warningCode"> | undefined): ModelCatalogIssue | undefined {
+	if (catalog?.warningCode === "not_installed") return "not_installed";
 	if (catalog?.warningCode === "auth_expired") return "expired";
 	if (catalog?.warningCode === "auth_required") return "required";
 	if (!catalog?.warningCode && catalog?.warning && AUTH_WARNING_PATTERN.test(catalog.warning)) return "required";
 	return undefined;
+}
+
+/** The login-only subset used by automatic authentication recovery. */
+export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning" | "warningCode"> | undefined): ModelCatalogAuthIssue | undefined {
+	const issue = modelCatalogIssue(catalog);
+	return issue === "not_installed" ? undefined : issue;
 }
 
 /**

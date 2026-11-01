@@ -2920,7 +2920,7 @@
 	"newTask.phoneConnected_many": "{{count}} celulares conectados",
 	"newTask.phoneConnected_other": "{{count}} celulares conectados",
 	"newTask.modelNotice.missingCLI": "A CLI do {{agent}} não está instalada. O AO precisa da ferramenta de linha de comando para carregar modelos e executar tarefas locais.",
-	"newTask.modelNotice.install": "Instalar",
+	"newTask.modelNotice.install": "Instalar {{agent}}",
 	"newTask.modelNotice.signedOut": "{{agent}} não está conectado neste computador, então não foi possível carregar os modelos.",
 	"newTask.modelNotice.expired": "O login salvo do {{agent}} expirou. Ele é renovado na próxima vez que o {{agent}} for executado, ou você pode entrar novamente agora.",
 	"newTask.modelNotice.login": "Entrar",

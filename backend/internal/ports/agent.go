@@ -435,6 +435,7 @@ type AgentModelCatalog struct {
 	Warning            string `json:"warning,omitempty"`
 	// WarningCode classifies actionable discovery failures so clients can offer
 	// installation or login instead of showing provider text.
+	// not_installed: the agent CLI could not be found on this host; offer installation.
 	// auth_required: the agent is signed out or its credential was rejected.
 	// auth_expired: a stored login's access token expired; the agent CLI
 	// renews it on its next run.
