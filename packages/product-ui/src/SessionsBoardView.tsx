@@ -70,8 +70,8 @@ export type BoardSessionPresentation = {
 	title: string;
 	trackerIssueId?: string;
 	/**
-	 * Generic activity line for the card, printed verbatim beneath the title.
-	 * Absent (or a daemon too old to send one) means no summary line renders.
+	 * The agent's one-line summary, printed verbatim beneath the branch.
+	 * Absent until the agent sets one, and from daemons too old to send it.
 	 */
 	summary?: string;
 	updatedAt: string;
