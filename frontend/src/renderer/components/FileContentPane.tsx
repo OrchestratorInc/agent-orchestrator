@@ -104,6 +104,7 @@ export function FileContentPane({
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
 	toolbarHost,
+	onEditingChange,
 }: {
 	annotation: FileAnnotationModel;
 	onOpenInCenter?: (mode: FileViewMode) => void;
@@ -132,6 +133,8 @@ export function FileContentPane({
 	 * path row; null renders none until the host mounts.
 	 */
 	toolbarHost?: HTMLElement | null;
+	/** Told whenever the file enters or leaves edit mode. */
+	onEditingChange?: (editing: boolean) => void;
 	/**
 	 * @deprecated Ignored: centre file tabs and the Files panel now share the
 	 * compact toolbar (breadcrumb + status/counts, icon mode switches).
@@ -152,6 +155,7 @@ export function FileContentPane({
 	// the edit is saved or cancelled. No display mode switch.
 	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
+	useEffect(() => onEditingChange?.(editing), [editing, onEditingChange]);
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");

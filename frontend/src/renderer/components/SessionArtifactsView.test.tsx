@@ -35,9 +35,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
+	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
 		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">
 			{`viewer:${path}`}
+			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
+			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
 			{sendMessage ? <button type="button" onClick={() => void sendMessage("looks good")}>send feedback</button> : null}
 		</div>
 	),
@@ -536,6 +538,15 @@ describe("SessionArtifactsView", () => {
 		expect(after(share!, screen.getByRole("button", { name: "Maximize" }))).toBe(true);
 		await userEvent.click(share!);
 		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+	});
+
+	it("hides Share while the open file is being edited", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+		expect(await screen.findByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "start editing" }));
+		expect(screen.queryByRole("button", { name: "Share: notes.md" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "stop editing" }));
+		expect(screen.getByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
 	});
 
 	it("disables Share for a video and says why", async () => {

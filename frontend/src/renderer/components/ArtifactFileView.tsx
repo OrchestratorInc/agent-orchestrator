@@ -45,6 +45,7 @@ export function ArtifactFileView({
 	sendMessage,
 	sessionId,
 	toolbarHost,
+	onEditingChange,
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
@@ -55,6 +56,8 @@ export function ArtifactFileView({
 	rawUrl?: string;
 	/** Hides the edit action, as for a cloud session's artifacts. */
 	readOnly?: boolean;
+	/** Told whenever the file enters or leaves edit mode. */
+	onEditingChange?: (editing: boolean) => void;
 	/** Fetches rawUrl through the cloud control-plane bridge. */
 	cloud?: boolean;
 	/** The URL the file's relative links resolve against. */
@@ -87,7 +90,7 @@ export function ArtifactFileView({
 		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
-				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
+				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} onEditingChange={onEditingChange} />
 			</div>
 			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>

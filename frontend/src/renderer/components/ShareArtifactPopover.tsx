@@ -48,7 +48,7 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 /**
  * The Share button beside an open local artifact's other actions. It opens a
  * popover anchored to it: publish the file as a public link, or, once it is
- * published, copy the link, update it or unpublish it. For a video the button
+ * published, copy the link or unpublish it. For a video the button
  * is disabled and says why.
  */
 export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
@@ -156,11 +156,11 @@ function SharePanel({
 		return () => clearTimeout(timer);
 	}, [copied]);
 
-	const publish = async (shareId?: string) => {
+	const publish = async () => {
 		setPhase({ kind: "uploading", sent: 0, total: 0 });
 		cancelUpload.current = () => void aoBridge.cloudShare.cancel();
 		try {
-			const result = await aoBridge.cloudShare.publish({ ...shareFile, shareId });
+			const result = await aoBridge.cloudShare.publish(shareFile);
 			switch (result.status) {
 				case "published":
 					return setPhase({ kind: "published", share: result.share });
@@ -243,11 +243,16 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					{note(t("artifacts.share.uploading", { percent }))}
-					<div className="mt-2 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+					{note(t("artifacts.share.public"))}
+					<div className="mt-2 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.publishing", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
 						<div className="h-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
 					</div>
-					{actions(<Button onClick={() => void aoBridge.cloudShare.cancel()} size="sm" type="button" variant="ghost">{t("artifacts.share.cancelUpload")}</Button>)}
+					{actions(
+						<>
+							<Button onClick={() => void aoBridge.cloudShare.cancel()} size="sm" type="button" variant="ghost">{t("artifacts.share.cancel")}</Button>
+							<Button disabled size="sm" type="button" variant="primary">{t("artifacts.share.publishing", { percent })}</Button>
+						</>,
+					)}
 				</>
 			);
 		}
@@ -301,12 +306,9 @@ function SharePanel({
 						</Tooltip>
 					</div>
 					{phase.error ? <p role="alert" className="mt-2 text-caption text-error">{phase.error}</p> : null}
-					<div className="mt-3 flex items-center justify-between gap-2">
+					<div className="mt-3 flex items-center justify-end">
 						<Button className="text-destructive hover:text-destructive" onClick={() => setPhase({ kind: "published", share, unpublishing: "confirm" })} size="sm" type="button" variant="ghost">
 							{t("artifacts.share.unpublish")}
-						</Button>
-						<Button onClick={() => void publish(share.id)} size="sm" type="button" variant="secondary">
-							{t("artifacts.share.update")}
 						</Button>
 					</div>
 				</>

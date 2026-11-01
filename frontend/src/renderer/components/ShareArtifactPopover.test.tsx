@@ -74,20 +74,29 @@ describe("ShareArtifactButton", () => {
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
 		await openPopover();
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
-		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test", shareId: undefined });
+		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test" });
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
 		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
 		expect(writeText).toHaveBeenCalledWith("https://viewer.test/artifact/abc");
 		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
 	});
 
-	it("opens a published file to its link, with Update link and Unpublish", async () => {
-		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
+	it("opens a published file to its link, with only Copy and Unpublish", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		await openPopover();
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
+		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
-		await userEvent.click(screen.getByRole("button", { name: "Update link" }));
-		expect(publishSpy).toHaveBeenCalledWith({ ...file, baseUrl: "https://cp.test", shareId: SHARE_ID });
+		expect(screen.queryByRole("button", { name: /update/i })).toBeNull();
+	});
+
+	it("says Publishing while the file uploads", async () => {
+		stub(inspection, links);
+		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
 	});
 
 	it("unpublishes after an inline confirmation, then offers to publish again", async () => {
