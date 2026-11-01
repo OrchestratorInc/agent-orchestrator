@@ -737,7 +737,7 @@
 	"createProject.workspace": "Espace de travail",
 	"createProject.workspaceAgents": "Agents de l'espace de travail",
 	"createProject.workspaceDesc": "Un dossier de plusieurs dépôts",
-	"createProject.standaloneDesc": "Sans code associé",
+	"createProject.standaloneDesc": "Sans projet ni dépôt",
 	"createProject.workspaceRoot": "Racine de l'espace de travail",
 	"createProject.workspaceNeedsGitRepo": "Aucun dépôt Git enfant n’existe dans ce dossier. Ajoutez un dépôt enfant ou choisissez un autre dossier d’espace de travail.",
 	"createProject.workspaceRootIsProject": "Il s’agit d’un seul dépôt, pas d’une collection de dépôts. Importez-le plutôt comme projet.",

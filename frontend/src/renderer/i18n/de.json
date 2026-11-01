@@ -732,7 +732,7 @@
 	"createProject.workspace": "Workspace",
 	"createProject.workspaceAgents": "Workspace-Agenten",
 	"createProject.workspaceDesc": "Ein Ordner mit mehreren Repos",
-	"createProject.standaloneDesc": "Ohne verknüpften Code",
+	"createProject.standaloneDesc": "Kein Projekt oder Repo nötig",
 	"createProject.workspaceRoot": "Workspace-Root",
 	"createProject.workspaceNeedsGitRepo": "In diesem Ordner gibt es keine untergeordneten Git-Repositorys. Fügen Sie ein untergeordnetes Repository hinzu oder wählen Sie einen anderen Workspace-Ordner.",
 	"createProject.workspaceRootIsProject": "Dies ist ein einzelnes Repository, keine Sammlung von Repositories. Importieren Sie es stattdessen als Projekt.",

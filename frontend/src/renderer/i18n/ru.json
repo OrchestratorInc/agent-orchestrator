@@ -3354,7 +3354,7 @@
 	"chat.mcpNotice.unavailable_other": "Не удалось запустить {{names}}. Продолжаем без них.",
 	"common.or": "или",
 	"home.newStandaloneAgent": "Запустить отдельного агента",
-	"createProject.standaloneDesc": "Без привязанного кода",
+	"createProject.standaloneDesc": "Без проекта и репозитория",
 	"executionContext.active": "активен",
 	"executionContext.configured": "настроен",
 	"executionContext.title": "контекст выполнения",

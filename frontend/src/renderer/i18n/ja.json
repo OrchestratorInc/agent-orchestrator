@@ -732,7 +732,7 @@
 	"createProject.workspace": "ワークスペース",
 	"createProject.workspaceAgents": "ワークスペースエージェント",
 	"createProject.workspaceDesc": "複数のリポジトリを含むフォルダー",
-	"createProject.standaloneDesc": "コードなし",
+	"createProject.standaloneDesc": "プロジェクトやリポジトリは不要",
 	"createProject.workspaceRoot": "ワークスペースルート",
 	"createProject.workspaceNeedsGitRepo": "このフォルダーには子 Git リポジトリがありません。子リポジトリを追加するか、別のワークスペースフォルダーを選択してください。",
 	"createProject.workspaceRootIsProject": "これはリポジトリのコレクションではなく、単一のリポジトリです。代わりにプロジェクトとしてインポートしてください。",

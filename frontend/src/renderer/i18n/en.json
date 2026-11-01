@@ -3228,7 +3228,7 @@
 	"chat.mcpNotice.unavailable_other": "{{names}} didn’t start. Continuing without them.",
 	"common.or": "or",
 	"home.newStandaloneAgent": "Start a standalone agent",
-	"createProject.standaloneDesc": "No code attached",
+	"createProject.standaloneDesc": "No project or repo needed",
 	"executionContext.active": "active",
 	"executionContext.configured": "configured",
 	"executionContext.title": "execution context",

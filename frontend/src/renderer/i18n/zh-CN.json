@@ -732,7 +732,7 @@
 	"createProject.workspace": "工作区",
 	"createProject.workspaceAgents": "工作区代理",
 	"createProject.workspaceDesc": "包含多个仓库的文件夹",
-	"createProject.standaloneDesc": "不关联代码",
+	"createProject.standaloneDesc": "无需项目或仓库",
 	"createProject.workspaceRoot": "工作区根目录",
 	"createProject.workspaceNeedsGitRepo": "此文件夹中没有子 Git 仓库。请添加一个子仓库，或选择其他工作区文件夹。",
 	"createProject.workspaceRootIsProject": "这是单个仓库，而不是仓库集合。请改为将其作为项目导入。",
