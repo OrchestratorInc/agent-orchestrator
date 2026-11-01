@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
+import MakerNSIS from "./makers/maker-nsis";
 
 // postMake's dmg/zip branches only need to prove they call the right
 // maker-dmg functions with the right gates; the functions' own behavior
@@ -29,7 +30,7 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	return { ...actual, checkMacDmgLayout };
 });
 
-import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -327,11 +328,15 @@ describe("postMake artifact verification", () => {
 });
 
 describe("Windows app labels", () => {
-	it("matches the installer display name without renaming the executable or bundle", () => {
+	it("matches the installer display name without renaming the executable or bundle", async () => {
+		expect(WINDOWS_DISPLAY_NAME).toBe("Orchestrator.inc");
 		expect(config.packagerConfig?.win32metadata).toEqual({
-			FileDescription: "Orchestrator.inc",
-			ProductName: "Orchestrator.inc",
+			FileDescription: WINDOWS_DISPLAY_NAME,
+			ProductName: WINDOWS_DISPLAY_NAME,
 		});
+		const windowsInstaller = config.makers?.find((maker) => maker instanceof MakerNSIS);
+		await windowsInstaller?.prepareConfig("x64");
+		expect(windowsInstaller?.config.productName).toBe(WINDOWS_DISPLAY_NAME);
 		expect(config.packagerConfig?.executableName).toBe("agent-orchestrator");
 		expect(config.packagerConfig?.name).toBe("Agent Orchestrator");
 		expect(config.packagerConfig?.appBundleId).toBe("dev.agent-orchestrator.desktop");

@@ -29,6 +29,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
+export const WINDOWS_DISPLAY_NAME = "Orchestrator.inc";
 const AUTH_PROTOCOL = {
 	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
@@ -164,8 +165,8 @@ const config: ForgeConfig = {
 		executableName: EXECUTABLE_NAME,
 		// Match the Windows installer without changing the executable name.
 		win32metadata: {
-			FileDescription: "Orchestrator.inc",
-			ProductName: "Orchestrator.inc",
+			FileDescription: WINDOWS_DISPLAY_NAME,
+			ProductName: WINDOWS_DISPLAY_NAME,
 		},
 		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
 		protocols: [AUTH_PROTOCOL],
@@ -350,7 +351,7 @@ const config: ForgeConfig = {
 				appId: "dev.agent-orchestrator.desktop",
 				// The name shown in the installer, the updater, the shortcuts, and
 				// Windows Apps. It matches the app's display name in main.ts.
-				productName: "Orchestrator.inc",
+				productName: WINDOWS_DISPLAY_NAME,
 				// Match the packaged binary name so the Start menu shortcut targets
 				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
