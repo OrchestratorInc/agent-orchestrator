@@ -382,7 +382,10 @@ func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
 	)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
 	h.conv.emit(turnlessPlan(3))
-	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(turnlessPlanRows(s)) == 2 })
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		rows := turnlessPlanRows(s)
+		return len(rows) == 2 && rows[1].Summary == "Plan 3/3" && planRowDetail(t, rows[0]).Superseded
+	})
 
 	plans := turnlessPlanRows(snapshot)
 	if plans[0].Summary != "Plan 2/3" || plans[1].Summary != "Plan 3/3" {
@@ -419,7 +422,11 @@ func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 			TurnState: domain.TurnStateCompleted},
 		turnlessPlan(2),
 	)
-	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(turnlessPlanRows(s)) == 1 })
+	// A snapshot reads turns and activities separately, so wait for both halves of
+	// the one projection rather than only the row that appears.
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(turnlessPlanRows(s)) == 1 && len(s.Turns) == 1 && s.Turns[0].Plan != nil && s.Turns[0].Plan.Superseded
+	})
 	if plan := snapshot.Turns[0].Plan; plan == nil || !plan.Superseded {
 		t.Errorf("turn A plan = %#v, want superseded by the later run's copy", plan)
 	}
@@ -438,7 +445,8 @@ func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 		turnPlan("provider-turn-2", 3),
 	)
 	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return len(s.Turns) == 2 && s.Turns[1].Plan != nil
+		rows := turnlessPlanRows(s)
+		return len(s.Turns) == 2 && s.Turns[1].Plan != nil && len(rows) == 1 && planRowDetail(t, rows[0]).Superseded
 	})
 	if plan := snapshot.Turns[1].Plan; plan.Superseded {
 		t.Errorf("turn B plan superseded, want it current")
