@@ -31,7 +31,7 @@ describe("palette parity", () => {
 	// A half-finished light palette is the likely failure mode: colours copied
 	// across unchanged look washed out on white, and nothing else would flag it.
 	it("darkens every semantic colour for light mode rather than reusing it", () => {
-		const semantic = ["accent", "orange", "amber", "red", "green"] as const;
+		const semantic = ["accent", "orange", "blue", "amber", "red", "green"] as const;
 		for (const token of semantic) {
 			expect(lightTheme[token], token).not.toBe(darkTheme[token]);
 		}
@@ -50,19 +50,22 @@ describe("palette parity", () => {
 	});
 
 	// Every hue in the palette means a state, and the interactive accent carries
-	// emphasis with contrast instead. Blue stays out — it meant nothing specific
-	// here, and the pin was carrying a stray one. Purple is in, meaning exactly
-	// one thing: a pull request that landed.
-	it("keeps blue out of the palette and purple to a single meaning", () => {
+	// emphasis with contrast instead. Blue means an exited worker; purple means
+	// exactly one thing: a pull request that landed.
+	it("keeps state hues distinct from the interactive accent", () => {
 		for (const t of [darkTheme, lightTheme]) {
-			for (const gone of ["blue", "tintBlue", "attention"]) {
+			for (const gone of ["attention"]) {
 				expect(t, gone).not.toHaveProperty(gone);
 			}
+			expect(t.blue, "blue").toBeTruthy();
+			expect(t.tintBlue, "tintBlue").toBeTruthy();
 			expect(t.purple, "purple").toBeTruthy();
 			// Not the accent, not the success hue: a merged PR must not read as
 			// either "selected" or "mergeable".
 			expect(t.purple).not.toBe(t.accent);
 			expect(t.purple).not.toBe(t.green);
+			expect(t.blue).not.toBe(t.accent);
+			expect(t.blue).not.toBe(t.red);
 			expect(t.accent).not.toBe(t.orange);
 			expect(t.accentBorder).toBeTruthy();
 		}
@@ -139,6 +142,12 @@ describe("theme-aware helpers", () => {
 		}
 		// And the two themes genuinely disagree, i.e. the argument is used.
 		expect(statusVisual(lightTheme, "working").color).not.toBe(statusVisual(darkTheme, "working").color);
+	});
+
+	it("uses the desktop blue treatment for an exited worker", () => {
+		expect(statusVisual(darkTheme, "exited").color).toBe("#60a5fa");
+		expect(statusVisual(lightTheme, "exited").color).toBe("#2563eb");
+		expect(statusVisual(darkTheme, "exited").color).not.toBe(darkTheme.red);
 	});
 
 	it("keeps labels identical across themes", () => {

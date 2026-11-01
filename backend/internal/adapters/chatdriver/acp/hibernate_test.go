@@ -17,6 +17,7 @@ func TestACPDriverUsesProviderHibernationCheck(t *testing.T) {
 		ready := false
 		var checkErr error
 		if configured {
+			cfg.HistoryNotice = func(string) bool { return true }
 			cfg.CanHibernate = func(_ context.Context, _ *acpsdk.ClientSideConnection, id acpsdk.SessionId) (bool, error) {
 				gotID = id
 				return ready, checkErr
@@ -27,6 +28,9 @@ func TestACPDriverUsesProviderHibernationCheck(t *testing.T) {
 		conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if (conv.(*conversation).historyNotice != nil) != configured {
+			t.Fatalf("configured=%v history notice not wired", configured)
 		}
 		h := conv.(ports.ChatProviderHibernator)
 		canSleep, err := h.CanHibernate(context.Background())

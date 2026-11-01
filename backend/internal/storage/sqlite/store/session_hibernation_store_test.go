@@ -15,8 +15,9 @@ func TestListChatHibernationCandidatesFiltersInSQL(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
 	var want []domain.SessionID
-	for _, change := range []func(*domain.SessionRecord){
+	for i, change := range []func(*domain.SessionRecord){
 		func(*domain.SessionRecord) {},
+		func(r *domain.SessionRecord) { r.Kind = domain.KindOrchestrator },
 		func(r *domain.SessionRecord) { r.Mode = domain.SessionModeTUI },
 		func(r *domain.SessionRecord) { r.IsTerminated = true },
 		func(r *domain.SessionRecord) { r.IsTaskPreparation = true },
@@ -31,7 +32,7 @@ func TestListChatHibernationCandidatesFiltersInSQL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if rec.EligibleForChatHibernation() {
+		if i == 0 {
 			want = append(want, created.ID)
 		}
 	}

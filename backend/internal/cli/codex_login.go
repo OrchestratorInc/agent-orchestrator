@@ -13,6 +13,8 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 const codexFileStoreOverride = `cli_auth_credentials_store="file"`
@@ -203,7 +205,8 @@ func readCodexLoginSelection(in io.Reader) (string, error) {
 }
 
 func runInteractiveCommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // executable and argv are resolved and fixed by the internal command.
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec,forbidigo // interactive login must inherit the caller's console.
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

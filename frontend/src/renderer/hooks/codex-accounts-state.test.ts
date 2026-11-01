@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodexAccountsResponse } from "./useCodexAccountsQuery";
-import { catalogFor } from "../i18n/messages";
+import { catalogFor } from "../i18n/all-messages";
 import type { AppLocale } from "../i18n/locales";
 import { codexAccountCanSwitch, codexAccountReasonCodes, codexAccountReasonKey, codexAuthenticationDisplay, codexSwitchDisplay, mergeCodexAccounts } from "./codex-accounts-state";
 import type { CodexAccountSwitch } from "./useCodexAccountsQuery";
@@ -146,7 +146,7 @@ it("presents every normal credential phase as the same switch progress", () => {
 });
 
 it("maps every account reason to complete native locale copy with a safe unknown fallback", () => {
-	const locales: AppLocale[] = ["en", "de", "es", "fr", "ja", "ko", "pt-BR", "zh-CN"];
+	const locales: AppLocale[] = ["en", "de", "es", "fr", "ja", "ko", "pt-BR", "ru", "zh-CN"];
 	const switchKeys = ["requested", "completed", "failed", "unknown"].map((phase) => `settings.codexAccounts.switch.${phase}`);
 	const keys = [
 		...codexAccountReasonCodes.map(codexAccountReasonKey),

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -17,9 +17,10 @@ import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
-import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
+import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	buildRankedAgentOptions,
@@ -58,6 +59,7 @@ import {
 	onboardingFooterActionsEndClass,
 	onboardingFormLabelClass,
 } from "../lib/onboarding-ui";
+import { automationPromptLengthBucket, captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
 import { hidesShellTopbar } from "../lib/platform";
 
@@ -195,6 +197,9 @@ type AutomationFormSubmit = {
 	prompt: string;
 	kind?: "worker" | "orchestrator";
 	harness?: string;
+	model?: string;
+	mode?: string;
+	effort?: string;
 	timezone?: string;
 	rrule?: string;
 };
@@ -236,10 +241,15 @@ function AutomationFormDialog({
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaultWorker = useProjectDefaultWorker(open ? (automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
+	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [harness, setHarness] = useState("");
+	const [model, setModel] = useState("");
+	const [mode, setMode] = useState("");
+	const [effort, setEffort] = useState("");
+	const [modelValid, setModelValid] = useState(true);
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
 		time: nowLocalHHMM(),
@@ -266,10 +276,15 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
+		if (!automation) void captureRendererEvent("ao.renderer.automation_create_opened");
 		setProjectId(automation?.projectId ?? "");
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");
 		setHarness(automation?.harness ?? "");
+		setModel(automation?.model ?? "");
+		setMode(automation?.mode ?? "");
+		setEffort(automation?.effort ?? "");
+		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
 		const nextSchedule = automation
@@ -303,6 +318,28 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
+	// Match the daemon's base config plus overrides for a matching worker harness.
+	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
+	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
+	const inheritedMode = inheritedWorker?.mode || projectDefaults.agentConfig?.mode || "";
+	const inheritedEffort = inheritedWorker?.effort || projectDefaults.agentConfig?.effort || "";
+	const displayedModel = model || (!mode ? inheritedModel : "");
+	const displayedMode = mode || (!model ? inheritedMode : "");
+	const displayedEffort = effort || (!model && !mode ? inheritedEffort : "");
+	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
+	useEffect(() => {
+		if (!open || awaitingInheritedHarness) { previousHarness.current = null; return; }
+		if (!previousHarness.current || previousHarness.current.automation !== automation) {
+			// Opening an edit hydrates its saved harness in the preceding effect.
+			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
+			return;
+		}
+		if (previousHarness.current.harness !== selectedHarness) {
+			setModel(""); setMode(""); setEffort(""); setModelValid(true);
+			previousHarness.current.harness = selectedHarness;
+		}
+	}, [open, automation, selectedHarness, awaitingInheritedHarness]);
 
 	function clearValidationError(field: AutomationField) {
 		setValidationErrors((current) => {
@@ -315,6 +352,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		if (!modelValid || awaitingInheritedHarness) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -338,16 +376,40 @@ function AutomationFormDialog({
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
 		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
-		const harnessChanged = !editing || harness !== (automation?.harness ?? "");
-		await onSubmit({
-			// Kind is not a form choice: automations are workers, and editing
-			// leaves the stored kind untouched.
-			...(editing ? {} : { projectId, timezone, kind: "worker" as const }),
-			displayName: name,
-			prompt,
-			...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
-			...(scheduleChanged ? { rrule: nextRRule } : {}),
-		});
+		const tuning = {
+			...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
+			...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
+			...(!editing || effort !== (automation?.effort ?? "") ? { effort } : {}),
+		};
+		const harnessChanged = !editing || harness !== (automation?.harness ?? "") || Object.keys(tuning).length > 0;
+		const funnel = editing
+			? null
+			: {
+					project_id: projectId,
+					schedule_preset: schedule.preset,
+					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
+				};
+		try {
+			await onSubmit({
+				// Kind is not a form choice: automations are workers, and editing
+				// leaves the stored kind untouched.
+				...(editing ? {} : { projectId, timezone, kind: "worker" as const }),
+				displayName: name,
+				prompt,
+				...tuning,
+				// A new pin resets omitted backend fields, so persist the complete tuple.
+				...(harnessChanged && selectedHarness ? { harness: selectedHarness, model, mode, effort } : {}),
+				...(scheduleChanged ? { rrule: nextRRule } : {}),
+			});
+		} catch (error) {
+			if (!funnel) throw error;
+			// The dialog already renders the mutation's error, so letting this
+			// reject only reported the same failure a second time as an
+			// unhandled renderer exception.
+			void captureRendererEvent("ao.renderer.automation_create_failed", funnel);
+			return;
+		}
+		if (funnel) void captureRendererEvent("ao.renderer.automation_create_succeeded", funnel);
 	}
 
 	return (
@@ -388,7 +450,7 @@ function AutomationFormDialog({
 								invalid={Boolean(validationErrors.projectId)}
 								describedBy={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
 								value={projectId}
-								onValueChange={(value) => { setProjectId(value); clearValidationError("projectId"); }}
+								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
 								options={projectOptions}
 							/>
 						</Field>
@@ -419,8 +481,27 @@ function AutomationFormDialog({
 								disabled={busy}
 								onChange={(value) => {
 									setHarness(value);
+									setModel(""); setMode(""); setEffort(""); setModelValid(true);
 								}}
 							/>
+							{open ? (
+								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+									<AgentModelField
+										key={selectedHarness + ":" + projectId}
+										role="worker"
+										variant="task"
+										agentId={selectedHarness}
+										projectId={projectId}
+										model={displayedModel}
+										mode={displayedMode}
+										effort={displayedEffort}
+										onModelChange={setModel}
+										onModeChange={setMode}
+										onEffortChange={setEffort}
+										onValidityChange={setModelValid}
+									/>
+								</div>
+							) : null}
 							<Field label={t("automations.field.schedule")}>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
@@ -575,7 +656,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy}>
+						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

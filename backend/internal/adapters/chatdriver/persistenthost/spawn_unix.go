@@ -18,7 +18,7 @@ func spawnDetached(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, hostArgs(cfg)...)
+	cmd := exec.Command(exe, hostArgs(cfg)...) //nolint:forbidigo // detached chat host has specialized lifetime and session ownership
 	cmd.Dir = cfg.Workdir
 	cmd.Env = cfg.Env
 	cmd.Stdin = nil

@@ -83,6 +83,9 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 			if ha.Harness == "kimi" {
 				cfg.Env = map[string]string{"KIMI_CODE_HOME": filepath.Join(cfg.DataDir, "kimi")}
 			}
+			if ha.Harness == "hermes" {
+				cfg.Env = map[string]string{"HERMES_HOME": t.TempDir()}
+			}
 			ensureAgentBinary(t, string(ha.Harness))
 			if err := ha.Agent.GetAgentHooks(context.Background(), cfg); err != nil {
 				t.Fatalf("GetAgentHooks: %v", err)
@@ -181,6 +184,39 @@ func TestRegistryIncludesOMP(t *testing.T) {
 	t.Fatal("Harnessed does not contain omp")
 }
 
+func TestRegistryIncludesCommandCode(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("command-code")
+	if !ok {
+		t.Fatal("registry does not contain command-code")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "Command Code" {
+		t.Fatalf("command-code manifest name = %q, want Command Code", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessCommandCode {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain command-code")
+}
+
+func TestRegistryIncludesCodewhale(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("codewhale")
+	if !ok || adapter.Manifest().Name != "Codewhale" {
+		t.Fatalf("codewhale adapter = %+v, ok=%v", adapter, ok)
+	}
+}
+
 func TestRegistryIncludesMiMoCode(t *testing.T) {
 	reg, err := Build()
 	if err != nil {
@@ -193,6 +229,26 @@ func TestRegistryIncludesMiMoCode(t *testing.T) {
 	if got := adapter.Manifest().Name; got != "MiMo Code" {
 		t.Fatalf("mimo-code manifest name = %q", got)
 	}
+}
+
+func TestRegistryIncludesOpenHands(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("openhands")
+	if !ok {
+		t.Fatal("registry does not contain openhands")
+	}
+	if name := adapter.Manifest().Name; name != "OpenHands" {
+		t.Fatalf("openhands manifest name = %q, want OpenHands", name)
+	}
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessOpenHands {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain openhands")
 }
 
 func TestHarnessedExcludesFakeHarness(t *testing.T) {
@@ -251,6 +307,9 @@ func ensureAgentBinary(t *testing.T, name string) {
 	if name == "omp" {
 		version = "17.1.0"
 	}
+	if name == "codewhale" {
+		version = "0.10.0"
+	}
 	script := "#!/usr/bin/env sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"" + name + " " + version + "\"\nfi\nexit 0\n"
 	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {
 		t.Fatalf("write fake agent binary %q: %v", binPath, err)
@@ -267,4 +326,21 @@ func hasLine(content, line string) bool {
 		}
 	}
 	return false
+}
+
+func TestMemcodeAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("memcode")
+	if !ok || !domain.HarnessMemcode.IsKnown() {
+		t.Fatal("Memcode is not selectable")
+	}
+	if adapter.Manifest().Name != "memcode" {
+		t.Fatal(adapter.Manifest())
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
 }

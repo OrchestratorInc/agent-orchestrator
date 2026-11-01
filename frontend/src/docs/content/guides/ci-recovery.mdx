@@ -3,16 +3,16 @@ title: CI recovery
 description: How AO observes failing GitHub checks and sends focused context to the owning session.
 ---
 
-When a claimed GitHub pull request has a failing check, AO records it and sends a recovery message to the worker that owns the PR.
+When a claimed GitHub pull request has a failing check, Orchestrator records it and sends a recovery message to the worker that owns the PR.
 
 ## The flow
 
-1. AO checks the claimed PR on GitHub.
-2. AO records new failing checks and sends their names and links to the owning session.
+1. Orchestrator checks the claimed PR on GitHub.
+2. Orchestrator records new failing checks and sends their names and links to the owning session.
 3. The session receives the message in Chat or Terminal UI.
 4. The desktop updates the PR summary with the same check information.
 
-AO compares the check list with the previous one. It does not resend an unchanged failure on every poll. A changed list can trigger another message.
+Orchestrator compares the check list with the previous one. It does not resend an unchanged failure on every poll. A changed list can trigger another message.
 
 ## Make sure the PR is linked
 
@@ -41,7 +41,7 @@ Claiming records ownership, but does not check out the PR branch. Prepare the ma
 
 ## What the agent receives
 
-The message includes the failing check names, available run URLs, and PR identity. AO does not copy raw CI logs into the desktop app. The agent can follow the links or use the repository host's CLI to read the logs.
+The message includes the failing check names, available run URLs, and PR identity. Orchestrator does not copy raw CI logs into the desktop app. The agent can follow the links or use the repository host's CLI to read the logs.
 
 ## Follow progress
 
@@ -49,8 +49,8 @@ Open the session inspector to see the PR, CI state, and failing-check links. The
 
 ## Current limits
 
-- This example covers GitHub checks. AO also observes GitLab, but check and review details depend on the provider.
+- This example covers GitHub checks. Orchestrator also observes GitLab, but check and review details depend on the provider.
 - CI messages are built in. You cannot configure them through a `reactions:` YAML block or set a retry budget. See [Automation reference](/configuration/lifecycle-automation) for current behavior.
-- AO uses the pull-request status reported by the repository host for draft and required-check status.
+- Orchestrator uses the pull-request status reported by the repository host for draft and required-check status.
 
 If automatic delivery is unavailable, open the owning Chat or Terminal UI session and send a follow-up directly with the desktop composer or `ao send`.

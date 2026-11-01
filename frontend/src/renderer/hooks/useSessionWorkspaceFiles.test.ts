@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	WorkspaceRequestError,
+	isMissingWorkspaceError,
+	isStaleWorkspaceSnapshotError,
+	clearMissingWorkspace,
+	knownMissingWorkspace,
+	recordWorkspaceResult,
+	retryWorkspaceRead,
 	sessionWorkspaceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	sessionWorkspaceSearchQueryOptions,
 	sessionSourceFileQueryOptions,
 	sessionSourceFileRevisionQueryOptions,
-	sessionSourceFilesQueryOptions,
 	updateSessionWorkspaceFile,
 	workspaceFilesRefetchInterval,
 } from "./useSessionWorkspaceFiles";
@@ -39,11 +45,69 @@ describe("workspaceFilesRefetchInterval", () => {
 	});
 });
 
+describe("retryWorkspaceRead", () => {
+	it("retries a failed read three times, but never a 4xx answer, which would only fail again", () => {
+		expect(retryWorkspaceRead(0, new Error("offline"))).toBe(true);
+		expect(retryWorkspaceRead(2, new WorkspaceRequestError("busy", "INTERNAL", 500))).toBe(true);
+		expect(retryWorkspaceRead(3, new Error("offline"))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("moved", "WORKSPACE_REF_MOVED", 409))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("gone", "WORKSPACE_BRANCH_NOT_FOUND", 404))).toBe(false);
+	});
+});
+
+describe("missing workspace boundary", () => {
+	it("requires the exact code and HTTP status", () => {
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("missing", "PROJECT_FOLDER_MISSING", 404))).toBe(true);
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("busy", "PROJECT_FOLDER_MISSING", 500))).toBe(false);
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("other", "OTHER_NOT_FOUND", 404))).toBe(false);
+	});
+	it("isolates the exact missing folder error by host and session", async () => {
+		const error = { code: "PROJECT_FOLDER_MISSING", message: "missing" };
+		hostAGet.mockResolvedValue({ error, response: new Response(null, { status: 404 }) });
+		try {
+			await expect(sessionWorkspaceFilesQueryOptions("session-1", undefined, "host-a").queryFn()).rejects.toMatchObject({ code: "PROJECT_FOLDER_MISSING" });
+			await expect(sessionWorkspaceFilesQueryOptions("session-1", undefined, "host-a").queryFn()).rejects.toMatchObject({ code: "PROJECT_FOLDER_MISSING" });
+			expect(hostAGet).toHaveBeenCalledTimes(1);
+			expect(knownMissingWorkspace("session-1", "host-b")).toBeUndefined();
+			expect(knownMissingWorkspace("session-2", "host-a")).toBeUndefined();
+		} finally {
+			clearMissingWorkspace("session-1", "host-a");
+		}
+	});
+
+	it("ignores an old missing response after manual recovery starts", () => {
+		const error = { code: "PROJECT_FOLDER_MISSING", message: "missing" };
+		const sessionId = "stale-response";
+		const epoch = 0;
+		clearMissingWorkspace(sessionId);
+		recordWorkspaceResult(sessionId, undefined, error, new Response(null, { status: 404 }), "missing", epoch);
+		expect(knownMissingWorkspace(sessionId)).toBeUndefined();
+	});
+	it("expires a missing folder result so restored folders can be read again", async () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const sessionId = "restored-folder";
+		try {
+			recordWorkspaceResult(sessionId, undefined, { code: "PROJECT_FOLDER_MISSING", message: "missing" }, new Response(null, { status: 404 }), "missing");
+			expect(knownMissingWorkspace(sessionId)?.code).toBe("PROJECT_FOLDER_MISSING");
+			now.mockReturnValue(61_001);
+			expect(knownMissingWorkspace(sessionId)).toBeUndefined();
+		} finally {
+			now.mockRestore();
+			clearMissingWorkspace(sessionId);
+		}
+	});
+});
+
+it("recognizes only the typed stale snapshot conflict", () => {
+	expect(isStaleWorkspaceSnapshotError(new WorkspaceRequestError("changed", "WORKSPACE_SNAPSHOT_STALE", 409))).toBe(true);
+	expect(isStaleWorkspaceSnapshotError(new WorkspaceRequestError("busy", "WORKSPACE_SNAPSHOT_STALE", 500))).toBe(false);
+});
+
 describe("pull request file query keys", () => {
 	const source = { kind: "pull_request", number: 42, url: "https://example.test/pull/42", label: "PR #42", snapshot: "head-2" } as const;
 
-	it("isolates list, detail, and revision caches by snapshot", () => {
-		expect(sessionSourceFilesQueryOptions("session-1", source).queryKey).toContain("head-2");
+	it("isolates detail and revision caches by snapshot", () => {
 		expect(sessionSourceFileQueryOptions("session-1", source, "README.md").queryKey).toContain("head-2");
 		expect(sessionSourceFileRevisionQueryOptions({ path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey).toContain("head-2");
 	});

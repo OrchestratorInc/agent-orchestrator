@@ -38,6 +38,8 @@ func (s *Store) CreateSessionInterfaceTransition(
 		NativeConversationID: rec.NativeConversationID,
 		CreatedAt:            rec.CreatedAt,
 		UpdatedAt:            rec.UpdatedAt,
+		SourceAccountID:      rec.SourceAccountID,
+		TargetAccountID:      rec.TargetAccountID,
 	})
 	if err == nil {
 		return interfaceTransitionToDomain(row), true, nil
@@ -87,6 +89,7 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 			TargetMode: rec.TargetMode, Policy: rec.Policy, HistoryPolicy: rec.HistoryPolicy,
 			Phase: rec.Phase, NativeConversationID: rec.NativeConversationID,
 			CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+			SourceAccountID: rec.SourceAccountID, TargetAccountID: rec.TargetAccountID,
 		})
 		if insertErr == nil {
 			transition, created = interfaceTransitionToDomain(row), true
@@ -315,11 +318,23 @@ func (s *Store) commitSessionControllerEpoch(
 		// Chat reservation and event namespace in the same transaction, so a
 		// later return can bind that identity without inventing inherited history.
 		released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
-			SessionID:       sql.NullString{String: string(id), Valid: true},
+			SessionID:       &id,
 			ProviderScopeID: uuid.NewString(),
 		})
 		if err != nil {
 			return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
+		}
+		if released == 0 {
+			// A Chat whose controller never started (its start failed, or it
+			// was never opened) has no conversation row: the freshness proof
+			// accepts that, and there is no reservation to release.
+			_, lookupErr := q.SelectConversationBySession(ctx, &id)
+			switch {
+			case errors.Is(lookupErr, sql.ErrNoRows):
+				released = 1
+			case lookupErr != nil:
+				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
+			}
 		}
 		if released != 1 {
 			return false, fmt.Errorf("release untouched Chat provider for %s: empty root proof changed", id)
@@ -329,6 +344,44 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, fmt.Errorf("commit controller epoch transaction for %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
+// its reserved conversation onto the fresh conversation the provider started
+// instead. The session and its untouched root branch move together; recorded
+// history or a different current owner fails the swap and changes nothing.
+func (s *Store) ReplaceUnpersistedChatProvider(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedProviderConversationID, providerConversationID string,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "replace unpersisted Chat provider for "+string(id), func(q *gen.Queries) error {
+		moved, err := q.ReplaceUnpersistedChatProvider(ctx, gen.ReplaceUnpersistedChatProviderParams{
+			ProviderConversationID:         providerConversationID,
+			ID:                             id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("move session provider: %w", err)
+		}
+		if moved != 1 {
+			return errors.New("controller owner changed")
+		}
+		rebound, err := q.ReplaceUntouchedConversationProvider(ctx, gen.ReplaceUntouchedConversationProviderParams{
+			ProviderConversationID:         providerConversationID,
+			SessionID:                      &id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("rebind root branch: %w", err)
+		}
+		if rebound != 1 {
+			return errors.New("empty root proof changed")
+		}
+		return nil
+	})
 }
 
 // EnqueueSessionInterfaceTransitionMessage queues a user message while an interface transition is active.
@@ -403,7 +456,8 @@ func interfaceTransitionToDomain(row gen.SessionInterfaceTransition) domain.Sess
 		SourceMode: row.SourceMode, TargetMode: row.TargetMode,
 		Policy: row.Policy, HistoryPolicy: row.HistoryPolicy, Phase: row.Phase,
 		NativeConversationID: row.NativeConversationID,
-		ErrorCode:            row.ErrorCode, ErrorDetail: row.ErrorDetail,
+		SourceAccountID:      row.SourceAccountID, TargetAccountID: row.TargetAccountID,
+		ErrorCode: row.ErrorCode, ErrorDetail: row.ErrorDetail,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt:          nullTimeToTime(row.CompletedAt),
 		NoticeAcknowledgedAt: nullTimeToTime(row.NoticeAcknowledgedAt),

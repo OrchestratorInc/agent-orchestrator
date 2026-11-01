@@ -231,11 +231,13 @@ function useSessionInterfaceTransitionStatusQuery(
 			if (interfaceTransitionNeedsRestart(status?.transition)) return false;
 			if (interfaceTransitionIsActive(status?.transition)) return 250;
 			// A missing or not-yet-current native identity is transient while the
-			// terminal's session-start hook is arriving. Recheck only those readiness
+			// terminal's session-start hook is arriving, and a missing workspace
+			// clears once Retry start sets it up. Recheck only those readiness
 			// states so supported switches enable without polling permanently
 			// unsupported harnesses or ordinary idle sessions.
 			return status?.reasonCode === "NATIVE_SESSION_MISSING" ||
-				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED"
+				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED" ||
+				status?.reasonCode === "WORKSPACE_UNAVAILABLE"
 				? nativeSessionReadinessPoll
 				: false;
 		},
@@ -523,6 +525,7 @@ export function useSessionInterfaceTransition(
 		},
 		starting: startState.isPending,
 		startingPolicy: startState.pendingInput?.policy,
+		startingTarget: startState.pendingInput?.targetMode,
 		startError: startErrorSuperseded ? undefined : startState.error,
 		resetStartError: () => {
 			clearInterfaceTransitionMutationState(

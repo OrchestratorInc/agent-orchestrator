@@ -11,6 +11,17 @@ import {
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  it("loads normalized project settings and preserves PATCH omissions", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ project: { id: "project" } }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await client.getProject("org/1", "project/1");
+    await client.updateProjectSettings("org/1", "project/1", { config: { reviewers: [{ harness: "claude-code", agentConfig: { model: "review-model", effort: "high", permissions: "auto" } }] } });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ config: { reviewers: [{ harness: "claude-code", agentConfig: { model: "review-model", effort: "high", permissions: "auto" } }] } }));
+    await client.updateProjectSettings("org/1", "project/1", { config: { worker: null, orchestrator: null } });
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBe('{"config":{"worker":null,"orchestrator":null}}');
+  });
   it("loads the authenticated account and organization memberships", async () => {
     const account = {
       user: {
@@ -72,6 +83,25 @@ describe("CloudClient", () => {
       "https://cloud.example.com/api/cloud/v1/orgs/4165753c-c6ad-4ac2-8f12-e0cbb24d9750/sessions/a9dc6493-bd04-4c03-bb45-55733ed83784",
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
+  });
+
+  it("retries a session whose startup failed", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ session: { id: "session one" } }, 202),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.retrySessionStartup("org one", "session one");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%20one/sessions/session%20one/startup-retry",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
   });
 
   it("updates editable project settings on the project resource", async () => {
@@ -324,6 +354,30 @@ describe("CloudClient", () => {
     );
   });
 
+  it("lists artifacts and requests an access prefix", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/access")
+          ? jsonResponse({ filesPrefix: "/api/cloud/v1/artifact-files/t/", expiresAt: "2026-10-16T00:30:00Z" })
+          : jsonResponse({ artifacts: [] }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listArtifacts("org", "session one")).resolves.toEqual({ artifacts: [] });
+    await expect(client.getArtifactAccess("org", "session one")).resolves.toMatchObject({
+      filesPrefix: "/api/cloud/v1/artifact-files/t/",
+    });
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts/access",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+  });
+
   it("writes a workspace file through the typed client", async () => {
     const file = { path: "src/main.ts", content: "export {};\n", size: 11 };
     const fetchMock = vi.fn(
@@ -417,6 +471,7 @@ describe("CloudClient", () => {
     } satisfies PullRequestSummary;
     const reviewState = {
       sessionId: "session one?",
+      availableReviewerHarnesses: ["codex"],
       reviews: [
         {
           pullRequestUrl: pullRequest.url,
@@ -631,6 +686,35 @@ describe("CloudClient", () => {
     });
   });
 
+	it("queues a stored review for delivery to the worker", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+			jsonResponse({
+				event: {
+					sessionId: "session",
+					sequence: 2,
+					type: "chat.user_message",
+					payload: { text: "review" },
+					createdAt: "2026-09-20T00:00:00Z",
+				},
+			}),
+		);
+		const client = createCloudClient({
+			baseUrl: "https://cloud.example.com",
+			getAccessToken: () => "access-token",
+			fetch: fetchMock as typeof fetch,
+		});
+
+		await client.sendSessionReviewToWorker("tenant", "session", "run/1", {
+			idempotencyKey: "review-command-1",
+		});
+
+		expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("review-command-1");
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/reviews/run%2F1/send",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
   it("sends the selected model, effort, mode, and approval mode with a chat message", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -688,6 +772,25 @@ describe("CloudClient", () => {
     await expect(client.listChatModels("tenant", "session")).resolves.toEqual(catalog);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/chat-models",
+    );
+  });
+
+  it("loads the model catalog a new task's agent runs with", async () => {
+    const catalog = {
+      models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }],
+      source: "release" as const,
+      cliVersion: "2.1.287",
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listUserAgentModels("org/a", "claude-code")).resolves.toEqual(catalog);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%2Fa/providers/claude-code/models",
     );
   });
 

@@ -81,7 +81,6 @@ export type TaskComposerModelControl = {
 	disabled: boolean;
 	fetching: boolean;
 	id: string;
-	loading: boolean;
 	mode: string;
 	onModeChange: (value: string) => void;
 	onModelChange: (value: string) => void;
@@ -114,8 +113,12 @@ export type TaskComposerAttachments = {
 export type TaskComposerSubmission = {
 	showFallbackAction: boolean;
 	error?: string;
+	status?: string;
+	errorAction?: { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } };
 	isSubmitting: boolean;
-	modelWarning?: string;
+	// A string renders as plain warning text; a node lets the host render its
+	// own notice (for example one with a login action).
+	modelWarning?: ReactNode;
 	onFallbackAction: (prompt: string) => void;
 	onSubmit: (prompt: string) => void;
 };
@@ -190,7 +193,7 @@ const TaskPrompt = memo(function TaskPrompt({
 			<textarea
 				ref={textareaRef}
 				id={id}
-				className="min-h-[calc(3lh+1.75rem)] max-h-[calc(8lh+1.75rem)] w-full resize-none overflow-y-auto bg-transparent px-4 pb-3 pt-4 text-md leading-relaxed text-foreground outline-none placeholder:text-passive disabled:cursor-not-allowed disabled:opacity-50"
+				className="min-h-[calc(3lh+1.125rem)] max-h-[calc(8lh+1.125rem)] w-full resize-none overflow-y-auto bg-transparent px-4 pb-3 pt-1.5 text-md leading-relaxed text-foreground outline-none placeholder:text-passive disabled:cursor-not-allowed disabled:opacity-50"
 				disabled={disabled}
 				placeholder={placeholder}
 				value={value}
@@ -380,7 +383,7 @@ export function TaskComposerView({
 				<p className="px-4 pb-2 text-caption text-destructive" role="alert">{attachments.error}</p>
 			)}
 
-			{(submission.error || submission.modelWarning) && (
+			{(submission.error || submission.status || submission.modelWarning) && (
 				<div className="px-3 pb-2">
 					{submission.error && (
 						<div
@@ -388,6 +391,19 @@ export function TaskComposerView({
 							role="alert"
 						>
 							<span>{submission.error}</span>
+							{submission.errorAction ? (
+								<div className="flex shrink-0 items-center gap-2">
+									{submission.errorAction.input ? <input
+										aria-label={submission.errorAction.input.label}
+										value={submission.errorAction.input.value}
+										onChange={(event) => submission.errorAction?.input?.onChange(event.target.value)}
+										className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
+									/> : null}
+									<button type="button" onClick={submission.errorAction.onClick} disabled={Boolean(submission.errorAction.input && !submission.errorAction.input.value.trim())} className="shrink-0 text-xs underline underline-offset-2">
+										{submission.errorAction.label}
+									</button>
+								</div>
+							) : null}
 							{submission.showFallbackAction ? (
 								<button
 									type="button"
@@ -400,9 +416,12 @@ export function TaskComposerView({
 							) : null}
 						</div>
 					)}
-					{!submission.error && submission.modelWarning && (
-						<p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
-					)}
+					{submission.status && <p className="text-caption text-foreground" role="status">{submission.status}</p>}
+					{!submission.error && submission.modelWarning ? (
+						typeof submission.modelWarning === "string"
+							? <p className="text-caption text-warning" role="status">{submission.modelWarning}</p>
+							: submission.modelWarning
+					) : null}
 				</div>
 			)}
 
@@ -428,7 +447,7 @@ export function TaskComposerView({
 				<button
 					type="button"
 					disabled={submission.isSubmitting}
-					className="inline-flex size-(--size-settings-action-height) shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+					className="inline-flex size-(--size-composer-toolbar-height) shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
 					aria-label={labels.addFile}
 					onClick={() => {
 						if (!submission.isSubmitting) fileInputRef.current?.click();
@@ -440,7 +459,7 @@ export function TaskComposerView({
 				<button
 					type="submit"
 					disabled={submission.isSubmitting || !canSubmit}
-					className="inline-flex h-(--size-settings-action-height) shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50"
+					className="inline-flex h-(--size-composer-toolbar-height) shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/80 disabled:pointer-events-none disabled:opacity-50"
 				>
 					{submission.isSubmitting ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 					{submission.isSubmitting ? labels.starting : labels.start}

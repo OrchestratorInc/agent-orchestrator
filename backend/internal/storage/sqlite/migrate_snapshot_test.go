@@ -2,11 +2,12 @@ package sqlite
 
 import (
 	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"testing"
+	"testing/fstest"
 
 	"github.com/pressly/goose/v3"
 )
@@ -19,7 +20,8 @@ import (
 // pays for one replay no matter how many versions the tests ask for.
 var migrationSnapshots struct {
 	sync.Mutex
-	images map[int64][]byte
+	images  map[int64][]byte
+	highest int64
 }
 
 // snapshotDSN keeps the checkpoint databases in rollback-journal mode so ao.db
@@ -30,7 +32,7 @@ const snapshotDSN = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 // noForeignKeysDSN is for tests that seed rows whose parents do not exist yet.
 const noForeignKeysDSN = "?_pragma=busy_timeout(5000)"
 
-// migratedDatabaseSnapshot returns a copy of a database migrated to exactly
+// migratedDatabaseSnapshot returns a copy of a database migrated through
 // version. Versions below the highest one built are served from the cache, so
 // requests may arrive in any order.
 func migratedDatabaseSnapshot(t *testing.T, version int64) []byte {
@@ -40,24 +42,36 @@ func migratedDatabaseSnapshot(t *testing.T, version int64) []byte {
 	if snapshot, ok := migrationSnapshots.images[version]; ok {
 		return append([]byte(nil), snapshot...)
 	}
-	return append([]byte(nil), buildMigrationSnapshots(t, version)...)
+	return append([]byte(nil), buildMigrationSnapshots(t, version, migrationsFS)...)
 }
 
-func buildMigrationSnapshots(t *testing.T, version int64) []byte {
+func buildMigrationSnapshots(t *testing.T, version int64, fsys fs.FS) []byte {
 	t.Helper()
+	gooseMu.Lock()
+	defer gooseMu.Unlock()
+	goose.SetBaseFS(fsys)
+	defer goose.SetBaseFS(migrationsFS)
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatalf("set dialect: %v", err)
+	}
+	migrations, err := goose.CollectMigrations("migrations", 0, version)
+	if err != nil {
+		t.Fatalf("collect migration checkpoints through %d: %v", version, err)
+	}
 	if migrationSnapshots.images == nil {
 		migrationSnapshots.images = map[int64][]byte{}
 	}
-	startVersion := int64(0)
-	for cachedVersion := range migrationSnapshots.images {
-		if cachedVersion <= version && cachedVersion > startVersion {
-			startVersion = cachedVersion
-		}
+	// Missing IDs mean the preceding schema, including existing callers that
+	// request latest-1 when the latest migration has a timestamp ID.
+	if snapshot, ok := migrationSnapshots.images[migrations[len(migrations)-1].Version]; ok {
+		migrationSnapshots.images[version] = snapshot
+		return snapshot
 	}
 	databasePath := filepath.Join(t.TempDir(), "ao.db")
-	if startVersion > 0 {
-		if err := os.WriteFile(databasePath, migrationSnapshots.images[startVersion], 0o600); err != nil {
-			t.Fatalf("resume migration checkpoint %d: %v", startVersion, err)
+	if migrationSnapshots.highest > 0 {
+		if err := os.WriteFile(databasePath, migrationSnapshots.images[migrationSnapshots.highest], 0o600); err != nil {
+			t.Fatalf("resume migration checkpoint %d: %v", migrationSnapshots.highest, err)
 		}
 	}
 	db, err := sql.Open("sqlite", "file:"+databasePath+snapshotDSN)
@@ -65,41 +79,26 @@ func buildMigrationSnapshots(t *testing.T, version int64) []byte {
 		t.Fatalf("open migration checkpoint: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	entries, err := migrationsFS.ReadDir("migrations")
-	if err != nil {
-		t.Fatalf("read migrations dir: %v", err)
-	}
-	versions := make([]int64, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
+	for _, migration := range migrations {
+		next := migration.Version
+		if next <= migrationSnapshots.highest {
 			continue
 		}
-		migrationVersion, err := goose.NumericComponent(entry.Name())
-		if err != nil {
-			t.Fatalf("read version from migration %q: %v", entry.Name(), err)
+		if err := goose.UpTo(db, "migrations", next); err != nil {
+			t.Fatalf("migrate to %d: %v", next, err)
 		}
-		if migrationVersion > startVersion && migrationVersion <= version {
-			versions = append(versions, migrationVersion)
-		}
-	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
-	for _, migrationVersion := range versions {
-		upTo(t, db, migrationVersion)
 		snapshot, err := os.ReadFile(databasePath)
 		if err != nil {
-			t.Fatalf("read migration checkpoint %d: %v", migrationVersion, err)
+			t.Fatalf("read migration checkpoint %d: %v", next, err)
 		}
-		migrationSnapshots.images[migrationVersion] = snapshot
+		migrationSnapshots.images[next] = snapshot
+		migrationSnapshots.highest = next
 	}
-	snapshot, err := os.ReadFile(databasePath)
-	if err != nil {
-		t.Fatalf("read migration snapshot at %d: %v", version, err)
-	}
-	migrationSnapshots.images[version] = snapshot
+	migrationSnapshots.images[version] = migrationSnapshots.images[migrationSnapshots.highest]
 	return migrationSnapshots.images[version]
 }
 
-// openMigratedDatabaseCopy returns an isolated database migrated to exactly
+// openMigratedDatabaseCopy returns an isolated database migrated through
 // version, opened with the package's production pragmas. Tests that exercise
 // migration behaviour seed their legacy data here and then call migrate().
 func openMigratedDatabaseCopy(t *testing.T, version int64) *sql.DB {
@@ -128,6 +127,70 @@ func openMigratedDatabaseCopyAt(t *testing.T, dataDir string, version int64, dsn
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func TestMigrationSnapshotsWithSparseTimestampVersions(t *testing.T) {
+	migrationSnapshots.Lock()
+	defer migrationSnapshots.Unlock()
+	images, highest := migrationSnapshots.images, migrationSnapshots.highest
+	defer func() {
+		migrationSnapshots.images, migrationSnapshots.highest = images, highest
+	}()
+	migrationSnapshots.images, migrationSnapshots.highest = nil, 0
+
+	const firstTimestamp, lastTimestamp = int64(20261013093000123), int64(20261014093000123)
+	fsys := fstest.MapFS{
+		"migrations/0001_initial.sql": {Data: []byte(`-- +goose Up
+CREATE TABLE checkpoints (version INTEGER PRIMARY KEY);
+INSERT INTO checkpoints VALUES (1);
+`)},
+		"migrations/0003_legacy.sql": {Data: []byte(`-- +goose Up
+INSERT INTO checkpoints VALUES (3);
+`)},
+		"migrations/20261013093000123_first.sql": {Data: []byte(`-- +goose Up
+INSERT INTO checkpoints VALUES (20261013093000123);
+`)},
+		"migrations/20261014093000123_last.sql": {Data: []byte(`-- +goose Up
+INSERT INTO checkpoints VALUES (20261014093000123);
+`)},
+	}
+	for _, tt := range []struct {
+		requested int64
+		applied   int64
+		rows      int
+	}{
+		{3, 3, 2},
+		{22, 3, 2},
+		{firstTimestamp, firstTimestamp, 3},
+		{lastTimestamp, lastTimestamp, 4},
+		{firstTimestamp - 1, 3, 2},
+		{2, 1, 1},
+		{firstTimestamp + 1, firstTimestamp, 3},
+		{lastTimestamp - 1, firstTimestamp, 3},
+		{lastTimestamp, lastTimestamp, 4},
+	} {
+		snapshot := buildMigrationSnapshots(t, tt.requested, fsys)
+		databasePath := filepath.Join(t.TempDir(), "ao.db")
+		if err := os.WriteFile(databasePath, snapshot, 0o600); err != nil {
+			t.Fatalf("copy checkpoint %d: %v", tt.requested, err)
+		}
+		db, err := sql.Open("sqlite", "file:"+databasePath+snapshotDSN)
+		if err != nil {
+			t.Fatalf("open checkpoint %d: %v", tt.requested, err)
+		}
+		var applied int64
+		var rows int
+		err = db.QueryRow(`SELECT
+			(SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1),
+			(SELECT COUNT(*) FROM checkpoints)`).Scan(&applied, &rows)
+		_ = db.Close()
+		if err != nil {
+			t.Fatalf("read checkpoint %d: %v", tt.requested, err)
+		}
+		if applied != tt.applied || rows != tt.rows {
+			t.Fatalf("checkpoint %d: applied/rows = %d/%d, want %d/%d", tt.requested, applied, rows, tt.applied, tt.rows)
+		}
+	}
 }
 
 // TestMigrationSnapshotsMatchTheRequestedVersion guards the cache: a snapshot

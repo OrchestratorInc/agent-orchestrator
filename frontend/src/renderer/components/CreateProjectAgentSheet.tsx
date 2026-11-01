@@ -3,6 +3,7 @@ import {
 	ProjectSetupFormView,
 	ProjectSetupHeaderView,
 } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
@@ -46,6 +47,8 @@ export type CreateProjectAgentSelection = {
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
 const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
 type CreateProjectAgentSheetProps = {
+	preparedClonePath?: string;
+	onKeepCheckout?: () => void;
 	error?: string | null;
 	action?: "create" | "clone";
 	connected?: boolean;
@@ -108,6 +111,8 @@ function projectSheetError(error: string, action: "create" | "clone"): SheetErro
 }
 
 export function CreateProjectAgentSheet({
+	preparedClonePath,
+	onKeepCheckout,
 	action = "create",
 	connected = true,
 	error,
@@ -125,6 +130,8 @@ export function CreateProjectAgentSheet({
 	shake = false,
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
+	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
 	const displayedAction = useRef(action);
@@ -218,9 +225,11 @@ export function CreateProjectAgentSheet({
 		}
 	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
 
+	if (isBusy) return null;
+
 	return (
 		<Dialog.Root
-			open={open}
+			open={open && !settingsOpen}
 			onOpenChange={(next) => {
 				if (isBusy) return;
 				setIsExiting(!next);
@@ -229,7 +238,7 @@ export function CreateProjectAgentSheet({
 		>
 			<Dialog.Portal>
 				<Dialog.Content
-					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
+					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
 					onAnimationEnd={(event) => {
 						if (!open && event.target === event.currentTarget) setIsExiting(false);
 					}}
@@ -263,6 +272,7 @@ export function CreateProjectAgentSheet({
 								: t("createProject.setupProject")
 						}
 					/>
+					{preparedClonePath ? <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t("createProject.cloneReady", { path: preparedClonePath })}</p> : null}
 					<ProjectSetupFormView
 						agentControls={{
 							worker: (
@@ -350,7 +360,7 @@ export function CreateProjectAgentSheet({
 								: null
 						}
 						submitLabel={
-							isInitializing
+							preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
 								? t("createProject.settingUp")
 								: isCreating
 									? action === "clone"
@@ -367,6 +377,7 @@ export function CreateProjectAgentSheet({
 							(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
 						)}
 					/>
+					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="outline" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
@@ -476,7 +487,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
+					triggerClassName={cn(variant === "settings-control" && "w-fit", invalid && "text-error")}
 					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
 					renderTrigger={() => (

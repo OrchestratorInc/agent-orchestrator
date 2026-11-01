@@ -3,15 +3,18 @@
 set -euo pipefail
 
 usage() {
-	printf '%s\n' 'Usage: setup-self-hosted.sh [--bundle PATH] [--tunnel] [--install-only]'
-	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and prints pairing details.'
+	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only]'
+	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and links it to your AO account (or prints pairing details).'
+	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
 }
 
 bundle=""
+nightly=false
 tunnel=false
 install_only=false
 while (($#)); do
 	case "$1" in
+		--nightly) nightly=true; shift ;;
 		--bundle) bundle="${2:?--bundle needs a path}"; shift 2 ;;
 		--tunnel) tunnel=true; shift ;;
 		--install-only) install_only=true; shift ;;
@@ -19,6 +22,9 @@ while (($#)); do
 		*) usage >&2; exit 2 ;;
 	esac
 done
+if "$nightly" && [[ -n "$bundle" ]]; then
+	printf '%s\n' '--nightly cannot be combined with --bundle.' >&2; exit 2
+fi
 
 if [[ "$(id -u)" == 0 ]]; then
 	printf '%s\n' 'Run this as the user who will own AO sessions, not as root.' >&2
@@ -102,13 +108,22 @@ PY
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
-	curl -fsSL --retry 3 'https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases/latest' -o "$metadata"
-	asset_info="$(python3 - "$metadata" "$asset" <<'PY'
+	release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases/latest'
+	"$nightly" && release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases?per_page=100'
+	curl -fsSL --retry 3 "$release_api" -o "$metadata"
+	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys
 release = json.load(open(sys.argv[1]))
+if sys.argv[3] == 'true':
+    candidates = [r for r in release if r.get('prerelease') and not r.get('draft')
+                  and '-nightly.' in r.get('tag_name', '') and r.get('published_at')]
+    if not candidates:
+        raise SystemExit('No published nightly release found.')
+    release = max(candidates, key=lambda r: r['published_at'])
 item = next((a for a in release.get('assets', []) if a['name'] == sys.argv[2]), None)
 if not item or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or ''):
     raise SystemExit(f'No verified release asset: {sys.argv[2]}')
+print(f"Downloading AO release: {release['tag_name']}", file=sys.stderr)
 print(item['browser_download_url'])
 print(item['digest'][7:])
 PY
@@ -360,7 +375,33 @@ if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
 		exit 1
 	fi
 fi
+# At a terminal, sign in from any device instead of copying a password: the
+# host then appears on every desktop and phone signed in to that AO account.
+# A release without `link`, or a sign-in that does not finish, falls back to
+# the pairing details below.
+# Without a terminal (an agent over SSH), say how to link instead.
+# A release without `link` exits 0 for it too, printing its parent's help, so
+# look for a flag only `link` has.
+link_help="$("$host_root/current/resources/daemon/ao" remote-host link --help 2>/dev/null || true)"
+# An upgrade of a linked host keeps its account; its devices already list it.
+if "$tunnel" && [[ "$enable_output" == *"Linked to an AO account"* ]]; then
+	printf '\n%s\n' "${addresses[@]}"
+	exit 0
+fi
+if "$tunnel" && [[ "$link_help" == *--no-qr* ]]; then
+	if [[ -t 1 ]]; then
+		printf '\n%s\n' 'Press Ctrl-C to skip signing in and see the pairing details instead.'
+		# Ctrl-C ends only the sign-in; this script goes on to the details.
+		trap ':' INT
+		linked=true
+		"$host_root/current/resources/daemon/ao" remote-host link || linked=false
+		trap - INT
+		"$linked" && exit 0
+	fi
+	printf '\nThe host is not linked to an AO account. To link it, run: %s remote-host link\n' "$host_root/current/resources/daemon/ao"
+	printf '%s\n' 'Or pair it by hand with these details.'
+fi
 printf '\nPair this host\n\n'
 printf '%s\n' "${addresses[@]}"
 printf '\nPassword: %s\n\n' "$password"
-printf 'On your laptop: enable Developer mode, then Settings → Remote hosts → Add host.\n'
+printf 'On your laptop: Settings → Remote hosts → Add host.\n'

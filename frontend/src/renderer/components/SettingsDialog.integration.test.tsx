@@ -10,8 +10,7 @@ import { apiClient } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet } from "./CreateProjectAgentSheet";
-import { NewTaskDialog } from "./NewTaskDialog";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsPageTestHarness";
 import { TooltipProvider } from "./ui/tooltip";
 
 // Routing and daemon requests are external boundaries; every modal, settings
@@ -27,18 +26,17 @@ const project = {
 };
 let catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
 
-function RecoveryDialogs({ origin }: { origin?: "create-project" | "new-task" }) {
+function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
 			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
-			{origin === "new-task" && <NewTaskDialog open={open} onOpenChange={setOpen} projectId="proj-1" onCreated={() => undefined} />}
 			<SettingsDialog />
 		</>
 	);
 }
 
-function renderDialogs(origin?: "create-project" | "new-task") {
+function renderDialogs(origin?: "create-project") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
 	client.setQueryData(agentReadinessQueryKey, catalog);
 	client.setQueryData(workspaceQueryKey, []);
@@ -151,28 +149,23 @@ describe("Settings recovery modal integration", () => {
 		useUiStore.getState().openProjectSettings("proj-1");
 		const client = renderDialogs();
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
-		const projectDialog = screen.getByRole("dialog");
 		const trigger = await screen.findByLabelText("Worker agent");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
 		}));
 		await waitFor(() => expect(trigger).not.toHaveTextContent("Needs setup"));
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		await waitFor(() => {
-			expect(document.activeElement?.isConnected).toBe(true);
-			expect(projectDialog).toContainElement(document.activeElement as HTMLElement);
-			expect(trigger).toHaveFocus();
-		});
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1", section: undefined }));
 		await userEvent.click(trigger);
 		expect(await screen.findByRole("menuitem", { name: /Codex/ })).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
 	it("allows pointer interaction above create-project and restores its selections and intake draft on close", async () => {
@@ -184,30 +177,17 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin(client);
 		await openAgentManagement("Worker agent");
 
+		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
 		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
 		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-	});
-
-	it("Escape dismisses only recovery settings above a new-task dialog and preserves its typed task", async () => {
-		requireCodexLogin();
-		renderDialogs("new-task");
-		await userEvent.type(screen.getByRole("textbox", { name: "Task" }), "Keep the task draft");
-		await openAgentManagement("Agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
-		await userEvent.keyboard("{Escape}");
-
-		expect(await screen.findByRole("textbox", { name: "Task" })).toHaveValue("Keep the task draft");
-		expect(useUiStore.getState().settingsModal).toBeNull();
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
 	it.each(["close button", "Escape"])("keeps the real project form mounted beneath recovery and returns to its draft via %s", async (dismiss) => {
@@ -222,23 +202,23 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
-		expect(form).toBeInTheDocument();
+		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");
-		else await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		else await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Codex");
-		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
 		expect(document.getElementById("project-settings-form")).toBe(form);
 		await userEvent.click(screen.getByRole("button", { name: "General" }));
 		expect(await screen.findByRole("button", { name: "Edit Project name" })).toHaveTextContent("Unsaved project name");
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
 		await waitFor(() => expect(put).toHaveBeenCalledWith(
 			"/api/v1/projects/{id}",
 			expect.objectContaining({ body: expect.objectContaining({ displayName: "Unsaved project name" }) }),
 		));
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 });

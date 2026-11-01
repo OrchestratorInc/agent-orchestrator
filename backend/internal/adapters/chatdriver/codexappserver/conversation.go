@@ -1,6 +1,7 @@
 package codexappserver
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,7 +40,6 @@ var approvalMethods = map[string]domain.ActivityKind{
 	codexproto.MethodItemCommandExecutionRequestApproval: domain.ActivityKindCommand,
 	codexproto.MethodItemFileChangeRequestApproval:       domain.ActivityKindFileChange,
 	codexproto.MethodItemPermissionsRequestApproval:      domain.ActivityKindApproval,
-	codexproto.MethodItemToolRequestUserInput:            domain.ActivityKindApproval,
 }
 
 // conversation is one live Codex thread. It is the only writer to that thread.
@@ -52,13 +52,24 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
-	events          chan ports.ChatEvent
+	disableNetwork  bool
+	// launchMode is the permission mode the thread started or resumed with;
+	// a turn without its own approval setting runs under it.
+	launchMode ports.PermissionMode
+	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
+	// Guarded by sendMu: whether the last turn put the thread on the fast tier
+	// or in plan mode, and each model's fast tier id as last listed.
+	fastTier, planMode bool
+	// A reconnected thread may be on any tier and in either collaboration mode.
+	tierUnknown, planUnknown bool
+	fastTiers                map[string]string
 
-	mu      sync.Mutex
-	pending map[string]*parkedRequest
-	closed  bool
+	mu            sync.Mutex
+	pending       map[string]*parkedRequest
+	pendingInputs map[string]*parkedInput
+	closed        bool
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
@@ -163,12 +174,15 @@ func (c *conversation) pump() {
 	}()
 	retries := make(map[string]ports.ChatEvent)
 	citations := newCitationFormatter()
+	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
 		// Before normalizing, because a token-usage report is the only place the
 		// context position is stated and a compaction event that arrives in the same
 		// batch has to be able to read it.
 		c.trackContext(n)
+		now := time.Now()
+		usageLimits.observe(n, c.threadID, now)
 		// Some normalized output events omit their thread ID. Read the native
 		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
@@ -180,7 +194,8 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
-		for _, ev := range normalizeNotification(n, time.Now()) {
+		for _, ev := range normalizeNotification(n, now) {
+			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
 				threadID = scope.ThreadID
@@ -249,6 +264,17 @@ func (c *conversation) pump() {
 				// The provider resolved it (possibly via another client), so any
 				// card AO is still showing is stale.
 				c.discardPending(ev.RequestID)
+				c.mu.Lock()
+				if input := c.pendingInputs[ev.RequestID]; input != nil {
+					delete(c.pendingInputs, ev.RequestID)
+					if input.resolved {
+						c.mu.Unlock()
+						continue
+					}
+					input.result <- inputResult{err: ports.ErrChatRequestNotPending}
+					ev.Kind = ports.ChatEventInputResolved
+				}
+				c.mu.Unlock()
 			}
 			c.emit(ev)
 		}
@@ -299,6 +325,25 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
+// configuredServiceTier is the service_tier the user's Codex config sets, or
+// "" for none or when it cannot be read.
+func (c *conversation) configuredServiceTier(ctx context.Context) string {
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var resp struct {
+		Config struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"config"`
+	}
+	if err := c.conn.request(readCtx, "config/read", map[string]any{}, &resp); err != nil {
+		return ""
+	}
+	return resp.Config.ServiceTier
+}
+
+// codexFastServiceTier is the fast tier's id before a model list is read.
+const codexFastServiceTier = "priority"
+
 // SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	if strings.TrimSpace(msg.Text) == "" {
@@ -319,7 +364,31 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
-	applyTurnSettings(params, msg.Settings, c.readOnly)
+	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
+	// A service tier sticks to the thread once set, so leaving the fast tier
+	// has to be said: an explicit null returns the thread to its default.
+	if msg.Settings.Fast {
+		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
+	} else if c.fastTier || c.tierUnknown && c.configuredServiceTier(ctx) == "" {
+		params["serviceTier"] = nil
+	}
+
+	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
+	// default mode. The mode names its model; with none known nothing is sent.
+	planMode := c.planMode
+	if model := cmp.Or(msg.Settings.Model, c.threadModel); (msg.Settings.Plan != c.planMode || c.planUnknown) && model != "" {
+		mode := "default"
+		if msg.Settings.Plan {
+			mode = "plan"
+		}
+		settings := map[string]any{"model": model, "developer_instructions": nil}
+		if effort := cmp.Or(msg.Settings.Effort, c.threadEffort); effort != "" {
+			settings["reasoning_effort"] = effort
+		}
+		params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
+		planMode = msg.Settings.Plan
+	}
+	planKnown := params["collaborationMode"] != nil
 
 	var resp struct {
 		Turn struct {
@@ -329,6 +398,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if err := c.conn.request(ctx, "turn/start", params, &resp); err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("turn/start: %w", err)
 	}
+	c.fastTier = msg.Settings.Fast
+	c.planMode = planMode
+	c.tierUnknown, c.planUnknown = false, c.planUnknown && !planKnown
 
 	c.mu.Lock()
 	c.activeTurn = resp.Turn.ID
@@ -342,7 +414,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 // Only fields the caller actually chose are sent. An omitted field lets the
 // provider fall back to what the thread was started with, which is why a caller
 // that chooses nothing behaves exactly as it did before per-turn settings existed.
-func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly bool) {
+func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
 	}
@@ -362,13 +434,11 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
-		// A reviewer must not write the workspace, but it does need the network:
-		// it reads the PR through gh and reports its verdict to the local daemon
-		// with `ao review submit`. With approvals off it cannot ask for that access
-		// mid-turn, so the read-only policy grants it up front.
+		// Reviewers need gh and ao review submit; text-only background calls
+		// explicitly disable that tool network access.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
-		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": true}
+		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
@@ -395,6 +465,15 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	if err != nil {
 		return nil, err
 	}
+	fastTiers := make(map[string]string, len(models))
+	for _, model := range models {
+		if model.FastTier != "" {
+			fastTiers[model.ID] = model.FastTier
+		}
+	}
+	c.sendMu.Lock()
+	c.fastTiers = fastTiers
+	c.sendMu.Unlock()
 	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
 		// An omitted turn model inherits thread/start (including config.toml),
@@ -413,16 +492,21 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
 	type modelListResponse struct {
 		Data []struct {
-			ID          string `json:"id"`
-			Model       string `json:"model"`
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			IsDefault   bool   `json:"isDefault"`
-			Hidden      bool   `json:"hidden"`
-			DefaultEff  string `json:"defaultReasoningEffort"`
+			ID          string   `json:"id"`
+			Model       string   `json:"model"`
+			DisplayName string   `json:"displayName"`
+			Description string   `json:"description"`
+			IsDefault   bool     `json:"isDefault"`
+			Hidden      bool     `json:"hidden"`
+			DefaultEff  string   `json:"defaultReasoningEffort"`
+			Inputs      []string `json:"inputModalities"`
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
+			ServiceTiers []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"serviceTiers"`
 		} `json:"data"`
 		NextCursor *string `json:"nextCursor"`
 	}
@@ -461,9 +545,19 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			if display == "" {
 				display = id
 			}
+			// The faster tier is named "Fast" and ids "priority"; the name identifies it.
+			fastTier := ""
+			for _, tier := range entry.ServiceTiers {
+				if strings.EqualFold(tier.Name, "fast") || tier.ID == "fast" {
+					fastTier = tier.ID
+					break
+				}
+			}
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
+				FastTier: fastTier,
+				Inputs:   entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {
@@ -641,7 +735,7 @@ func isNoActiveTurn(err error) bool {
 	return strings.Contains(strings.ToLower(rpcErr.Message), "no active turn")
 }
 
-// ResolveRequest answers a parked approval or user-input request.
+// ResolveRequest answers a parked approval request.
 //
 // The decision is checked against the set the provider offered for THIS request,
 // and the request stays parked unless a valid answer is actually going through.
@@ -649,6 +743,9 @@ func isNoActiveTurn(err error) bool {
 // consuming the request on a bad one would leave the user's real answer with
 // nothing left to answer while the provider waits out its timeout.
 func (c *conversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	requestID = c.nativeID(requestID)
 	c.mu.Lock()
 	parked, ok := c.pending[requestID]
@@ -658,7 +755,11 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 		return errConversationClosed
 	}
 	if !ok {
+		input := c.pendingInputs[requestID] != nil
 		c.mu.Unlock()
+		if input {
+			return ports.ErrChatDecisionNotOffered
+		}
 		// Already resolved, superseded, or from a previous controller. Refusing is
 		// required: a stale card must never resolve a newer request.
 		return fmt.Errorf("%w: %q", ports.ErrChatRequestNotPending, requestID)
@@ -688,17 +789,11 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 // reconstruct them. AO echoes what the provider sent rather than rebuilding it.
 type parkedRequest struct {
 	ch      chan ports.ChatDecision
-	method  string
 	offered map[string]json.RawMessage
 }
 
 // reply resolves a client decision into the payload to send back.
 func (p *parkedRequest) reply(decision ports.ChatDecision) (ports.ChatDecision, error) {
-	if p.method == "item/tool/requestUserInput" {
-		// Not a decision but an answer: the provider offers questions, not options,
-		// so there is no set to check it against.
-		return decision, nil
-	}
 	raw, ok := p.offered[decision.ID]
 	if !ok {
 		return ports.ChatDecision{}, fmt.Errorf("%w: %q (offered: %s)",
@@ -730,12 +825,17 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		return nil, c.reportAuthRefreshRequest(req.Params)
 	case codexproto.MethodItemToolCall:
 		return nil, c.refuseDynamicToolCall(req.Params)
+	case codexproto.MethodItemToolRequestUserInput:
+		return c.requestUserInput(ctx, req)
 	}
 
 	kind, known := approvalMethods[req.Method]
 	if !known {
 		c.log.Warn("refusing unmodelled app-server request", "method", req.Method)
 		return nil, fmt.Errorf("unsupported request %s", req.Method)
+	}
+	if c.disableNetwork {
+		return nil, errors.New("background task does not permit approval or input requests")
 	}
 
 	requestID := rawID(req.ID)
@@ -756,7 +856,11 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		c.mu.Unlock()
 		return nil, errConversationClosed
 	}
-	c.pending[requestID] = &parkedRequest{ch: ch, method: req.Method, offered: offered}
+	if c.pending[requestID] != nil || c.pendingInputs[requestID] != nil {
+		c.mu.Unlock()
+		return nil, errors.New("server request id is already pending")
+	}
+	c.pending[requestID] = &parkedRequest{ch: ch, offered: offered}
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{
@@ -773,7 +877,7 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 
 	select {
 	case decision := <-ch:
-		return approvalReply(req.Method, decision), nil
+		return approvalReply(decision), nil
 
 	case <-time.After(approvalWait):
 		c.discardPending(requestID)
@@ -915,6 +1019,12 @@ func (c *conversation) failPendingApprovals() {
 	pending := c.pending
 	c.pending = map[string]*parkedRequest{}
 	c.closed = true
+	for id, input := range c.pendingInputs {
+		delete(c.pendingInputs, id)
+		if !input.resolved {
+			input.result <- inputResult{err: errConversationClosed}
+		}
+	}
 	c.mu.Unlock()
 	for _, parked := range pending {
 		close(parked.ch)
@@ -986,13 +1096,6 @@ type approvalPayload struct {
 	// per request and does not always offer a plain decline, so a client must
 	// render from this rather than a fixed set of buttons.
 	AvailableDecisions []json.RawMessage `json:"availableDecisions"`
-	Questions          []struct {
-		ID      string `json:"id"`
-		Prompt  string `json:"prompt"`
-		Options []struct {
-			Label string `json:"label"`
-		} `json:"options"`
-	} `json:"questions"`
 }
 
 // parseApproval extracts the decisions, label, and neutral detail for a request.
@@ -1015,8 +1118,6 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 		summary = "Run " + commandSummary(p.Command)
 	case method == "item/fileChange/requestApproval":
 		summary = "Apply file changes"
-	case method == "item/tool/requestUserInput" && len(p.Questions) > 0:
-		summary = p.Questions[0].Prompt
 	case p.Reason != "":
 		summary = p.Reason
 	}
@@ -1034,9 +1135,6 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 	}
 	if p.Reason != "" {
 		detail["reason"] = p.Reason
-	}
-	if len(p.Questions) > 0 {
-		detail["questions"] = p.Questions
 	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {
@@ -1111,15 +1209,7 @@ func decisionLabel(id string) string {
 
 // approvalReply builds the provider response for a decision. A decision carrying
 // Raw is echoed verbatim so the structured forms round-trip exactly.
-func approvalReply(method string, decision ports.ChatDecision) any {
-	if method == "item/tool/requestUserInput" {
-		// User-input replies are answers, not decisions; the raw payload is the
-		// whole response body.
-		if len(decision.Raw) > 0 {
-			return json.RawMessage(decision.Raw)
-		}
-		return map[string]any{"answers": map[string]any{}}
-	}
+func approvalReply(decision ports.ChatDecision) any {
 	if len(decision.Raw) > 0 {
 		return map[string]any{"decision": json.RawMessage(decision.Raw)}
 	}

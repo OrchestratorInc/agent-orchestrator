@@ -60,17 +60,33 @@ type clineHookSpec struct {
 // clineManagedHooks is the source of truth for the hooks AO installs. The
 // native Cline events are mapped onto AO's fixed sub-command names so activity
 // derivation stays uniform across adapters:
-//   - TaskStart        -> session-start       (a new task begins: active)
+//   - TaskStart/Resume -> session-start       (a task begins or resumes: active)
 //   - UserPromptSubmit -> user-prompt-submit  (user message submitted: active)
-//   - PreToolUse       -> permission-request  (about to act: approval point)
+//   - PreToolUse       -> permission-resolved (approval answered: active work)
 //   - TaskCancel       -> stop                (task cancelled/aborted: idle)
 //   - TaskComplete     -> stop                (task completed normally: idle)
+//
+// PreToolUse maps to permission-resolved, NOT permission-request or
+// pre-tool-use: since upstream cline/cline#7446 it fires AFTER the user
+// approves (or with no prompt at all under auto-approve), so it proves the
+// decision is closed and work resumed rather than a decision pending. Two
+// properties follow:
+//   - it derives active, so a tool invocation never pins the session to
+//     waiting_input (the bug in #6414);
+//   - permission-resolved is a turn boundary, so it also clears a
+//     waiting_input the terminal detector wrote while the approval dialog was
+//     on screen. A plain pre-tool-use signal would be suppressed against that
+//     sticky state, leaving the session on Input needed after approval.
+//
+// Genuine approval dialogs carry no hook of their own and are observed via the
+// terminal detector instead (see activity.go).
 var clineManagedHooks = []clineHookSpec{
 	{Event: "TaskStart", Subcommand: "session-start"},
+	{Event: "TaskResume", Subcommand: "session-start"},
 	{Event: "UserPromptSubmit", Subcommand: "user-prompt-submit"},
-	{Event: "PreToolUse", Subcommand: "permission-request"},
-	{Event: "TaskCancel", Subcommand: "stop"},
+	{Event: "PreToolUse", Subcommand: "permission-resolved"},
 	{Event: "TaskComplete", Subcommand: "stop"},
+	{Event: "TaskCancel", Subcommand: "stop"},
 }
 
 // GetAgentHooks installs AO's Cline hook scripts into the worktree-local

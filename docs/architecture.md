@@ -353,6 +353,40 @@ flowchart TD
 
 ```
 
+New Git worker sessions from the desktop, CLI, or orchestrator with an initial
+prompt generate a title and task slug together
+through the selected agent's background-task driver. The call starts with
+provisioning and has a twenty-second deadline, but neither setup nor the agent
+waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` on
+the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
+life. After launch, a background step renames only the branch to
+`ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
+repository of the task and records it on the session and its repository rows
+together, only after a start that succeeded. The session also keeps the
+temporary branch it replaced: a full-row write from an older read never puts it
+back, and generic row writes never change the title. The title is applied first
+and needs no project gate; the rename's deadline starts once the gate is held, so
+another start's long setup cannot use it up.
+Failure, invalid output, or a full four-call naming limit uses a local prompt
+slug; prompts without usable ASCII words fall back to the session ID, which keeps
+the temporary branch. Generated slugs prefer two short words, allow at most three,
+and are capped at 24 characters. The rename is skipped once the temporary branch
+is pushed, because the agent's next plain `git push` would name another remote
+branch. Branches the agent made or remembers under the temporary branch stay
+attributed to the session, below any session currently on that name, so its PRs
+are found after the rename. A rename the session row does not accept is put back
+exactly. When a rename or its undo stops partway, the session and each
+repository row record the branch that checkout holds. Session IDs
+remain unchanged. Explicit CLI/API session titles are preserved. Explicit
+branches, promptless sessions, Scratch sessions, and existing sessions keep their
+naming behavior.
+The session's `branchNaming` flag is set from the start of naming until the
+rename lands or is skipped, cleared early while the rename waits for the project
+gate, and cleared at startup. The desktop and mobile app hide the provisional
+branch behind a text shimmer with a randomly selected naming label while the flag
+is set or the worktree step is unfinished. The label stays stable across updates
+while it is displayed.
+
 ### Session interface handoff
 
 An interface switch is a controller replacement inside the existing AO session,
@@ -400,6 +434,35 @@ that flag, while new provider boundaries use scoped IDs.
 When Codex proves fork ancestry, replay omits copied prefixes only if their stable
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
+
+Current-context side forks fence source dispatch only during copying. The
+start/stop gate is released before provider I/O; Stop cancels the copy and Kill
+can terminate it. A canceled ACP copy terminates its destination host before
+releasing source dispatch. Native drivers record returned child ownership before
+loading it in private `side-forks/` files under the AO data directory. These files
+contain IDs and harness identity, never transcripts or launch credentials. A
+replacement daemon retires interrupted loads, stops their hosts before deletion,
+and retains failed deletions for retry. Adopted sides from the current desktop
+launch retain Electron's recovery path; previous-launch forks are retired. A
+child whose ACP reply never returns still has an unknown identity.
+
+ChatUI next-message suggestions use the same isolated native fork contract when
+an active desktop launch and the live provider's fork capability are available.
+Exact-turn providers receive the resolved native turn ID; current-context
+providers revalidate and fence the latest completed turn while copying. The
+child uses a scratch workspace, background permissions, its parent's model and
+the lowest advertised reasoning effort. Codex forks omit turn history from the fork response, enforce read-only access,
+and have tool network access disabled. Temporary forks retain a provider rollout
+so the existing cleanup API can delete them after their host stops. ACP retains the existing no-tools
+instruction policy rather than an enforced read-only sandbox. Unsupported
+providers and standalone daemons retain the bounded transcript-copy fallback.
+Suggestions create no visible side chat or durable transcript. Child IDs enter
+the same cleanup journal before loading and remain unadopted, so a replacement
+daemon retires them even within the same desktop launch. Completion and
+cancellation stop the child host before provider deletion; unsupported deletion
+can leave provider-side history, and genuine deletion failures retain ownership
+for retry through an active parent of the same harness.
+
 
 ```mermaid
 sequenceDiagram
@@ -559,6 +622,17 @@ sequenceDiagram
         Dispatch->>Chat: Enqueue native provider turn
     end
 ```
+
+Chat queues every message in SQLite while a provider turn is active. Completion
+claims the waiting messages in enqueue order and sends them as one provider
+input. A steer claims the same waiting queue and appends its guidance to one
+active turn input. Each source message keeps its own transcript row, origin,
+sender, and delivery handle. Messages arriving after the claim wait for the next
+turn. AO does not truncate a batch or impose a provider input size limit;
+provider limits and refusals are surfaced as delivery failures. An uncertain
+provider result closes the claimed receipts without automatically replaying
+input that the provider may already have accepted. Terminal sessions retain
+their existing delivery path.
 
 ---
 
@@ -998,6 +1072,25 @@ provider configuration, compaction, rollback, and shell creation remain daemon
 commands; no provider or lifecycle policy is implemented in React Native.
 
 For implementation details and security model, consult `docs/adr/0001-lan-listener-for-mobile.md` and the glossary in `CONTEXT.md`.
+
+### Browser-to-daemon boundary
+
+Workspace previews and unrelated loopback web servers are untrusted browser
+clients. API requests and terminal mux upgrades accept only the exact configured
+renderer origins (`app://renderer` in packaged builds; the explicit Vite origin
+in development). Rejected requests stop before handlers or terminal attachment;
+CORS response headers alone do not prevent side effects. Native clients without
+Origin or browser fetch metadata remain unauthenticated on the primary listener.
+The authenticated LAN listener records successful bearer authentication internally
+so paired React Native clients can retain their existing mux Origin. Preview-only
+cookies do not grant terminal or API authority.
+
+A preview virtual host serves only its own confined content. Legacy API preview
+file responses are sandboxed without `allow-same-origin`, including HTML-rendered
+Markdown and SVG documents. Normal isolated previews retain their own scripts and
+assets. The desktop remote proxy checks browser origins before stripping them or
+injecting credentials; only its separately routed preview origins remove the
+host-added legacy sandbox, preserving any application-supplied CSP policies.
 
 ### Request flow
 

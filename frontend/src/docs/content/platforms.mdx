@@ -3,13 +3,13 @@ title: Platforms
 description: Install and use AO on macOS, Windows, Linux, and mobile.
 ---
 
-AO has a desktop app for macOS, Windows, and Linux. The basic workflow is the same on each platform: add a repository, start an isolated worker, and follow its pull request in Chat or Terminal UI.
+Orchestrator has a desktop app for macOS, Windows, and Linux. The basic workflow is the same on each platform: add a repository, start an isolated worker, and follow its pull request in Chat or Terminal UI.
 
 <PlatformSupport
 	macos="full"
 	linux="full"
 	windows="full"
-	note={<>New Terminal UI sessions use AO's native terminal hosts on macOS/Linux and ConPTY on Windows. Older sessions and fallback launches can use tmux. Available agents vary by platform.</>}
+	note={<>New Terminal UI sessions use Orchestrator's native terminal hosts on macOS/Linux and ConPTY on Windows. Older sessions and fallback launches can use tmux. Available agents vary by platform.</>}
 />
 
 ## Desktop downloads
@@ -25,7 +25,7 @@ Use the download selector on [Installation](/installation) for the current relea
 
 ## macOS
 
-Both Chat and Terminal UI are supported when the selected agent allows them. New terminal sessions use AO's native pseudo-terminal (PTY) host. Packaged builds include tmux for older sessions and fallback launches. macOS still checks that tmux is available when starting a session. Source builds can install it with:
+Both Chat and Terminal UI are supported when the selected agent allows them. New terminal sessions use Orchestrator's native pseudo-terminal (PTY) host. Packaged builds include tmux for older sessions and fallback launches. macOS still checks that tmux is available when starting a session. Source builds can install it with:
 
 ```bash
 brew install tmux
@@ -37,19 +37,19 @@ If macOS says the developer cannot be verified, follow [Common Installation Prob
 
 ## Linux
 
-Linux supports the desktop app, Chat, AO's native terminal host, and the browser inspector. Older sessions and fallback launches still use tmux; desktop packages include it. Source builds can install tmux with the distribution package manager, for example `sudo apt install tmux`.
+Linux supports the desktop app, Chat, Orchestrator's native terminal host, and the browser inspector. Older sessions and fallback launches still use tmux; desktop packages include it. Source builds can install tmux with the distribution package manager, for example `sudo apt install tmux`.
 
 Choose the AppImage for a portable launch, or the `.deb`/`.rpm` package that matches your distribution. `ao doctor` still probes tmux even though new Linux sessions normally use the native host.
 
 ## Windows
 
-Windows supports the desktop workflow, structured Chat, and native Terminal UI through AO's conpty host. It does not require tmux, and iTerm2-specific helpers do not apply.
+Windows supports the desktop workflow, structured Chat, and native Terminal UI through Orchestrator's conpty host. It does not require tmux, and iTerm2-specific helpers do not apply.
 
-Use PowerShell, Command Prompt, or Git Bash for optional CLI commands. AO suppresses transient console windows for tools launched by the desktop daemon.
+Use PowerShell, Command Prompt, or Git Bash for optional CLI commands. Orchestrator suppresses transient console windows for tools launched by the desktop daemon.
 
 ## Mobile companion
 
-AO's Expo mobile app is a second interface to the desktop daemon. In desktop settings, choose **Connect Mobile** to enable a separate LAN listener and pair the phone.
+Orchestrator's Expo mobile app is a second interface to the desktop daemon. In desktop settings, choose **Connect Mobile** to enable a separate LAN listener and pair the phone.
 
 Security properties:
 
@@ -65,7 +65,7 @@ Mobile defaults new workers and orchestrators to Chat when the selected harness 
 
 The primary desktop listener is fixed to `127.0.0.1` and has no authentication. Do not expose it with a public bind or reverse proxy. Connect Mobile provides a separate authenticated listener for local or secure remote connections. Never publish the primary listener.
 
-For unattended work, keep the desktop host awake and reachable on its local network. AO does not turn the local desktop product into a hosted multi-user service.
+For unattended work, keep the desktop host awake and reachable on its local network. Orchestrator does not turn the local desktop product into a hosted multi-user service.
 
 When Cloud is enabled for your build and account, its remote sessions use a separate control plane. Availability and provider choices are gated; local desktop installation alone does not grant Cloud access.
 
@@ -74,7 +74,7 @@ When Cloud is enabled for your build and account, its remote sessions use a sepa
 ## Next steps
 
 <Cards>
-	<Card title="Installation" href="/installation" description="Download AO and connect GitHub and an agent harness." />
+	<Card title="Installation" href="/installation" description="Download Orchestrator and connect GitHub and an agent harness." />
 	<Card title="Dashboard" href="/dashboard" description="Learn the desktop and mobile control surfaces." />
 	<Card title="Troubleshooting" href="/troubleshooting" description="Resolve platform-specific startup and terminal issues." />
 </Cards>

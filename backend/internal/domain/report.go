@@ -113,9 +113,12 @@ const (
 // ReportRecord is the durable report and outbox persistence shape. State and
 // outputs are independent, and neither changes authoritative session state.
 type ReportRecord struct {
-	ID                 string
-	SessionID          SessionID
-	ProjectID          ProjectID
+	ID        string
+	SessionID SessionID
+	ProjectID ProjectID
+	// SessionDisplayName is resolved at delivery time for presentation. It is
+	// intentionally not persisted with the durable report row.
+	SessionDisplayName string
 	State              ReportState
 	Note               string
 	Message            string

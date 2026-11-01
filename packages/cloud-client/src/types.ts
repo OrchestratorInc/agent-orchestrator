@@ -18,6 +18,12 @@ export type AgentAvailability = Schemas["AgentAvailability"];
 export type AgentProfile = Schemas["AgentProfile"];
 
 export type Project = Schemas["Project"];
+export type ProjectConfig = Schemas["ProjectConfig"];
+export type ProjectCoderConfig = Schemas["ProjectCoderConfig"];
+export type ProjectAgentConfig = Schemas["ProjectAgentConfig"];
+export type ProjectRoleConfig = Schemas["ProjectRoleConfig"];
+export type ProjectReviewer = Schemas["ProjectReviewer"];
+export type ProjectSettingsInput = Schemas["ProjectSettingsInput"];
 export type CreateProjectInput = Schemas["CreateProjectInput"];
 export type UpdateProjectInput = Schemas["UpdateProjectInput"];
 export type DeleteProjectResponse = Schemas["DeleteProjectResponse"];
@@ -42,6 +48,12 @@ export type CreateGitHubScratchProjectResponse =
   Schemas["CreateGitHubScratchProjectResponse"];
 
 export type Session = Schemas["Session"];
+export type SessionArtifact = Schemas["SessionArtifact"];
+export type SessionArtifactList = Schemas["SessionArtifactList"];
+export type SessionArtifactAccess = Schemas["SessionArtifactAccess"];
+export type SessionOutputType = Schemas["SessionOutputType"];
+export type RequestedOutput = Schemas["RequestedOutput"];
+export type SessionStartupError = Schemas["SessionStartupError"];
 export type SessionKind = Schemas["SessionKind"];
 export type SessionMode = Schemas["SessionMode"];
 export type SessionActivityState = Schemas["SessionActivityState"];

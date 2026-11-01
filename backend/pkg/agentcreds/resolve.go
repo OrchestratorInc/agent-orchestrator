@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Credential resolution for the local machine.
@@ -187,12 +188,23 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 	}
 	// Source 5: the subscription login, stored in the keychain on macOS and in
 	// a plain file everywhere else.
-	if secret, source, kind, ok := loadOAuth(ctx, opts); ok {
+	if stored, source, ok := loadOAuth(ctx, opts); ok {
 		return Credential{
-			Kind: kind, Secret: secret, Source: source, Provider: ProviderFirstParty,
+			Kind: stored.kind, Secret: stored.token, Source: source, Provider: ProviderFirstParty,
+			ExpiresAt: stored.expiresAt, Renewable: stored.renewable,
 		}, true
 	}
 	return Credential{}, false
+}
+
+// storedOAuth is the subscription login Claude Code persisted: the access
+// token plus the expiry metadata stored next to it. The refresh token itself
+// is never retained; only its presence is recorded.
+type storedOAuth struct {
+	token     string
+	kind      Kind
+	expiresAt time.Time
+	renewable bool
 }
 
 // loadOAuth is the entire platform surface of this package.
@@ -203,56 +215,69 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 // third storage backend to implement. The macOS path falls through to the file
 // on any failure, which is the path the other two platforms always take, so
 // non-Mac platforms exercise strictly less code rather than different code.
-func loadOAuth(ctx context.Context, opts ResolveOptions) (secret, source string, kind Kind, ok bool) {
+func loadOAuth(ctx context.Context, opts ResolveOptions) (stored storedOAuth, source string, ok bool) {
 	if opts.goos() == "darwin" && opts.AllowKeychain {
-		if secret, kind, ok := readKeychain(ctx, opts); ok {
-			return secret, "keychain", kind, true
+		if stored, ok := readKeychain(ctx, opts); ok {
+			return stored, "keychain", true
 		}
 		// Absent, locked, or denied. Fall through to the file.
 	}
-	s, src, ok := readCredentialsFile(ctx, opts)
+	stored, src, ok := readCredentialsFile(ctx, opts)
 	if !ok {
-		return "", "", "", false
+		return storedOAuth{}, "", false
 	}
-	return s, src, KindOAuthToken, true
+	return stored, src, true
 }
 
 // readCredentialsFile reads ~/.claude/.credentials.json.
-func readCredentialsFile(ctx context.Context, opts ResolveOptions) (secret, source string, ok bool) {
+func readCredentialsFile(ctx context.Context, opts ResolveOptions) (stored storedOAuth, source string, ok bool) {
 	_ = ctx
 	dir, err := claudeConfigDir(opts)
 	if err != nil {
-		return "", "", false
+		return storedOAuth{}, "", false
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".credentials.json"))
 	if err != nil {
-		return "", "", false
+		return storedOAuth{}, "", false
 	}
-	token, ok := oauthTokenFromCredentialsJSON(data)
+	stored, ok = oauthTokenFromCredentialsJSON(data)
 	if !ok {
-		return "", "", false
+		return storedOAuth{}, "", false
 	}
-	return token, "credentials-file", true
+	return stored, "credentials-file", true
 }
 
 // oauthTokenFromCredentialsJSON pulls the access token out of the credential
 // file, tolerating both the nested and flat shapes Claude Code has written.
-func oauthTokenFromCredentialsJSON(data []byte) (string, bool) {
+// The nested shape also records the access token's expiry (epoch milliseconds)
+// and a refresh token, which together say whether an expired access token is
+// one Claude Code will renew on its own.
+func oauthTokenFromCredentialsJSON(data []byte) (storedOAuth, bool) {
+	type oauthFields struct {
+		AccessToken  string  `json:"accessToken"`
+		RefreshToken string  `json:"refreshToken"`
+		ExpiresAt    float64 `json:"expiresAt"`
+	}
 	var payload struct {
-		ClaudeAiOauth struct {
-			AccessToken string `json:"accessToken"`
-		} `json:"claudeAiOauth"`
-		AccessToken string `json:"accessToken"`
+		ClaudeAiOauth oauthFields `json:"claudeAiOauth"`
+		oauthFields
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", false
+		return storedOAuth{}, false
 	}
-	for _, candidate := range []string{payload.ClaudeAiOauth.AccessToken, payload.AccessToken} {
-		if token := strings.TrimSpace(candidate); token != "" {
-			return token, true
+	for _, candidate := range []oauthFields{payload.ClaudeAiOauth, payload.oauthFields} {
+		token := strings.TrimSpace(candidate.AccessToken)
+		if token == "" {
+			continue
 		}
+		stored := storedOAuth{token: token, kind: KindOAuthToken}
+		if candidate.ExpiresAt > 0 {
+			stored.expiresAt = time.UnixMilli(int64(candidate.ExpiresAt)).UTC()
+		}
+		stored.renewable = strings.TrimSpace(candidate.RefreshToken) != ""
+		return stored, true
 	}
-	return "", false
+	return storedOAuth{}, false
 }
 
 // claudeConfigDir resolves Claude Code's config directory, honoring the same

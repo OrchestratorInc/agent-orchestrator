@@ -49,6 +49,7 @@ describe("WindowTitlebar", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (platformDescriptor) {
       Object.defineProperty(navigator, "platform", platformDescriptor);
     } else {
@@ -96,6 +97,16 @@ describe("WindowTitlebar", () => {
     expect(
       screen.queryByRole("button", { name: "Window" }),
     ).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("shows shell debugging actions only in development: %s", async (development) => {
+    vi.stubEnv("DEV", development);
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    render(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByRole("menuitem", { name: /Reload/ }) !== null).toBe(development);
+    expect(screen.queryByRole("menuitem", { name: /DevTools/ }) !== null).toBe(development);
+    expect(screen.getByRole("menuitem", { name: /Zoom In/ })).toBeInTheDocument();
   });
 
   it("renders the back and forward navigation buttons", async () => {

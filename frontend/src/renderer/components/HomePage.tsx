@@ -7,6 +7,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { formatTimeCompact } from "../lib/format-time";
 import { isMacPlatform } from "../lib/platform";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -30,23 +31,24 @@ import { Badge } from "./ui/badge";
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
  *   TopbarButton / accent pill / bordered card.
- * - Primary actions are a 2×2 grid that always includes the standalone-agent
- *   action. With Developer Mode and Cloud enabled, a full-width Cloud action
- *   sits beneath the grid rather than displacing standalone.
- *   Connect Mobile is settings-only — not here.
+ * - Primary actions are always a 2×2 grid. The fourth cell is the
+ *   standalone-agent action, or Clone to the cloud when Developer Mode and
+ *   Cloud are both enabled (standalone stays reachable from the sidebar's
+ *   Scratchpad "+"). Never add a fifth row. Connect Mobile is settings-only.
  * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a
  *   flat `hover:bg-interactive-hover` wash.
- * - Section titles share {@link HOME_SECTION_TITLE_CLASS}. With no projects the
- *   heading is Get started and Recent projects stays hidden; otherwise keep
- *   Jump back paired with Recent projects. The Scratchpad (standalone agents)
- *   is not a project: it never appears in Recent projects or counts toward
- *   the heading — the grid's standalone action and the sidebar own it.
+ * - One heading ({@link HOME_SECTION_TITLE_CLASS}) above the grid: Get started
+ *   with no projects, otherwise Jump back right in. Recent-project rows sit
+ *   under the grid with no heading of their own; each is one compact line
+ *   (name and time, no path). The Scratchpad (standalone agents) is not a
+ *   project: it never appears in the recent rows or counts toward the
+ *   heading — the grid's standalone action and the sidebar own it.
  */
 const isMac = isMacPlatform();
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
-	"flex w-full items-center gap-3 rounded-lg bg-[var(--color-bg-import-card)] px-4 py-3 text-left transition-[scale] duration-fast ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transform-none";
+	"flex w-full items-center gap-3 rounded-lg bg-card px-4 py-3 text-left transition-[scale,background-color] duration-fast ease-out hover:bg-accent hover:text-foreground active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transform-none";
 const HOME_ICON_SLOT_CLASS =
 	"grid size-8 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4";
 const HOME_PROJECT_ICON_CLASS =
@@ -64,13 +66,11 @@ function latestProjectTimestamp(project: WorkspaceSummary): string {
 		.at(-1) ?? "";
 }
 
-function relativeProjectTime(timestamp: string | undefined, emptyLabel: string, justNowLabel: string): string {
+// Relative times must follow the app language (i18n catalogs), not the OS locale —
+// formatTimeCompact routes through appI18n like every other time surface.
+function relativeProjectTime(timestamp: string | undefined, emptyLabel: string): string {
 	if (!timestamp) return emptyLabel;
-	const elapsedMinutes = Math.floor((Date.now() - new Date(timestamp).getTime()) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return justNowLabel;
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit);
+	return formatTimeCompact(timestamp);
 }
 
 function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[] {
@@ -79,7 +79,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; justNowLabel: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -88,14 +88,14 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 		<button
 			// Host must use NAV_ROW_HIGHLIGHT_HOST_CLASS — pill owns the fill.
 			className={cn(
-				"flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left text-muted-foreground",
+				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-left text-muted-foreground",
 				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
 			type="button"
 		>
-			<NavRowHighlight />
+			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
 				{project.folderMissing ? <AlertTriangle strokeWidth={1.8} className="text-warning" /> : <Folder strokeWidth={1.8} />}
 			</span>
@@ -106,23 +106,20 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 						<Badge variant="warning" className="h-4 shrink-0 px-1.5 text-2xs">{t("home.folderMissing")}</Badge>
 					) : null}
 				</span>
-				<span className="block truncate text-caption text-muted-foreground">{project.path}</span>
 			</span>
 			<span className="relative z-[1] ml-auto shrink-0 text-right text-caption tabular-nums text-muted-foreground">
-				{relativeProjectTime(latestProjectFact, emptyTimeLabel, justNowLabel)}
+				{relativeProjectTime(latestProjectFact, emptyTimeLabel)}
 			</span>
 		</button>
 	);
 }
 
 function HomeActionCard({
-	centerContent = false,
 	disabled,
 	icon,
 	label,
 	onClick,
 }: {
-	centerContent?: boolean;
 	disabled?: boolean;
 	icon: ReactNode;
 	label: string;
@@ -132,7 +129,6 @@ function HomeActionCard({
 		<button
 			className={cn(
 				HOME_BUTTON_CLASS,
-				centerContent && "justify-center",
 				"disabled:pointer-events-none disabled:opacity-50",
 			)}
 			disabled={disabled}
@@ -243,27 +239,23 @@ export function HomePage() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
-							<HomeActionCard
-								icon={<MessageSquarePlus strokeWidth={1.8} />}
-								label={t("home.newStandaloneAgent")}
-								onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-							/>
 							{developerMode && cloudEnabled ? (
-								<div className="col-span-2">
-									<HomeActionCard
-										centerContent
-										icon={<Cloud strokeWidth={1.8} />}
-										label={t("createProject.cloudTitle")}
-										onClick={() => requestSource("cloud")}
-									/>
-								</div>
-							) : null}
+								<HomeActionCard
+									icon={<Cloud strokeWidth={1.8} />}
+									label={t("createProject.cloudTitle")}
+									onClick={() => requestSource("cloud")}
+								/>
+							) : (
+								<HomeActionCard
+									icon={<MessageSquarePlus strokeWidth={1.8} />}
+									label={t("home.newStandaloneAgent")}
+									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+								/>
+							)}
 						</div>
-					</section>
 
-					{recentProjects.length > 0 && (
-						<section className="space-y-3 px-3">
-							<h2 className={HOME_SECTION_TITLE_CLASS}>{t("home.recentProjects")}</h2>
+						{/* Same section as the grid so the gap matches the grid's gap-3. */}
+						{recentProjects.length > 0 && (
 							<div>
 								{recentProjects.map((project) => (
 									<ProjectRow
@@ -281,12 +273,11 @@ export function HomePage() {
 										openProject(project.id);
 									}}
 										emptyTimeLabel={t("home.never")}
-										justNowLabel={t("time.justNow")}
 									/>
 								))}
 							</div>
-						</section>
-					)}
+						)}
+					</section>
 
 					<GitHubOnboardingNotice />
 				</div>

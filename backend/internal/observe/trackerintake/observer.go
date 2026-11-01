@@ -208,6 +208,7 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			IssueID:   issueID,
 			Kind:      domain.KindWorker,
 			Prompt:    BuildIssuePrompt(issue),
+			CreatedBy: domain.SessionCreatedByAutomation,
 		}); err != nil {
 			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
 			spawnFailed = true

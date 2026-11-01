@@ -20,6 +20,7 @@ INSERT INTO sessions (
     preview_url, preview_revision, terminate_on_pr_merge, cleanup_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
+    requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
     client_request_id, client_request_hash
@@ -30,7 +31,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?
+    ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -40,10 +41,12 @@ SELECT id, client_request_hash, client_request_committed FROM sessions WHERE cli
 UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request_id <> '';
 
 -- name: UpdateSession :exec
+-- The title has narrow writers only, and a renamed task's temporary branch is
+-- never written back, so a write from an older read cannot undo either.
 UPDATE sessions SET
-    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?, display_name = ?,
+    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = ?, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -67,6 +70,68 @@ WHERE id = sqlc.arg(id);
 UPDATE sessions
 SET hibernated_at = sqlc.narg(hibernated_at)
 WHERE id = sqlc.arg(id) AND revision = sqlc.arg(expected_revision);
+
+-- name: MarkHarnessSessionsStale :execrows
+-- Marks the live launches of a harness an update just replaced. A launch that
+-- was already marked keeps when it first went stale; the version moves on.
+UPDATE sessions
+SET stale_binary_since = CASE
+        WHEN stale_binary_since IS NOT NULL AND stale_binary_launch =
+            (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+        THEN stale_binary_since ELSE sqlc.arg(since) END,
+    stale_binary_version = sqlc.arg(version),
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END,
+    stale_binary_switch_failed_at = NULL
+WHERE harness = sqlc.arg(harness) AND is_terminated = 0 AND is_task_preparation = 0
+    AND hibernated_at IS NULL AND activity_state <> 'exited';
+
+-- name: SetSessionVersionSwitchFailed :execrows
+-- Records that the move to the new release failed for the launch that tried it.
+UPDATE sessions
+SET stale_binary_switch_failed_at = sqlc.arg(failed_at),
+    stale_binary_since = COALESCE(stale_binary_since, sqlc.arg(failed_at)),
+    stale_binary_version = sqlc.arg(version),
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+WHERE id = sqlc.arg(id);
+
+-- name: ListVersionRefreshChatCandidates :many
+-- Idle Chat sessions whose current launch still runs a replaced release.
+-- Orchestrators are included: a move restarts them right away.
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= sqlc.arg(idle_before)
+    AND trim(provider_conversation_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = controller_generation;
+
+-- name: ListVersionRefreshTerminalCandidates :many
+-- Idle terminal sessions whose current launch still runs a replaced release
+-- and can be resumed natively.
+SELECT id FROM sessions
+WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= sqlc.arg(idle_before)
+    AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = runtime_launch_id;
+
+-- name: CountStaleBinarySessions :many
+-- Live launches still on a replaced release, per harness.
+SELECT harness, COUNT(*) AS sessions FROM sessions
+WHERE is_terminated = 0 AND hibernated_at IS NULL AND activity_state <> 'exited'
+    AND stale_binary_since IS NOT NULL
+    AND stale_binary_launch = (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+GROUP BY harness;
+
+-- name: SetSessionRuntimeReleased :execrows
+-- Narrow write for an agent exit that keeps its session: names only the
+-- released launch, and only while that launch is still the session's own.
+UPDATE sessions
+SET runtime_released_launch_id = sqlc.arg(launch_id)
+WHERE id = sqlc.arg(id) AND runtime_launch_id = sqlc.arg(launch_id);
 
 -- name: UpdateSessionArtifactOutput :execrows
 -- Narrow write for lifecycle.Manager.ReconcileSessionOutputType: touches only
@@ -95,6 +160,15 @@ WHERE id = sqlc.arg(id)
   AND agent_session_id_launch_id = sqlc.arg(expected_agent_session_id_launch_id)
   AND provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
   AND controller_generation = sqlc.arg(expected_controller_generation);
+
+-- name: ReplaceUnpersistedChatProvider :execrows
+-- Move a Chat from a provider id the provider never persisted to the fresh id
+-- it started instead. Guarded on the old id so a newer owner is never replaced.
+UPDATE sessions SET
+    provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE id = sqlc.arg(id)
+  AND session_mode = 'chat'
+  AND provider_conversation_id = sqlc.arg(expected_provider_conversation_id);
 
 -- name: RecordSessionLatestUserPrompt :execrows
 UPDATE sessions SET
@@ -215,9 +289,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -234,9 +311,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -253,9 +333,12 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -272,17 +355,32 @@ SELECT id, project_id, num, issue_id, kind, harness,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, provision_steps, is_task_preparation, automation_run_id, automation_launch_completed,
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND trim(provider_conversation_id) <> ''
+ORDER BY id;
+
+-- name: ListTurnFailureCandidates :many
+-- Terminal sessions of one harness that are in a turn and have a native
+-- transcript to check. Only the columns the failed-turn observer reads.
+SELECT id, harness, activity_state, activity_last_at, latest_user_prompt_at, revision,
+    runtime_launch_id, native_transcript_path
+FROM sessions
+WHERE harness = sqlc.arg(harness) AND is_terminated = 0 AND session_mode = 'tui'
+    AND activity_state IN ('active', 'waiting_input', 'blocked')
+    AND native_transcript_path <> ''
 ORDER BY id;
 
 -- name: PromoteTaskPreparation :execrows
@@ -301,6 +399,7 @@ UPDATE sessions SET
     model = sqlc.arg(model),
     effort = sqlc.arg(effort),
     session_permissions = sqlc.arg(session_permissions),
+    requested_output = sqlc.arg(requested_output),
     created_at = sqlc.arg(created_at),
     updated_at = sqlc.arg(updated_at),
     auto_inject_review = sqlc.arg(auto_inject_review),
@@ -364,6 +463,28 @@ WHERE id = sqlc.arg(id)
   AND ((provision_state = 'provisioning' AND is_terminated = 0)
     OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path))));
 
+-- name: SetSessionTaskBranch :execrows
+-- Background task naming renames only the branch; the checkout never moves.
+-- It applies only while the row still carries the temporary branch it renamed,
+-- keeps that branch once replaced so no later write restores it, and ends
+-- branch naming.
+UPDATE sessions SET
+    branch = sqlc.arg(branch),
+    temporary_branch = CASE WHEN sqlc.arg(branch) <> sqlc.arg(expected_branch)
+        THEN sqlc.arg(expected_branch) ELSE temporary_branch END,
+    branch_naming = FALSE,
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND branch = sqlc.arg(expected_branch);
+
+-- name: SetSessionBranchNaming :exec
+-- Narrow: whether a task's generated branch name is still on the way.
+UPDATE sessions SET branch_naming = sqlc.arg(branch_naming)
+WHERE id = sqlc.arg(id) AND branch_naming <> sqlc.arg(branch_naming);
+
+-- name: ClearSessionBranchNaming :exec
+-- No branch naming survives a daemon restart.
+UPDATE sessions SET branch_naming = FALSE WHERE branch_naming;
+
 -- name: SetTaskPreparationBase :execrows
 -- Only the still-hidden reservation may receive its immutable branch base.
 -- The preparation worker can finish after promotion, so a full row update
@@ -393,6 +514,14 @@ WHERE id = sqlc.arg(id);
 UPDATE sessions SET
     provision_steps = sqlc.arg(provision_steps),
     updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
+
+-- name: SetSessionBranchState :execrows
+-- Narrow write for the branch-state reconcile: it names only branch_state, so a
+-- stale read can never replay other session columns. updated_at is left
+-- alone because an observed git fact is not user-visible recency.
+UPDATE sessions SET
+    branch_state = sqlc.arg(branch_state)
 WHERE id = sqlc.arg(id);
 
 -- name: SessionIsSeed :one

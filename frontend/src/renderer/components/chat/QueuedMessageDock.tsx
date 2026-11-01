@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { flushSync } from "react-dom";
 import {
 	DndContext,
+	KeyboardSensor,
 	PointerSensor,
 	closestCenter,
 	type DragEndEvent,
@@ -10,15 +11,21 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 
-export type QueuedMessage = { turnId: string; message: ConversationMessage };
+export type QueuedMessage = {
+	turnId: string;
+	message: ConversationMessage;
+	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
+	pending?: boolean;
+};
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
@@ -100,7 +107,21 @@ function QueuedMessageRowContent({
 	dragHandleProps?: Record<string, unknown>;
 }) {
 	const { t } = useTranslation();
-	const text = labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
+	// Lead with what the user wrote: page titles and counts alone leave two
+	// batches from the same page indistinguishable.
+	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
+		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
+	const text = annotations
+		? [annotations.items[0] ? annotationLabel(annotations.items[0]) : annotations.pageTitle,
+			t("browser.annotationCount", { count: annotations.items.length })].join(" · ")
+		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const tooltip = annotations
+		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
+		: text;
+	// Relayed user-authored text is generated, so it can be steered or cancelled
+	// but not edited.
+	const editable = message.origin === "human";
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -115,7 +136,7 @@ function QueuedMessageRowContent({
 			<div className="min-w-0 flex-1 overflow-hidden">
 				<p
 					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
-					title={text}
+					title={tooltip}
 				>
 					{text}
 				</p>
@@ -157,7 +178,7 @@ function QueuedMessageRowContent({
 						Steer
 					</button>
 				) : null}
-				{onBeginQueuedEdit ? (
+				{onBeginQueuedEdit && editable ? (
 					<button
 						type="button"
 						disabled={busy}
@@ -339,6 +360,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		useSensor(PointerSensor, {
 			activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE },
 		}),
+		useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
 	);
 
 	const runAction = useCallback(
@@ -370,7 +392,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		() => new Map(visibleMessages.map((message) => [message.turnId, message])),
 		[visibleMessages],
 	);
-	const fifoTurnIds = useMemo(() => visibleMessages.map(({ turnId }) => turnId), [visibleMessages]);
+	const pendingMessages = useMemo(() => visibleMessages.filter((entry) => entry.pending), [visibleMessages]);
+	const fifoTurnIds = useMemo(
+		() => visibleMessages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
+		[visibleMessages],
+	);
 	const defaultDisplayTurnIds = useMemo(() => [...fifoTurnIds].reverse(), [fifoTurnIds]);
 	const displayTurnIds = useMemo(() => {
 		if (!displayOrder) return defaultDisplayTurnIds;
@@ -380,15 +406,18 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		return [...ordered, ...missing];
 	}, [defaultDisplayTurnIds, displayOrder, fifoTurnIds]);
 	const displayMessages = useMemo(
-		() =>
-			displayTurnIds.flatMap((turnId) => {
+		() => [
+			// Newest first, like the rest of the dock: a pending send is the newest of all.
+			...[...pendingMessages].reverse(),
+			...displayTurnIds.flatMap((turnId) => {
 				const message = messagesByTurnId.get(turnId);
 				return message ? [message] : [];
 			}),
-		[displayTurnIds, messagesByTurnId],
+		],
+		[displayTurnIds, messagesByTurnId, pendingMessages],
 	);
 	const reorderEnabled =
-		Boolean(onReorderQueuedTurns) && count > 1 && isOpen;
+		Boolean(onReorderQueuedTurns) && fifoTurnIds.length > 1 && isOpen;
 	const nextQueuedTurnId = fifoTurnIds[0];
 
 	const suppressHoverSteer = useCallback(() => {
@@ -612,13 +641,15 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 									isOpen && count >= QUEUE_DOCK_VISIBLE_ROWS && "queue-dock-scroll-active",
 								)}
 							>
-								{displayMessages.map(({ turnId, message }, index) => {
+								{displayMessages.map(({ turnId, message, pending }, index) => {
 									const busy =
 										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
 										<SortableQueuedMessageRow
-											key={turnId}
+											// The send's own id outlives the swap from pending to confirmed, so the
+											// row stays mounted instead of replaying its entrance.
+											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
 											hiddenFromView={!isOpen && index !== displayMessages.length - 1}
@@ -628,8 +659,16 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											error={errors[turnId]}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
-											reorderEnabled={reorderEnabled && !busy}
+											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
+											{...(pending
+												? {
+														canSteer: false,
+														onPromoteQueuedTurn: undefined,
+														onBeginQueuedEdit: undefined,
+														onCancelQueuedTurn: undefined,
+													}
+												: null)}
 										/>
 									);
 								})}
