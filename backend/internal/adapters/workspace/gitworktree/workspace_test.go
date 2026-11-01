@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -1022,6 +1023,59 @@ func TestCreateRejectsInvalidBranchName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad branch!!") {
 		t.Fatalf("err = %v, want message to include the rejected branch name", err)
+	}
+}
+
+// TestCreateDoesNotCallKilledBranchProbeInvalid covers #5043: a check-ref-format
+// probe that git never finished says nothing about the name, so it must not
+// surface as ports.ErrWorkspaceBranchInvalid (INVALID_BRANCH).
+func TestCreateDoesNotCallKilledBranchProbeInvalid(t *testing.T) {
+	killed := func(t *testing.T) error {
+		if runtime.GOOS == "windows" {
+			t.Skip("needs a POSIX signal")
+		}
+		err := exec.Command("sh", "-c", "kill -KILL $$").Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != -1 {
+			t.Fatalf("setup: want a signal-killed ExitError, got %v", err)
+		}
+		return err
+	}
+	for _, tc := range []struct {
+		name  string
+		ctx   func() context.Context
+		probe func(t *testing.T) error
+		want  string
+	}{
+		{"signal killed", context.Background, killed, "signal: killed"},
+		{"caller cancelled", func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}, func(*testing.T) error { return errors.New("exit status 1") }, "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			ws, err := New(Options{ManagedRoot: t.TempDir(), RepoResolver: StaticRepoResolver{"proj": repo}})
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+			probeErr := tc.probe(t)
+			ws.run = func(_ context.Context, binary string, args ...string) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "check-ref-format") {
+					return nil, commandError{args: append([]string{binary}, args...), err: probeErr}
+				}
+				t.Fatalf("no git beyond check-ref-format should run after a failed probe: %v", args)
+				return nil, nil
+			}
+			_, err = ws.Create(tc.ctx(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/sess/root"})
+			if err == nil || errors.Is(err, ports.ErrWorkspaceBranchInvalid) {
+				t.Fatalf("err = %v, want a non-INVALID_BRANCH failure", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want the real cause %q", err, tc.want)
+			}
+		})
 	}
 }
 
