@@ -51,6 +51,26 @@ func TestSessionsAPI_ResumeAgentErrorContract(t *testing.T) {
 			wantKind:   "conflict",
 			wantCode:   "CHAT_DRIVER_INCOMPATIBLE",
 		},
+		{
+			name: "relaunch wrapper preserves retryable initialize deadline",
+			err: &sessionmanager.RelaunchError{
+				Step: "chat start",
+				Err:  fmt.Errorf("resume agent ao-1: resume chat: initialize: %w", context.DeadlineExceeded),
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			wantKind:   "unavailable",
+			wantCode:   "SERVICE_UNAVAILABLE",
+		},
+		{
+			name: "relaunch wrapper preserves incompatible protocol refusal",
+			err: &sessionmanager.RelaunchError{
+				Step: "chat start",
+				Err:  fmt.Errorf("resume agent ao-1: resume chat: %w: initialize: method not found", ports.ErrChatDriverIncompatible),
+			},
+			wantStatus: http.StatusConflict,
+			wantKind:   "conflict",
+			wantCode:   "CHAT_DRIVER_INCOMPATIBLE",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := &resumeErrorCommander{err: tc.err}
