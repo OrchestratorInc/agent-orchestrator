@@ -168,9 +168,13 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	if !parserCheckpointsEqual(cursorSample.checkpoint, parserState.Integrity.Checkpoint) {
 		return i.resetSourceGeneration(ctx, source, identity, now)
 	}
+	// A source stopped on a conflicting event keeps its cursor short of EOF,
+	// so it looks like it has unread bytes forever. Re-reading it replays the
+	// same conflict and flips its binding through finalizing on every pass.
 	if source.Source.State == domain.UsageSourceComplete &&
 		source.BindingState != domain.UsageBindingFinalizing &&
-		info.Size() == source.Source.ByteOffset {
+		(info.Size() == source.Source.ByteOffset ||
+			source.Source.LastErrorCode == domain.UsageErrorSourceEventConflict) {
 		return result, nil
 	}
 	if (source.BindingState == domain.UsageBindingComplete || source.BindingState == domain.UsageBindingPartial) &&
@@ -361,6 +365,9 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			); markErr != nil {
 				return result, errors.Join(err, markErr)
 			}
+			// Retrying cannot resolve a conflict, so drop any finalization
+			// quiet-period retry scheduled above.
+			result.RetryAt = nil
 			if source.BindingState == domain.UsageBindingFinalizing {
 				return result, i.completeBinding(ctx, source.Source.BindingID, now)
 			}
