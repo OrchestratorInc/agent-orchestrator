@@ -671,7 +671,11 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 	const { t } = useTranslation();
 	const favorites = useModelFavorites();
 	return (
-		<ModelMenuChoices models={source.models} searchable={source.models.filter((model) => model.id).length > 10}>
+		<ModelMenuChoices
+			models={source.models}
+			selectedId={source.modelId}
+			searchable={source.models.filter((model) => model.id).length > 10}
+		>
 			{(matches, searchActiveID, optionID) => matches.map((model, index) => {
 				const active = model.id === source.modelId;
 				const key = model.id || "default";

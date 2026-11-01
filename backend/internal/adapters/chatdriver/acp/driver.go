@@ -136,6 +136,9 @@ type Config struct {
 	// agent cannot use (for example one its CLI version predates) before AO asks
 	// the agent to switch to it. It returns nil when the model may be tried.
 	ValidateModel func(ctx context.Context, cfg LaunchConfig, model string) error
+	// PromptFailureCode classifies a provider-specific failed prompt without
+	// changing its technical error or treating unrelated ACP errors as auth failures.
+	PromptFailureCode func(error) domain.ConversationFailureCode
 	// SessionPromptResponseFailure is PromptResponseFailure given the provider
 	// session, for a binding that reads the failure from the agent's own record,
 	// and whether the turn brought any reply text or tool call.
@@ -741,6 +744,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.promptFailureCode = d.cfg.PromptFailureCode
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID

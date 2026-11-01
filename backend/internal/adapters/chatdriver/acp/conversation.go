@@ -143,6 +143,7 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse, string) error
+	promptFailureCode     func(error) domain.ConversationFailureCode
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
@@ -862,12 +863,16 @@ func (c *conversation) finishPrompt(
 	}
 	var state domain.TurnState
 	var turnErr error
+	var failureCode domain.ConversationFailureCode
 	if err != nil {
 		if interruptedLocally || errors.Is(err, context.Canceled) {
 			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)
+			if c.promptFailureCode != nil {
+				failureCode = c.promptFailureCode(err)
+			}
 		}
 	} else {
 		state = turnState(resp.StopReason)
@@ -937,7 +942,7 @@ func (c *conversation) finishPrompt(
 	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
-		ProviderTurnID: turnID, TurnState: state, Err: turnErr,
+		ProviderTurnID: turnID, TurnState: state, FailureCode: failureCode, Err: turnErr,
 	})
 	// Release the turn before announcing readiness, not after. A consumer that
 	// reacts to ChatControllerReady by sending the next turn — AO's own queue

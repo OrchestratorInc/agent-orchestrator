@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { GitBranch, GitPullRequest } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { formatTimeCompact } from "../../lib/format-time";
+import { useTruncatedText } from "../../hooks/useTruncatedText";
 import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import {
 	DropdownMenu,
@@ -50,8 +51,8 @@ export type ReviewBranchMenuProps = {
 };
 
 const BRANCH_PAGE = REVIEW_MENU_PAGE;
-/** A list that fits its box needs no search; one that scrolls gets it. */
-const SEARCH_THRESHOLD = REVIEW_MENU_VISIBLE_ROWS;
+/** A lone branch has nothing to search; two or more get it. */
+const SEARCH_THRESHOLD = 1;
 
 export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, onRetry, onOpenChange, className }: ReviewBranchMenuProps) {
 	const { t } = useTranslation();
@@ -178,7 +179,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 									>
 										<Icon aria-hidden="true" />
 										<span className="flex min-w-0 flex-1 flex-col leading-tight">
-											<span className={cn("truncate text-xs", !row.detached && "font-mono")}>{rowLabel(row)}</span>
+											<BranchRowLabel label={rowLabel(row)} mono={!row.detached} />
 											{caption ? <span className="truncate text-caption text-passive">{caption}</span> : null}
 										</span>
 									</DropdownMenuRadioItem>
@@ -208,5 +209,15 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+/** A name cut off by the menu's width shows in full on hover. */
+function BranchRowLabel({ label, mono }: { label: string; mono: boolean }) {
+	const { ref, isTruncated } = useTruncatedText<HTMLSpanElement>(label);
+	return (
+		<span className={cn("truncate text-xs", mono && "font-mono")} ref={ref} title={isTruncated ? label : undefined}>
+			{label}
+		</span>
 	);
 }

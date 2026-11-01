@@ -965,7 +965,7 @@ func New(d Deps) *Manager {
 		m.lookPath = exec.LookPath
 	}
 	if m.executable == nil {
-		m.executable = os.Executable
+		m.executable = agentlaunch.Executable
 	}
 	if m.newLaunchID == nil {
 		m.newLaunchID = uuid.NewString
@@ -6324,6 +6324,14 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, m.dataDir)
+	if err != nil {
+		m.logger.Warn("login shells in the session may run another ao: their startup files can reorder the pinned PATH",
+			"session", id, "error", err)
+	}
+	for key, value := range loginEnv {
+		setProtectedEnv(env, key, value, caseInsensitive)
+	}
 	return env, accountErr
 }
 

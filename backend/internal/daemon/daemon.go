@@ -34,6 +34,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -215,6 +216,11 @@ func Run(buildVersion string) error {
 	if err := skillassets.Install(cfg.DataDir); err != nil {
 		log.Warn("install using-ao skill", "err", err)
 	}
+	// Before any session starts: an AppImage remounts under a new path on every
+	// launch, so sessions get a link under the data dir that follows it.
+	if err := agentlaunch.UseStableExecutable(cfg.DataDir, os.Getenv); err != nil {
+		log.Warn("link a stable ao for sessions of this AppImage", "err", err)
+	}
 
 	// The app owns the user's "Share error events" choice and writes it to the
 	// policy file. It gates Sentry capture only: product telemetry answers to
@@ -261,7 +267,7 @@ func Run(buildVersion string) error {
 	defer stop()
 	var usage *usageTelemetryFlusher
 	if remoteTelemetryActive && telemetryIdentity != nil {
-		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, log)
+		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, installMilestones(cfg), log)
 		defer func() {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -322,6 +328,14 @@ func Run(buildVersion string) error {
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
+	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
+	// which are scoped to the install and only minted while export is on.
+	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
+		if telemetryIdentity == nil || telemetryIdentity.OptedOut() || telemetryIdentity.ExportSuppressed() {
+			return ""
+		}
+		return telemetryIdentity.Snapshot().InstallID
+	})
 
 	// Wire the controller-facing session service over the same store + LCM, the
 	// selected runtime, routed git/scratch workspaces, the per-session agent

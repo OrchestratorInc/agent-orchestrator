@@ -614,7 +614,7 @@ export function WorkspaceReviewPane({
 				const isViewed = viewed.has(file.path);
 				return (
 					<div className="bg-background" key={file.path} ref={(node) => { if (node) fallbackRows.current.set(file.path, node); else fallbackRows.current.delete(file.path); }}>
-						<div className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
+						<div data-selection-toolbar-header="" className="group/file-header flex h-9 min-w-0 items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40">
 							<button
 								aria-expanded={!collapsed}
 								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
@@ -771,7 +771,7 @@ export function WorkspaceReviewPane({
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
 										<PopoverAnchor asChild>
-											<div className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
+											<div data-selection-toolbar-header="" className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
 												<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/file-header:text-foreground", !isCollapsed && "rotate-90")} />
 												<WorkspaceEntryIcon className="size-icon-xl" kind="file" name={file.path.split("/").pop() ?? file.path} />
 												<div className="flex min-w-0 shrink items-baseline gap-3">
@@ -885,7 +885,7 @@ export function WorkspaceReviewPane({
 						style={{ height: "100%" }}
 					/>
 				) : null}
-				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
+				<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 			</div>
 				</>
 			)}
