@@ -230,6 +230,9 @@ var shippedMigrations = map[int64]string{
 	20261025082607314: "20261025082607314_session_import.sql",
 	20261026185532680: "20261026185532680_usage_telemetry_measurements.sql",
 	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
+	20261029072736970: "20261029072736970_session_telemetry.sql",
+	20261030044053264: "20261030044053264_usage_telemetry_details.sql",
+	20261030141527623: "20261030141527623_session_end_telemetry_claim.sql",
 	20261031150212345: "20261031150212345_session_import_live_identity.sql",
 }
 

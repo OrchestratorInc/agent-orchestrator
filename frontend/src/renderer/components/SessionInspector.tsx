@@ -231,7 +231,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const cloudOrgId = session?.cloud?.orgId;
 	const cloudReview = useQuery({
 		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session?.id ?? "", "summary"],
-		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined,
+		// Only a connected worker answers for its files, as in the Files panel: a
+		// waking session's count is not polled until its worker is back, and the
+		// count read before stays on the tab meanwhile.
+		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && session.runtimeConnected === true,
 		refetchInterval: 5_000,
 		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
 	});

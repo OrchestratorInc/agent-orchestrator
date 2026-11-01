@@ -444,6 +444,7 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
+	readiness.env["AO_CUE_COMMAND"] = ""
 	env = agentlaunch.MergeEnv(env, readiness.env)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
@@ -456,8 +457,16 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
 		return ShellTerminal{}, err
 	}
-	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
+	delivery, err := prepareCueCommand(s.dataDir, argv, in.Command)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer delivery.cleanup()
+	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, delivery.input); err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
+	}
+	if err := waitForCueCommandConsumed(ctx, delivery.file); err != nil {
+		return ShellTerminal{}, err
 	}
 	return terminal, nil
 }

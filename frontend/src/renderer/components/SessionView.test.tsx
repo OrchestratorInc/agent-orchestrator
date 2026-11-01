@@ -41,6 +41,7 @@ const cloudGetSessionMock = cloudCpClientMock.getSession;
 const getCloudSessionMock = cloudCpClientMock.getSession;
 const listSessionEventsMock = cloudCpClientMock.listChatEvents;
 const autoAttachSessionTerminal = vi.hoisted(() => ({ current: true }));
+const refreshCloudSessionLifecycleMock = vi.hoisted(() => vi.fn(async () => undefined));
 const subscribeSessionEventsMock = vi.hoisted(() => vi.fn(async (_options: {
 	onEvent: (event: { type: string; createdAt: string; sessionId: string; sequence: number; payload: unknown }) => void;
 }) => undefined));
@@ -783,6 +784,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
 	refetchCloudProjectsForUnknownSessions: vi.fn(),
+	refreshCloudSessionLifecycle: refreshCloudSessionLifecycleMock,
 	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean, poll?: boolean) => {
 		cloudSessionLookup(orgId, sessionId, enabled);
 		cloudSessionPoll(poll);
@@ -1000,6 +1002,7 @@ describe("SessionView", () => {
 		cloudReviewGetMock.mockResolvedValue({ sessionId: "sess-2", reviews: [], runs: [] });
 		cloudGetSessionMock.mockReset();
 		subscribeSessionEventsMock.mockClear();
+		refreshCloudSessionLifecycleMock.mockClear();
 		listSessionEventsMock.mockReset();
 		listSessionEventsMock.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		getCloudSessionMock.mockReset();
@@ -1762,6 +1765,19 @@ describe("SessionView", () => {
 		expect(cloudResumeMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not ask a waking session's absent worker to prepare its workspace", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		checkout.mockClear();
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
+		// The checkout would follow the resume; let that chain settle first.
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
 	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
 		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
 		const id = "sess-2";
@@ -1850,6 +1866,33 @@ describe("SessionView", () => {
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Preparing your repository and agent"));
 		expect(listSessionEventsMock).toHaveBeenCalledWith("cloud-org", "sess-2", { after: 0, limit: 500 }, expect.any(Object));
 		expect(subscribeSessionEventsMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: "cloud-org", sessionId: "sess-2", after: 0 }));
+	});
+
+	it("refreshes the sessions list once the loader's own poll sees the worker connect", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" };
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "bootstrapping", runtimeConnected: false } });
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(cloudGetSessionMock).toHaveBeenCalled());
+		expect(refreshCloudSessionLifecycleMock).not.toHaveBeenCalled();
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "running", runtimeConnected: true } });
+		await waitFor(() => expect(refreshCloudSessionLifecycleMock).toHaveBeenCalled(), { timeout: 3_000 });
+	});
+
+	it("refreshes the sessions list when the loader's stream reports this worker connecting", async () => {
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" };
+		cloudGetSessionMock.mockResolvedValue({ session: { observedState: "bootstrapping", runtimeConnected: false } });
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
+		const { onEvent } = subscribeSessionEventsMock.mock.lastCall![0];
+		// An earlier worker's connect, replayed from before this loader, is not this one.
+		act(() => onEvent({ type: "worker.connected", createdAt: new Date(Date.now() - 10 * 60_000).toISOString(), sessionId: "sess-2", sequence: 1, payload: {} }));
+		expect(refreshCloudSessionLifecycleMock).not.toHaveBeenCalled();
+		act(() => onEvent({ type: "worker.connected", createdAt: new Date().toISOString(), sessionId: "sess-2", sequence: 2, payload: {} }));
+		expect(refreshCloudSessionLifecycleMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("advances the active phrase when a later startup event arrives", async () => {

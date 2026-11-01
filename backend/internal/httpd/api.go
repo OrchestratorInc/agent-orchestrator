@@ -215,7 +215,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
@@ -448,4 +448,11 @@ func agentBrowserURL(raw string) *url.URL {
 		return nil
 	}
 	return u
+}
+
+// userMessageRecorder reuses the session service, which owns session telemetry,
+// to report human chat sends. Nil when the service cannot record.
+func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
+	recorder, _ := sessions.(controllers.UserMessageRecorder)
+	return recorder
 }
