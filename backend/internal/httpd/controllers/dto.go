@@ -3261,6 +3261,10 @@ type ConversationActivityResponse struct {
 	// it carries the provider's own offered decisions, which is what the client
 	// renders buttons from.
 	//
+	// Opt-in deduplication marks removed copies as outputOmitted: "content",
+	// contentOmitted: "output", or rawCommandOmitted: "command". The named
+	// source field retains the body the timeline renders.
+	//
 	// The keys that depend on the kind:
 	//
 	//   command      command, rawCommand, cwd, exitCode, durationMs, processId,
@@ -3288,6 +3292,8 @@ type ConversationActivityResponse struct {
 	//                these actions stay in the ordinary activity batch.
 	Detail    map[string]any `json:"detail,omitempty"`
 	RequestID string         `json:"requestId,omitempty"`
+	// DetailOmitted means detail contains previews; read the activity endpoint before displaying its body.
+	DetailOmitted bool `json:"detailOmitted,omitempty"`
 	// ProviderItemID is the stable parent key used by nested ACP transcripts.
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	CreatedAt      string `json:"createdAt"`
