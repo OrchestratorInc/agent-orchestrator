@@ -66,6 +66,7 @@ type sessionDTO struct {
 }
 
 type branchStateDTO struct {
+	Branch       string `json:"branch,omitempty"`
 	Commits      int    `json:"commits"`
 	RemoteBranch string `json:"remoteBranch,omitempty"`
 	Unpushed     int    `json:"unpushed"`
@@ -998,7 +999,7 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sessionBranch(sess)), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -1094,12 +1095,22 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	return nil
 }
 
+// sessionBranch is the branch checked out in the session worktree, falling
+// back to the recorded branch until the daemon has observed it.
+func sessionBranch(sess sessionDTO) string {
+	if sess.BranchState != nil && sess.BranchState.Branch != "" {
+		return sess.BranchState.Branch
+	}
+	return sess.Branch
+}
+
 // formatBranchState renders the daemon's observed branch facts, for example
 // "feat/x (3 commits, 1 not pushed to origin/feat/x)".
 func formatBranchState(sess sessionDTO) string {
+	branch := sessionBranch(sess)
 	state := sess.BranchState
-	if sess.Branch == "" || state == nil {
-		return sess.Branch
+	if branch == "" || state == nil {
+		return branch
 	}
 	commits := fmt.Sprintf("%d commit", state.Commits)
 	if state.Commits != 1 {
@@ -1108,13 +1119,13 @@ func formatBranchState(sess sessionDTO) string {
 	switch {
 	case state.RemoteBranch == "":
 		if state.Commits == 0 {
-			return fmt.Sprintf("%s (%s)", sess.Branch, commits)
+			return fmt.Sprintf("%s (%s)", branch, commits)
 		}
-		return fmt.Sprintf("%s (%s, not pushed)", sess.Branch, commits)
+		return fmt.Sprintf("%s (%s, not pushed)", branch, commits)
 	case state.Unpushed > 0:
-		return fmt.Sprintf("%s (%s, %d not pushed to %s)", sess.Branch, commits, state.Unpushed, state.RemoteBranch)
+		return fmt.Sprintf("%s (%s, %d not pushed to %s)", branch, commits, state.Unpushed, state.RemoteBranch)
 	default:
-		return fmt.Sprintf("%s (%s, pushed to %s)", sess.Branch, commits, state.RemoteBranch)
+		return fmt.Sprintf("%s (%s, pushed to %s)", branch, commits, state.RemoteBranch)
 	}
 }
 
