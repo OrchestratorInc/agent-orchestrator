@@ -1400,6 +1400,31 @@ describe("selection side-chat operation ownership", () => {
 			view.rerender(<Wrapper client={client}><SessionChatSurface session={{...session}} /></Wrapper>);
 		} };
 	}
+	it("keeps segmented receipt identities independent and freezes nested sources", async () => {
+		mount();
+		const first: ChatDraftExcerptReference = {...excerpt,messageId:"",revision:0,text:"same",segments:[{kind:"command",sourceId:"one",revision:1,field:"output",text:"same"}]};
+		const original = structuredClone(first);
+		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValue({id:"recovered",activated:false});
+		await act(async()=>{await expect(sideMocks.attach!(first)).rejects.toThrow("Reply lost");});
+		const key = sideMocks.create.mock.calls[0][2];
+		first.segments![0].sourceId = "two";
+		await act(async()=>{await sideMocks.attach!(first);});
+		expect(sideMocks.create.mock.calls[1][2]).not.toBe(key);
+		await act(async()=>{await sideMocks.attach!(original);});
+		expect(sideMocks.create.mock.calls[2][2]).toBe(key);
+		expect(sideMocks.create.mock.calls[0][0].segments[0].sourceId).toBe("one");
+	});
+	it.each([false,true])("opens the inspector only after an eligible creation succeeds: %s", async activated => {
+		mount(); let finish!: (value:{id:string;activated:boolean})=>void;
+		sideMocks.create.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+		let pending!: Promise<void>;
+		act(()=>{pending=sideMocks.attach!(excerpt);});
+		await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledOnce());
+		expect(useUiStore.getState().inspectorSessions[session.id]?.isOpen).not.toBe(true);
+		await act(async()=>{finish({id:"created",activated});await pending;});
+		expect(Boolean(useUiStore.getState().inspectorSessions[session.id]?.isOpen)).toBe(activated);
+	});
+
 	it("follows the current destination on a new click after a lost creation reply", async () => {
 		const view = mount();
 		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValueOnce({id:"original-side"});

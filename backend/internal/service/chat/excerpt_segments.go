@@ -145,7 +145,7 @@ func commandExcerptField(activity domain.ConversationActivity, field string) str
 	// Only text that can be checked against durable bytes is attachable. Do not
 	// reproduce the browser's JSON, ANSI, carriage-return or caret rendering.
 	for _, ch := range text {
-		if (ch < 32 && ch != '\n' && ch != '\t') || ch == 127 {
+		if (ch < 32 && ch != '\n' && ch != '\t') || (ch >= 127 && ch <= 159) {
 			return ""
 		}
 	}
