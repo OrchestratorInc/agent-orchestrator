@@ -73,6 +73,8 @@ describe("HarnessLoginPanel", () => {
 	it("warns that a Claude Code API key can replace the subscription", () => {
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
+		// The billing note sits above Save as a warning, not as muted help text.
+		expect(screen.getByText(/instead of your Claude subscription/).closest("p")).toHaveClass("border-warning/30");
 		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
 	});
 	it("offers the harness's provider catalog and needs a provider before saving", async () => {
@@ -121,7 +123,7 @@ describe("HarnessLoginPanel", () => {
 		const onTerminal = vi.fn().mockResolvedValue(undefined);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
 		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
-		expect(screen.getByText("This native screen needs input that AO cannot safely identify.")).toBeVisible();
+		expect(screen.getByText("This step needs the terminal. Open the terminal login to continue.")).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined);
 		expect(onTerminal).toHaveBeenCalledTimes(1);
@@ -163,7 +165,7 @@ describe("HarnessLoginPanel", () => {
 	});
 	it("labels Codewhale's masked provider method with its own credential store", () => {
 		render(<HarnessLoginPanel agentId="codewhale" methods={[{ id: "codewhale_deepseek_key", label: "DeepSeek API key", secret: true }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "DeepSeek API key" })).toHaveAccessibleDescription("Save a DeepSeek key in CodeWhale's native credential store.");
+		expect(screen.getByRole("button", { name: "DeepSeek API key" })).toHaveAccessibleDescription("Saved in CodeWhale's own credential store.");
 		expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
 	});
 	it("saves an Aider provider key directly without opening a terminal", async () => {
@@ -178,7 +180,7 @@ describe("HarnessLoginPanel", () => {
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "aider", method: "aider_openrouter_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined };
 		vi.mocked(startAgentUILogin).mockResolvedValue(saved);
 		render(<HarnessLoginPanel agentId="aider" methods={methods} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "OpenRouter API key" })).toHaveAccessibleDescription("Save an OpenRouter key in Aider's configuration file.");
+		expect(screen.getByRole("button", { name: "OpenRouter API key" })).toHaveAccessibleDescription("Saved in Aider's configuration file.");
 		await user.click(screen.getByRole("button", { name: "OpenRouter API key" }));
 		expect(startAgentUILogin).not.toHaveBeenCalled();
 		const input = screen.getByLabelText("API key");
@@ -211,6 +213,17 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "2. OpenAI" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "2. OpenAI" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "2", undefined);
+	});
+	it("offers Enter separately for a numbered menu that still waits after a choice", async () => {
+		const user = userEvent.setup();
+		const native: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "menu", nativeOptions: ["Anthropic", "OpenAI"], loginUrl: undefined, deviceCode: undefined };
+		vi.mocked(startAgentUILogin).mockResolvedValue(native);
+		vi.mocked(getAgentUILogin).mockResolvedValue(native);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
+		expect(screen.getByRole("group", { name: "Choose how to continue:" })).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Press Enter" }));
+		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "select", undefined);
 	});
 
 	it.each([undefined, "local"])("explains local sign-in methods and keeps terminal login under other options (%s)", async (hostId) => {
