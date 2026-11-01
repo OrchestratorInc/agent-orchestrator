@@ -208,3 +208,23 @@ func TestOMPModelAndEffortFollowTheActiveBranch(t *testing.T) {
 		t.Fatalf("active settings = %q, %q", got.model, got.effort)
 	}
 }
+
+func TestOMPBoundsHeldTextAcrossAbandonedBranches(t *testing.T) {
+	oldHeld := maxClaudeHeld
+	maxClaudeHeld = 128
+	t.Cleanup(func() { maxClaudeHeld = oldHeld })
+	body := `{"type":"session","id":"` + ompSession + `","cwd":"/work/repo"}` + "\n" +
+		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":"opening prompt"}}` + "\n" +
+		`{"type":"message","id":"a1","parentId":"m1","message":{"role":"assistant","content":"` + strings.Repeat("x", 100) + `"}}` + "\n" +
+		`{"type":"message","id":"abandoned","parentId":"a1","message":{"role":"assistant","content":"` + strings.Repeat("y", 100) + `"}}` + "\n" +
+		`{"type":"message","id":"a2","parentId":"a1","message":{"role":"assistant","content":"latest answer"}}` + "\n"
+	root := t.TempDir()
+	got, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: opening prompt", "assistant: latest answer")
+	if !got.shortened {
+		t.Fatal("text discarded to bound memory was not reported as shortened")
+	}
+}

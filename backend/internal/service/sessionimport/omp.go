@@ -97,11 +97,14 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 	t.nativeID = ompNativeIDFromPath(paths[0])
 
 	var (
-		nodes   []ompNode
-		index   = map[string]int{}
-		leafID  string
-		sawMeta bool
-		now     = time.Now()
+		nodes     []ompNode
+		index     = map[string]int{}
+		leafID    string
+		sawMeta   bool
+		held      int
+		firstText = -1
+		drop      int
+		now       = time.Now()
 	)
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
@@ -146,11 +149,27 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
 			node.role, node.text, node.message, node.omitted = r.Message.Role, string(r.Message.Content), true, r.Omitted
 		}
-		if i, ok := index[r.ID]; ok {
+		i, seen := index[r.ID]
+		if seen {
+			held -= len(nodes[i].text)
 			nodes[i] = node // OMP rewrites a record in place; keep its first position.
 		} else {
-			index[r.ID] = len(nodes)
+			i = len(nodes)
+			index[r.ID] = i
 			nodes = append(nodes, node)
+		}
+		if firstText < 0 && node.text != "" {
+			firstText = i
+		}
+		held += len(nodes[i].text)
+		// Bound text retained across all branches before the active leaf is known,
+		// keeping the opening prompt and the newest text like the shared readers.
+		for held > maxClaudeHeld && drop < len(nodes) {
+			if drop != firstText && nodes[drop].text != "" {
+				held -= len(nodes[drop].text)
+				nodes[drop].text, nodes[drop].omitted = "", true
+			}
+			drop++
 		}
 		leafID = r.ID
 		return nil
