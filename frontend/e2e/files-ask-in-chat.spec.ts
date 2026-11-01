@@ -246,10 +246,24 @@ test.describe("Add to chat from highlighted code", () => {
 		await openChatSession(page, after, filePath, text, false, true);
 		const log = page.getByRole("log", { name: "Conversation" });
 		await expect(log.locator("[data-chat-message-body]")).toBeVisible();
+		await log.hover();
+		await page.mouse.wheel(0, -100000);
+		await expect.poll(() => log.evaluate(pane => pane.scrollTop)).toBe(0);
+		const firstParagraph = log.locator("[data-chat-message-body] p").first();
+		const firstBox = (await firstParagraph.boundingBox())!;
+		await page.mouse.move(firstBox.x + 4, firstBox.y + 10);
+		await page.mouse.down();
+		await page.mouse.move(firstBox.x + 100, firstBox.y + 10, { steps: 8 });
+		await page.mouse.up();
+		expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
 		const timing = await log.evaluate(async (pane) => {
 			const body = pane.querySelector("[data-chat-message-body]")!;
 			pane.scrollTop = 0;
-			const range = document.createRange(); range.selectNodeContents(body);
+			const paragraphs = body.querySelectorAll("p");
+			const range = document.createRange();
+			range.setStart(paragraphs[0].firstChild!, 0);
+			const last = paragraphs[paragraphs.length - 1].lastChild!;
+			range.setEnd(last, last.textContent!.length);
 			const first = Array.from(range.getClientRects()).find(rect => rect.width > 0 && rect.height > 0)!;
 			pane.scrollTop += first.top - pane.getBoundingClientRect().top - 20;
 			const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
@@ -658,12 +672,16 @@ test("chat selection toolbar follows its start, pins while scrolled, and support
  const pane=page.getByRole("log",{name:"Conversation"});
  await expect(pane.locator("[data-chat-message-body] p").first()).toBeVisible();
  await pane.focus();
+ await pane.hover();
+ await page.mouse.wheel(0, -100000);
+ await expect.poll(() => pane.evaluate(element => element.scrollTop)).toBe(0);
  await pane.evaluate(element=>{
   element.scrollTop=0;
   const paragraphs=element.querySelectorAll("[data-chat-message-body] p");
-  const range=document.createRange();range.setStart(paragraphs[3],0);range.setEndAfter(paragraphs[paragraphs.length-1]);
+  const range=document.createRange();range.setStart(paragraphs[3].firstChild!,0);
+  const last = paragraphs[paragraphs.length-1].lastChild!; range.setEnd(last,last.textContent!.length);
   getSelection()!.removeAllRanges();getSelection()!.addRange(range);
-  element.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}));
+  element.dispatchEvent(new PointerEvent("pointerup",{bubbles:true}));
  });
  const toolbar=page.locator("[data-chat-selection-actions]");
  await expect(toolbar).toBeVisible();
