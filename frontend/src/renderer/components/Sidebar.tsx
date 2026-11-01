@@ -786,11 +786,9 @@ export function Sidebar({
 	const resizeScopeRef = useRef<HTMLDivElement>(null);
 	const getResizeTargets = useCallback(() => {
 		const scope = resizeScopeRef.current;
-		// Container first: drag seeds from the first painted width, and the gap
-		// is narrower than the sidebar by the macOS panel overlap.
 		return [
-			scope?.querySelector<HTMLElement>('[data-slot="sidebar-container"]') ?? null,
 			scope?.querySelector<HTMLElement>('[data-slot="sidebar-gap"]') ?? null,
+			scope?.querySelector<HTMLElement>('[data-slot="sidebar-container"]') ?? null,
 			resizeAuxiliaryTargetRef?.current ?? null,
 		];
 	}, [resizeAuxiliaryTargetRef]);

@@ -545,8 +545,17 @@ html[data-modal-handoff] .dialog-overlay,
 
 /* The open sidebar covers that left inset, so its edge, footer divider and
  * resize line sit on the panel border. Fullscreen drops the inset. */
-html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) {
-	--size-sidebar-panel-overlap: var(--size-center-panel-inset-mac);
+html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+	/* Match the sidebar spring settle time (~280ms). */
+	transition: margin-right 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"][data-state="expanded"] {
+	margin-right: calc(-1 * var(--size-center-panel-inset-mac));
+}
+@media (prefers-reduced-motion: reduce) {
+	html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+		transition: none;
+	}
 }
 
 /* Keep the center surface closed on all four edges, including macOS where the
