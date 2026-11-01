@@ -1761,6 +1761,27 @@ func TestModelDiscoverySuccessWithoutBinaryDoesNotScheduleRetry(t *testing.T) {
 	}
 }
 
+func TestModelsPreservesTypedMissingBinaryDiagnosticAfterReadinessExpires(t *testing.T) {
+	now := time.Now().UTC()
+	discoveryErr := fmt.Errorf("codex model discovery: chat driver unavailable: codex: %w", ports.ErrAgentBinaryNotFound)
+	svc := newService([]agentregistry.HarnessAgent{
+		harnessAgent("codex", "Codex", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)),
+	}, &fakeModelCache{}, &fakeModelDiscoverer{version: "v1", err: discoveryErr})
+	svc.readiness.now = func() time.Time { return now }
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"codex"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(svc.readiness.displayTTL + time.Second)
+	got, err := svc.Models(context.Background(), "codex", "", true)
+	if err != nil || got.WarningCode != ports.ModelCatalogWarningNotInstalled || got.Warning != discoveryErr.Error() {
+		t.Fatalf("missing Codex catalog = %#v, %v, want original typed diagnostic", got, err)
+	}
+	cached, ok, err := svc.cachedCatalog(context.Background(), "codex", "")
+	if err != nil || !ok || cached.Catalog.Warning != discoveryErr.Error() || cached.RefreshError != discoveryErr.Error() {
+		t.Fatalf("persisted diagnostic = %#v, %t, %v, want original typed diagnostic", cached, ok, err)
+	}
+}
+
 func TestModelsClassifiesMissingAiderAfterReadinessExpires(t *testing.T) {
 	now := time.Now().UTC()
 	svc := newService([]agentregistry.HarnessAgent{
