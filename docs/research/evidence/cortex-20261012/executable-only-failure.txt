@@ -1,0 +1,19 @@
+An unexpected error occurred:
+Error: Cannot find module 'fs-native-extensions'
+Require stack:
+- <audit-native>/cortex
+    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)
+    at defaultResolveImpl (node:internal/modules/cjs/loader:1025:19)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1030:22)
+    at Function._load (node:internal/modules/cjs/loader:1192:37)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Module.require (node:internal/modules/cjs/loader:1463:12)
+    at require (node:internal/modules/helpers:147:16)
+    at /tmp/tmp.45zJu6yruB/coco-1.1.104+041358.66de1c44636f-linux-amd64/dist/index.cjs:378:90230
+    at /tmp/tmp.45zJu6yruB/coco-1.1.104+041358.66de1c44636f-linux-amd64/dist/index.cjs:3:231 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    '<audit-native>/cortex'
+  ]
+}
