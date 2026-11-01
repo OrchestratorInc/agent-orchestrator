@@ -21,6 +21,9 @@ const { FakeTray, trayInstances } = vi.hoisted(() => {
 		constructor(public icon: unknown) {
 			trayInstances.push(this);
 		}
+		setImage(icon: unknown) {
+			this.icon = icon;
+		}
 		setTitle(title: string) {
 			this.title = title;
 		}
@@ -41,7 +44,7 @@ const setTemplateImage = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
 	app: { isPackaged: false, getVersion: () => "0.0.0-test" },
-	nativeImage: { createFromPath: () => ({ isEmpty: () => false, setTemplateImage }) },
+	nativeImage: { createFromPath: (path: string) => ({ path, isEmpty: () => false, setTemplateImage }) },
 	Tray: FakeTray,
 	Menu: { buildFromTemplate: (template: MenuItem[]) => ({ template }) },
 }));
@@ -81,6 +84,29 @@ afterEach(() => {
 });
 
 describe("createTrayController", () => {
+	it("keeps the awake indicator independent of attention counts and renderer resets", () => {
+		const { controller, tray } = setup();
+		controller.setAwakeState(true);
+		expect(tray.title).toBe("");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		expect(tray.tooltip).toContain("keeping this Mac awake");
+		expect(tray.template.some((i) => i.label === "Stay Awake: keeping this Mac awake" && i.enabled === false)).toBe(true);
+		controller.setState({ sessions: [entry({ sessionId: "s1" })] });
+		expect(tray.title).toBe("1");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		controller.clear();
+		expect(tray.title).toBe("");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		controller.setAwakeState(null);
+		expect(tray.title).toBe("?");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayAwakeIconTemplate.png") });
+		expect(tray.tooltip).toContain("status unavailable");
+		controller.setAwakeState(false);
+		expect(tray.title).toBe("");
+		expect(tray.tooltip).toBe("Agent Orchestrator");
+		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayIconTemplate.png") });
+	});
+
 	it("renders an empty state with no title before any session needs attention", () => {
 		const { tray } = setup();
 		expect(tray.title).toBe("");
