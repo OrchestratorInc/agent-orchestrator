@@ -576,7 +576,7 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	roll := statusRollup(pr)
 	if roll == nil {
-		return domain.CIUnknown
+		return noRollupCIState(pr)
 	}
 	return mapRollupState(str(roll["state"]))
 }

@@ -316,7 +316,8 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
 // If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. An empty rollup is
+// Otherwise any pending context wins over passing. A null rollup is
+// CINone (the commit has no checks); an empty one with no state is
 // CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
 // the verdict is conservative: a known failure is still safe — failures
 // don't get un-failed by more pages — but passing/pending/unknown
@@ -325,7 +326,7 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	roll := statusRollup(pr)
 	if roll == nil {
-		return domain.CIUnknown
+		return noRollupCIState(pr)
 	}
 	contexts, _ := roll["contexts"].(map[string]any)
 	rawNodes := nodes(contexts["nodes"])
@@ -566,6 +567,18 @@ func jobIDForCheck(pr map[string]any, name string) int64 {
 		return int64(num(n["databaseId"]))
 	}
 	return 0
+}
+
+// noRollupCIState is the CI state of a PR whose head commit has no
+// statusCheckRollup. GitHub returns null there when the commit carries no check
+// runs and no commit statuses at all (a repository with no workflows, or with
+// Actions disabled), which is a settled answer: CINone. Without a head commit
+// there is nothing to have observed, so the state stays CIUnknown.
+func noRollupCIState(pr map[string]any) domain.CIState {
+	if firstNonEmpty(str(pr["headRefOid"]), latestCommitOID(pr)) == "" {
+		return domain.CIUnknown
+	}
+	return domain.CINone
 }
 
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob

@@ -43,7 +43,8 @@
 //     error). Pending if any context is still running / queued.
 //     Passing if all non-skipped contexts concluded SUCCESS / NEUTRAL.
 //     Unknown otherwise. Empty rollup falls back to the rollup-level
-//     "state" field.
+//     "state" field. A null rollup on a head commit (no check runs and no
+//     statuses exist) is None: settled, as opposed to Unknown (not observed).
 //
 //   - Review: from GraphQL pullRequest.reviewDecision:
 //
