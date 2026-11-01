@@ -192,7 +192,7 @@ export function providerQualifiedChoice<T extends { value: string; name: string;
 		// OpenCode's provider IDs are distinct routes, even its own opencode and
 		// opencode-go. Suppressing either group lets same-name choices collapse.
 		group: isOpenCode ? provider : modelGroupLabel(provider, harness),
-		...(isOpenCode ? { groupName: modelGroupLabel(provider, "") } : {}),
+		...(isOpenCode ? { groupName: readableProviderName(provider) } : {}),
 	};
 }
 
@@ -207,7 +207,13 @@ export function modelGroupLabel(group: string | undefined, harness: string): str
 	if (!id || id.startsWith("[")) return undefined;
 	const own = harness.toLowerCase().replace(/[^a-z0-9]/g, "");
 	if (own && id.replace(/[^a-z0-9]/g, "").includes(own)) return undefined;
+	return readableProviderName(raw);
+}
+
+// Provider display names are independent of whether a harness hides its own group.
+function readableProviderName(raw: string): string {
 	// Vendor names from a variant catalog are already written out.
 	if (/[A-Z]/.test(raw)) return raw;
+	const id = raw.slice(raw.lastIndexOf(":") + 1).toLowerCase();
 	return id.split(/[-_\s]+/).map((word) => GROUP_NAMES[word] ?? word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }

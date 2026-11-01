@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collapseModelVariants, findModelVariant, groupModelsByVendor, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
+import { collapseModelVariants, findModelVariant, groupModelsByVendor, modelGroupLabel, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
 
 // Shapes taken from a real Cursor catalog.
 const catalog = [
@@ -94,6 +94,15 @@ describe("collapseModelVariants", () => {
 });
 
 describe("providerQualifiedChoice", () => {
+	it("formats provider headings independently of harness-specific group suppression", () => {
+		expect(modelGroupLabel("opencode", "opencode")).toBeUndefined();
+		expect(modelGroupLabel("managed:kimi-code", "kimi")).toBeUndefined();
+		expect(modelGroupLabel("opencode-go", "pi")).toBe("OpenCode Go");
+		expect(modelGroupLabel("OpenRouter Custom", "pi")).toBe("OpenRouter Custom");
+		expect(providerQualifiedChoice({ value: "opencode/model", name: "Model" }, "opencode"))
+			.toMatchObject({ group: "opencode", groupName: "OpenCode" });
+	});
+
 	it("names a running Pi's model as its catalog does, under its provider", () => {
 		expect(providerQualifiedChoice({ value: "openai-codex/gpt-6.1-sol", name: "openai-codex/GPT-6.1 Sol" }, "pi"))
 			.toEqual({ value: "openai-codex/gpt-6.1-sol", name: "GPT-6.1 Sol", group: "OpenAI Codex" });

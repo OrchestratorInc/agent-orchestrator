@@ -25,6 +25,18 @@ function modelOption(currentValue: string): ChatConfigOption {
 }
 
 describe.each(["opencode", "opencode-v2"])("%s provider model choices", (harness) => {
+	it("keeps a readable provider heading for a single-provider menu", async () => {
+		const user = userEvent.setup();
+		const option = modelOption(direct);
+		render(<TurnSettingsBar harness={harness} models={[]} settings={{ model: direct }}
+			configOptions={[{ ...option, choices: option.choices.slice(0, 1) }]} onChangeConfigOption={vi.fn()} />);
+
+		await user.click(screen.getByRole("button", { name: "Model" }));
+		expect(screen.getByText("OpenCode", { exact: true })).toBeInTheDocument();
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+		expect(screen.getByRole("menuitemradio", { name: "DeepSeek V4 Flash", checked: true })).toBeInTheDocument();
+	});
+
 	it.each([direct, go])("keeps both routes selectable when %s is current", async (current) => {
 		const user = userEvent.setup();
 		const change = vi.fn();
