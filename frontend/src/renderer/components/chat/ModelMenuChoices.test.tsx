@@ -108,4 +108,65 @@ describe("ModelMenuChoices", () => {
 		// Query "Model 1" matches 1, 10-19, 100-199 (over 100 matches), capped at 50 for search
 		expect(items).toHaveLength(50);
 	});
+
+	const renderRows = (models: { id: string; label: string }[], counts?: Map<string, number[]>) =>
+		render(
+			<ModelMenuChoices models={models} searchable>
+				{(matches, _active, _optionID, query) => {
+					if (query) counts?.set(query, [...(counts.get(query) ?? []), matches.length]);
+					return matches.map((model) => (
+						<button key={model.id} type="button" role="menuitemradio">
+							{model.label}
+						</button>
+					));
+				}}
+			</ModelMenuChoices>,
+		);
+
+	const scrollToBottom = (element: Element) => {
+		Object.defineProperty(element, "scrollHeight", { configurable: true, value: 1000 });
+		Object.defineProperty(element, "scrollTop", { configurable: true, writable: true, value: 700 });
+		Object.defineProperty(element, "clientHeight", { configurable: true, value: 200 });
+	};
+
+	it("adds one batch for several scroll events before the list grows", () => {
+		const { container } = renderRows(generateModels(500));
+		const scroller = container.querySelector(".model-menu-scroll")!;
+		scrollToBottom(scroller);
+		fireEvent.scroll(scroller);
+		fireEvent.scroll(scroller);
+		fireEvent.scroll(scroller);
+		// Each commit grows the list by one batch from what is rendered.
+		expect(screen.getAllByRole("menuitemradio").length).toBeLessThanOrEqual(250);
+	});
+
+	it("starts a new query at the search cap without committing the longer list first", async () => {
+		const user = userEvent.setup();
+		const counts = new Map<string, number[]>();
+		const { container } = renderRows(generateModels(500), counts);
+		const scroller = container.querySelector(".model-menu-scroll")!;
+		scrollToBottom(scroller);
+		fireEvent.scroll(scroller);
+		fireEvent.scroll(scroller);
+		expect(screen.getAllByRole("menuitemradio").length).toBeGreaterThan(100);
+
+		await user.type(screen.getByRole("searchbox"), "M");
+		expect(Math.max(...counts.get("m")!)).toBe(50);
+
+		// Loading more in one query does not carry over to the next.
+		scrollToBottom(scroller);
+		fireEvent.scroll(scroller);
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+		await user.type(screen.getByRole("searchbox"), "o");
+		expect(Math.max(...counts.get("mo")!)).toBe(50);
+	});
+
+	it("loads more on ArrowDown only near the last rendered row", () => {
+		renderRows(generateModels(500));
+		const rows = screen.getAllByRole("menuitemradio");
+		fireEvent.keyDown(rows[0], { key: "ArrowDown" });
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
+		fireEvent.keyDown(rows[95], { key: "ArrowDown" });
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(150);
+	});
 });
