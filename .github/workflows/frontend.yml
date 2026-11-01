@@ -337,6 +337,12 @@ jobs:
     # provides Chromium and its system dependencies without a live apt install.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Two runners, half the spec files each: the suite is bound by the single
+    # Vite dev server, so more workers on one runner don't help.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     container:
       # Keep this aligned with Playwright in frontend/package-lock.json.
       image: mcr.microsoft.com/playwright:v1.60.0-noble
@@ -362,10 +368,11 @@ jobs:
         working-directory: packages/product-ui
 
       - name: Typecheck e2e suite
+        if: matrix.shard == 1
         # Playwright transpiles specs without typechecking, so the
         # `satisfies AoBridge` guard in e2e/support/fake-bridge.ts (the
         # preload-drift tripwire) is only enforced by this step.
         run: npm run typecheck:e2e
 
       - name: Run renderer smoke suite
-        run: CI=true npm run test:e2e:renderer
+        run: CI=true npm run test:e2e:renderer -- --shard=${{ matrix.shard }}/2

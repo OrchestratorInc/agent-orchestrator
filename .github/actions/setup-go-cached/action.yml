@@ -1,0 +1,27 @@
+name: Set up Go with this job's build cache
+description: >
+  setup-go's own cache is a single entry per go.sum, saved by whichever job
+  finishes first, so jobs that build different packages left each other a
+  partial cache until go.sum next changed (often weeks). This keeps one cache
+  per job and, when go.sum or the workflow's build flags change, starts from
+  that job's previous cache instead of from nothing.
+inputs:
+  name:
+    description: Cache name, unique per job and matrix shard.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        # Read the version from go.mod so CI can't drift from the module.
+        go-version-file: backend/go.mod
+        cache: false
+
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: go-${{ inputs.name }}-${{ runner.os }}-${{ hashFiles('backend/go.mod', 'backend/go.sum', '.github/workflows/go.yml') }}
+        restore-keys: go-${{ inputs.name }}-${{ runner.os }}-
