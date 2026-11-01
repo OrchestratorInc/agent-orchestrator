@@ -85,6 +85,54 @@ func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	}
 }
 
+func TestProjectSetConfig_PreRemoveFlags(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--pre-remove", "docker compose down -v", "--pre-remove", "rm -rf .cache")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.method != http.MethodPut || capture.path != "/api/v1/projects/demo/config" {
+		t.Fatalf("request = %s %s, want PUT /api/v1/projects/demo/config", capture.method, capture.path)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	want := []string{"docker compose down -v", "rm -rf .cache"}
+	if len(got.Config.PreRemove) != len(want) || got.Config.PreRemove[0] != want[0] || got.Config.PreRemove[1] != want[1] {
+		t.Fatalf("preRemove request = %#v, want %q", got.Config.PreRemove, want)
+	}
+}
+
+func TestProjectSetConfig_PreRemoveConfigJSON(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{"postCreate":["npm install"],"preRemove":["docker compose down -v"]}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	// #7514: preRemove must survive --config-json instead of being dropped.
+	if len(got.Config.PreRemove) != 1 || got.Config.PreRemove[0] != "docker compose down -v" {
+		t.Fatalf("preRemove request = %#v, want preserved from --config-json", got.Config.PreRemove)
+	}
+	if len(got.Config.PostCreate) != 1 || got.Config.PostCreate[0] != "npm install" {
+		t.Fatalf("postCreate request = %#v", got.Config.PostCreate)
+	}
+}
+
 func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	got, err := buildProjectConfig(projectSetConfigOptions{
 		trackerIntake:   true,
