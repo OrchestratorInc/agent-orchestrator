@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -93,6 +93,18 @@ test("failure-reporting opt-out does not withhold PostHog identity", async () =>
 	});
 	expect(bootstrap?.eventsEnabled).toBe(false);
 	expect(bootstrap?.distinctId).toMatch(/^ins_/);
+});
+
+test("buildTelemetryBootstrap provides the install ID file timestamp for event age", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	await loadOrCreateTelemetryInstallId(dir);
+	const installedAt = new Date(Date.now() - 60_000);
+	await utimes(path.join(dir, "telemetry_install_id"), installedAt, installedAt);
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	expect(bootstrap?.installTimestampMs).toBeGreaterThan(0);
+	expect(bootstrap?.installTimestampMs).toBeCloseTo(installedAt.getTime(), -3);
+	expect(bootstrap?.daysSinceInstall).toBe(0);
 });
 
 test("buildTelemetryBootstrap carries the deny list across the process boundary", async () => {
