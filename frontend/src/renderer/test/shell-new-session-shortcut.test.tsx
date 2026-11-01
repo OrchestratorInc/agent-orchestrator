@@ -573,6 +573,32 @@ describe("shell workspace startup", () => {
 		expect(screen.getByTestId("global-toast")).toHaveTextContent("Project already added");
 	});
 
+	it.each(["/one ", "/one\t", "/one\r", " /one"])("does not open a trimmed sibling after a path conflict for %j", async (path) => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		vi.mocked(apiClient.POST).mockResolvedValueOnce({ error: {
+			code: "PATH_ALREADY_REGISTERED", message: "Already registered",
+		} });
+		await renderShell();
+		shellMocks.queryClient.fetchQuery.mockResolvedValueOnce(workspaces);
+		await expect(shellMocks.state.shellValue?.createProject?.({ path, workerAgent: "codex", orchestratorAgent: "codex" })).rejects.toMatchObject({
+			code: "PATH_ALREADY_REGISTERED", message: "Already registered",
+		});
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("opens the exact whitespace path after a path conflict", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		const registered = [...workspaces, { ...workspaces[0], id: "exact", path: "/one " }];
+		setWorkspaces(registered);
+		shellMocks.queryClient.getQueryData.mockReturnValue(registered);
+		vi.mocked(apiClient.POST).mockResolvedValueOnce({ error: {
+			code: "PATH_ALREADY_REGISTERED", message: "Already registered",
+		} });
+		await renderShell();
+		await expect(shellMocks.state.shellValue?.createProject?.({ path: "/one /", workerAgent: "codex", orchestratorAgent: "codex" })).resolves.toBeUndefined();
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "exact" } });
+	});
+
 	it("finishes clone provisioning after registration committed but its response was lost", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		shellMocks.state.routeParams = { projectId: "proj-1" };

@@ -88,13 +88,13 @@ export default function CloneRepositoryDialog({
 	const hasRemoteUrl = value.remoteUrl.trim().length > 0;
 	const hasDestination = value.destinationParent.trim().length > 0;
 	const targetPath = repositoryName && hasDestination
-		? joinCloneDestination(value.destinationParent.trim(), repositoryName)
+		? joinCloneDestination(value.destinationParent, repositoryName)
 		: "";
 	const projectExists = Boolean(
 		targetPath && existingProjectPaths.some((path) => sameProjectPath(path, targetPath)),
 	);
 	const urlError = hasRemoteUrl && !repositoryName ? t("createProject.cloneInvalidUrl") : null;
-	const checkKey = JSON.stringify([value.remoteUrl.trim(), value.destinationParent.trim()]);
+	const checkKey = JSON.stringify([value.remoteUrl.trim(), value.destinationParent]);
 	const currentCheck = "key" in destinationCheck && destinationCheck.key === checkKey ? destinationCheck : null;
 	const destination = currentCheck?.kind === "ready" ? currentCheck.destination : null;
 	const duplicateError = repositoryName && projectExists ? t("createProject.cloneProjectExists") : null;
@@ -171,7 +171,7 @@ export default function CloneRepositoryDialog({
 		const controller = new AbortController();
 		setDestinationCheck({ kind: "checking", key: checkKey });
 		const timer = window.setTimeout(() => {
-			void onCheckDestination({ remoteUrl: value.remoteUrl.trim(), destinationParent: value.destinationParent.trim() }, controller.signal).then((destination) => {
+			void onCheckDestination({ remoteUrl: value.remoteUrl.trim(), destinationParent: value.destinationParent }, controller.signal).then((destination) => {
 				if (requestId === repositoryCheckRequest.current) setDestinationCheck({ kind: "ready", key: checkKey, destination });
 			}).catch((err: unknown) => {
 				if (controller.signal.aborted || requestId !== repositoryCheckRequest.current) return;
@@ -238,7 +238,7 @@ export default function CloneRepositoryDialog({
 		}
 		if (!remote) {
 			try {
-				window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, value.destinationParent.trim());
+				window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, value.destinationParent);
 			} catch {
 				// Remembering the folder is optional.
 			}
@@ -246,7 +246,7 @@ export default function CloneRepositoryDialog({
 		onContinue({
 			...value,
 			remoteUrl: destination?.remoteUrl ?? value.remoteUrl.trim(),
-			destinationParent: value.destinationParent.trim(),
+			destinationParent: value.destinationParent,
 			targetPath,
 		});
 	};

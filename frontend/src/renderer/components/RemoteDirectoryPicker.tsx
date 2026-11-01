@@ -40,7 +40,7 @@ export function RemoteDirectoryPicker({ hostId, hostLabel, connected, initialPat
 					<Dialog.Description className="sr-only">{t("remote.directoryPicker.description")}</Dialog.Description>
 					<Button type="button" variant="ghost" size="icon-sm" aria-label={t("remote.directoryPicker.close")} onClick={onClose}><X className="size-4" aria-hidden="true" /></Button>
 				</div>
-				<form className="flex gap-2 p-4" onSubmit={(event) => { event.preventDefault(); setLookup(path.trim()); }}>
+				<form className="flex gap-2 p-4" onSubmit={(event) => { event.preventDefault(); setLookup(path.trim() ? path : ""); }}>
 					<Input aria-label={t("remote.directoryPicker.path")} value={path} onChange={(event) => setPath(event.target.value)} disabled={!connected} placeholder="/home/you/code" />
 					<Button type="submit" variant="outline" disabled={!connected}>{t("remote.directoryPicker.go")}</Button>
 				</form>

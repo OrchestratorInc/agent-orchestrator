@@ -70,6 +70,31 @@ describe("clone repository input", () => {
 		expect(window.localStorage.getItem("ao.clone.lastDestinationParent")).toBe("/Projects/new folder");
 	});
 
+	it.each(["/code/trailing ", "/code/trailing\t", " /code/leading"])("checks and submits the exact clone destination %j", async (destinationParent) => {
+		const { props } = renderCloneDialog({
+			value: { remoteUrl: "https://github.com/acme/web-app.git", destinationParent },
+			existingProjectPaths: [joinCloneDestination(destinationParent.trim(), "web-app")],
+		});
+		await waitFor(() => expect(props.onCheckDestination).toHaveBeenCalledWith(props.value, expect.any(AbortSignal)));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+		fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+		expect(props.onContinue).toHaveBeenCalledWith({ ...props.value, targetPath: joinCloneDestination(destinationParent, "web-app") });
+		expect(window.localStorage.getItem("ao.clone.lastDestinationParent")).toBe(destinationParent);
+	});
+
+	it("rechecks destinations that differ only in meaningful whitespace", async () => {
+		const { props, view } = renderCloneDialog();
+		await waitFor(() => expect(props.onCheckDestination).toHaveBeenCalledTimes(1));
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, value: { ...props.value, destinationParent: "/code " } }));
+		await waitFor(() => expect(props.onCheckDestination).toHaveBeenLastCalledWith({ ...props.value, destinationParent: "/code " }, expect.any(AbortSignal)));
+	});
+
+	it("still rejects whitespace-only clone destinations", () => {
+		const { props } = renderCloneDialog({ value: { remoteUrl: "https://github.com/acme/web-app.git", destinationParent: " \t " } });
+		expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+		expect(props.onCheckDestination).not.toHaveBeenCalled();
+	});
+
 	it("shows that the clone is running and where it is going", () => {
 		renderCloneDialog({ cloning: true, disabled: true });
 

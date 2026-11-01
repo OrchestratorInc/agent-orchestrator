@@ -210,8 +210,8 @@ function errorMessage(error: unknown) {
 
 function normalizeProjectPath(path: string): string {
 	if (!path) return path;
-	const trimmed = path.trim().replace(/[\\/]+$/, "");
-	return trimmed === "" ? path : trimmed;
+	const normalized = path.replace(/[\\/]+$/, "");
+	return normalized === "" ? path : normalized;
 }
 
 function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: string): WorkspaceSummary | undefined {

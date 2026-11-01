@@ -188,6 +188,9 @@ jobs:
       - name: Test data-dir lock (LockFileEx)
         run: go test -race -count=1 ./internal/datadirlock/
 
+      - name: Test project repository path compatibility
+        run: go test -race -count=1 -timeout=10m -v ./internal/service/project
+
       - name: Test workspace teardown and session kill
         run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|RenameTaskBranch' ./internal/adapters/workspace/... ./internal/session_manager/
 

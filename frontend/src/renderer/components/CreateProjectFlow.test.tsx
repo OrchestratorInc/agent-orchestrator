@@ -894,6 +894,35 @@ describe("CreateProjectFlow droppedPath", () => {
 });
 
 describe("CreateProjectFlow project import validation", () => {
+	it.each(["/repo/existing ", "/repo/existing\t", "/repo/existing\r", " /repo/existing"])("does not open a trimmed sibling when importing %j", async (path) => {
+		const user = userEvent.setup();
+		const onOpenExistingProject = vi.fn();
+		bridgeMocks.chooseDirectory.mockResolvedValue(path);
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation(path) });
+		render(<CreateProjectFlow mode="choose" {...noop} existingProjectPaths={["/repo/existing"]} onOpenExistingProject={onOpenExistingProject}>
+			{({ choosePath }) => <button onClick={choosePath}>New project</button>}
+		</CreateProjectFlow>);
+
+		await openSource(user, "Open a local folder");
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", path);
+		expect(apiMocks.POST).toHaveBeenCalledWith("/api/v1/imports/validate", { body: { importKind: "project", path } });
+		expect(onOpenExistingProject).not.toHaveBeenCalled();
+	});
+
+	it("does not alias a clone's existing checkout to a registered whitespace sibling", async () => {
+		const user = userEvent.setup();
+		const onOpenExistingProject = vi.fn();
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/existing") });
+		render(<CreateProjectFlow mode="choose" {...noop} existingProjectPaths={["/repo/existing "]} onOpenExistingProject={onOpenExistingProject}>
+			{({ choosePath }) => <button onClick={choosePath}>New project</button>}
+		</CreateProjectFlow>);
+
+		await openSource(user, "Clone a repo");
+		await user.click(await screen.findByRole("button", { name: "Use existing checkout" }));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/existing");
+		expect(onOpenExistingProject).not.toHaveBeenCalled();
+	});
+
 	it("opens a registered project before validation or agent selection", async () => {
 		const user = userEvent.setup();
 		const onOpenExistingProject = vi.fn();
