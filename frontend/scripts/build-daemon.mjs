@@ -66,6 +66,12 @@ const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], {
 if (commit.status === 0 && commit.stdout.trim()) {
 	ldflags.push(`-X ${cliPackage}.Commit=${commit.stdout.trim()}`);
 }
+// `ao remote-host link` must sign in with the same WorkOS client as this
+// desktop build, or the machine lands in a different AO account.
+const workOSClientID = process.env.VITE_WORKOS_CLIENT_ID?.trim();
+if (workOSClientID) {
+	ldflags.push(`-X ${cliPackage}.defaultWorkOSClientID=${workOSClientID}`);
+}
 
 const result = spawnSync("go", ["build", "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,

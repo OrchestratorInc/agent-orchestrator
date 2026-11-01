@@ -62,6 +62,11 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
 
+function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
+	if (workflow.action === "logout") return status === "unauthorized";
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code"));
+}
+
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
 type AgentAuthProbeResult = Awaited<ReturnType<typeof probeAgentAuth>>;
 const AUTH_STATE_RANK = {
@@ -626,10 +631,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				cliSignedIn = await refreshCliLogin(workflow.agentId);
 				return cliSignedIn === signingIn;
 			}
-			// MiMo can confirm a stored provider key locally without validating it upstream.
-			return !signingIn
-				? candidate?.agent?.authStatus === "unauthorized"
-				: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		};
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		let done = await completed(result);
@@ -685,8 +687,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
 		if (cliLoginOnOwnRow(authWorkflow.agentId)) return;
-		const expected = authWorkflow.action === "logout" ? "unauthorized" : "authorized";
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === expected) void closeAuth(authWorkflow);
+		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
 	}, [authWorkflow, readinessAgents, closeAuth, cliLoginOnOwnRow]);
 
 	useEffect(() => {

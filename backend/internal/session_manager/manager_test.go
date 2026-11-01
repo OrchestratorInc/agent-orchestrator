@@ -6362,6 +6362,35 @@ func TestSpawnOrchestrator_ProjectRulesInSystemPrompt(t *testing.T) {
 	}
 }
 
+// TestSpawnOrchestrator_OrchestratorRulesFileInSystemPrompt covers
+// OrchestratorRulesFile: a repo-relative file read fresh on every spawn and
+// restore, mirroring AgentRulesFile for the worker role. Unlike inline
+// OrchestratorRules (persisted as config text), editing this file's contents
+// takes effect on the session's next spawn/restore without any config write.
+func TestSpawnOrchestrator_OrchestratorRulesFileInSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	rulesPath := filepath.Join(dir, "orchestrator-rules.md")
+	if err := os.WriteFile(rulesPath, []byte("Delegate architecture reviews to architect-agent.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testRoleAgents()
+	cfg.OrchestratorRulesFile = "orchestrator-rules.md"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: dir, Config: cfg}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator}); err != nil {
+		t.Fatal(err)
+	}
+
+	systemPrompt := agent.lastLaunch.SystemPrompt
+	if !strings.Contains(systemPrompt, "Delegate architecture reviews to architect-agent.") {
+		t.Fatalf("orchestratorRulesFile contents missing from system prompt:\n%s", systemPrompt)
+	}
+}
+
 func TestSpawnOrchestrator_WorkspaceProjectPromptListsRepos(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -6555,24 +6584,32 @@ func TestSystemPrompt_ArtifactRequestedOutput(t *testing.T) {
 		kind            domain.SessionKind
 		projectID       domain.ProjectID
 		requestedOutput domain.RequestedOutput
+		chat            bool
 		want            bool
 	}{
-		{name: "ordinary worker", kind: domain.KindWorker, projectID: "mer"},
-		{name: "artifact worker", kind: domain.KindWorker, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, want: true},
-		{name: "artifact standalone worker", kind: domain.KindWorker, requestedOutput: domain.RequestedOutputArtifact, want: true},
-		{name: "orchestrator ignores artifact", kind: domain.KindOrchestrator, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact},
+		{name: "ordinary worker", kind: domain.KindWorker, projectID: "mer", chat: true},
+		{name: "artifact worker chat", kind: domain.KindWorker, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, chat: true, want: true},
+		{name: "artifact worker terminal", kind: domain.KindWorker, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, want: true},
+		{name: "artifact standalone worker", kind: domain.KindWorker, requestedOutput: domain.RequestedOutputArtifact, chat: true, want: true},
+		{name: "orchestrator ignores artifact", kind: domain.KindOrchestrator, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, chat: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, tc.projectID, "mer-7", tc.requestedOutput, true)
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, tc.projectID, "mer-7", tc.requestedOutput, tc.chat)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
 			if got := strings.Contains(sp, "## Artifact Output"); got != tc.want {
 				t.Fatalf("artifact output section present = %v, want %v:\n%s", got, tc.want, sp)
 			}
-			if tc.want && !strings.Contains(sp, "Do not open a pull request") {
-				t.Fatalf("artifact output section missing the no-PR rule:\n%s", sp)
+			if tc.want {
+				if !strings.Contains(sp, "Do not push or open a PR/MR unless") ||
+					!strings.Contains(sp, "later direct human instruction or authorized orchestrator scope update") {
+					t.Errorf("artifact prompt missing conditional publishing rule:\n%s", sp)
+				}
+				if strings.Contains(sp, "Do not open a pull request, and do not commit the deliverable") {
+					t.Errorf("artifact prompt retains unconditional no-PR rule:\n%s", sp)
+				}
 			}
 		})
 	}

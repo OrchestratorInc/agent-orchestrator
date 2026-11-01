@@ -1,20 +1,30 @@
-import { getAccountAccessToken, loadAccount, type Account } from "./account";
-import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
+import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
+import { isQuickTunnelHost } from "./staleTunnel";
 
 export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
+// Tunnels are a quick tunnel's name or AO Cloud's fixed address,
+// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
+// kept beside the pairing's tunnel rather than in its place.
+function isTunnelAddress(url: URL): boolean {
+	const name = url.hostname.toLowerCase();
+	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
+}
+
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".trycloudflare.com") ? "tunnel" : url.hostname.endsWith(".ts.net") ? "tailscale" : "lan",
+			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",
@@ -62,6 +72,30 @@ async function syncFetch(url: string, init: RequestInit, timeoutMs: number, sign
 	finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }
 
+// A session from the previous WorkOS environment tagged this phone's account
+// machines with that environment's user ID. The control plane links both users
+// to one AO account, so the listing still has those machines: retag them in
+// place, keeping the phone's name, icon and endpoints, and carry the hidden set
+// over. Otherwise the stale-ID cleanup below would unpair every one of them and
+// re-import them without their local preferences. Only the same email counts
+// as the same person.
+async function adoptPreviousAccount(account: Account, listed: Set<string>, current: () => Promise<boolean>): Promise<void> {
+	const previous = await loadPreviousAccount();
+	if (!previous || previous.id === account.id) return;
+	if (previous.email.trim().toLowerCase() === account.email.trim().toLowerCase()) {
+		const adopted = await mutateAccountHosts(async () => {
+			if (!await current()) return false;
+			await moveIgnoredAccountHosts(previous.id, account.id);
+			for (const host of await loadHosts()) {
+				if (host.accountUserId === previous.id && listed.has(host.id)) await saveHost({ ...host, accountUserId: account.id });
+			}
+			return true;
+		});
+		if (!adopted) return;
+	}
+	await clearPreviousAccount(previous.id);
+}
+
 async function performSync(account: Account, signal: AbortSignal, current: () => Promise<boolean>): Promise<void> {
 	const access = await getAccountAccessToken();
 	if (!access || !await current()) return;
@@ -69,7 +103,9 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
 	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
-	const { hosts } = response.body as { hosts: AccountHost[] };
+	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
+	if (!await current()) return;
+	await adoptPreviousAccount(account, new Set(hosts.map((item) => item.hostId)), current);
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
@@ -87,13 +123,14 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id, "X-AO-Account-ID": account.id },
 				}, 5_000, signal);
 				if (!claim.ok) continue;
-				const issued = claim.body as { hostId?: string; token?: string };
+				const issued = claim.body as { hostId?: string; token?: string; hostKey?: string };
 				if (issued.hostId !== manual.id || !/^[0-9a-f]{64}$/.test(issued.token ?? "")) continue;
 				const item = { hostId: manual.id, label: manual.name, url: base, token: issued.token! };
 				if (!await current() || (await ignoredAccountHosts(account.id)).has(manual.id)) break;
 				const saved = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts/${encodeURIComponent(manual.id)}`, {
 					method: "PUT", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-					body: JSON.stringify({ label: item.label, url: item.url, token: item.token }),
+					// The machine's host key, only where AO Cloud says it takes one: it then needs the machine's own signature.
+					body: JSON.stringify({ label: item.label, url: item.url, token: item.token, hostKey: hostKeys === true ? issued.hostKey : undefined }),
 				}, 10_000, signal);
 				if (saved.ok) hosts.push(item);
 				break;
@@ -117,9 +154,12 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 			if (!await current()) return;
 			if (existing && !existing.accountUserId) {
 				// Keep the original pairing password and private-network endpoints,
-				// but accept the host's newly published quick-tunnel address.
+				// but accept the host's newly published quick-tunnel address. A
+				// fixed address goes beside the pairing's tunnel, not in its place:
+				// a listing the machine no longer updates, after a new password or
+				// a link to another account, keeps a fixed address nothing serves.
 				const endpoints = [address, ...existing.endpoints.filter((candidate) =>
-					address.kind === "tunnel" ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
+					address.kind === "tunnel" && isQuickTunnelHost(address.host) ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
 				if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
 				return;
 			}

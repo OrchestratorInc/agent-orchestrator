@@ -184,7 +184,7 @@ func TestProjectGet_Success(t *testing.T) {
 
 func TestProjectGet_JSON(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := projectServer(t, http.StatusOK, `{"status":"degraded","project":{"id":"demo","name":"Demo","path":"/repo/demo","resolveError":"config missing","config":{"worker":{"agent":"amp","agentConfig":{"mode":"high"}}}}}`)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"degraded","project":{"id":"demo","name":"Demo","path":"/repo/demo","resolveError":"config missing","config":{"orchestratorRulesFile":"docs/orch.md","worker":{"agent":"amp","agentConfig":{"mode":"high"}}}}}`)
 	writeRunFileFor(t, cfg, srv)
 
 	out, errOut, err := executeCLI(t, Deps{
@@ -202,6 +202,9 @@ func TestProjectGet_JSON(t *testing.T) {
 	}
 	if got.Status != "degraded" || got.Project.ID != "demo" || got.Project.ResolveError != "config missing" {
 		t.Fatalf("get json = %#v, want degraded demo with resolve error", got)
+	}
+	if got.Project.Config == nil || got.Project.Config.OrchestratorRulesFile != "docs/orch.md" {
+		t.Fatalf("get json orchestratorRulesFile = %#v, want preserved", got.Project.Config)
 	}
 	if got.Project.Config == nil || got.Project.Config.Worker.AgentConfig.Mode != "high" {
 		t.Fatalf("get json worker config = %#v, want preserved amp high mode", got.Project.Config)
@@ -240,7 +243,7 @@ func TestProjectGet_NotFound(t *testing.T) {
 
 func TestProjectSetConfig_RulesFlags(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"agentRules":"Run tests.","agentRulesFile":"docs/rules.md","orchestratorRules":"Delegate."}}}`)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"agentRules":"Run tests.","agentRulesFile":"docs/rules.md","orchestratorRules":"Delegate.","orchestratorRulesFile":"docs/orch.md"}}}`)
 	writeRunFileFor(t, cfg, srv)
 
 	out, errOut, err := executeCLI(t, Deps{
@@ -249,6 +252,7 @@ func TestProjectSetConfig_RulesFlags(t *testing.T) {
 		"--agent-rules", "Run tests.",
 		"--agent-rules-file", "docs/rules.md",
 		"--orchestrator-rules", "Delegate.",
+		"--orchestrator-rules-file", "docs/orch.md",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
@@ -260,11 +264,31 @@ func TestProjectSetConfig_RulesFlags(t *testing.T) {
 	if err := json.Unmarshal(capture.body, &got); err != nil {
 		t.Fatalf("decode request body: %v\nbody=%s", err, capture.body)
 	}
-	if got.Config.AgentRules != "Run tests." || got.Config.AgentRulesFile != "docs/rules.md" || got.Config.OrchestratorRules != "Delegate." {
+	if got.Config.AgentRules != "Run tests." || got.Config.AgentRulesFile != "docs/rules.md" || got.Config.OrchestratorRules != "Delegate." || got.Config.OrchestratorRulesFile != "docs/orch.md" {
 		t.Fatalf("rules config = %#v", got.Config)
 	}
 	if !strings.Contains(out, "updated config for project demo") {
 		t.Fatalf("output missing update message:\n%s", out)
+	}
+}
+
+func TestProjectSetConfig_ConfigJSONKeepsOrchestratorRulesFile(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{"orchestratorRulesFile":"docs/orch.md"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request body: %v\nbody=%s", err, capture.body)
+	}
+	if got.Config.OrchestratorRulesFile != "docs/orch.md" {
+		t.Fatalf("config-json dropped orchestratorRulesFile: %s", capture.body)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -142,6 +143,81 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 	}
 }
 
+func TestStartGeminiInjectsAuthWhenEditorIsReady(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("gemini"), opener)
+
+	got, err := svc.Start(context.Background(), "gemini")
+	if err != nil {
+		t.Fatalf("Start(gemini): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:  []string{"/test/bin/gemini"},
+		Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "How would you like to authenticate for this project?", SkipInput: true},
+			{
+				Text:            "Type your message or @path/to/file",
+				RawPrefix:       "/auth",
+				SubmitReadyText: "Manage authentication",
+			},
+		},
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(gemini) terminal input = %q, want none so setup is not held behind a button", got.TerminalInput)
+	}
+}
+
+func TestGeminiReadyStateMatchesRenderedEditor(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["gemini"].initialInputReadyStates
+	if got := shellterm.MatchInitialInputReadyState("Gemini CLI v0.63.0\nAuthenticated with gemini-api-key /auth", readyStates); got != nil {
+		t.Fatalf("startup banner matched before editor was ready: %#v", got)
+	}
+	if got := shellterm.MatchInitialInputReadyState("Type your message or @path/to/file", readyStates); got == nil || got.SkipInput {
+		t.Fatal("rendered Gemini editor did not match its ready state")
+	}
+}
+
+func TestGeminiReadyStateSkipsOpenAuthDialog(t *testing.T) {
+	t.Parallel()
+
+	// The picker wins even when scrollback still contains the editor marker.
+	output := "Type your message or @path/to/file\nGet started\nHow would you like to authenticate for this project?"
+	got := shellterm.MatchInitialInputReadyState(output, planByAgentID["gemini"].initialInputReadyStates)
+	if got == nil || !got.SkipInput {
+		t.Fatalf("open Gemini auth dialog = %#v, want skip input", got)
+	}
+}
+
+func TestStartOMPOpensNativeProviderSetupWithoutInjectingInput(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("omp"), opener)
+
+	got, err := svc.Start(context.Background(), "omp")
+	if err != nil {
+		t.Fatalf("Start(omp): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Argv:  []string{"/test/bin/omp", "setup"},
+		Title: "Log in to OMP",
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(omp) terminal input = %q, want none because OMP owns provider sign-in", got.TerminalInput)
+	}
+}
+
 // Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
 // reviewed markers are checked against what Pi actually renders.
 const (
@@ -247,6 +323,39 @@ func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	want := []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login", "--executable", "/managed/bin/codex", "--use-default-credential-store"}
 	if got := opener.input.Argv; !reflect.DeepEqual(got, want) {
 		t.Fatalf("terminal argv = %#v, want trusted Codex login menu", got)
+	}
+}
+
+func TestStartPinsClaudeDataDirectoryAcrossAuthWorkspaceChange(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("AO_DATA_DIR", "data")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(foundExecutable("claude"), nil, opener, cfg.DataDir)
+	svc.selfExecutable = func() (string, error) { return "/managed/bin/ao", nil }
+	if _, err := svc.Start(context.Background(), "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if got := opener.input.Env["AO_DATA_DIR"]; got != cfg.DataDir || !filepath.IsAbs(got) {
+		t.Fatalf("launcher data directory = %q, want absolute %q", got, cfg.DataDir)
+	}
+	// Reproduce the launcher's cwd and inherited environment without starting
+	// a process. The login command uses config.Load to find its token file.
+	authWorkspace := filepath.Join(cfg.DataDir, "auth-workspace", "shellterm-test")
+	if err := os.MkdirAll(authWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(authWorkspace)
+	t.Setenv("AO_DATA_DIR", opener.input.Env["AO_DATA_DIR"])
+	launcherConfig, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launcherConfig.DataDir != cfg.DataDir {
+		t.Fatalf("launcher resolved %q, want daemon root %q", launcherConfig.DataDir, cfg.DataDir)
 	}
 }
 

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	get: vi.fn(),
 	capture: vi.fn(),
 	deleteCloudArtifact: vi.fn(),
+	refreshCloudAccess: vi.fn(),
 	hideShellTopbar: true,
 }));
 
@@ -37,7 +38,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudArtifacts")>(),
-	useCloudArtifactAccess: (session: Pick<WorkspaceSession, "cloud">) => ({ data: session.cloud ? "https://cp.test/artifact-files/token/" : undefined }),
+	useCloudArtifactAccess: (session: Pick<WorkspaceSession, "cloud">) => ({ data: session.cloud ? "https://cp.test/artifact-files/token/" : undefined, refetch: mocks.refreshCloudAccess }),
+}));
+vi.mock("../lib/cloud-cp/renderer-client", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-cp/renderer-client")>(),
+	cloudCpFetch: async () => new Response("Cloud artifact thumbnail"),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
 	CloudArtifactFrame: ({ title, url }: { title: string; url: string }) => <iframe data-testid="cloud-artifact-preview" title={title} src={url} />,
@@ -367,6 +372,23 @@ describe("ArtifactsView", () => {
 		expect(screen.getAllByRole("listitem")).toHaveLength(6);
 		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
 		expect(fetch).toHaveBeenCalledTimes(4);
+	});
+
+	it("caps cloud HTML thumbnails and shares their live frame across gallery sections", async () => {
+		const pages: Parameters<typeof session>[2] = Array.from({ length: 6 }, (_, index) => ({ name: `page-${index}.html`, kind: "html", updatedAt: "2026-10-11T10:00:00Z" }));
+		const cloud = session("cloud-html", "Cloud design review", pages);
+		cloud.cloud = { orgId: "org-1" };
+		mocks.workspaces = [{ id: "cloud", name: "Cloud", path: "", kind: CLOUD_PROJECT_KIND, sessions: [cloud] }, withArtifacts[1]];
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["cloud-html", "page-0.html"])] });
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(4));
+		expect(screen.getByRole("region", { name: "Pinned" }).querySelectorAll("iframe")).toHaveLength(1);
+		expect(screen.getByRole("region", { name: "Recent" }).querySelectorAll("iframe")).toHaveLength(2);
+		expect(screen.getByRole("region", { name: "Cloud" }).querySelectorAll("iframe")).toHaveLength(1);
+		for (const frame of container.querySelectorAll("iframe")) {
+			expect(frame.src).toMatch(/^https:\/\/cp.test\/artifact-files\/token\/page-\d.html\?v=/);
+		}
 	});
 
 	it.each(["missing", "network failure"])("shows an unavailable HTML preview for %s files after reopening", async (failure) => {

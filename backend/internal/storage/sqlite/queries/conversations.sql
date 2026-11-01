@@ -1300,6 +1300,25 @@ INSERT INTO conversation_messages (
     created_at, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: IncrementUsageMessageSummary :exec
+-- Adds one human message: a direct Chat message (pending_count), a steer, or
+-- a `/send`, plus at most one of the surface counters. Each counter is 0 or 1.
+INSERT INTO usage_message_summary (session_id, pending_count, steer_count, send_count,
+    desktop_count, mobile_count, cli_count, first_at, last_at)
+SELECT sqlc.arg(session_id), sqlc.arg(chat), sqlc.arg(steer), sqlc.arg(send),
+    sqlc.arg(desktop), sqlc.arg(mobile), sqlc.arg(cli), sqlc.arg(first_at), sqlc.arg(last_at) WHERE EXISTS (
+    SELECT 1 FROM sessions WHERE id = sqlc.arg(session_id) AND project_id IS NOT NULL
+)
+ON CONFLICT(session_id) DO UPDATE SET
+    pending_count = MIN(usage_message_summary.pending_count + excluded.pending_count, 1000000000),
+    steer_count = MIN(usage_message_summary.steer_count + excluded.steer_count, 1000000000),
+    send_count = MIN(usage_message_summary.send_count + excluded.send_count, 1000000000),
+    desktop_count = MIN(usage_message_summary.desktop_count + excluded.desktop_count, 1000000000),
+    mobile_count = MIN(usage_message_summary.mobile_count + excluded.mobile_count, 1000000000),
+    cli_count = MIN(usage_message_summary.cli_count + excluded.cli_count, 1000000000),
+    first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
+    last_at = excluded.last_at;
+
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key
 -- because AO does not know the message id the provider will use.
