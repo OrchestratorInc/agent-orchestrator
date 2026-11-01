@@ -3237,6 +3237,25 @@ describe("useTaskLaunch Cloud pre-start", () => {
 		await waitFor(() => expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "pre-2"));
 	});
 
+	it("starts a fresh session named after the brief when the control plane cannot rename the pre-started one", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		h.cloudCreateSession.mockResolvedValueOnce({ session: { id: "pre-3", harness: "codex" } }).mockResolvedValue({ session: { id: "fresh-1", harness: "codex" } });
+		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-3", harness: "codex", runtimeConnected: false } });
+		h.cloudRenameSession.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
+		await screen.findByText(/starting/);
+		let sessionId!: string;
+		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-3" }); });
+		expect(sessionId).toBe("fresh-1");
+		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
+		expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ prompt: "Fix the bug", displayName: "Fix the bug" }), { idempotencyKey: "req-3" });
+		await waitFor(() => expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "pre-3"));
+	});
+
 	it("never pre-starts a Coder project's session", async () => {
 		const queryClient = cloudFixture("codex");
 		h.cloudProjects[0].config = { ...h.cloudProjects[0].config, sandboxProvider: "coder" };

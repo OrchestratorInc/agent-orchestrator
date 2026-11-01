@@ -237,9 +237,14 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 					if (input.clientRequestId) claimedCloudRef.current.set(input.clientRequestId, preparedId);
 					if (prepared?.sessionId === preparedId) setPreparedCloud(undefined);
 					const started = await startPreparedCloudSession(cloudClient, cloudOrg.id, preparedId, input).catch((err: unknown) => {
-						// A session that is gone (deleted, or failed to start) gives way
-						// to a fresh one; any other failure keeps the claim for a retry.
+						// A session that is gone (deleted, or failed to start), or a control
+						// plane that cannot name it after the brief, gives way to a fresh one;
+						// any other failure keeps the claim for a retry.
 						if (err instanceof CloudCpError && (err.status === 404 || err.code === "SESSION_TERMINATED")) return undefined;
+						if (err instanceof PreparedSessionUnnamed) {
+							discardPreparedCloudSession(cloudClient, cloudOrg.id, preparedId);
+							return undefined;
+						}
 						throw err;
 					});
 					if (started) {
@@ -1424,10 +1429,14 @@ function discardPreparedCloudSession(client: ReturnType<typeof useCloudCp>["clie
 	);
 }
 
+/** A control plane that cannot rename a session: its pre-started one cannot take the brief's name. */
+class PreparedSessionUnnamed extends Error {}
+
 /**
  * Makes a pre-started Cloud session the task: named after the brief, with the
  * brief as its first message and the task's settings on that turn. A control
- * plane that cannot rename a session keeps the placeholder name.
+ * plane that predates renaming refuses (PreparedSessionUnnamed) before the
+ * brief is sent, so the task starts as a fresh session named after it.
  */
 async function startPreparedCloudSession(
 	client: ReturnType<typeof useCloudCp>["client"],
@@ -1436,7 +1445,10 @@ async function startPreparedCloudSession(
 	input: CreateTaskInput,
 ): Promise<CloudCpSession> {
 	const displayName = input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code");
-	const renamed = await client.renameSession(orgId, sessionId, displayName).then((answer) => answer.session, () => undefined);
+	const renamed = await client.renameSession(orgId, sessionId, displayName).then((answer) => answer.session, (error: unknown) => {
+		if (error instanceof CloudCpError && (error.status === 404 || error.status === 405)) throw new PreparedSessionUnnamed();
+		return undefined;
+	});
 	await client.sendSessionMessage(orgId, sessionId, {
 		text: input.brief,
 		...(input.model ? { model: input.model } : {}),
