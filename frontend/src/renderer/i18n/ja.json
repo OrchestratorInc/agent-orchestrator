@@ -3713,7 +3713,7 @@
 	"settings.models.useConfiguredDefault": "プロジェクトまたはエージェントの既定を使用",
 	"createProject.placementQuestion": "エージェントはどこでこのコードを扱いますか？",
 	"createProject.placementLocal": "このコンピューター",
-	"createProject.placementLocalDesc": "エージェントはここで、あなたのフォルダーで動きます",
+	"createProject.placementLocalDesc": "コードをローカルに保管",
 	"createProject.placementCloud": "クラウド",
 	"createProject.backToPlacement": "戻る",
 	"createProject.placementCloudDesc": "エージェントごとのサンドボックス",

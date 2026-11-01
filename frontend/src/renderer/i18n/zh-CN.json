@@ -3695,7 +3695,7 @@
 	"settings.models.useConfiguredDefault": "使用项目或智能体默认值",
 	"createProject.placementQuestion": "智能体要在哪里处理这些代码？",
 	"createProject.placementLocal": "在这台电脑上",
-	"createProject.placementLocalDesc": "智能体在本机、你自己的文件夹中运行",
+	"createProject.placementLocalDesc": "将代码保存在本地",
 	"createProject.placementCloud": "云端",
 	"createProject.backToPlacement": "返回",
 	"createProject.placementCloudDesc": "每个智能体一个托管沙盒",

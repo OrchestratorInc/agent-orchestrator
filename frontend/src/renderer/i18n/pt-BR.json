@@ -3782,7 +3782,7 @@
 	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente",
 	"createProject.placementQuestion": "Onde os agentes devem trabalhar neste código?",
 	"createProject.placementLocal": "Neste computador",
-	"createProject.placementLocalDesc": "Os agentes rodam aqui, nas suas pastas",
+	"createProject.placementLocalDesc": "Mantenha seu código localmente",
 	"createProject.placementCloud": "Nuvem",
 	"createProject.backToPlacement": "Voltar",
 	"createProject.placementCloudDesc": "Um sandbox hospedado por agente",

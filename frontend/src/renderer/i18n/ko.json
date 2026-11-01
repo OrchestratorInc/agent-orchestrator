@@ -3713,7 +3713,7 @@
 	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용",
 	"createProject.placementQuestion": "에이전트가 이 코드를 어디에서 작업할까요?",
 	"createProject.placementLocal": "이 컴퓨터에서",
-	"createProject.placementLocalDesc": "에이전트가 여기, 내 폴더에서 실행됩니다",
+	"createProject.placementLocalDesc": "코드를 로컬에 보관",
 	"createProject.placementCloud": "클라우드",
 	"createProject.backToPlacement": "뒤로",
 	"createProject.placementCloudDesc": "에이전트마다 호스팅 샌드박스",

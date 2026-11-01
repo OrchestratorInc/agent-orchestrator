@@ -3713,7 +3713,7 @@
 	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden",
 	"createProject.placementQuestion": "Wo sollen Agents an diesem Code arbeiten?",
 	"createProject.placementLocal": "Auf diesem Computer",
-	"createProject.placementLocalDesc": "Agents laufen hier, in deinen eigenen Ordnern",
+	"createProject.placementLocalDesc": "Behalte deinen Code lokal",
 	"createProject.placementCloud": "Cloud",
 	"createProject.backToPlacement": "Zurück",
 	"createProject.placementCloudDesc": "Eine gehostete Sandbox pro Agent",

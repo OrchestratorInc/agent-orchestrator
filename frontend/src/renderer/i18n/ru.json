@@ -3840,7 +3840,7 @@
 	"settings.models.useConfiguredDefault": "Использовать модель проекта или агента по умолчанию",
 	"createProject.placementQuestion": "Где агенты будут работать с этим кодом?",
 	"createProject.placementLocal": "На этом компьютере",
-	"createProject.placementLocalDesc": "Агенты работают здесь, в ваших папках",
+	"createProject.placementLocalDesc": "Храните код локально",
 	"createProject.placementCloud": "Облако",
 	"createProject.backToPlacement": "Назад",
 	"createProject.placementCloudDesc": "Своя песочница для каждого агента",

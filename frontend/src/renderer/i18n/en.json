@@ -3694,7 +3694,7 @@
 	"settings.models.useConfiguredDefault": "Use project or agent default",
 	"createProject.placementQuestion": "Where should agents work on this code?",
 	"createProject.placementLocal": "On this computer",
-	"createProject.placementLocalDesc": "Agents run here, in your own folders",
+	"createProject.placementLocalDesc": "Keep your code locally",
 	"createProject.placementCloud": "Cloud",
 	"createProject.backToPlacement": "Back",
 	"createProject.placementCloudDesc": "A hosted sandbox for each agent",
