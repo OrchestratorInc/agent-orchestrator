@@ -80,6 +80,27 @@ func TestBuild_MatchesEmbedded(t *testing.T) {
 	}
 }
 
+func TestBuild_TelemetryIdentityUsesNamedSchema(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	if _, ok := doc.Components.Schemas["TelemetryIdentityResponse"]; !ok {
+		t.Fatal("named TelemetryIdentityResponse schema is missing")
+	}
+	if _, ok := doc.Components.Schemas["ControllersTelemetryIdentityResponse"]; ok {
+		t.Fatal("default controller-prefixed telemetry identity schema remains")
+	}
+}
+
 func TestBuild_InstallJobTargetRemainsAnEnum(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {
@@ -334,6 +355,18 @@ func TestBuild_OMPIsPubliclyDelegatable(t *testing.T) {
 	agents := doc.Components.Schemas["DelegateTaskRequest"].Properties["agent"].Enum
 	if !slices.Contains(agents, "omp") {
 		t.Fatalf("DelegateTaskRequest agent enum = %v, want omp", agents)
+	}
+}
+
+func TestBuild_CodewhaleIsPubliclySpawnableAndDelegatable(t *testing.T) {
+	doc := buildSchemas(t)
+	harnesses := doc.Components.Schemas["SpawnSessionRequest"].Properties["harness"].Enum
+	if !slices.Contains(harnesses, "codewhale") {
+		t.Fatalf("SpawnSessionRequest harness enum = %v, want codewhale", harnesses)
+	}
+	agents := doc.Components.Schemas["DelegateTaskRequest"].Properties["agent"].Enum
+	if !slices.Contains(agents, "codewhale") {
+		t.Fatalf("DelegateTaskRequest agent enum = %v, want codewhale", agents)
 	}
 }
 

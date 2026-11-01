@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -100,6 +101,44 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	}
 }
 
+func TestLANManagerServesHTTP2WithoutTLS(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, r.Proto)
+	})
+	st := &authState{}
+	st.setHash(mobilebridge.HashPassword("secret12"))
+	m := NewLANManager(inner, st, 0, slog.Default(), nil)
+	port, err := m.Start(0)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer m.Stop(context.Background())
+
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{Transport: &http.Transport{Protocols: protocols}}
+	base := fmt.Sprintf("http://127.0.0.1:%d/anything", port)
+	resp, err := client.Get(base)
+	if err != nil {
+		t.Fatalf("h2c without auth: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("h2c without auth: got %d want 401", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodGet, base, nil)
+	req.Header.Set("Authorization", "Bearer secret12")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("h2c with auth: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "HTTP/2.0" {
+		t.Fatalf("h2c with auth: got %d %q, want 200 over HTTP/2.0", resp.StatusCode, body)
+	}
+}
+
 func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
 	m := NewMobileLAN(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), "h_test", 0, nil, nil)
 	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))
@@ -112,6 +151,39 @@ func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
 	}
 	if _, err := m.Start(0); err == nil {
 		t.Fatal("LAN start silently reused a loopback-only listener")
+	}
+}
+
+func TestAccountTokenIssuanceReturnsThroughRealLANListener(t *testing.T) {
+	bridge := &controllers.BridgeService{ConfigPath: mobilebridge.Path(t.TempDir()), HostID: "h_test"}
+	if err := mobilebridge.Save(bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	mountMobile(router, &controllers.MobileController{Bridge: bridge})
+	lan := NewMobileLAN(router, bridge.HostID, 0, nil, nil)
+	bridge.LAN = lan
+	lan.SetPasswordHash(mobilebridge.HashPassword("secret12"))
+	port, err := lan.StartLoopback(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lan.Stop(context.Background())
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, account := range []string{"account-a", "account-b"} {
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/remote-host/account-token", port), nil)
+		req.Header.Set("Authorization", "Bearer secret12")
+		req.Header.Set("X-AO-Account-ID", account)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("account linking lost its response: %v", err)
+		}
+		var issued controllers.RemoteHostAccountTokenResponse
+		err = json.NewDecoder(resp.Body).Decode(&issued)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || err != nil || issued.HostID != bridge.HostID || len(issued.Token) != 64 {
+			t.Fatalf("account linking: status=%d decode=%v host=%s tokenLength=%d", resp.StatusCode, err, issued.HostID, len(issued.Token))
+		}
 	}
 }
 
@@ -159,7 +231,7 @@ func TestLANManagerIdentityEndpoint(t *testing.T) {
 // TestLANManagerBlocksLoopbackOnlyControlRoutes proves the LAN listener never
 // serves /shutdown, /internal/*, /api/v1/mobile*, /api/v1/dev*,
 // /api/v1/browser*, or the Codex credential routes under
-// /api/v1/agents/codex/accounts* and /api/v1/agents/codex/account-switches* —
+// /api/v1/agents/codex/accounts* —
 // even when the request carries a spoofed Host: 127.0.0.1
 // and valid LAN auth, since gating on Host alone (localControlRequest) is what
 // let a LAN client reach these routes.
@@ -177,22 +249,30 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	defer m.Stop(context.Background())
 
 	blocked := []string{
+		"/api/v1/awake",
+		"/api/v1/awake/sessions",
+		"/api/v1/awake/settings",
+		"/api/v1/awake/low-power/revoke",
+		"/api/v1/awake/browser",
 		"/shutdown",
 		"/internal/telemetry/cli-invoked",
-		"/internal/agent-switch-observability/prepare-disable",
-		"/internal/agent-switch-observability/apply-policy",
 		"/api/v1/mobile/status",
+		"/api/v1/mobile/keep-awake",
 		"/api/v1/mobile/devices",
 		"/api/v1/mobile/devices/i1",
 		"/api/v1/dev/import-projects",
 		"/api/v1/browser/status",
 		"/api/v1/desktop/sessions/ao-1/workspace",
+		"/api/v1/desktop/sessions/ao-1/artifacts",
 		"/api/v1/system/install/tmux",
+		"/api/v1/system/install/cua-driver",
+		"/api/v1/computer-use/status",
+		"/api/v1/computer-use/call",
+		"/api/v1/settings/computer-use",
 		"/api/v1/sessions/ao-1/preview/server",
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/accounts/login-terminal",
 		"/api/v1/agents/codex/accounts/login-operations/op-1/verify",
-		"/api/v1/agents/codex/account-switches",
 	}
 	for _, path := range blocked {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
@@ -420,6 +500,10 @@ func (c *lanFakeAgentCatalog) Models(_ context.Context, agentID, _ string, _ boo
 	return ports.AgentModelCatalog{AgentID: agentID}, nil
 }
 
+func (c *lanFakeAgentCatalog) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	return c.Models(ctx, agentID, projectID, refresh)
+}
+
 func (c *lanFakeAgentCatalog) RevalidateModels(_ context.Context, agentID, _ string) (ports.AgentModelCatalog, error) {
 	c.calls++
 	return ports.AgentModelCatalog{AgentID: agentID}, nil
@@ -485,6 +569,28 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s: got %d want 404", path, resp.StatusCode)
+		}
+	}
+}
+
+// A paired phone must not turn on "Let agents use this computer": that hands
+// desktop control to every new chat on this machine. The block is the switch's
+// own route; the rest of settings stays reachable.
+func TestLANBlocksTheComputerUseSwitchOnly(t *testing.T) {
+	reached := false
+	handler := lanControlBlock(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	for path, blocked := range map[string]bool{
+		"/api/v1/settings/computer-use":    true,
+		"/api/v1/settings/computer-use/":   true,
+		"/api/v1/settings":                 false,
+		"/api/v1/settings/version-refresh": false,
+		"/api/v1/settings/computer-user":   false,
+	} {
+		reached = false
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"enabled":true}`)))
+		if got := recorder.Code == http.StatusNotFound && !reached; got != blocked {
+			t.Fatalf("PATCH %s: status %d, reached %v; want blocked=%v", path, recorder.Code, reached, blocked)
 		}
 	}
 }

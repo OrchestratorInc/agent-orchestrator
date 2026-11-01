@@ -56,6 +56,13 @@ func TestClaimCommandsCheckoutOutput(t *testing.T) {
 				if want := "  checkout: " + tc.wantCheckout + "\n"; !strings.Contains(out, want) {
 					t.Errorf("%v output = %q, want %q", args, out, want)
 				}
+				if !tc.branchChanged {
+					for _, guidance := range []string{"verified full head SHA", "Do not use FETCH_HEAD", "even on failure"} {
+						if !strings.Contains(out, guidance) {
+							t.Errorf("%v missing safe checkout guidance %q: %s", args, guidance, out)
+						}
+					}
+				}
 				if strings.Contains(out, "already on PR branch") || strings.Contains(out, "switched to PR branch") != tc.branchChanged {
 					t.Errorf("%v output contradicts branchChanged=%t: %s", args, tc.branchChanged, out)
 				}

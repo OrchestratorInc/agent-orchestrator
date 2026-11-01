@@ -1,6 +1,8 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { VitePlugin } from "@electron-forge/plugin-vite";
+import { FusesPlugin } from "@electron-forge/plugin-fuses";
+import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import { rebuild } from "@electron/rebuild";
 import electronPackage from "electron/package.json";
 import MakerNSIS from "./makers/maker-nsis";
@@ -12,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
+import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -63,9 +66,11 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
+		// AO Browser Bridge (Chrome extension); the daemon finds it beside daemon/.
+		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -173,6 +178,9 @@ const config: ForgeConfig = {
 				const helperBuild = spawnSync(process.execPath, [path.resolve("scripts/build-update-helper.mjs"), "--arch", arch], { stdio: "inherit" });
 				if (helperBuild.error) throw helperBuild.error;
 				if (helperBuild.status !== 0) throw new Error("macOS update helper build failed");
+                const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+                if (wakeBuild.error) throw wakeBuild.error;
+                if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -210,6 +218,12 @@ const config: ForgeConfig = {
 					resourcesPath = path.join(outputPath, appBundle, "Contents", "Resources");
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
+					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					// Run it: remote access depends on this signed copy starting, not just existing.
+					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
+					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
+					const cloudflaredVersion = spawnSync(cloudflared, ["--version"], { encoding: "utf8", timeout: 10_000 });
+					if (cloudflaredVersion.status !== 0) throw new Error(`packaged cloudflared failed to run at ${cloudflared}: ${cloudflaredVersion.error?.message || cloudflaredVersion.stderr}`);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
@@ -260,11 +274,17 @@ const config: ForgeConfig = {
 		// the artifact CI ships for x64 — completely unverified: a regression of
 		// exactly the crash #3879 fixed could ship without any automated gate
 		// catching it.
+		//
+		// Before any of that, fail the build if the dmg lost its install window
+		// layout (.DS_Store, background, icon positions). Without them Finder
+		// shows a large plain window with two small icons in a corner, and
+		// nothing else would notice. Runs on unsigned builds too.
 		postMake: async (_forgeConfig, makeResults) => {
 			for (const result of makeResults) {
 				if (result.platform !== "darwin") continue;
 				for (const artifact of result.artifacts) {
 					if (artifact.endsWith(".dmg")) {
+						await checkMacDmgLayout(artifact);
 						if (await sealDmg(artifact)) await verifyDmg(artifact);
 					} else if (artifact.endsWith(".zip") && isSigningConfigured()) {
 						await verifyMacArtifact(artifact);
@@ -282,11 +302,16 @@ const config: ForgeConfig = {
 		new MakerNSIS(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				// The name shown in the installer, the updater, the shortcuts, and
+				// Windows Apps. It matches the app's display name in main.ts.
+				productName: "Orchestrator.inc",
 				// Match the packaged binary name so the Start menu shortcut targets
 				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
 				icon: "assets/icon.ico",
+				// Keep the installer filename unchanged. electron-builder names it
+				// after productName by default.
+				nsis: { artifactName: "Agent Orchestrator Setup ${version}.${ext}" },
 			},
 			["win32"],
 		),
@@ -378,6 +403,26 @@ const config: ForgeConfig = {
 				{ entry: "src/annotate-preload.ts", config: "vite.preload.config.ts", target: "preload" },
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
+		}),
+		// Harden the packaged Electron binary. Flipped at package time, so dev
+		// (electron-forge start) and Playwright e2e, which launch the unfused
+		// node_modules/electron binary, are unaffected.
+		new FusesPlugin({
+			version: FuseVersion.V1,
+			// The app never re-execs itself as Node (no ELECTRON_RUN_AS_NODE /
+			// fork / utilityProcess); acp-runtime ships its own Node binary.
+			[FuseV1Options.RunAsNode]: false,
+			// Left on: with this fuse off Electron unsets NODE_OPTIONS from its own
+			// environment at startup, so the daemon, agents and terminals it spawns
+			// would silently lose a user's NODE_OPTIONS (Windows system env,
+			// launchctl setenv). Disabling it needs its own change.
+			[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: true,
+			[FuseV1Options.EnableNodeCliInspectArguments]: false,
+			// Enforced on macOS and Windows; Electron does not validate ASAR
+			// integrity on Linux.
+			[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+			[FuseV1Options.OnlyLoadAppFromAsar]: true,
+			[FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
 		}),
 	],
 };

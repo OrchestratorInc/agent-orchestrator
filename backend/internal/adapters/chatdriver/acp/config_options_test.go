@@ -136,3 +136,22 @@ func TestApplyAcceptedConfigOptionIgnoresUnknownID(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// pi-acp sends its thinking levels as a config option and again as legacy
+// session modes; the modes are not offered a second time as a "mode" option.
+func TestNormalizeSessionOptionsSkipsModesThatRepeatAnOption(t *testing.T) {
+	thinking := selectOption("thought_level", "Thinking", "low", "minimal", "low", "high")
+	modes := &acpsdk.SessionModeState{CurrentModeId: "low", AvailableModes: []acpsdk.SessionMode{
+		{Id: "minimal", Name: "Thinking: minimal"}, {Id: "low", Name: "Thinking: low"}, {Id: "high", Name: "Thinking: high"},
+	}}
+	for _, option := range normalizeSessionOptions([]acpsdk.SessionConfigOption{thinking}, nil, modes) {
+		if option.ID == "mode" {
+			t.Fatalf("mode option %+v repeats the thinking levels", option)
+		}
+	}
+	// Modes of their own are still offered.
+	modes.AvailableModes = []acpsdk.SessionMode{{Id: "ask", Name: "Ask"}, {Id: "code", Name: "Code"}}
+	if got := normalizeSessionOptions([]acpsdk.SessionConfigOption{thinking}, nil, modes); len(got) != 2 {
+		t.Fatalf("options = %+v, want the thinking option and the mode", got)
+	}
+}

@@ -19,12 +19,17 @@ export type ConversationActionsEntry = {
 	interfaceSupported: boolean;
 	interfaceReason?: string;
 	interfaceSwitching: boolean;
+	canRename: boolean;
 	canPin: boolean;
 	pinned: boolean;
 	canDelete: boolean;
+	/** Files in the session's artifact directory; undefined when not known. */
+	artifactCount?: number;
 	onMap(): void;
+	onFiles(): void;
 	onOpenShell(): void;
 	onPreview(): void;
+	onArtifacts(): void;
 	onPullRequests(): void;
 	onSettings(): void;
 	onSwitchInterface(): void;

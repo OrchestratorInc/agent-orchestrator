@@ -2,21 +2,30 @@
 # Fresh Ubuntu x64 entry point. The lower-level installer owns AO releases and service setup.
 set -euo pipefail
 
+# Braced so bash reads the whole script before running any of it: a download
+# cut off mid-way by `curl ... | bash` runs nothing.
+{
 usage() {
-	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--source-ref BRANCH] [--lan]'
+	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
 	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
+	printf '%s\n' 'Downloads stable by default; --nightly installs the newest published nightly.'
 }
 
 source_ref=""
+nightly=false
 tunnel=true
 while (($#)); do
 	case "$1" in
+		--nightly) nightly=true; shift ;;
 		--source-ref) source_ref="${2:?--source-ref needs a branch}"; shift 2 ;;
 		--lan) tunnel=false; shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; exit 2 ;;
 	esac
 done
+if "$nightly" && [[ -n "$source_ref" ]]; then
+	printf '%s\n' '--nightly cannot be combined with --source-ref.' >&2; exit 2
+fi
 
 [[ "$(id -u)" != 0 ]] || { printf '%s\n' 'Run as the host user, not root.' >&2; exit 1; }
 [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || { printf '%s\n' 'This bootstrap supports Ubuntu x64 only.' >&2; exit 1; }
@@ -45,7 +54,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 installer="$stage/setup-self-hosted.sh"
 if [[ -z "$source_ref" ]]; then
-	curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
+	curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
 else
 	sudo apt-get install -y build-essential pkg-config xz-utils
 	tools="$HOME/.local/ao-build-tools"
@@ -64,7 +73,7 @@ else
 		tar -xJf "$stage/node.tar.xz" -C "$tools"
 	fi
 	export PATH="$tools/go/bin:$tools/node-v22.23.2-linux-x64/bin:$PATH"
-	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/Untrivial-ai/agent-orchestrator.git "$stage/source"
+	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/OrchestratorInc/agent-orchestrator.git "$stage/source"
 	(
 		cd "$stage/source/frontend"
 		export GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=1536
@@ -79,6 +88,7 @@ else
 fi
 
 args=()
+"$nightly" && args+=(--nightly)
 [[ -z "$source_ref" ]] || args+=(--bundle "$bundle")
 if "$tunnel"; then
 	args+=(--tunnel)
@@ -87,3 +97,4 @@ bash "$installer" "${args[@]}"
 
 printf '\nDay-two commands: %s\n' "$HOME/.ao/host/current/resources/daemon/ao remote-host status"
 printf 'Service logs: journalctl --user -u ao-self-hosted.service -n 100 --no-pager\n'
+}

@@ -14,11 +14,9 @@
 // to a green that had only just said "mergeable". Purple means exactly that one
 // thing and nothing else.
 //
-// Blue is still absent. Every remaining hue means a state, so the interactive
-// accent carries emphasis with contrast — a filled pill against a hairline
-// outline — instead
-// of with a hue of its own. That keeps exactly one meaning per color, and stops
-// a filled button from reading as a status.
+// Blue is the stopped/exited worker treatment, matching the desktop board.
+// Interactive emphasis stays hue-less so a filled button cannot be mistaken
+// for a worker state.
 //
 // The terminal's ANSI ramp further down is the one exception: a terminal's 16
 // colors are a compatibility surface owned by the agent TUIs, not part of this
@@ -38,6 +36,9 @@
 // There is deliberately no exported `theme` const. A default would let a screen
 // keep rendering dark while compiling cleanly; without one, `tsc` names every
 // call site that still needs the hook.
+
+import { DEFAULT_THEME_STYLE, getThemeDefinition, type ThemeStyle } from "../../shared/theme/palettes";
+import { deriveMobileTheme, deriveTerminalTheme } from "./themeDerive";
 
 export type Theme = {
 	bgBase: string;
@@ -62,14 +63,28 @@ export type Theme = {
 	accentTint: string;
 	accentBorder: string;
 	accentPressed: string;
+	/**
+	 * The theme's own accent, for links, text selection and the cursor. The
+	 * default palette keeps these hue-less, so it equals `accent` there; a named
+	 * theme puts its signature colour here and nowhere a state could be implied.
+	 */
+	highlight: string;
+	/**
+	 * Android's text-selection fill: the highlight, translucent so the selected
+	 * text stays legible (iOS draws its own tint from `highlight`). The default
+	 * palette keeps it equal to `accentBorder`.
+	 */
+	selection: string;
 
 	orange: string;
+	blue: string;
 	amber: string;
 	red: string;
 	green: string;
 	purple: string;
 
 	tintOrange: string;
+	tintBlue: string;
 	tintAmber: string;
 	tintRed: string;
 	tintGreen: string;
@@ -113,14 +128,18 @@ export const darkTheme: Theme = {
 	accentTint: "rgba(244,245,247,0.14)",
 	accentBorder: "rgba(244,245,247,0.28)",
 	accentPressed: "rgba(244,245,247,0.22)",
+	highlight: "#f4f5f7",
+	selection: "rgba(244,245,247,0.28)",
 
 	orange: "#f59f4c",
+	blue: "#60a5fa",
 	amber: "#e8c14a",
 	red: "#ef6b6b",
 	green: "#74b98a",
 	purple: "#b49bf0",
 
 	tintOrange: "rgba(245,159,76,0.14)",
+	tintBlue: "rgba(96,165,250,0.14)",
 	tintAmber: "rgba(232,193,74,0.14)",
 	tintRed: "rgba(239,107,107,0.14)",
 	tintGreen: "rgba(116,185,138,0.14)",
@@ -161,16 +180,20 @@ export const lightTheme: Theme = {
 	accentTint: "rgba(20,21,25,0.08)",
 	accentBorder: "rgba(20,21,25,0.24)",
 	accentPressed: "rgba(20,21,25,0.16)",
+	highlight: "#141519",
+	selection: "rgba(20,21,25,0.24)",
 
 	// Hue kept, darkened for contrast on white — each clears 4.5:1 both on the
 	// base surface and on its own 12% tint, which is where these actually render.
 	orange: "#a04a08",
+	blue: "#2563eb",
 	amber: "#875900",
 	red: "#b13428",
 	green: "#2a702d",
 	purple: "#7a3fd0",
 
 	tintOrange: "rgba(180,83,9,0.12)",
+	tintBlue: "rgba(37,99,235,0.12)",
 	tintAmber: "rgba(148,98,0,0.12)",
 	tintRed: "rgba(192,57,43,0.12)",
 	tintGreen: "rgba(47,125,50,0.12)",
@@ -184,8 +207,25 @@ export const lightTheme: Theme = {
 
 export type ColorScheme = "light" | "dark";
 
-export function themeFor(scheme: ColorScheme): Theme {
-	return scheme === "light" ? lightTheme : darkTheme;
+// Derived palettes are cached so each (style, scheme) pair keeps one identity:
+// useThemedStyles memoises on the theme object, and a fresh object per render
+// would rebuild every stylesheet.
+const derivedThemes = new Map<string, Theme>();
+
+/**
+ * The palette to render. `style` is a named theme from the shared catalog
+ * (packages/shared/theme/palettes.ts); the default, Orchestrate, is the
+ * hand-tuned palette above rather than a derivation.
+ */
+export function themeFor(scheme: ColorScheme, style: ThemeStyle = DEFAULT_THEME_STYLE): Theme {
+	if (style === DEFAULT_THEME_STYLE) return scheme === "light" ? lightTheme : darkTheme;
+	const key = `${style}:${scheme}`;
+	let theme = derivedThemes.get(key);
+	if (!theme) {
+		theme = deriveMobileTheme(getThemeDefinition(style)[scheme], scheme, FONT_MONO);
+		derivedThemes.set(key, theme);
+	}
+	return theme;
 }
 
 // ---- Terminal --------------------------------------------------------------
@@ -267,8 +307,9 @@ const lightTerminal: TerminalTheme = {
 	brightWhite: "#24292f",
 };
 
-export function terminalTheme(scheme: ColorScheme): TerminalTheme {
-	return scheme === "light" ? lightTerminal : darkTerminal;
+export function terminalTheme(scheme: ColorScheme, style: ThemeStyle = DEFAULT_THEME_STYLE): TerminalTheme {
+	if (style === DEFAULT_THEME_STYLE) return scheme === "light" ? lightTerminal : darkTerminal;
+	return deriveTerminalTheme(getThemeDefinition(style)[scheme], scheme);
 }
 
 // ---- Status vocabulary -----------------------------------------------------
@@ -339,7 +380,7 @@ export function statusVisual(t: Theme, status?: string | null): StatusVisual {
 		case "no_signal":
 			return { color: t.textTertiary, label: "No signal" };
 		case "exited":
-			return { color: t.red, label: "Exited" };
+			return { color: t.blue, label: "Exited" };
 		case "draft":
 			return { color: t.textSecondary, label: "Draft PR" };
 		case "unknown":

@@ -10,6 +10,8 @@ export type WindowComposition = {
 	shellView: WebContentsView;
 	shellWebContents: WebContents;
 	setOverlayOpen: (open: boolean) => void;
+	/** Re-raise the shell after another native view was added above it. */
+	restackShell: () => void;
 	resize: () => void;
 	dispose: () => void;
 };
@@ -64,9 +66,7 @@ export function createWindowComposition(options: {
 		}, 0);
 	};
 
-	const setOverlayOpen = (open: boolean): void => {
-		if (overlayOpen === open) return;
-		overlayOpen = open;
+	const placeShell = (open: boolean): void => {
 		if (open) {
 			// Re-adding an existing child raises it above all page/DevTools views.
 			options.mainWindow.contentView.addChildView(shellView);
@@ -85,12 +85,28 @@ export function createWindowComposition(options: {
 		if (open && options.platform === "darwin") forceSurfaceRefresh();
 	};
 
+	const setOverlayOpen = (open: boolean): void => {
+		if (overlayOpen === open) return;
+		overlayOpen = open;
+		placeShell(open);
+	};
+
+	// `addChildView` without an index appends on top, so a browser tab created
+	// while an overlay is open (a long-lived update notice, a dialog during an
+	// agent-driven `ao browser` action) would cover the raised shell until the
+	// overlay toggled again. Put the shell back on top whenever that happens.
+	const restackShell = (): void => {
+		if (!overlayOpen || options.mainWindow.isDestroyed?.()) return;
+		placeShell(true);
+	};
+
 	resize();
 
 	return {
 		shellView,
 		shellWebContents: shellView.webContents,
 		setOverlayOpen,
+		restackShell,
 		resize,
 		dispose: () => {
 			try {

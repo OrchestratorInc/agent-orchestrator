@@ -114,13 +114,13 @@ function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "stat
 		return { status: "Install unknown", statusTone: "warning" };
 	}
 	if (agent.authentication.state === "unknown") {
-		return { status: "Auth unknown", statusTone: "warning" };
+		// Inconclusive checks belong on Agent Harnesses, not in agent pickers.
+		return { status: "", statusTone: "muted" };
 	}
-	// A credential exists but nothing proved it works. It must not fall through
-	// to the known-good branch below: rendering an unverified credential green
-	// is precisely how a revoked key came to look like a working agent.
+	// Keep credential verification details on Agent Harnesses. A configured
+	// credential stays neutral rather than inheriting the known-good tone.
 	if (agent.authentication.state === "configured") {
-		return { status: "Unverified", statusTone: "muted" };
+		return { status: "", statusTone: "muted" };
 	}
 	// Known-good agents stay selectable even while stale or checking; freshness
 	// is informative coordinator state, not a reason for the renderer to block.

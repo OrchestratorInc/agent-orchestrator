@@ -56,7 +56,11 @@ func (s *cancelAfterSteerRecorder) Steer(
 }
 
 func newSteerRecorder() *steerRecorder {
-	return &steerRecorder{fakeConversation: newFakeConversation()}
+	conv := newFakeConversation()
+	caps := productionCaps()
+	caps[ports.ChatCapabilitySteer] = true
+	conv.setCapabilities(caps)
+	return &steerRecorder{fakeConversation: conv}
 }
 
 func (s *steerRecorder) Steer(
@@ -305,7 +309,7 @@ func TestSteerOrSendSteersAndRecoversOneAtomicOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover SteerOrSend: %v", err)
 	}
-	if !recovered.Steered || !recovered.Duplicate || recovered.Steer != first.Steer {
+	if !recovered.Steered || !recovered.Duplicate || !recovered.Steer.Replayed || withoutReplay(recovered.Steer) != first.Steer {
 		t.Fatalf("recovered = %+v, want %+v", recovered, first)
 	}
 	if calls := provider.steers(); len(calls) != 1 {
@@ -398,6 +402,11 @@ func TestSteerIsIdempotentOnTheClientHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retried Steer: %v", err)
 	}
+	// Usage counting relies on the flag: only the accepted original is new.
+	if first.Replayed || !replayed.Replayed {
+		t.Fatalf("Replayed = %v then %v, want false then true", first.Replayed, replayed.Replayed)
+	}
+	replayed.Replayed = false
 	if replayed != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
@@ -431,7 +440,8 @@ func TestAcceptedSteerReplaysAfterControllerRestartWithoutProviderRedispatch(t *
 	if err != nil {
 		t.Fatalf("Steer after restart: %v", err)
 	}
-	if replayed != first {
+	// A retry after a daemon restart is still the original steer.
+	if !replayed.Replayed || withoutReplay(replayed) != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
 	if calls := restartedProvider.steers(); len(calls) != 0 {
@@ -654,6 +664,81 @@ func TestSteerOfAnUnsteerableTurnKeepsItsOwnOutcome(t *testing.T) {
 	}
 }
 
+// A definitive provider refusal (for example ACP JSON-RPC method-not-found for
+// an optional steering extension) must settle the reserved delivery handle. Retry
+// and recover-only must replay that refusal without another provider call.
+func TestSteerProviderRefusalSettlesAndRecoversWithoutRedispatch(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.failWith(refusedError{msg: `"Method not found": _session/steering`})
+	msg := ports.ChatUserMessage{Text: "guidance", ClientMessageID: "steer-refused-provider"}
+
+	_, err := h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("err = %v, want ErrProviderRefused", err)
+	}
+	_, err = h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("retried err = %v, want ErrProviderRefused", err)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d refused steer attempts, want one", len(calls))
+	}
+
+	recovered, recoverErr := h.svc.RecoverSteer(context.Background(), testSession, msg.ClientMessageID)
+	if !errors.Is(recoverErr, chatsvc.ErrProviderRefused) {
+		t.Fatalf("RecoverSteer error = %v, want ErrProviderRefused", recoverErr)
+	}
+	if recovered != (chatsvc.SteerResult{}) {
+		t.Fatalf("RecoverSteer result = %+v, want empty settled refusal", recovered)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d attempts after recover, want one", len(calls))
+	}
+
+	restartedProvider := newSteerRecorder()
+	restarted := restartSteerService(t, h, restartedProvider)
+	_, err = restarted.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("restart retry error = %v, want ErrProviderRefused", err)
+	}
+	if calls := restartedProvider.steers(); len(calls) != 0 {
+		t.Fatalf("restarted provider received %d refused steer attempts, want none", len(calls))
+	}
+}
+
+// Ambiguous transport failures must leave the reserved handle uncertain so AO
+// neither claims delivery nor automatically resends guidance that may already
+// have reached the provider.
+func TestSteerTransportFailureStaysUncertain(t *testing.T) {
+	h, provider := steerHarness(t)
+	transportErr := errors.New("connection reset while waiting for steer reply")
+	provider.failWith(transportErr)
+	msg := ports.ChatUserMessage{Text: "guidance", ClientMessageID: "steer-transport"}
+
+	_, err := h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("err = %v, want ErrSteerDeliveryUncertain", err)
+	}
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("err = %v, want transport cause preserved", err)
+	}
+	_, err = h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("retried err = %v, want ErrSteerDeliveryUncertain", err)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d steer attempts after retry, want one", len(calls))
+	}
+
+	_, recoverErr := h.svc.RecoverSteer(context.Background(), testSession, msg.ClientMessageID)
+	if !errors.Is(recoverErr, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("RecoverSteer error = %v, want ErrSteerDeliveryUncertain", recoverErr)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d attempts after recover, want one", len(calls))
+	}
+}
+
 // A provider with no steering at all: a permanent answer, so a client hides the
 // control instead of retrying.
 func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
@@ -681,6 +766,36 @@ func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
 	}
 	if calls := restartedProvider.steers(); len(calls) != 0 {
 		t.Fatalf("restarted capable provider received %d attempts for a prior refusal, want none", len(calls))
+	}
+}
+
+// The ACP driver implements Steer for every agent, but only an agent that
+// advertised the extension can take it. Without the capability AO refuses before
+// reserving a delivery, so the agent is never called and the answer is not
+// "uncertain".
+func TestSteerIsRefusedWhenTheProviderDidNotAdvertiseIt(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.setCapabilities(productionCaps())
+	ctx := context.Background()
+
+	_, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{
+		Text: "guidance", ClientMessageID: "steer-unadvertised",
+	})
+	if !errors.Is(err, chatsvc.ErrSteerUnsupported) {
+		t.Fatalf("Steer err = %v, want ErrSteerUnsupported", err)
+	}
+
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "queued", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); !errors.Is(err, chatsvc.ErrSteerUnsupported) {
+		t.Fatalf("PromoteQueuedTurn err = %v, want ErrSteerUnsupported", err)
+	}
+	if calls := provider.steers(); len(calls) != 0 {
+		t.Fatalf("provider received %d steer attempts, want none", len(calls))
 	}
 }
 
@@ -871,6 +986,65 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	}
 }
 
+// Browser annotations are the user's own words relayed as automation. Their
+// queued turn keeps its attribution but can be steered like a typed message.
+func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, msg := range s.Messages {
+			if msg.TurnID == queued.ID {
+				return true
+			}
+		}
+		return false
+	})
+	for _, msg := range snapshot.Messages {
+		if msg.TurnID == queued.ID && (!msg.AuthoredByUser || msg.Origin != domain.MessageOriginAutomation) {
+			t.Fatalf("queued annotation message = %+v, want automation origin authored by the user", msg)
+		}
+	}
+
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	calls := provider.steers()
+	if len(calls) != 1 || calls[0].msg.ClientMessageID != "queued-annotation" ||
+		calls[0].msg.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("provider steers = %+v, want the queued annotation as automation", calls)
+	}
+}
+
+// The annotation text is generated from the Browser panel, so it is not
+// editable even though the user may steer or cancel it.
+func TestQueuedUserAuthoredAutomationTurnCanBeCancelledButNotEdited(t *testing.T) {
+	h, _ := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation-edit",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, chatsvc.QueuedMessageEdit{Text: "rewritten"}); err == nil {
+		t.Fatal("EditQueuedTurn accepted a user-authored automation turn")
+	}
+	if err := h.svc.CancelQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("CancelQueuedTurn: %v", err)
+	}
+	if next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); err == nil {
+		t.Fatalf("queue head after cancel = %+v, want empty", next)
+	}
+}
+
 // A transport failure after the request leaves delivery unknowable. Returning the
 // source to the queue would let drain send guidance the provider may already have
 // accepted, so it must settle failed and require an explicit user decision.
@@ -960,7 +1134,7 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 			for range 2 {
 				recovered, err := h.svc.RecoverSteer(ctx, testSession, "image-steer")
-				if !errors.Is(err, tc.wantError) || recovered != original {
+				if !errors.Is(err, tc.wantError) || withoutReplay(recovered) != original {
 					t.Fatalf("recovery = %+v, %v; want %+v, %v", recovered, err, original, tc.wantError)
 				}
 			}
@@ -974,4 +1148,11 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withoutReplay compares a replayed steer receipt with the original: they
+// differ only in Replayed, which marks the retry.
+func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
+	r.Replayed = false
+	return r
 }

@@ -39,6 +39,56 @@ func turnByID(s store.ConversationSnapshot, id string) (domain.ConversationTurn,
 	return domain.ConversationTurn{}, false
 }
 
+type retryPromptErrorStore struct {
+	chatsvc.Store
+	err error
+}
+
+func (s *retryPromptErrorStore) RetryPrompt(context.Context, string, string) (domain.RetryPrompt, error) {
+	return domain.RetryPrompt{}, s.err
+}
+
+func TestRetryTurnClassifiesPromptReadErrors(t *testing.T) {
+	readFailure := errors.New("injected prompt read failure")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"missing prompt", domain.ErrNoConversationTurn, chatsvc.ErrTurnNotRetryable},
+		{"transient read failure", readFailure, readFailure},
+		{"read deadline", context.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWithConversationAndStore(t, nil, func(st *store.Store) chatsvc.Store {
+				return &retryPromptErrorStore{Store: st, err: tc.err}
+			})
+			ctx := context.Background()
+			turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "retry this task", ClientMessageID: "failed-prompt-read", Origin: domain.MessageOriginHuman,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.conv.emit(ports.ChatEvent{
+				Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+				TurnState: domain.TurnStateFailed, Err: errors.New("source failed"),
+			})
+			failedTurnSnapshot(t, h, turn.ID)
+			_, retryErr := h.svc.RetryTurn(ctx, testSession, turn.ID)
+			if !errors.Is(retryErr, tc.want) {
+				t.Fatalf("RetryTurn = %v, want %v", retryErr, tc.want)
+			}
+			if !errors.Is(tc.want, chatsvc.ErrTurnNotRetryable) && errors.Is(retryErr, chatsvc.ErrTurnNotRetryable) {
+				t.Fatalf("read failure was classified as a permanent refusal: %v", retryErr)
+			}
+			if sent := h.conv.sentMessages(); len(sent) != 1 {
+				t.Fatalf("prompt read failure dispatched a retry: %+v", sent)
+			}
+		})
+	}
+}
+
 func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

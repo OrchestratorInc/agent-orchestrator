@@ -50,14 +50,17 @@ export type FileAttachmentOptions = {
 	onAttachmentsChange?: (attachments: FileAttachment[]) => void;
 };
 
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
+
 type SharedAttachmentUpdate = {
 	pending: number;
+	pendingAttachments: PendingFileAttachment[];
 	attachments?: FileAttachment[];
 	error?: string | null;
 };
 
 type SharedAttachmentEntry = {
-	pending: Set<symbol>;
+	pending: Map<symbol, PendingFileAttachment[]>;
 	generation: number;
 	listeners: Map<symbol, (update: SharedAttachmentUpdate) => void>;
 	attachments?: FileAttachment[];
@@ -79,13 +82,14 @@ export type PendingFileAttachmentCapture = {
 	readonly [pendingFileAttachmentCaptureEntries]: readonly CapturedPendingFileAttachmentEntry[];
 };
 
-function sharedAttachmentDescriptors(attachments: FileAttachment[]): FileAttachment[] {
-	return attachments.map(({ id, mimeType, bytes, name, stagedPath }) => ({
+function sharedAttachmentSnapshot(attachments: FileAttachment[]): FileAttachment[] {
+	return attachments.map(({ id, mimeType, bytes, name, stagedPath, data, dataUrl }) => ({
 		id,
 		mimeType,
 		bytes,
 		name,
-		...(stagedPath ? { stagedPath } : {}),
+		// Unstaged files have no durable copy. Keep their bytes in memory for retry.
+		...(stagedPath ? { stagedPath } : { data, dataUrl }),
 	}));
 }
 
@@ -98,7 +102,7 @@ const sharedAttachmentEntries = new Map<string, SharedAttachmentEntry>();
 function sharedEntry(key: string): SharedAttachmentEntry {
 	let entry = sharedAttachmentEntries.get(key);
 	if (!entry) {
-		entry = { pending: new Set(), generation: 0, listeners: new Map() };
+		entry = { pending: new Map(), generation: 0, listeners: new Map() };
 		sharedAttachmentEntries.set(key, entry);
 	}
 	return entry;
@@ -106,23 +110,23 @@ function sharedEntry(key: string): SharedAttachmentEntry {
 
 function notifySharedAttachmentEntry(
 	key: string,
-	update: Omit<SharedAttachmentUpdate, "pending"> = {},
+	update: Omit<SharedAttachmentUpdate, "pending" | "pendingAttachments"> = {},
 	originToken?: symbol,
 ): void {
 	const entry = sharedAttachmentEntries.get(key);
 	if (!entry) return;
 	if (update.attachments !== undefined) entry.attachments = update.attachments;
 	if (update.error !== undefined) entry.error = update.error;
-	const notification = { pending: entry.pending.size, ...update };
+	const notification = { pending: entry.pending.size, pendingAttachments: [...entry.pending.values()].flat(), ...update };
 	for (const [token, listener] of entry.listeners) {
 		if (token !== originToken) listener(notification);
 	}
 }
 
-function beginSharedAttachmentWork(key: string): SharedAttachmentWork {
+function beginSharedAttachmentWork(key: string, files: PendingFileAttachment[]): SharedAttachmentWork {
 	const entry = sharedEntry(key);
 	const work = { token: Symbol("chat-attachment-work"), generation: entry.generation };
-	entry.pending.add(work.token);
+	entry.pending.set(work.token, files);
 	notifySharedAttachmentEntry(key);
 	return work;
 }
@@ -150,6 +154,7 @@ function subscribeSharedAttachmentWork(
 	entry.listeners.set(token, listener);
 	listener({
 		pending: entry.pending.size,
+		pendingAttachments: [...entry.pending.values()].flat(),
 		...(entry.attachments !== undefined ? { attachments: entry.attachments } : {}),
 		...(entry.error !== undefined ? { error: entry.error } : {}),
 	});
@@ -193,7 +198,7 @@ export function capturePendingFileAttachmentsForSession(
 	const entries: CapturedPendingFileAttachmentEntry[] = [];
 	for (const [key, entry] of sharedAttachmentEntries) {
 		if (!attachmentKeyBelongsToSession(key, sessionId) || entry.pending.size === 0) continue;
-		entries.push({ key, generation: entry.generation, tokens: [...entry.pending] });
+		entries.push({ key, generation: entry.generation, tokens: [...entry.pending.keys()] });
 	}
 	return { [pendingFileAttachmentCaptureEntries]: entries };
 }
@@ -296,6 +301,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const [attachments, setAttachments] = useState<FileAttachment[]>(() => initialAttachments);
 	const [error, setError] = useState<string | null>(null);
 	const [preparing, setPreparing] = useState(() => sharedAttachmentPending(initialKey));
+	const [pendingAttachments, setPendingAttachments] = useState<PendingFileAttachment[]>(() =>
+		initialKey ? [...(sharedAttachmentEntries.get(initialKey)?.pending.values() ?? [])].flat() : []);
 	const attachmentsRef = useRef<FileAttachment[]>(initialAttachments);
 	const initialKeyRef = useRef(initialKey);
 	const listenerTokenRef = useRef(Symbol("file-attachment-listener"));
@@ -312,11 +319,15 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setAttachments(initialAttachments);
 		setError(null);
 		setPreparing(sharedAttachmentPending(initialKey));
+		setPendingAttachments(initialKey ? [...(sharedAttachmentEntries.get(initialKey)?.pending.values() ?? [])].flat() : []);
 	}, [initialAttachments, initialKey]);
 
 	useEffect(() => {
 		if (!initialKey) return;
 		return subscribeSharedAttachmentWork(initialKey, listenerTokenRef.current, (update) => {
+			setPendingAttachments((current) => current.length === update.pendingAttachments.length &&
+				current.every((file, index) => file.id === update.pendingAttachments[index]?.id)
+				? current : update.pendingAttachments);
 			if (update.attachments) {
 				attachmentsRef.current = update.attachments;
 				setAttachments(update.attachments);
@@ -458,7 +469,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			if (initialKey) {
 				notifySharedAttachmentEntry(
 					initialKey,
-					{ attachments: sharedAttachmentDescriptors(next) },
+					{ attachments: sharedAttachmentSnapshot(next) },
 					listenerTokenRef.current,
 				);
 			}
@@ -478,7 +489,9 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey) : undefined;
+		const pending = batch.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
+		if (!sharedKey) setPendingAttachments((current) => [...current, ...pending]);
 		queuedAddsRef.current += 1;
 		setPreparing(true);
 		// Preserve the hook's existing contract: the first FileReader starts in the
@@ -496,7 +509,10 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			.finally(() => {
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
 				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
-				else if (queuedAddsRef.current === 0) setPreparing(false);
+				else {
+					setPendingAttachments((current) => current.filter((file) => !pending.some((item) => item.id === file.id)));
+					if (queuedAddsRef.current === 0) setPreparing(false);
+				}
 			});
 		addQueueRef.current = settled;
 		return settled;
@@ -510,7 +526,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (initialKey) {
 			notifySharedAttachmentEntry(
 				initialKey,
-				{ attachments: sharedAttachmentDescriptors(next), error: null },
+				{ attachments: sharedAttachmentSnapshot(next), error: null },
 				listenerTokenRef.current,
 			);
 		}
@@ -581,6 +597,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 
 	return {
 		attachments,
+		pendingAttachments,
 		error,
 		preparing,
 		addFiles,

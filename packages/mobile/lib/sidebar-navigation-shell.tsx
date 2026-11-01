@@ -1,7 +1,8 @@
-import { Button, Column, Host, Icon, RNHostView, Row, Spacer, Text } from "@expo/ui";
+import { Button, Column, Host, RNHostView, Row, Spacer, Text } from "@expo/ui";
 import { usePathname, useRouter } from "expo-router";
 import {
 	createContext,
+	memo,
 	useCallback,
 	useContext,
 	useEffect,
@@ -21,11 +22,11 @@ import {
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AgentLogo } from "./AgentLogo";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
 import { haptics } from "./haptics";
-import { hostedProjectKey, hostedSessionKey, sessionHostId } from "./hostedRows";
+import { hostedProjectKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
+import { MachineIdentity } from "./MachineIdentity";
 import { sessionTitle } from "./sessionStatus";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { sidebarDestinationHitModifiers } from "./sidebar-destination-hit-modifiers";
@@ -42,6 +43,7 @@ import {
 } from "./sidebar-navigation";
 import { sidebarGestureTarget, shouldCaptureSidebarGesture } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
+import { SidebarSessionLogo } from "./SidebarSessionLogo";
 import { useReducedMotion } from "./useReducedMotion";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useApp } from "./store";
@@ -74,6 +76,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const reduceMotion = useReducedMotion();
 	const [scrollRequest, setScrollRequest] = useState<SidebarScrollRequest | null>(null);
+	const scrollSequence = useRef(0);
 	const progress = useRef(new Animated.Value(0)).current;
 	const gestureStartedOpen = useRef(false);
 	const activeDestination = activeSidebarDestination(pathname);
@@ -91,22 +94,29 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	const projectLabel = (session: DashboardSession) => {
 		const hostId = sessionHostId(session);
-		const name = projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
-		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
-		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return hostStates.length > 1 && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
+		return projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
 	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
-		setOpen(nextOpen);
+		if (nextOpen) setOpen(true);
+		if (reduceMotion) {
+			progress.stopAnimation();
+			progress.setValue(nextOpen ? 1 : 0);
+			setOpen(nextOpen);
+			return;
+		}
 		Animated.spring(progress, {
 			toValue: nextOpen ? 1 : 0,
 			useNativeDriver: true,
 			damping: 24,
 			stiffness: 240,
 			mass: 0.8,
-		}).start();
-	}, [progress]);
+		}).start(({ finished }) => {
+			if (!finished) return;
+			if (!nextOpen) setOpen(false);
+		});
+	}, [progress, reduceMotion]);
+	useEffect(() => () => progress.stopAnimation(), [progress]);
 
 	const openSidebar = useCallback(() => {
 		haptics.tap();
@@ -150,15 +160,16 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const selectDestination = useCallback(
 		(destination: SidebarDestination) => {
 			haptics.select();
-			if (destination.id === activeDestination) {
-				setScrollRequest((current) => ({
-					destination: destination.id,
-					sequence: (current?.sequence ?? 0) + 1,
-				}));
-			} else {
-				router.replace(destination.href);
-			}
 			closeSidebar();
+			if (destination.id === activeDestination) {
+				setScrollRequest({
+					destination: destination.id,
+					sequence: ++scrollSequence.current,
+				});
+			} else {
+				setScrollRequest(null);
+				router.navigate(destination.href);
+			}
 		},
 		[activeDestination, closeSidebar, router],
 	);
@@ -261,7 +272,8 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 							<SessionRow
 								session={item}
 								projectName={projectLabel(item)}
-								onPress={() => selectSession(item)}
+								offline={hostStates.find((host) => host.hostId === sessionHostId(item))?.connection === "closed"}
+								onSelect={selectSession}
 							/>
 						)}
 						ListEmptyComponent={<RNText style={styles.emptySessions}>No active sessions</RNText>}
@@ -276,7 +288,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					</View>
 				</Animated.View>
 
-				<Animated.View style={[styles.contentFrame, contentTransform]}>
+				<Animated.View
+					// Cache the moving page, not every list row. Release the bitmap
+					// after closing so normal scrolling and live updates stay uncached.
+					shouldRasterizeIOS={open}
+					style={[styles.contentFrame, contentTransform]}
+				>
 					<View style={[styles.contentSurface, open && styles.contentSurfaceOpen]}>
 						{children}
 						{open ? (
@@ -294,27 +311,31 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 }
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
 	session,
 	projectName,
-	onPress,
+	offline,
+	onSelect,
 }: {
 	session: DashboardSession;
 	projectName: string;
-	onPress: () => void;
+	offline: boolean;
+	onSelect: (session: DashboardSession) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const visual = statusVisual(t, session.status);
+	const machine = sessionMachineIdentity(session);
+	const machineName = machine ? `${machine.name}${offline ? " (offline)" : ""}` : undefined;
 
 	return (
 		<Pressable
-			onPress={onPress}
+			onPress={() => onSelect(session)}
 			accessibilityRole="button"
-			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}`}
+			accessibilityLabel={`${sessionTitle(session)}, ${visual.label}, ${projectName}${machineName ? `, ${machineName} machine` : ""}`}
 			style={({ pressed }) => [styles.sessionRow, pressed && styles.sessionRowPressed]}
 		>
-			<AgentLogo harness={session.harness} size={28} />
+			<SidebarSessionLogo harness={session.harness} pinned={Boolean(session.isPinned)} />
 			<View style={styles.sessionText}>
 				<RNText numberOfLines={1} style={styles.sessionTitle}>
 					{sessionTitle(session)}
@@ -324,18 +345,12 @@ function SessionRow({
 					<RNText numberOfLines={1} style={styles.sessionMeta}>
 						{visual.label} · {projectName}
 					</RNText>
+					{machine && machineName ? <MachineIdentity name={machineName} appearance={machine.appearance} style={styles.sessionMachine} /> : null}
 				</View>
 			</View>
-			{session.isPinned ? (
-				<Host matchContents>
-					{/* Upright, like the desktop's own row — see the Android shell for the
-					    measurement behind dropping the tilt. */}
-					<Icon name="pin.fill" size={13} color={t.textTertiary} />
-				</Host>
-			) : null}
 		</Pressable>
 	);
-}
+});
 
 function DestinationRow({
 	destination,
@@ -427,6 +442,7 @@ const makeStyles = (t: Theme) =>
 		sessionMetaRow: { marginTop: space.xxs, flexDirection: "row", alignItems: "center", gap: space.xs },
 		statusDot: { width: 6, height: 6, borderRadius: 4 },
 		sessionMeta: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize },
+		sessionMachine: { maxWidth: "42%" },
 		sidebarActions: {
 			position: "absolute",
 			left: 28,
