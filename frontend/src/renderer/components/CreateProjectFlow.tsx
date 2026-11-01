@@ -297,7 +297,10 @@ export function CreateProjectFlow({
 	};
 	const transitionFromFolder = (open: () => void) => {
 		setFolderPickerOpen(false);
-		if (cloneDialogOpen) setCloneDialogOpen(false);
+		if (cloneDialogOpen) {
+			setCloneDialogOpen(false);
+			if (firstRunClone) onFirstRunDismiss?.();
+		}
 		transitionToChild(open);
 	};
 
@@ -350,7 +353,10 @@ export function CreateProjectFlow({
 					setFolderPickerOpen(false);
 					showGlobalToast("Project already added", "Opened the registered project for this folder.");
 					await onOpenExistingProject(registeredPath);
-					if (cloneDialogOpen) setCloneDialogOpen(false);
+					if (cloneDialogOpen) {
+						setCloneDialogOpen(false);
+						if (firstRunClone) onFirstRunDismiss?.();
+					}
 					return;
 				}
 				const validation = await validateImportFolder(path, "project", hostId);
@@ -852,9 +858,7 @@ export function CreateProjectFlow({
 						<CloneRepositoryDialog
 							firstRun={firstRunClone}
 							onOpenLocalFolder={() => {
-								onFirstRunDismiss?.();
-								setCloneDialogOpen(false);
-								void selectSource("local");
+								void chooseDirectory("single_repo", undefined, true);
 							}}
 							onStartStandaloneAgent={() => {
 								onFirstRunDismiss?.();
