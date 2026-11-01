@@ -3807,5 +3807,6 @@
 	"newTask.startNext.hint": "{{shortcut}} inicia esta tarea y abre un borrador nuevo",
 	"newTask.startNext.started": "Tarea iniciada",
 	"newTask.startNext.startedBody": "Está en la barra lateral. Escribe aquí la siguiente.",
-	"shortcut.context.startNext": "Iniciar una tarea nueva y abrir el siguiente borrador"
+	"shortcut.context.startNext": "Iniciar una tarea nueva y abrir el siguiente borrador",
+	"parallelPrompt.startUncertain": "No se pudo confirmar ese inicio. Iníciala de nuevo para comprobarlo; no se iniciará una segunda copia."
 }

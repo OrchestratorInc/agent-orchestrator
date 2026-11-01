@@ -3720,5 +3720,6 @@
 	"newTask.startNext.hint": "{{shortcut}} 启动此任务并打开新草稿",
 	"newTask.startNext.started": "任务已启动",
 	"newTask.startNext.startedBody": "它在侧边栏中。在这里写下一个任务。",
-	"shortcut.context.startNext": "启动新任务并打开下一个草稿"
+	"shortcut.context.startNext": "启动新任务并打开下一个草稿",
+	"parallelPrompt.startUncertain": "无法确认该任务是否已启动。再次启动以确认；不会启动第二个副本。"
 }

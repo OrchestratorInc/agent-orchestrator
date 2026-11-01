@@ -28,6 +28,7 @@ import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { isMacPlatform } from "../lib/platform";
+import { POST_START_ERRORS } from "../lib/spawn-errors";
 
 const START_NEXT_SHORTCUT = isMacPlatform() ? "⌘↵" : "Ctrl+Enter";
 
@@ -478,13 +479,6 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	}
 	return out;
 }
-
-// Errors raised after the daemon may have created the session: a retry with the
-// same request id must be possible, so these never count as a final refusal.
-const POST_START_ERRORS = new Set([
-	"SPAWN_COMMIT_FAILED", "SPAWN_INTERNAL", "SPAWN_PROMPT_DELIVERY_FAILED", "SPAWN_LAUNCH_COMMAND_FAILED",
-	"SPAWN_SUPERVISOR_FAILED", "SPAWN_PREPARE_LAUNCH_FAILED", "RUNTIME_CREATE_FAILED",
-]);
 
 /** A send whose outcome is unknown: no answer, or a failure after the session may exist. */
 function sendIsUncertain(error: unknown): boolean {

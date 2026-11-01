@@ -2,14 +2,18 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDot, ListTodo, Pencil, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import {
+	clearPendingParallelStart,
 	dismissParallelPrompt,
 	rankParallelSuggestions,
 	reportParallelPromptAction,
 	reportParallelPromptShown,
+	readPendingParallelStart,
+	savePendingParallelStart,
 	type ParallelSuggestion,
 } from "../lib/parallel-prompt";
+import { POST_START_ERRORS } from "../lib/spawn-errors";
 import { isMacPlatform } from "../lib/platform";
 import { captureRendererEvent } from "../lib/telemetry";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
@@ -52,6 +56,9 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 	const [editingId, setEditingId] = useState<string>();
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string>();
+	// Bumped when a start's outcome becomes, or stops being, unknown, so rows
+	// re-read their saved request.
+	const [, setPendingRevision] = useState(0);
 	const suggestions = ranked.filter((suggestion) => !started.has(suggestion.id));
 
 	useEffect(() => {
@@ -80,16 +87,36 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 			// One at a time, stopping at the first refusal: a limit, a missing agent
 			// or sign-in applies to the rest too, and the reason is shown here.
 			for (const suggestion of targets) {
-				const brief = promptFor(suggestion).trim();
+				// An earlier start that got no answer is resent exactly as it was, with
+				// its request id, so the daemon replays it rather than starting a second
+				// worker for the same task.
+				const saved = readPendingParallelStart(projectId, suggestion.id);
+				const brief = saved?.brief ?? promptFor(suggestion).trim();
 				if (!brief) continue;
-				const { data, error: apiError } = await apiClient.POST("/api/v1/orchestrators/delegate", {
-					body: { clientRequestId: crypto.randomUUID(), projectId, brief, spawnSource: "parallel_prompt" },
-				});
-				if (apiError || !data?.workerId) {
+				const requestId = saved?.requestId ?? crypto.randomUUID();
+				savePendingParallelStart(projectId, suggestion.id, { requestId, brief });
+				// A rejected request got no answer at all: undefined, not a refusal.
+				const response = await apiClient.POST("/api/v1/orchestrators/delegate", {
+					body: { clientRequestId: requestId, projectId, brief, spawnSource: "parallel_prompt" },
+				}).catch(() => undefined);
+				const apiError = response?.error;
+				const workerId = response?.data?.workerId;
+				if (!workerId) {
 					void captureRendererEvent("ao.renderer.task_create_failed", { project_id: projectId });
-					setError(apiErrorMessage(apiError, t("newTask.unableToStart")));
+					const uncertain = !response || !apiError || POST_START_ERRORS.has(apiErrorCode(apiError) ?? "");
+					if (uncertain) {
+						if (editingId === suggestion.id) setEditingId(undefined);
+						setError(t("parallelPrompt.startUncertain"));
+					} else {
+						// The daemon refused it: nothing started, so a retry is a new request.
+						clearPendingParallelStart(projectId, suggestion.id);
+						setError(apiErrorMessage(apiError, t("newTask.unableToStart")));
+					}
+					setPendingRevision((revision) => revision + 1);
 					break;
 				}
+				clearPendingParallelStart(projectId, suggestion.id);
+				setPendingRevision((revision) => revision + 1);
 				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: projectId });
 				count += 1;
 				setStarted((current) => new Set(current).add(suggestion.id));
@@ -156,18 +183,23 @@ export function ParallelPromptCard({ projectId, onDismiss }: { projectId: string
 							<SuggestionLabel suggestion={suggestion} />
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button
-										aria-expanded={editingId === suggestion.id}
-										aria-label={t("parallelPrompt.edit")}
-										disabled={pending}
-										size="icon-sm"
-										variant="ghost"
-										onClick={() => edit(suggestion)}
-									>
-										<Pencil className="size-icon-sm" aria-hidden="true" />
-									</Button>
+									<span className="inline-flex">
+										<Button
+											aria-expanded={editingId === suggestion.id}
+											aria-label={t("parallelPrompt.edit")}
+											// A start awaiting confirmation is retried exactly as sent.
+											disabled={pending || Boolean(readPendingParallelStart(projectId, suggestion.id))}
+											size="icon-sm"
+											variant="ghost"
+											onClick={() => edit(suggestion)}
+										>
+											<Pencil className="size-icon-sm" aria-hidden="true" />
+										</Button>
+									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("parallelPrompt.edit")}</TooltipContent>
+								<TooltipContent side="bottom">
+									{readPendingParallelStart(projectId, suggestion.id) ? t("parallelPrompt.startUncertain") : t("parallelPrompt.edit")}
+								</TooltipContent>
 							</Tooltip>
 							<Button disabled={pending} size="sm" variant="ghost" onClick={() => void startOne(suggestion)}>
 								{t("parallelPrompt.start")}

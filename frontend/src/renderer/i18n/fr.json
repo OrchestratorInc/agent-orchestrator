@@ -3807,5 +3807,6 @@
 	"newTask.startNext.hint": "{{shortcut}} lance cette tâche et ouvre un nouveau brouillon",
 	"newTask.startNext.started": "Tâche lancée",
 	"newTask.startNext.startedBody": "Elle est dans la barre latérale. Écrivez la suivante ici.",
-	"shortcut.context.startNext": "Lancer une nouvelle tâche et ouvrir le brouillon suivant"
+	"shortcut.context.startNext": "Lancer une nouvelle tâche et ouvrir le brouillon suivant",
+	"parallelPrompt.startUncertain": "Impossible de confirmer ce lancement. Relancez-le pour vérifier ; aucune seconde copie ne sera lancée."
 }

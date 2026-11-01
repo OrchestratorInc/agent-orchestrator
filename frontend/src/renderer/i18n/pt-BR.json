@@ -3807,5 +3807,6 @@
 	"newTask.startNext.hint": "{{shortcut}} inicia esta tarefa e abre um novo rascunho",
 	"newTask.startNext.started": "Tarefa iniciada",
 	"newTask.startNext.startedBody": "Ela está na barra lateral. Escreva a próxima aqui.",
-	"shortcut.context.startNext": "Iniciar uma nova tarefa e abrir o próximo rascunho"
+	"shortcut.context.startNext": "Iniciar uma nova tarefa e abrir o próximo rascunho",
+	"parallelPrompt.startUncertain": "Não foi possível confirmar esse início. Inicie de novo para verificar; não será iniciada uma segunda cópia."
 }

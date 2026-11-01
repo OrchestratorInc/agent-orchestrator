@@ -3719,5 +3719,6 @@
 	"newTask.startNext.hint": "{{shortcut}} starts this task and opens a new draft",
 	"newTask.startNext.started": "Task started",
 	"newTask.startNext.startedBody": "It's in the sidebar. Write the next one here.",
-	"shortcut.context.startNext": "Start a new task and open the next draft"
+	"shortcut.context.startNext": "Start a new task and open the next draft",
+	"parallelPrompt.startUncertain": "Couldn't confirm that start. Start it again to check; it won't start a second copy."
 }

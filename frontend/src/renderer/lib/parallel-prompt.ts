@@ -65,6 +65,54 @@ export function shouldOfferParallelPrompt(workerCount: number): boolean {
 	return workerCount >= 1;
 }
 
+/**
+ * A start whose answer never arrived: the daemon may already have created the
+ * worker. A retry sends exactly this request again, so the daemon replays the
+ * first result instead of starting a second worker.
+ */
+export type PendingParallelStart = { requestId: string; brief: string };
+
+const PENDING_KEY = "ao.parallelPrompt.pending.v1";
+
+type PendingStarts = Record<string, Record<string, PendingParallelStart>>;
+
+function readPendingStarts(): PendingStarts {
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(PENDING_KEY) ?? "{}");
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as PendingStarts) : {};
+	} catch {
+		return {};
+	}
+}
+
+function writePendingStarts(all: PendingStarts): void {
+	try {
+		window.localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+	} catch {
+		// Without storage the request survives only while the card stays mounted.
+	}
+}
+
+export function readPendingParallelStart(projectId: string, suggestionId: string): PendingParallelStart | undefined {
+	const pending = readPendingStarts()[projectId]?.[suggestionId];
+	return typeof pending?.requestId === "string" && typeof pending.brief === "string" ? pending : undefined;
+}
+
+export function savePendingParallelStart(projectId: string, suggestionId: string, pending: PendingParallelStart): void {
+	const all = readPendingStarts();
+	all[projectId] = { ...all[projectId], [suggestionId]: pending };
+	writePendingStarts(all);
+}
+
+/** Forgets a start once the daemon has answered it, either way. */
+export function clearPendingParallelStart(projectId: string, suggestionId: string): void {
+	const all = readPendingStarts();
+	if (!all[projectId]?.[suggestionId]) return;
+	delete all[projectId][suggestionId];
+	if (Object.keys(all[projectId]).length === 0) delete all[projectId];
+	writePendingStarts(all);
+}
+
 export type TaskSuggestionView = components["schemas"]["TaskSuggestionView"];
 
 /** Built-in tasks that suit almost any repository, used to fill the list. */

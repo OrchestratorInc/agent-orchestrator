@@ -3738,5 +3738,6 @@
 	"newTask.startNext.hint": "{{shortcut}} startet diese Aufgabe und öffnet einen neuen Entwurf",
 	"newTask.startNext.started": "Aufgabe gestartet",
 	"newTask.startNext.startedBody": "Sie ist in der Seitenleiste. Schreib hier die nächste.",
-	"shortcut.context.startNext": "Neue Aufgabe starten und nächsten Entwurf öffnen"
+	"shortcut.context.startNext": "Neue Aufgabe starten und nächsten Entwurf öffnen",
+	"parallelPrompt.startUncertain": "Der Start konnte nicht bestätigt werden. Starte ihn erneut zur Prüfung; es wird keine zweite Kopie gestartet."
 }

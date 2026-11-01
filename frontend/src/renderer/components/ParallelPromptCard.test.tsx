@@ -14,21 +14,26 @@ const { getMock, postMock, capture } = vi.hoisted(() => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
+	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 	apiErrorMessage: (error: unknown, fallback?: string) =>
 		(error as { message?: string } | undefined)?.message ?? fallback ?? "error",
 }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: capture }));
 
 function renderCard(onDismiss = vi.fn()) {
+	renderCardWithHandle(onDismiss);
+	return onDismiss;
+}
+
+function renderCardWithHandle(onDismiss = vi.fn()) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	render(
+	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<ParallelPromptCard projectId="ao" onDismiss={onDismiss} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
-	return onDismiss;
 }
 
 function actions(event: string) {
@@ -103,6 +108,60 @@ describe("ParallelPromptCard", () => {
 		expect(postMock).toHaveBeenCalledTimes(2);
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
 		expect(actions("ao.onboarding.parallel_prompt_action")).toEqual([{ action: "spawn_all", count: 1 }]);
+	});
+
+	it("retries a start whose response was lost with the same request, so the daemon replays it", async () => {
+		// The daemon committed the worker, but its answer never arrived.
+		postMock
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ data: { ok: true, workerId: "ao-2" } });
+		const { unmount } = renderCardWithHandle();
+		let row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't confirm that start");
+		// Still offered, and held to what was sent: its prompt cannot change before the retry.
+		row = screen.getByText("Fix login").closest("li") as HTMLElement;
+		expect(within(row).getByRole("button", { name: "Edit prompt" })).toBeDisabled();
+
+		// The unanswered request outlives the card.
+		unmount();
+		renderCard();
+		row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(screen.queryByText("Fix login")).not.toBeInTheDocument());
+
+		expect(postMock).toHaveBeenCalledTimes(2);
+		const [first, second] = postMock.mock.calls.map((call) => call[1].body);
+		expect(second.clientRequestId).toBe(first.clientRequestId);
+		expect(second.brief).toBe(first.brief);
+		expect(window.localStorage.getItem("ao.parallelPrompt.pending.v1")).toBe("{}");
+	});
+
+	it("treats a failure after the daemon may have started the worker as unconfirmed", async () => {
+		postMock
+			.mockResolvedValueOnce({ error: { code: "SPAWN_COMMIT_FAILED", message: "commit failed" } })
+			.mockResolvedValueOnce({ data: { ok: true, workerId: "ao-2" } });
+		renderCard();
+		const row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't confirm that start");
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1][1].body.clientRequestId).toBe(postMock.mock.calls[0][1].body.clientRequestId);
+	});
+
+	it("sends a new request after the daemon refuses a start", async () => {
+		postMock
+			.mockResolvedValueOnce({ error: { code: "AGENT_AUTH_REQUIRED", message: "Sign in to Codex first" } })
+			.mockResolvedValueOnce({ data: { ok: true, workerId: "ao-2" } });
+		renderCard();
+		const row = (await screen.findByText("Fix login")).closest("li") as HTMLElement;
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to Codex first");
+		expect(within(row).getByRole("button", { name: "Edit prompt" })).toBeEnabled();
+		await userEvent.click(within(row).getByRole("button", { name: "Start" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1][1].body.clientRequestId).not.toBe(postMock.mock.calls[0][1].body.clientRequestId);
 	});
 
 	it("falls back to starter tasks when the lookup fails", async () => {
