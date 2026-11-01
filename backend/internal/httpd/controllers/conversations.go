@@ -93,6 +93,9 @@ type turnAutoResumeService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// UserMessages counts accepted human steers for product telemetry. Nil
+	// counts nothing.
+	UserMessages UserMessageRecorder
 	// Renders serves agent HTML renders. Nil answers the render route 501.
 	Renders *attachmentstore.Store
 	// Search serves chat search. Nil answers the search route 501.

@@ -92,7 +92,7 @@ export function ArtifactsView() {
 		for (const section of sections) {
 			for (const row of section.rows) {
 				const page = row.kind === "html" && (row.cloud || (row.inlineUrl && row.rawUrl));
-				const pdf = !row.cloud && /\.pdf$/i.test(row.path) && row.rawUrl;
+				const pdf = /\.pdf$/i.test(row.path) && (row.cloud || row.rawUrl);
 				if (!page && !pdf) continue;
 				const key = artifactKey(row);
 				if (!owners.has(key) && owners.size < MAX_LIVE_PREVIEWS) owners.set(key, section.id);
