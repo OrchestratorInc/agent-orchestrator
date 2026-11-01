@@ -342,7 +342,7 @@ func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 
 // The claim transaction is the non-overlap boundary. Once one occurrence is
 // spawning, later pending work for that definition cannot be leased.
-func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
+func TestAutomationClaimSupersedesStalePendingWithoutOverlap(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
 	ctx := context.Background()
@@ -363,14 +363,18 @@ func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 		}
 	}
 	lease := base.Add(time.Minute)
-	claimed, ok, err := store.ClaimNextAutomationRun(ctx, base, lease)
-	if err != nil || !ok || claimed.ID != "run-1" || claimed.Status != domain.AutomationRunSpawning || claimed.AttemptCount != 1 {
+	claimed, ok, err := store.ClaimNextAutomationRun(ctx, base.Add(time.Hour), lease)
+	if err != nil || !ok || claimed.ID != "run-2" || claimed.Status != domain.AutomationRunSpawning || claimed.AttemptCount != 1 {
 		t.Fatalf("first claim = %#v ok=%v err=%v", claimed, ok, err)
+	}
+	stale, ok, err := store.GetAutomationRun(ctx, "run-1")
+	if err != nil || !ok || stale.Status != domain.AutomationRunFailed || stale.AttemptCount != 0 || stale.FinishedAt == nil || stale.ErrorMessage != "Superseded by a newer scheduled occurrence" {
+		t.Fatalf("stale run=%+v ok=%v err=%v", stale, ok, err)
 	}
 	if claimed.LeaseExpiresAt == nil || !claimed.LeaseExpiresAt.Equal(lease) {
 		t.Fatalf("lease = %v, want %s", claimed.LeaseExpiresAt, lease)
 	}
-	if second, ok, err := store.ClaimNextAutomationRun(ctx, base, lease); err != nil || ok {
+	if second, ok, err := store.ClaimNextAutomationRun(ctx, base.Add(time.Hour), lease); err != nil || ok {
 		t.Fatalf("overlapping claim = %#v ok=%v err=%v", second, ok, err)
 	}
 }
