@@ -13,9 +13,14 @@ function boundsFor(selection: CodeSelection) {
 }
 
 function placement(selection: CodeSelection, button: HTMLElement, bounds = boundsFor(selection)) {
-	const rect = selection.textRange?.getBoundingClientRect() ?? new DOMRect(selection.point.x, selection.point.y, 1, 1);
+	const extent = selection.textRange?.getBoundingClientRect() ?? new DOMRect(selection.point.x, selection.point.y, 1, 1);
+	const rects = selection.textRange?.getClientRects?.();
+	let anchor = extent;
+	if (rects) for (let i = 0; i < rects.length; i++) {
+		if (rects[i].width > 0 && rects[i].height > 0) { anchor = rects[i]; break; }
+	}
 	const connected = !selection.textRange || (selection.host.isConnected && selection.textRange.startContainer.isConnected && selection.textRange.endContainer.isConnected);
-	return { bounds, connected, position: selectionToolbarPosition(rect, bounds, button.getBoundingClientRect()) };
+	return { bounds, connected, position: selectionToolbarPosition(anchor, bounds, button.getBoundingClientRect(), extent) };
 }
 
 // Keep highlighted code actionable in its visible pane, including tall ranges.

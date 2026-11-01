@@ -806,12 +806,12 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [autoFocus, disabled]);
 
 	const previousAutoFocusKey = useRef(autoFocusKey);
- useEffect(() => {
-  const changedSession = previousAutoFocusKey.current !== autoFocusKey;
-  previousAutoFocusKey.current = autoFocusKey;
-  if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
-  focusEditor();
- }, [autoFocusKey, focusEditor]);
+	useEffect(() => {
+		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
+		previousAutoFocusKey.current = autoFocusKey;
+		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
+		focusEditor();
+	}, [autoFocusKey, focusEditor]);
 
 	const hasQueuedDock = Boolean(queuedDock);
 	const restoreFocusAfterQueueAppears =
@@ -828,9 +828,9 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus) return;
 
 		const onWindowFocus = () => {
-   if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
-   focusEditor();
-  };
+			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			focusEditor();
+		};
 		const onVisibilityChange = () => {
 			if (document.visibilityState === "visible") onWindowFocus();
 		};

@@ -86,8 +86,8 @@ export function AoDiffFile({
 	const { t } = useTranslation();
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
- const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, split, annotationRange?.requestKey]);
- const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, split, annotationRange?.requestKey]);
+	const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const metadata = useMemo(() => cachedMetadata(detail), [detail]);
 	const rows = useMemo(() => parseUnifiedDiff(detail.diff), [detail.diff]);
@@ -152,7 +152,7 @@ export function AoDiffFile({
 		() => ((endsAtEndOfFile || annotationRange) && metadata && endOfFileContents.data ? hydratedCopy(metadata, endOfFileContents.data) : null) ?? metadata,
 		[endOfFileContents.data, endsAtEndOfFile, annotationRange, metadata],
 	);
- const fileDiff = useSelectionSnapshot(containerRef, incomingFileDiff, selectionIdentity);
+	const fileDiff = useSelectionSnapshot(containerRef, incomingFileDiff, selectionIdentity);
  const annotationReveal=useFileAnnotationReveal(containerRef,annotationRange,{ready:annotationReady && (!annotationRange || !metadata || (endOfFileContents.isSuccess && !endOfFileContents.isFetching)),contentKey:fileDiff});
 	const beginLineAnnotation = useCallback((side: "deletions" | "additions", lineNumber: number) => {
 		const { row, rowIndex } = rowForLine(rows, side, lineNumber);

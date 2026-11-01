@@ -79,8 +79,8 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
- const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, side, editing, annotationRange?.requestKey]);
- const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, side, editing, annotationRange?.requestKey]);
+	const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());

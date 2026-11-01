@@ -165,8 +165,8 @@ export function FileContentPane({
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
- const selectionPane = useRef<HTMLDivElement>(null);
- const selectionIdentity = JSON.stringify([sessionId, hostId, path, source, scope, commitSha, mode, editing, initialRequestKey, annotationRange?.requestKey]);
+	const selectionPane = useRef<HTMLDivElement>(null);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, path, source, scope, commitSha, mode, editing, initialRequestKey, annotationRange?.requestKey]);
 	// The daemon serves workspace files by relative path only. An absolute path
 	// that reaches here was not inside the session, so say that rather than
 	// sending a request that can only fail.
@@ -177,7 +177,7 @@ export function FileContentPane({
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
 	const query = { ...queryResult, data: useSelectionSnapshot(selectionPane, queryResult.data, selectionIdentity) };
- const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
 	const liveTextResult = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
@@ -185,7 +185,7 @@ export function FileContentPane({
 		refetchOnWindowFocus: true,
 	});
 
- const liveText = { ...liveTextResult, data: useSelectionSnapshot(selectionPane, liveTextResult.data, selectionIdentity) };
+	const liveText = { ...liveTextResult, data: useSelectionSnapshot(selectionPane, liveTextResult.data, selectionIdentity) };
 
  // Each annotation open must verify rows from this request's fresh source,
  // rather than a still-mounted pane's previous query cache.

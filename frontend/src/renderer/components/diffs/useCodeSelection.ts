@@ -85,9 +85,9 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 
 /** Read native shadow selection without traversing or copying code rows. */
 export function codeSelectionRange(host: HTMLElement): Range | null {
- const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
- const range = selection ? selectionRange(selection) : null;
- return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
+	const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+	const range = selection ? selectionRange(selection) : null;
+	return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
 }
 
 /** Reads the rows a selection covers inside one Pierre surface, or null. */
