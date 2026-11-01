@@ -113,7 +113,7 @@ type longContextRates struct {
 
 // longContextInputField matches the input rate that announces a size, such as
 // input_cost_per_token_above_272k_tokens.
-var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_([0-9]+)k_tokens$`)
+var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
 
 // suffixTiers are the service tiers LiteLLM prices with their own rate fields.
 var suffixTiers = []string{pricing.ServiceTierPriority, pricing.ServiceTierFlex, pricing.ServiceTierUltrafast}
