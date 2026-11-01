@@ -72,8 +72,8 @@ type InitialInputReadyState struct {
 type OpenCommandTerminalInput struct {
 	// Owner is a trusted workflow identity, independent of the editable title.
 	// It is persisted so the workflow can reconcile commands after a restart.
-	Owner                   string
-	Argv                    []string
+	Owner string
+	Argv  []string
 	// HideFromList keeps a daemon-owned guided login PTY out of the user's
 	// terminal drawer. The auth service still owns and closes its handle.
 	HideFromList            bool
