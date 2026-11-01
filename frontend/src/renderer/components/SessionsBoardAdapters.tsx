@@ -107,6 +107,7 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	backgroundTasks,
 	me,
 	participants,
 	memory,
@@ -117,6 +118,7 @@ export function BoardSessionCardAdapter({
 	onTerminate,
 	session,
 }: {
+	backgroundTasks?: ReactNode;
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
 	/** Colour for the chip; neutral unless this card is part of the fix. */
@@ -134,6 +136,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			footer={backgroundTasks}
 			me={me}
 			participants={participants}
 			memory={memory}

@@ -882,3 +882,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
+
+// BackgroundTaskReporting describes the task reader shared by every conversation.
+func (d *Driver) BackgroundTaskReporting() string { return "native" }

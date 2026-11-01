@@ -190,6 +190,94 @@ function collapseWhitespace(text) {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+// A UI projection of Claude's complete background set. The bridge's own
+// liveBackgroundTasks also contains foreground calls for permission attribution;
+// it must not be used as a background-work counter or changed by this reader.
+function aoObserveBackgroundTasks(session, message) {
+	const now = Date.now();
+	const live = session.aoBackgroundLive ??= new Map();
+	const known = session.aoBackgroundKnown ??= new Map();
+	const recent = session.aoBackgroundRecent ??= new Map();
+	for (const [id, task] of known) {
+		if (!live.has(id) && now - task.observedAt > 30000) known.delete(id);
+	}
+	for (const [id, task] of recent) {
+		if (now - Date.parse(task.endedAt) >= 30000) recent.delete(id);
+	}
+	if (message.subtype === "background_tasks_changed") {
+		// A removal level can precede its completion event even after a task
+		// has run for hours. Retain its label for the following bookend.
+		for (const record of live.values()) record.observedAt = now;
+		live.clear();
+		for (const task of message.tasks) {
+			const previous = known.get(task.task_id);
+			const sameRun = !task.run_id || !previous?.runId || task.run_id === previous.runId;
+			const record = {
+				id: task.task_id, runId: task.run_id,
+				kind: task.task_type === "local_bash" ? "shell" : task.task_type === "local_agent" ? "agent" : "other",
+				description: task.description ?? "", state: "running", observedAt: now, wasBackground: true,
+				ambient: task.ambient === true || (sameRun && previous?.ambient === true),
+			};
+			known.set(record.id, record);
+			if (!record.ambient) live.set(record.id, record);
+			recent.delete(record.id);
+		}
+		session.aoBackgroundReady = true;
+	} else if (message.subtype === "task_started") {
+		// A start may describe foreground work. Only a full background snapshot
+		// grants membership; starts can enrich or hide an already known task.
+		let record = known.get(message.task_id);
+		if (!record || (message.run_id && record.runId && message.run_id !== record.runId)) {
+			record = { id: message.task_id, runId: message.run_id, observedAt: now };
+			known.set(message.task_id, record);
+		}
+		if (record && (!message.run_id || !record.runId || record.runId === message.run_id)) {
+			record.ambient ||= message.ambient === true || message.skip_transcript === true;
+			if (record.ambient) live.delete(record.id);
+		}
+	} else {
+		const record = known.get(message.task_id);
+		if (!record?.wasBackground || (message.run_id && record.runId && message.run_id !== record.runId)) return;
+		const status = message.subtype === "task_notification" ? message.status : message.patch?.status;
+		if (["completed", "failed", "killed", "stopped"].includes(status)) {
+			live.delete(record.id);
+			if (!record.ambient && !recent.has(record.id)) {
+				recent.set(record.id, { ...record, state: status === "killed" ? "stopped" : status, endedAt: new Date(now).toISOString() });
+			}
+		}
+	}
+	// Bound transient history even if a provider emits an unusually large burst.
+	while (known.size > 512) known.delete(known.keys().next().value);
+	while (recent.size > 128) recent.delete(recent.keys().next().value);
+}
+
+export function patchClaudeBackgroundTasks(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	const method = '"_ao/session/background_tasks"';
+	if (source.includes(method)) return false;
+	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
+	const cases = ["task_started", "task_updated", "task_notification", "background_tasks_changed"];
+	if (!source.includes(marker) || cases.some(name => source.split(`case "${name}":`).length !== 2)) {
+		throw new Error("claude-agent-acp no longer matches AO's background-task projection");
+	}
+	for (const name of cases) {
+		source = source.replace(`case "${name}":`, `case "${name}":\n                                aoObserveBackgroundTasks(session, message);`);
+	}
+	const registration = `.onRequest(${method}, { parse: params => params }, (ctx) => {
+            const id = ctx.params?.sessionId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed) throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            // Until a native level arrives, absence of events does not prove empty.
+            if (!session.aoBackgroundReady) throw RequestError.methodNotFound("Background task snapshot unavailable.");
+            aoObserveBackgroundTasks(session, { subtype: "prune" });
+            const tasks = [...session.aoBackgroundLive.values(), ...session.aoBackgroundRecent.values()];
+            return { tasks: tasks.map(({ id, runId, kind, description, state, endedAt }) => ({ id, runId, kind, description, state, endedAt })) };
+        })
+        `;
+	writeFileSync(adapterPath, `${aoObserveBackgroundTasks.toString()}\n${source.replace(marker, registration + marker)}`);
+	return true;
+}
+
 // Reuse the pinned bridge's native task registry. Ending its process loses the
 // task monitor even when a background shell's process group survives. Claude
 // Code also starts cycles on its own after an AO turn, for example to answer a

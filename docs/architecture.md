@@ -81,6 +81,32 @@ The daemon starts with Chat hibernation disabled; the desktop synchronizes its D
 
 ---
 
+### Session background work
+
+Background task reporting covers every harness in the Chat registry. The board
+uses one batch read; a Chat panel reads only its current controller. Reads never
+wake a hibernated session. OS processes remain separate, optional Diagnostics.
+
+| Chat transport | Source | Coverage |
+| --- | --- | --- |
+| Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
+| Codex | Paginated `thread/backgroundTerminals/list`, command completion and collaboration events | Native shell inventory; event-derived subagent states |
+| Unreal Agent | Live provider-owned asynchronous Bash operation registry | Native inventory, including after controller reattachment |
+| All other ACP bindings | Negotiated `asyncTasks` lifecycle and explicitly backgrounded tool metadata | Reported jobs; complete native inventory is not available in ACP v1 |
+
+The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
+OMP, Qwen, Copilot, Agy, Command Code, and DeepSeek Harness. An adapter that
+emits no background metadata or async-task events cannot expose hidden native
+jobs through ACP; a partial empty reading means no jobs **reported**, not none
+running. Partial readings may miss completions as well as starts. Do not infer
+jobs from foreground tool duration, an idle turn, output prose, or process trees.
+
+`GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
+`ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
+termination/generation checks after provider I/O. Real completion outcomes remain
+visible for 30 seconds. Event-derived running jobs defer ACP hibernation; native
+snapshots remain authoritative where a provider supports them.
+
 ## System overview
 
 ```mermaid
