@@ -191,7 +191,7 @@ if (typeof window !== "undefined") {
 			save: async () => true,
 		},
 		cloudShare: {
-			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false }),
+			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
 			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,

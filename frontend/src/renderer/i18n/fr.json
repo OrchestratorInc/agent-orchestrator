@@ -3114,6 +3114,7 @@
 	"artifacts.share.secrets": "Ce fichier semble contenir un {{kinds}}. Le publier le rendra public.",
 	"artifacts.share.publish": "Publier",
 	"artifacts.share.publishing": "Publication… {{percent}} %",
+	"artifacts.share.changed": "Ce fichier a changé depuis l’ouverture de Partager. Vérifiez-le et publiez-le à nouveau.",
 	"artifacts.share.upgradeTitle": "Passez à une offre supérieure pour partager plus",
 	"artifacts.share.limitReached": "Offre gratuite : jusqu’à {{limit}} liens actifs. Passez à une offre supérieure pour partager plus.",
 	"artifacts.share.upgrade": "Mettre à niveau",

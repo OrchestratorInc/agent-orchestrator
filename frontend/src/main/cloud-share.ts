@@ -56,6 +56,9 @@ export interface ResolvedShareFile {
 	/** Slash-separated path in the artifacts folder. */
 	relativePath: string;
 	size: number;
+	/** The file's identity when it resolved: a later open must find the same file. */
+	dev: number;
+	ino: number;
 }
 
 /**
@@ -89,7 +92,7 @@ export async function resolveShareFile(dataDir: string, sessionId: unknown, relP
 	}
 	const stat = await fs.stat(realFile);
 	if (!stat.isFile()) throw new CloudShareError("invalid_file", "Only files can be shared.");
-	return { realPath: realFile, name: path.basename(realFile), relativePath: segments.join("/"), size: stat.size };
+	return { realPath: realFile, name: path.basename(realFile), relativePath: segments.join("/"), size: stat.size, dev: stat.dev, ino: stat.ino };
 }
 
 const SECRET_PATTERNS: Array<[string, RegExp]> = [
@@ -137,22 +140,48 @@ export class SecretScanner {
 	}
 }
 
-/** Reads a file once and reports the credentials it looks like it holds. */
-export async function scanShareFile(file: ResolvedShareFile): Promise<string[]> {
+/**
+ * What the person was shown about a file: the hash of its scanned start, its
+ * size and its modification time. Publishing refuses a file whose
+ * fingerprint changed since, so the bytes that go public are the ones whose
+ * scan the person saw.
+ */
+class FingerprintHash {
+	private readonly hash = createHash("sha256");
+	private hashed = 0;
+
+	push(chunk: Uint8Array): void {
+		if (this.hashed >= MAX_SCANNED_BYTES) return;
+		const take = chunk.subarray(0, MAX_SCANNED_BYTES - this.hashed);
+		this.hash.update(take);
+		this.hashed += take.byteLength;
+	}
+
+	digest(stat: { size: number; mtimeMs: number }): string {
+		return `${this.hash.digest("hex")}:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+	}
+}
+
+/** Reads a file's start once: the credentials it looks like it holds, and its fingerprint. */
+export async function scanShareFile(file: ResolvedShareFile): Promise<{ secretFindings: string[]; fingerprint: string }> {
 	const scanner = new SecretScanner(file.name);
-	const handle = await openNoFollow(file.realPath);
+	const fingerprint = new FingerprintHash();
+	const handle = await openResolved(file);
 	try {
+		const stat = await handle.stat();
 		const buffer = Buffer.alloc(READ_CHUNK);
 		for (let read = 0; read < MAX_SCANNED_BYTES; ) {
 			const { bytesRead } = await handle.read(buffer, 0, READ_CHUNK, null);
 			if (bytesRead === 0) break;
-			scanner.push(buffer.subarray(0, bytesRead));
+			const chunk = buffer.subarray(0, bytesRead);
+			scanner.push(chunk);
+			fingerprint.push(chunk);
 			read += bytesRead;
 		}
+		return { secretFindings: scanner.list(), fingerprint: fingerprint.digest(stat) };
 	} finally {
 		await handle.close();
 	}
-	return scanner.list();
 }
 
 export interface ShareSnapshot {
@@ -160,34 +189,50 @@ export interface ShareSnapshot {
 	size: number;
 	sha256: string;
 	secretFindings: string[];
+	/** The source's fingerprint as it was copied; see scanShareFile. */
+	fingerprint: string;
+}
+
+export interface SnapshotOptions {
+	/** Stops the copy between chunks. */
+	signal?: AbortSignal;
+	/** Bytes copied so far. */
+	onProgress?: (copiedBytes: number) => void;
 }
 
 /**
  * Copies a shared file into a private snapshot under snapshotDir, hashing it
- * and scanning it as it goes. The upload reads only the snapshot.
+ * and scanning it as it goes. The upload reads only the snapshot. The copy
+ * needs as much free space as the file, which is checked first.
  */
-export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: string): Promise<ShareSnapshot> {
+export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: string, options: SnapshotOptions = {}): Promise<ShareSnapshot> {
 	await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
+	const free = await fs.statfs(snapshotDir).then((stats) => stats.bavail * stats.bsize, () => Number.POSITIVE_INFINITY);
+	if (free < file.size) throw new CloudShareError("disk_full", "There is not enough free disk space to prepare this file for sharing.");
 	const target = path.join(snapshotDir, randomUUID());
-	const source = await openNoFollow(file.realPath);
+	const source = await openResolved(file);
 	let output: fs.FileHandle | undefined;
 	try {
-		if (!(await source.stat()).isFile()) throw new CloudShareError("invalid_file", "Only files can be shared.");
+		const stat = await source.stat();
 		output = await fs.open(target, "wx", 0o600);
 		const hash = createHash("sha256");
 		const scanner = new SecretScanner(file.name);
+		const fingerprint = new FingerprintHash();
 		const buffer = Buffer.alloc(READ_CHUNK);
 		let size = 0;
 		for (;;) {
+			if (options.signal?.aborted) throw new CloudShareError("cancelled", "Sharing was cancelled.");
 			const { bytesRead } = await source.read(buffer, 0, READ_CHUNK, null);
 			if (bytesRead === 0) break;
 			const chunk = buffer.subarray(0, bytesRead);
 			hash.update(chunk);
 			scanner.push(chunk);
+			fingerprint.push(chunk);
 			await output.write(chunk);
 			size += bytesRead;
+			options.onProgress?.(size);
 		}
-		return { path: target, size, sha256: hash.digest("hex"), secretFindings: scanner.list() };
+		return { path: target, size, sha256: hash.digest("hex"), secretFindings: scanner.list(), fingerprint: fingerprint.digest(stat) };
 	} catch (error) {
 		await output?.close().catch(() => undefined);
 		output = undefined;
@@ -204,9 +249,25 @@ export async function clearShareSnapshots(snapshotDir: string): Promise<void> {
 	await fs.rm(snapshotDir, { recursive: true, force: true });
 }
 
-function openNoFollow(file: string): Promise<fs.FileHandle> {
-	// O_NOFOLLOW refuses a final symlink swapped in after the file resolved.
-	return fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+/**
+ * Opens a resolved file, refusing anything but the very file that resolved.
+ * O_NOFOLLOW refuses a final symlink swapped in since; comparing the opened
+ * file's device and inode with the resolved ones refuses a folder on the way
+ * swapped for a symlink, which O_NOFOLLOW does not see.
+ */
+async function openResolved(file: ResolvedShareFile): Promise<fs.FileHandle> {
+	const handle = await fs.open(file.realPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile()) throw new CloudShareError("invalid_file", "Only files can be shared.");
+		if (stat.dev !== file.dev || stat.ino !== file.ino) {
+			throw new CloudShareError("invalid_file", "The file changed while it was being shared.");
+		}
+		return handle;
+	} catch (error) {
+		await handle.close();
+		throw error;
+	}
 }
 
 export interface CloudShareApi {
@@ -308,6 +369,12 @@ export async function uploadShare(
 		? { name: input.name, size: snapshot.size, sha256: snapshot.sha256, shareId: input.shareId }
 		: { name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature }, signal);
 	const handle = await fs.open(snapshot.path, "r");
+	// One failed part stops the others before the upload is aborted and the
+	// snapshot closed.
+	const batch = new AbortController();
+	const stop = () => batch.abort();
+	signal?.addEventListener("abort", stop, { once: true });
+	const running: Array<Promise<void>> = [];
 	try {
 		const completed: Array<{ partNumber: number; sha256: string; etag: string }> = [];
 		let sent = 0;
@@ -323,13 +390,13 @@ export async function uploadShare(
 			// The snapshot does not change, so each part is read again only as it
 			// is sent: at most UPLOAD_CONCURRENCY parts are in memory.
 			const worker = async () => {
-				for (let part = queue.shift(); part; part = queue.shift()) {
+				for (let part = queue.shift(); part && !batch.signal.aborted; part = queue.shift()) {
 					const signed = parts.find((candidate) => candidate.partNumber === part!.partNumber);
 					if (!signed) throw new CloudShareError("upload_failed", "The upload was signed for another part.");
 					const range = partRange(start, snapshot.size, part.partNumber);
 					const body = Buffer.alloc(range.length);
 					await handle.read(body, 0, range.length, range.offset);
-					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal });
+					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal: batch.signal });
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
@@ -337,17 +404,22 @@ export async function uploadShare(
 					onProgress(sent);
 				}
 			};
-			await Promise.all(Array.from({ length: UPLOAD_CONCURRENCY }, worker));
+			const workers = Array.from({ length: UPLOAD_CONCURRENCY }, worker);
+			running.push(...workers);
+			await Promise.all(workers);
 		}
 		completed.sort((a, b) => a.partNumber - b.partNumber);
 		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
 			{ uploadToken: start.uploadToken, parts: completed }, signal);
 	} catch (error) {
+		batch.abort();
+		await Promise.allSettled(running);
 		// The upload was never finalized: discard its parts. Finalize itself
 		// failing leaves nothing to discard but aborting is harmless.
 		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
 		throw error;
 	} finally {
+		signal?.removeEventListener("abort", stop);
 		await handle.close();
 	}
 }

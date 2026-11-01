@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, Copy, Share } from "lucide-react";
-import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks } from "../../shared/cloud-share";
+import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
@@ -15,7 +15,7 @@ type Phase =
 	| { kind: "signin" }
 	| { kind: "unsupported" }
 	| { kind: "limit"; limit: number }
-	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks }
+	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
 	| { kind: "published"; share: CloudShareLink; unpublishing?: "confirm" | "busy"; error?: string }
 	| { kind: "error"; message: string };
@@ -23,6 +23,23 @@ type Phase =
 /** Videos are not shared yet: there is no partial-file serving for them. */
 const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
 const COPIED_MS = 2_000;
+
+/**
+ * A publish still running. It outlives the popover: closing the popover
+ * keeps it going, and reopening Share on the file shows its progress again.
+ */
+interface PendingShare {
+	result: Promise<CloudSharePublishResult>;
+	links: CloudShareLinks;
+	sent: number;
+	total: number;
+}
+
+const pendingShares = new Map<string, PendingShare>();
+
+function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
+	return JSON.stringify([baseUrl, file.sessionId, file.path]);
+}
 
 /** "2.0 KB", "64 MB": a byte count for the share popover. */
 export function formatBytes(bytes: number): string {
@@ -54,7 +71,6 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const cancelUpload = useRef<(() => void) | null>(null);
 	const video = VIDEO_FILE.test(file.path);
 	const button = (
 		<Button
@@ -79,16 +95,12 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 			</Tooltip>
 		);
 	}
-	// Closing the popover mid-upload cancels the upload.
-	const changeOpen = (next: boolean) => {
-		if (!next) cancelUpload.current?.();
-		setOpen(next);
-	};
+	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
-		<Popover open={open} onOpenChange={changeOpen}>
+		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>{button}</PopoverTrigger>
 			<PopoverContent align="end" className="w-[min(22rem,90vw)] p-3" data-browser-native-overlay="true">
-				{open ? <SharePanel file={file} name={name} onClose={() => changeOpen(false)} cancelUpload={cancelUpload} /> : null}
+				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
 		</Popover>
 	);
@@ -98,12 +110,10 @@ function SharePanel({
 	file,
 	name,
 	onClose,
-	cancelUpload,
 }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	onClose: () => void;
-	cancelUpload: React.MutableRefObject<(() => void) | null>;
 }) {
 	const { t } = useTranslation();
 	const { baseUrl, signedIn } = useShareAccess();
@@ -111,6 +121,27 @@ function SharePanel({
 	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
 	const [copied, setCopied] = useState(false);
 	const shareFile = { ...file, baseUrl };
+	const key = pendingKey(baseUrl, file);
+	const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+	// Shows how a publish ended. Its own refusal is shown as it came, not
+	// worked out again from the link list.
+	const settle = (result: CloudSharePublishResult, links: CloudShareLinks) => {
+		switch (result.status) {
+			case "published":
+				return setPhase({ kind: "published", share: result.share });
+			case "cancelled":
+				return load();
+			case "limit":
+				return setPhase({ kind: "limit", limit: links.limit });
+			case "changed":
+				return setPhase({ kind: "publish", inspection: result.inspection, links, changed: true });
+			case "unsupported":
+				return setPhase({ kind: "unsupported" });
+			case "signed_out":
+				return setPhase({ kind: "signin" });
+		}
+	};
 
 	const load = useCallback(() => {
 		if (!signedIn) {
@@ -118,6 +149,16 @@ function SharePanel({
 			return () => undefined;
 		}
 		let cancelled = false;
+		const pending = pendingShares.get(key);
+		if (pending) {
+			setPhase({ kind: "uploading", sent: pending.sent, total: pending.total });
+			pending.result
+				.then((result) => !cancelled && settle(result, pending.links))
+				.catch((error: unknown) => !cancelled && setPhase({ kind: "error", message: errorMessage(error) }));
+			return () => {
+				cancelled = true;
+			};
+		}
 		setPhase({ kind: "loading" });
 		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), aoBridge.cloudShare.list(baseUrl)])
 			.then(([inspection, links]) => {
@@ -138,7 +179,7 @@ function SharePanel({
 		return () => {
 			cancelled = true;
 		};
-	}, [signedIn, baseUrl, file.sessionId, file.path, file.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [signedIn, baseUrl, key, file.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	useEffect(() => load(), [load]);
 
@@ -146,9 +187,11 @@ function SharePanel({
 		if (phase.kind !== "uploading") return;
 		return aoBridge.cloudShare.onProgress((progress) => {
 			if (progress.sessionId !== file.sessionId || progress.path !== file.path) return;
+			const pending = pendingShares.get(key);
+			if (pending) Object.assign(pending, { sent: progress.sentBytes, total: progress.totalBytes });
 			setPhase({ kind: "uploading", sent: progress.sentBytes, total: progress.totalBytes });
 		});
-	}, [phase.kind, file.sessionId, file.path]);
+	}, [phase.kind, file.sessionId, file.path, key]);
 
 	useEffect(() => {
 		if (!copied) return;
@@ -156,27 +199,17 @@ function SharePanel({
 		return () => clearTimeout(timer);
 	}, [copied]);
 
-	const publish = async () => {
+	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks) => {
 		setPhase({ kind: "uploading", sent: 0, total: 0 });
-		cancelUpload.current = () => void aoBridge.cloudShare.cancel();
+		// The fingerprint ties the publish to what this popover showed.
+		const pending: PendingShare = { result: aoBridge.cloudShare.publish({ ...shareFile, fingerprint: inspection.fingerprint }), links, sent: 0, total: 0 };
+		pendingShares.set(key, pending);
 		try {
-			const result = await aoBridge.cloudShare.publish(shareFile);
-			switch (result.status) {
-				case "published":
-					return setPhase({ kind: "published", share: result.share });
-				case "cancelled":
-					return load();
-				case "limit":
-					return load();
-				case "unsupported":
-					return setPhase({ kind: "unsupported" });
-				case "signed_out":
-					return setPhase({ kind: "signin" });
-			}
+			settle(await pending.result, links);
 		} catch (error) {
-			setPhase({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+			setPhase({ kind: "error", message: errorMessage(error) });
 		} finally {
-			cancelUpload.current = null;
+			if (pendingShares.get(key) === pending) pendingShares.delete(key);
 		}
 	};
 
@@ -229,12 +262,13 @@ function SharePanel({
 						{formatBytes(inspection.size)}
 						{links.unlimited ? null : ` · ${t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })}`}
 					</p>
+					{phase.changed ? <p role="status" className="mt-2 text-caption text-foreground">{t("artifacts.share.changed")}</p> : null}
 					{inspection.secretFindings.length > 0 ? (
 						<p role="alert" className="mt-2 text-caption leading-4 text-error">
 							{t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") })}
 						</p>
 					) : null}
-					{actions(<Button onClick={() => void publish()} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>)}
+					{actions(<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>)}
 				</>
 			);
 		}

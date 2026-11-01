@@ -57,16 +57,18 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
-							{artifact.cloud ? null : (
+							{/* A file's project names its document: without one, sharing it
+							    here would make a second link for the same file. */}
+							{artifact.cloud || !artifact.projectId ? null : (
 								<ShareArtifactButton
 									className="transition-none"
-									file={{ sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
+									file={{ sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId }}
 									name={artifact.name}
 								/>
 							)}
 							<ArtifactActionsMenu
 								artifact={artifact}
-								session={{ id: artifact.sessionId, cloud: artifact.cloud, workspaceId: artifact.projectId }}
+								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
 								pinInMenu
 								pinned={pinned}

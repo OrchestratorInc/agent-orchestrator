@@ -166,8 +166,9 @@ function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
 		throw invalid(`path must stay under ${API_PREFIX} after URL normalization.`);
 	}
 	// Share links are published, updated and revoked only through the main
-	// process's cloudShare flow, which a person confirms in a native dialog;
-	// through this proxy the renderer may only read them.
+	// process's cloudShare flow, which reads files only inside a session's
+	// artifacts folder and publishes only what its inspection showed; through
+	// this proxy the renderer may only read them.
 	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
 	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`);
 	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {

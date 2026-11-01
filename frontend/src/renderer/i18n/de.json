@@ -3056,6 +3056,7 @@
 	"artifacts.share.secrets": "Diese Datei scheint einen {{kinds}} zu enthalten. Beim Veröffentlichen wird er öffentlich.",
 	"artifacts.share.publish": "Veröffentlichen",
 	"artifacts.share.publishing": "Wird veröffentlicht… {{percent}} %",
+	"artifacts.share.changed": "Diese Datei hat sich geändert, seit du „Teilen“ geöffnet hast. Prüfe sie und veröffentliche sie erneut.",
 	"artifacts.share.upgradeTitle": "Upgrade, um mehr zu teilen",
 	"artifacts.share.limitReached": "Kostenloser Plan: bis zu {{limit}} aktive Links. Führe ein Upgrade durch, um mehr zu teilen.",
 	"artifacts.share.upgrade": "Upgrade",
