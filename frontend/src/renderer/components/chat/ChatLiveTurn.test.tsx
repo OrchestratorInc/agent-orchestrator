@@ -1,4 +1,4 @@
-import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -72,7 +72,13 @@ describe("settling under a reader who scrolled up", () => {
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
 	let restoreLayout: (() => void) | undefined;
-	afterEach(() => {
+	afterEach(async () => {
+		cleanup();
+		// TanStack's 150ms scroll-end debounce survives unmount. Drain it before
+		// jsdom removes window, as in WorkspaceDiffView's virtualizer tests.
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		});
 		restoreLayout?.();
 		restoreLayout = undefined;
 	});
