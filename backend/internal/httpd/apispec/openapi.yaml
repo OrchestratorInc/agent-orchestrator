@@ -19411,6 +19411,22 @@ components:
           type: string
         verdict:
           type: string
+        workerNotice:
+          enum:
+          - ""
+          - pending
+          - sent
+          - failed
+          type: string
+        workerNoticeAttemptedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        workerNoticeAttempts:
+          type: integer
+        workerNoticeError:
+          type: string
       required:
       - id
       - reviewId
