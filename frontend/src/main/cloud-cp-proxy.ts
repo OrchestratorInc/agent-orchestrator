@@ -42,6 +42,8 @@ export interface CloudCpProxyRequestInit {
 	method: string;
 	headers?: Record<string, string>;
 	body?: string;
+	/** A binary request body, base64-encoded to cross IPC. Excludes body. */
+	bodyBase64?: string;
 }
 
 export interface CloudCpProxyResponse {
@@ -113,13 +115,15 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	if (typeof init !== "object" || init === null) {
 		throw invalid("the request payload must be an object.");
 	}
-	const { baseUrl, path, method, headers, body } = init as Record<string, unknown>;
+	const { baseUrl, path, method, headers, body, bodyBase64 } = init as Record<string, unknown>;
 	parseCloudBaseUrl(baseUrl);
 	if (typeof path !== "string") throw invalid("path must be a string.");
 	if (typeof method !== "string" || !/^[A-Za-z]+$/.test(method)) {
 		throw invalid("method must be an HTTP method token.");
 	}
 	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
+	if (bodyBase64 !== undefined && typeof bodyBase64 !== "string") throw invalid("bodyBase64 must be a string when present.");
+	if (body !== undefined && bodyBase64 !== undefined) throw invalid("body and bodyBase64 are mutually exclusive.");
 	if (headers !== undefined) {
 		if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
 			throw invalid("headers must be a plain record of strings.");
@@ -143,6 +147,7 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 		method,
 		headers: headers as Record<string, string> | undefined,
 		body: body as string | undefined,
+		bodyBase64: bodyBase64 as string | undefined,
 	};
 }
 
@@ -282,7 +287,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		const response = await doFetch(url, {
 			method: valid.method.toUpperCase(),
 			headers: buildHeaders(valid.headers, token),
-			body: valid.body,
+			body: valid.bodyBase64 !== undefined ? Buffer.from(valid.bodyBase64, "base64") : valid.body,
 		});
 		const headers: Record<string, string> = {};
 		response.headers.forEach((value, key) => {
