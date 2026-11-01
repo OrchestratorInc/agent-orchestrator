@@ -476,6 +476,9 @@ func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck 
 	const name = "codex-launch-flags"
 	path, err := c.deps.DoctorResolveCodexBinary(ctx)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex binary resolution canceled"}
+		}
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
 			return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex binary not found"}
 		}

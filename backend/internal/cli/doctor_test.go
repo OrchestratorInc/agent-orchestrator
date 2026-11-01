@@ -888,6 +888,27 @@ func TestDoctorCodexLaunchFlagsWarnsOnResolverError(t *testing.T) {
 	}
 }
 
+func TestDoctorCodexLaunchFlagsSkipsCanceledResolution(t *testing.T) {
+	for _, resolverErr := range []error{context.Canceled, fmt.Errorf("resolve codex: %w", context.Canceled)} {
+		t.Run(resolverErr.Error(), func(t *testing.T) {
+			c := &commandContext{deps: Deps{
+				DoctorResolveCodexBinary: func(context.Context) (string, error) {
+					return "", resolverErr
+				},
+				CommandOutput: func(context.Context, string, ...string) ([]byte, error) {
+					t.Fatal("canceled resolution must not run a launch-flag probe")
+					return nil, nil
+				},
+			}}
+
+			check := c.checkCodexLaunchFlags(context.Background())
+			if check.Level != doctorPass || check.Message != "skipped: codex binary resolution canceled" {
+				t.Fatalf("canary = %+v, want skipped PASS for canceled resolution", check)
+			}
+		})
+	}
+}
+
 func TestDoctorCodexLaunchFlagsWarnsOnShimOnlyInstall(t *testing.T) {
 	for _, ext := range []string{".cmd", ".bat", ".CMD", ".BAT"} {
 		t.Run(ext, func(t *testing.T) {
