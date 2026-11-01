@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1614,5 +1615,172 @@ func run(t *testing.T, binary string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", binary, strings.Join(args, " "), err, out)
+	}
+}
+
+// TestWorkspaceIntegrationReclaimsOrphanedWorktreeFromPreviousDataRoot proves
+// end-to-end that a worktree registered under a previous AO data root (same
+// project/session layout, different root) is reclaimed automatically and the
+// spawn succeeds.
+// TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot proves
+// end-to-end that a worktree registered under a previous AO data root is NOT
+// removed automatically, but the spawn fails with the typed 409 carrying the
+// remediation command, and the orphan is preserved intact.
+func TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old-managed")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if !strings.Contains(err.Error(), filepath.ToSlash(orphanInfo.Path)) {
+		t.Fatalf("err = %v, want orphan path %q", err, orphanInfo.Path)
+	}
+	if !strings.Contains(err.Error(), "worktree remove "+quoteRecoveryPath(filepath.ToSlash(orphanInfo.Path))) {
+		t.Fatalf("err = %v, want quoted remediation command", err)
+	}
+	if _, statErr := os.Stat(orphanInfo.Path); statErr != nil {
+		t.Fatalf("orphan was not preserved: %v", statErr)
+	}
+}
+
+// TestWorkspaceIntegrationOrphanRemediationCommandHandlesShellMetacharacters
+// proves the recovery command from the 409 is copy-pasteable when the previous
+// data root contains spaces and shell metacharacters ($HOME, backticks): the
+// path must survive a real shell literally, actually clear the orphan, and let
+// the spawn succeed.
+func TestWorkspaceIntegrationOrphanRemediationCommandHandlesShellMetacharacters(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old $HOME `whoami` root")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/spaced-orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	command := remediationCommandFromError(t, err)
+	// git prints worktree paths with forward slashes, including on Windows.
+	if quoted := "'" + filepath.ToSlash(orphanInfo.Path) + "'"; !strings.Contains(command, quoted) {
+		t.Fatalf("command = %q, want literal orphan path %s", command, quoted)
+	}
+	runShellCommand(t, command)
+	if _, statErr := os.Stat(orphanInfo.Path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("remediation command did not remove the orphan: %v", statErr)
+	}
+	if _, err := ws.Create(ctx, cfg); err != nil {
+		t.Fatalf("create after remediation: %v", err)
+	}
+}
+
+// remediationCommandFromError returns the command fenced by the 409's
+// "(`...`), then retry" remediation, i.e. the exact text the user is told to
+// paste into a shell. The delimiters, not backtick counting, identify it: the
+// path itself may legally contain backticks.
+func remediationCommandFromError(t *testing.T, err error) string {
+	t.Helper()
+	msg := err.Error()
+	const prefix = "(`"
+	const suffix = "`), then retry"
+	start := strings.Index(msg, prefix)
+	if start < 0 {
+		t.Fatalf("err = %v, want a backticked remediation command", err)
+	}
+	rest := msg[start+len(prefix):]
+	end := strings.Index(rest, suffix)
+	if end < 0 {
+		t.Fatalf("err = %v, want a closed backticked remediation command", err)
+	}
+	return rest[:end]
+}
+
+// runShellCommand runs a copy-pasted remediation command the way a user would:
+// through the platform shell, so quoting is exercised for real. The commands
+// assume a POSIX shell or PowerShell; cmd.exe has no literal quoting form.
+func runShellCommand(t *testing.T, command string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		// Go's argv escaping is not PowerShell escaping, so a quoted command
+		// passed as an argument would be mangled before PowerShell ever sees it.
+		// Run it from a script file instead, which is how the command is pasted
+		// on Windows anyway. The BOM keeps Windows PowerShell 5.1 from reading
+		// the file as ANSI.
+		path := filepath.Join(t.TempDir(), "recover.ps1")
+		script := append([]byte{0xEF, 0xBB, 0xBF}, []byte(command+"\r\n")...)
+		if err := os.WriteFile(path, script, 0o644); err != nil {
+			t.Fatalf("write recovery script: %v", err)
+		}
+		run(t, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+		return
+	}
+	run(t, "sh", "-c", command)
+}
+
+func TestWorkspaceIntegrationPreservesDirtyOrphanedWorktree(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old-managed")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/dirty-orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanInfo.Path, "scratch.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatalf("write scratch: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(orphanInfo.Path, "scratch.txt")); statErr != nil {
+		t.Fatalf("dirty orphan was not preserved: %v", statErr)
 	}
 }
