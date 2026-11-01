@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -268,6 +269,7 @@ func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
+	t.Setenv("HERMES_HOME", t.TempDir())
 	modeLog := filepath.Join(t.TempDir(), "modes.json")
 	binary := writeHermesACPExecutable(t, modeLog, "")
 	t.Setenv(fakeAgentLiveReplies, "1")
@@ -280,7 +282,7 @@ func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.
 	ctx := context.Background()
 	start := ports.ChatStartConfig{
 		SessionID: "hermes-acp-replay", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
-		Permissions: ports.PermissionModeDefault,
+		Permissions: ports.PermissionModeDefault, SystemPrompt: "Keep this standing instruction out of replay.",
 	}
 	conversation, err := driver.Start(ctx, start)
 	if err != nil {
@@ -631,6 +633,15 @@ func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRe
 		<-ctx.Done()
 		return acpsdk.PromptResponse{}, ctx.Err()
 	}
+	var text []string
+	for _, block := range params.Prompt {
+		if block.Text != nil {
+			text = append(text, block.Text.Text)
+		}
+	}
+	if err := os.WriteFile(a.modeLog+".prompt", []byte(strings.Join(text, "\n")), 0o600); err != nil {
+		return acpsdk.PromptResponse{}, err
+	}
 	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
 		SessionId: params.SessionId,
 		Update:    acpsdk.UpdateAgentMessageText("\n\nAnswer one.\n"),
@@ -646,8 +657,12 @@ func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRe
 // reply if reconciliation dropped only the item's completed event.
 func (a *fakeHermesAgent) hermesReplayUpdates(ctx context.Context, sessionID acpsdk.SessionId) {
 	notice := hermesFailedTurnNotices[0]
+	prompt, err := os.ReadFile(a.modeLog + ".prompt")
+	if err != nil {
+		return
+	}
 	updates := []acpsdk.SessionUpdate{
-		acpsdk.UpdateUserMessageText("What is X?"),
+		acpsdk.UpdateUserMessageText(strings.TrimSpace(string(prompt))),
 		acpsdk.UpdateAgentMessageText("Answer one."),
 		acpsdk.UpdateUserMessageText("Do turn two."),
 		acpsdk.UpdateAgentMessageText(notice[:20]),

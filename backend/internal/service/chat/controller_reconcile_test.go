@@ -109,7 +109,7 @@ func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
 		{TurnID: "ao-turn-2", Role: domain.MessageRoleUser, ClientMessageID: "live-client-2", Text: interruptedPrompt},
 	}
 
-	got := reconcileNativeHistory(events, existingTurns, existingMessages, nil)
+	got := reconcileNativeHistoryForHarness(domain.HarnessHermes, events, existingTurns, existingMessages, nil)
 	byTurn := map[string][]ports.ChatEvent{}
 	for _, event := range got {
 		byTurn[event.ProviderTurnID] = append(byTurn[event.ProviderTurnID], event)
@@ -136,5 +136,23 @@ func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
 	}
 	if _, extra := byTurn["acp-history-turn:replay-2"]; extra {
 		t.Fatal("replay turn imported as a duplicate of the interrupted turn")
+	}
+}
+
+func TestReplayWhitespaceMatchingStaysHermesOnly(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessHermes, domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessKimi} {
+		t.Run(string(harness), func(t *testing.T) {
+			turns := []domain.ConversationTurn{{ID: "ao", ProviderTurnID: "turn", State: domain.TurnStateCompleted}}
+			messages := []domain.ConversationMessage{{TurnID: "ao", Role: domain.MessageRoleAssistant, Text: " answer "}}
+			events := []ports.ChatEvent{{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "turn", Text: "answer"}}
+			got := reconcileNativeHistoryForHarness(harness, events, turns, messages, nil)
+			want := 1
+			if harness == domain.HarnessHermes {
+				want = 0
+			}
+			if len(got) != want {
+				t.Fatalf("%s replay retained %d events, want %d", harness, len(got), want)
+			}
+		})
 	}
 }

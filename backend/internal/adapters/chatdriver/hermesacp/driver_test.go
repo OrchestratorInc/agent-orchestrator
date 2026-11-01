@@ -111,7 +111,7 @@ func TestSessionPreambleCarriesStandingPromptAndLanguagePin(t *testing.T) {
 	if !strings.Contains(text, "Never output Chinese") {
 		t.Errorf("preamble %q is missing the output-language pin", text)
 	}
-	if !strings.Contains(text, "<ao_standing_instructions>") || !strings.Contains(text, "</ao_standing_instructions>") {
+	if !strings.Contains(text, "<ao-standing-instructions>") || !strings.Contains(text, "</ao-standing-instructions>") {
 		t.Errorf("preamble %q is not wrapped in ao_standing_instructions", text)
 	}
 	if strings.Index(text, "Coordinate work") > strings.Index(text, "Never output Chinese") {

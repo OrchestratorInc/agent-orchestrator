@@ -195,6 +195,19 @@ describe("SessionInterfaceSwitchButton", () => {
 });
 
 describe("SessionInterfaceSwitchDialog", () => {
+	it.each(["chat", "tui"] as const)("discloses Hermes' fresh-context fallback before a switch to %s", (target) => {
+		render(<SessionInterfaceSwitchDialog open target={target} mayStartFresh onOpenChange={vi.fn()} onChoose={vi.fn()} />);
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("Hermes may start a fresh conversation");
+		expect(dialog).toHaveTextContent("Messages and tool results may not transfer into the target agent's context");
+		expect(dialog).not.toHaveTextContent("Completed messages and tool work stay in the agent's context");
+	});
+
+	it("keeps the context-continuity explanation for other harnesses", () => {
+		render(<SessionInterfaceSwitchDialog open target="chat" onOpenChange={vi.fn()} onChoose={vi.fn()} />);
+		expect(screen.getByRole("dialog")).toHaveTextContent("Completed messages and tool work stay in the agent's context");
+	});
+
 	it("requires an explicit Terminal stop for Cloud without claiming the agent is busy", () => {
 		const onChoose = vi.fn();
 		render(

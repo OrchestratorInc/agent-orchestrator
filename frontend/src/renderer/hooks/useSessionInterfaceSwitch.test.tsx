@@ -79,6 +79,15 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.settling = false;
 	});
 
+	it.each(["chat", "tui"] as const)("asks before an idle Hermes %s switch can reset context", (mode) => {
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider: "hermes", mode }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		expect(mocks.start).not.toHaveBeenCalled();
+		const dialogs = result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>;
+		expect(dialogs.props.children[0].props.open).toBe(true);
+	});
+
 	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
 		mocks.status = { supported: true, targetMode: "tui" };
 		localStorage.setItem(`cloud-chat-settings:org-1:session-1:${provider}`, JSON.stringify({

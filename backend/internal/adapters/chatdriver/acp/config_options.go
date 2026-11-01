@@ -9,6 +9,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -142,6 +143,9 @@ func (c *conversation) SetConfigOption(
 // notification and session setup — so an empty list means the session really
 // has no options and is applied as given.
 func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption) {
+	if c.suppressSessionModes {
+		options = withoutModeOptions(options)
+	}
 	normalized := normalizeConfigOptions(options)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -394,8 +398,15 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 		}
 		matched = choice.Value
 	}
-	if matched != "" {
-		return matched, true
+	return matched, matched != ""
+}
+
+func resolveModelChoice(harness domain.AgentHarness, choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	if resolved, ok := resolveLegacyModelChoice(choices, requested); ok {
+		return resolved, true
+	}
+	if harness != domain.HarnessHermes {
+		return "", false
 	}
 	// Hermes' session/new offers auto:<model>, the id a composer start stores,
 	// but a session/load replaces that row with the provider it resolved to. A

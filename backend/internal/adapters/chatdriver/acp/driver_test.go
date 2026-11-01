@@ -323,7 +323,7 @@ func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
 				Capabilities: ports.ChatCapabilities{
 					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
 				},
-				Launch: func(context.Context, LaunchConfig) (Launch, error) {
+				Launch:  func(context.Context, LaunchConfig) (Launch, error) {
 					return Launch{
 						Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"}, Env: env,
 					}, nil
@@ -3066,8 +3066,8 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	if detail["rawCommand"] != "/bin/zsh -lc 'ao session ls'" {
 		t.Fatalf("detail.rawCommand = %#v, want the verbatim provider command", detail["rawCommand"])
 	}
-	if detail["arguments"] == nil {
-		t.Fatalf("detail.arguments dropped: %#v", detail)
+	if detail["input"] == nil {
+		t.Fatalf("detail.input dropped: %#v", detail)
 	}
 }
 
@@ -3095,26 +3095,15 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
 			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
 		}
-	}
-	// The tool event stores the call's input under the neutral `arguments` key;
-	// the approval card keeps the provider-shaped `input`.
-	var toolDetail struct {
-		Arguments map[string]any `json:"arguments"`
-	}
-	if err := json.Unmarshal(event.Detail, &toolDetail); err != nil {
-		t.Fatal(err)
-	}
-	if toolDetail.Arguments["truncated"] != true {
-		t.Fatalf("tool arguments = %v, want the truncation marker", toolDetail.Arguments)
-	}
-	var approvalDetail struct {
-		Input map[string]any `json:"input"`
-	}
-	if err := json.Unmarshal(approval, &approvalDetail); err != nil {
-		t.Fatal(err)
-	}
-	if approvalDetail.Input["truncated"] != true {
-		t.Fatalf("approval input = %v, want the truncation marker", approvalDetail.Input)
+		var detail struct {
+			Input map[string]any `json:"input"`
+		}
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Input["truncated"] != true {
+			t.Fatalf("%s input = %v, want the truncation marker", name, detail.Input)
+		}
 	}
 	var detail struct {
 		Content []json.RawMessage `json:"content"`
@@ -3139,7 +3128,7 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 // it is only absence.
 func TestACPToolDetailOmitsMissingInputAndContent(t *testing.T) {
 	tool := &toolState{id: "agent-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted}
-	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	event := (&conversation{harness: domain.HarnessHermes}).toolEvent("turn-1", tool, true)
 	var detail map[string]any
 	if err := json.Unmarshal(event.Detail, &detail); err != nil {
 		t.Fatal(err)
@@ -3189,16 +3178,16 @@ func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
 		content:  []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(file))},
 	}
 	var detail struct {
-		Arguments map[string]any           `json:"arguments"`
-		Content   []acpsdk.ToolCallContent `json:"content"`
+		Input   map[string]any           `json:"input"`
+		Content []acpsdk.ToolCallContent `json:"content"`
 	}
 	if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Arguments["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
+	if detail.Input["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
 		detail.Content[0].Content == nil || detail.Content[0].Content.Content.Text == nil ||
 		detail.Content[0].Content.Content.Text.Text != file {
-		t.Fatalf("read detail changed: arguments=%v content=%+v", detail.Arguments, detail.Content)
+		t.Fatalf("read detail changed: input=%v content=%+v", detail.Input, detail.Content)
 	}
 }
 
@@ -4066,7 +4055,7 @@ func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := resolveLegacyModelChoice(tt.choices, tt.requested)
+			got, ok := resolveModelChoice(domain.HarnessHermes, tt.choices, tt.requested)
 			if tt.want == "" {
 				if ok {
 					t.Fatalf("resolveLegacyModelChoice(%q) = %q, true; want rejection", tt.requested, got)
@@ -5701,5 +5690,125 @@ func TestACPDriverUnsupportedAdditionalDirectoriesStillFail(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "additional workspace directories") {
 		t.Fatalf("Start err = %v, want the additional-directories refusal", err)
+	}
+}
+
+func TestProviderPrefixedModelAliasesStayHermesOnly(t *testing.T) {
+	choices := []ports.ChatConfigOptionChoice{{Value: "openrouter:model"}}
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessKimi, domain.HarnessCursor, domain.HarnessCline} {
+		for _, requested := range []string{"model", "auto:model"} {
+			if got, ok := resolveModelChoice(harness, choices, requested); ok {
+				t.Fatalf("%s resolved %q to %q; Hermes aliases must not change other harnesses", harness, requested, got)
+			}
+		}
+		if got, ok := resolveModelChoice(harness, choices, "openrouter:model"); !ok || got != "openrouter:model" {
+			t.Fatalf("%s rejected exact model id: %q, %v", harness, got, ok)
+		}
+	}
+}
+
+func TestLegacyModelDiscoveryStaysHermesOnly(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{"", domain.HarnessCline, domain.HarnessDeepSeek, domain.HarnessDevin} {
+		t.Run(string(harness), func(t *testing.T) {
+			agent := &legacyKimiAgent{}
+			driver := New(Config{
+				Harness: harness,
+				Launch:  func(context.Context, LaunchConfig) (Launch, error) {
+					return Launch{Command: "fake"}, nil
+				},
+			}, slog.New(slog.DiscardHandler))
+			driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+			options, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(options) != 0 {
+				t.Fatalf("discovery for %q imported legacy options: %#v", harness, options)
+			}
+		})
+	}
+}
+
+func TestToolPayloadContractStaysHarnessSpecific(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessHermes, domain.HarnessClaudeCode, domain.HarnessKimi, domain.HarnessCursor} {
+		t.Run(string(harness), func(t *testing.T) {
+			conv := &conversation{harness: harness}
+			tool := &toolState{id: "tool", kind: acpsdk.ToolKindOther, rawInput: map[string]any{"task": "inspect"}}
+			var detail map[string]json.RawMessage
+			if err := json.Unmarshal(conv.toolEvent("turn", tool, true).Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			key, absent := "input", "arguments"
+			if harness == domain.HarnessHermes {
+				key, absent = "arguments", "input"
+			}
+			if string(detail[key]) != `{"task":"inspect"}` || detail[absent] != nil {
+				t.Fatalf("%s tool payload = %s", harness, conv.toolEvent("turn", tool, true).Detail)
+			}
+			if _, exists := detail["locations"]; exists != (harness != domain.HarnessHermes) {
+				t.Fatalf("%s changed its absent-field contract: %#v", harness, detail)
+			}
+		})
+	}
+}
+
+func TestModeSuppressionAppliesToLiveCatalogReplacements(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "one", "one", "two"),
+		selectConfigOption("edit_approval_policy", "Edits", "mode", "ask", "ask", "allow"),
+	}
+	for _, suppress := range []bool{false, true} {
+		conv := &conversation{capabilities: ports.ChatCapabilities{}, suppressSessionModes: suppress}
+		conv.replaceConfigOptions(catalog)
+		options, err := conv.ListConfigOptions(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 2
+		if suppress {
+			want = 1
+		}
+		if len(options) != want || options[0].ID != "model" {
+			t.Fatalf("suppress=%v: options = %#v", suppress, options)
+		}
+	}
+}
+
+func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessHermes, domain.HarnessKimi} {
+		t.Run(string(harness), func(t *testing.T) {
+			agent := &legacyKimiAgent{
+				currentModel: "other",
+				availableModels: []legacyModelInfo{
+					{ModelID: "other", Name: "Other"},
+					{ModelID: "auto:model", Name: "Model"},
+				},
+				rejectUnknownModel: true,
+			}
+			driver := New(Config{
+				Harness: harness,
+				Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+			}, slog.New(slog.DiscardHandler))
+			driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Model: "model"})
+			if harness != domain.HarnessHermes {
+				if conv != nil {
+					_ = conv.Close()
+				}
+				if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+					t.Fatalf("non-Hermes Start error = %v, want invalid model", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conv.Close()
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if agent.currentModel != "auto:model" {
+				t.Fatalf("Hermes selected %q, want auto:model", agent.currentModel)
+			}
+		})
 	}
 }

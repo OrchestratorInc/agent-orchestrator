@@ -87,6 +87,8 @@ type nestedMessageState struct {
 }
 
 type conversation struct {
+	harness              domain.AgentHarness
+	suppressSessionModes bool
 	conn                 *acpsdk.ClientSideConnection
 	legacyWire           *legacyACPTransport
 	proc                 *process
@@ -540,7 +542,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				continue
 			}
 			modelOptionFound = true
-			resolved, ok := resolveLegacyModelChoice(option.Choices, model)
+			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
 			if !ok {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}

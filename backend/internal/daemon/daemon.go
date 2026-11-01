@@ -497,11 +497,11 @@ func Run(buildVersion string) error {
 				}, request.WorkingDir, log)
 			},
 			"hermes": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+				return chatdriveracp.DiscoverConfigOptionsForHarness(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
 					Args:    []string{"acp"},
 					Env:     request.Env,
-				}, request.WorkingDir, log)
+				}, request.WorkingDir, domain.HarnessHermes, log)
 			},
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,

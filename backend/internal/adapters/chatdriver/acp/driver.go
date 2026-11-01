@@ -240,8 +240,21 @@ func DiscoverConfigOptions(
 	workingDir string,
 	log *slog.Logger,
 ) ([]ports.ChatConfigOption, error) {
+	return DiscoverConfigOptionsForHarness(ctx, launch, workingDir, "", log)
+}
+
+// DiscoverConfigOptionsForHarness preserves the default discovery contract and
+// enables provider-specific catalog handling only for the named harness.
+func DiscoverConfigOptionsForHarness(
+	ctx context.Context,
+	launch Launch,
+	workingDir string,
+	harness domain.AgentHarness,
+	log *slog.Logger,
+) ([]ports.ChatConfigOption, error) {
 	driver := New(Config{
-		Launch: func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
+		Harness: harness,
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return launch, nil },
 	}, log)
 	return driver.discoverConfigOptions(ctx, workingDir)
 }
@@ -274,9 +287,10 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	// Normalize exactly like the live session path: agents that list models
-	// only in the legacy `models` response field (Hermes) or modes only in
-	// `modes` must surface those in discovery, not just in a launched session.
+	if d.cfg.Harness != domain.HarnessHermes {
+		return normalizeConfigOptions(resp.ConfigOptions), nil
+	}
+	// Hermes lists its model catalog only in the legacy response field.
 	return normalizeSessionOptions(d.suppressedModeOptions(resp.ConfigOptions), conv.legacyWire.modelState(), d.sessionModes(resp.Modes)), nil
 }
 
@@ -300,6 +314,10 @@ func (d *Driver) suppressedModeOptions(options []acpsdk.SessionConfigOption) []a
 	if !d.cfg.SuppressSessionModes {
 		return options
 	}
+	return withoutModeOptions(options)
+}
+
+func withoutModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionConfigOption {
 	out := make([]acpsdk.SessionConfigOption, 0, len(options))
 	for _, option := range options {
 		if option.Select != nil && option.Select.Category != nil &&
@@ -799,6 +817,8 @@ func (d *Driver) initialize(
 	conv := newConversation(
 		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.cfg.ClientExtensionAliases,
 	)
+	conv.harness = d.cfg.Harness
+	conv.suppressSessionModes = d.cfg.SuppressSessionModes
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.promptFailureCode = d.cfg.PromptFailureCode
