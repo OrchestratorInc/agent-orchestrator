@@ -1400,6 +1400,10 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * kind this build does not recognize still renders as a generic row — dropping it
  * would hide work the agent really did.
  */
+function unsupportedCommandField(value: unknown) {
+	return typeof value !== "string" || /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(value) ? "formatted" : undefined;
+}
+
 export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	const toolActivity =
 		activity.activityKind === "command" ||
@@ -1712,12 +1716,12 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 							// Said explicitly rather than implied by the label: "Ran command"
 							// alone never tells the reader what ran, and the collapsed row
 							// deliberately keeps only the category.
-							<pre data-chat-command-field="command" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+							<pre data-chat-command-field="command" data-chat-selection-unsupported={unsupportedCommandField(detail.command)} className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
 						{!isFileChange && (detail?.reason || detail?.text) ? (
-							<p data-chat-command-field="explanation" className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
+							<p data-chat-command-field="explanation" data-chat-selection-unsupported={unsupportedCommandField(detail.reason ?? detail.text)} className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
 								{detail.reason ?? detail.text}
 							</p>
 						) : null}
@@ -1760,7 +1764,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 						&gt;_
 					</span>
 					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span data-chat-command-field="explanation" className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
+						<span data-chat-command-field="explanation" data-chat-selection-unsupported={unsupportedCommandField(reason)} className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
 							{reason}
 						</span>
 						{binary ? (
@@ -1775,6 +1779,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			{command ? (
 				<pre
 					data-chat-command-field="command"
+					data-chat-selection-unsupported={unsupportedCommandField(command)}
 					className={cn(
 						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
@@ -1818,7 +1823,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre data-chat-command-field="terminalInput" data-chat-selection-unsupported={/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? "formatted" : undefined} className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
+			<pre data-chat-command-field="terminalInput" data-chat-selection-unsupported={unsupportedCommandField(text)} className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
@@ -1887,7 +1892,7 @@ function CommandOutput({
 			<pre
 				ref={pre}
 				data-chat-command-field="output"
-				data-chat-selection-unsupported={typeof detail?.output !== "string" || /[\x00-\x08\x0b-\x1f\x7f]/.test(raw) ? "formatted" : undefined}
+				data-chat-selection-unsupported={unsupportedCommandField(detail?.output)}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
 					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",

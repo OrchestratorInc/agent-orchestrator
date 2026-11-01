@@ -1,3 +1,4 @@
+import { isMacPlatform } from "../../lib/platform";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatExcerptActivation } from "../../../shared/chat-excerpt";
@@ -147,6 +148,19 @@ describe("mixed selection actions", () => {
 		expect(window.getSelection()!.toString()).toContain(
 			"Keep this instruction",
 		);
+		fireEvent.keyDown(document, {
+			key: "l",
+			ctrlKey: !isMacPlatform(),
+			metaKey: isMacPlatform(),
+		});
+		expect(
+			screen.queryByRole("button", { name: "1 annotation" }),
+		).not.toBeInTheDocument();
+		act(() => window.getSelection()?.removeAllRanges());
+		fireEvent(document, new Event("selectionchange"));
+		expect(
+			screen.queryByText("This content cannot be attached."),
+		).not.toBeInTheDocument();
 	});
 
 	it("reveals and highlights source segments in separate visual groups of one steered turn", async () => {

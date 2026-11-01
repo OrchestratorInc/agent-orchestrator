@@ -23,6 +23,8 @@ const test = process.env.AO_E2E_ELECTRON
 			},
 		})
 	: base;
+test.setTimeout(120_000);
+
 const origin = `http://127.0.0.1:${process.env.AO_E2E_PORT ?? 5173}`;
 const project = "mixed-selection",
 	session = "mixed-worker";
@@ -215,6 +217,10 @@ async function open(page: Page, mode: "main" | "existing" | "new" | "mermaid") {
 		}
 		return route.fulfill({ json: { status: "ok" } });
 	});
+	await page.addInitScript(() => {
+		localStorage.setItem("ao.developerMode", "true");
+		localStorage.setItem("ao.sideChats", "true");
+	});
 	await page.goto(`${origin}/#/projects/${project}/sessions/${session}`, {
 		waitUntil: "domcontentloaded",
 		timeout: 90000,
@@ -222,12 +228,7 @@ async function open(page: Page, mode: "main" | "existing" | "new" | "mermaid") {
 	await expect(
 		page.getByRole("combobox", { name: "Message the agent" }),
 	).toBeVisible({ timeout: 30000 });
-	await page.evaluate(async () => {
-		const modulePath = "/src/renderer/stores/ui-store.ts";
-		const { useUiStore } = await import(modulePath);
-		useUiStore.setState({ developerMode: true, sideChats: true });
-	});
-	return { sends, creations };
+	return { sends, creations, drafts };
 }
 
 async function selectMixed(page: Page, reverse = false) {
@@ -288,12 +289,23 @@ for (const destination of ["main", "existing", "new"] as const)
 				.info()
 				.outputPath(`${destination}-selection-before-attachment.png`),
 		});
-		await page
-			.getByRole("button", {
-				name: destination === "main" ? "Add to chat" : "Add to side chat",
-				exact: true,
-			})
-			.click();
+		if (destination === "main") {
+			await page.keyboard.press("Escape");
+			await expect(
+				page.getByRole("button", { name: "Add to chat", exact: true }),
+			).not.toBeVisible();
+			expect(
+				await page.evaluate(() => window.getSelection()!.toString()),
+			).not.toBe("");
+			await selectMixed(page);
+			await page.keyboard.press("ControlOrMeta+l");
+		} else
+			await page
+				.getByRole("button", {
+					name: "Add to side chat",
+					exact: true,
+				})
+				.click();
 		await expect(
 			page.getByRole("button", { name: "1 annotation", exact: true }),
 		).toBeVisible();
@@ -329,12 +341,17 @@ test("Mermaid controls never enter an excerpt; diagram content requests Code vie
 	await body.evaluate((element) => {
 		window.getSelection()!.selectAllChildren(element);
 	});
-	await body.dispatchEvent("mouseup");
+	await body.dispatchEvent("pointerup");
 	await expect(
-		page.getByText(
-			"Switch the Mermaid diagram to Code view, then select its source.",
-		),
+		page.getByText("Switch the diagram to Code view to select its source."),
 	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "Add to chat", exact: true }),
+	).toBeDisabled();
+	await expect(page.getByRole("alert")).toHaveCount(0);
+	await page.screenshot({
+		path: test.info().outputPath("diagram-disabled-selection.png"),
+	});
 	expect(await page.evaluate(() => window.getSelection()!.toString())).not.toBe(
 		"",
 	);
@@ -342,7 +359,7 @@ test("Mermaid controls never enter an excerpt; diagram content requests Code vie
 	await body.evaluate((element) => {
 		window.getSelection()!.selectAllChildren(element);
 	});
-	await body.dispatchEvent("mouseup");
+	await body.dispatchEvent("pointerup");
 	await expect(
 		page.getByRole("button", { name: "Add to chat", exact: true }),
 	).toBeVisible();
@@ -359,4 +376,46 @@ test("Mermaid controls never enter an excerpt; diagram content requests Code vie
 	expect(text).toContain(prose);
 	expect(text).not.toContain("powershell");
 	expect(text).not.toContain("mermaid");
+});
+
+test("selection cleared during creation saves the annotation without opening an empty inspector @T0", async ({
+	page,
+}) => {
+	const { creations, drafts } = await open(page, "new");
+	let release!: () => void;
+	let requested = false;
+	const response = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route("**/conversation/side-chats", async (route) => {
+		if (route.request().method() === "POST") {
+			requested = true;
+			await response;
+		}
+		await route.fallback();
+	});
+	await selectMixed(page);
+	await page
+		.getByRole("button", { name: "Add to side chat", exact: true })
+		.click();
+	await expect.poll(() => requested).toBe(true);
+	await page.evaluate(() => window.getSelection()?.removeAllRanges());
+	release();
+	await expect.poll(() => creations.length).toBe(1);
+	await expect
+		.poll(() =>
+			[...drafts.values()].some(
+				(value) => JSON.parse(value).references?.length === 1,
+			),
+		)
+		.toBe(true);
+	await expect(
+		page.getByRole("combobox", { name: "Side chat question" }),
+	).not.toBeVisible();
+	await expect(
+		page.getByText("No side chat opened yet", { exact: true }),
+	).not.toBeVisible();
+	await page.screenshot({
+		path: test.info().outputPath("selection-cleared-during-creation.png"),
+	});
 });
