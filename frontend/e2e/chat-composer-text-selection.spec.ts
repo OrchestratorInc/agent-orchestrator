@@ -136,6 +136,27 @@ test("clicking chat whitespace and composer padding keeps the draft caret positi
 	await expect(composer).toHaveText("abcdYXef");
 });
 
+test("composer padding preserves a native caret before selectionchange is processed @T0", async ({ page }) => {
+	const composer = await openChatWithDraft(page, "abcdef");
+	// Hold the event Lexical uses to adopt native arrow moves, reproducing a
+	// padding click that arrives before its selectionchange listener runs.
+	await page.evaluate(() => {
+		document.addEventListener("selectionchange", (event) => event.stopImmediatePropagation(), true);
+	});
+	await composer.press("ArrowLeft");
+	await composer.press("ArrowLeft");
+	const caretOffset = () => composer.evaluate((element) => {
+		const selection = window.getSelection();
+		return selection?.anchorNode && element.contains(selection.anchorNode) ? selection.anchorOffset : -1;
+	});
+	await expect.poll(caretOffset).toBe(4);
+	await composer.locator("xpath=ancestor::form").click({ position: { x: 20, y: 6 } });
+	await expect(composer).toBeFocused();
+	await expect.poll(caretOffset).toBe(4);
+	await page.keyboard.type("X");
+	await expect(composer).toHaveText("abcdXef");
+});
+
 test("typed chat composer text is visibly selected with a pointer drag @T0", async ({ page }) => {
 	const composer = await openChatWithDraft(page);
 
