@@ -252,7 +252,7 @@ const macTrafficLightBand = hidesShellTopbar();
  */
 const ShellCenter = memo(function ShellCenter({
 	isSessionRoute,
-	isBoardRoute,
+	isHomeRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
@@ -260,7 +260,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingCoderWorkspaceUrl,
 }: {
 	isSessionRoute: boolean;
-	isBoardRoute: boolean;
+	isHomeRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
@@ -274,10 +274,11 @@ const ShellCenter = memo(function ShellCenter({
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
 		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
 	</>;
-	// Pages own their header content; the panel owns the shared workspace controls.
+	// Pages own their header content; the panel owns the shared workspace controls,
+	// so every page carries the bell except the welcome start page.
 	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} notifications={isBoardRoute || isSessionRoute || startingOrchestrator}>
+		<CenterPanelShell className={panelClassName} notifications={!isHomeRoute || startingOrchestrator}>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -554,8 +555,6 @@ function ShellLayout() {
 	const newChatProject = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { project?: string }).project : undefined),
 	});
-	const isBoardRoute = Boolean(matchRoute({ to: "/projects/$projectId" })) ||
-		Boolean(matchRoute({ to: "/host/$hostId/project/$projectId" }));
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
@@ -1544,7 +1543,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
-								isBoardRoute={isBoardRoute}
+								isHomeRoute={isHomeRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}

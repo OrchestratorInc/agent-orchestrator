@@ -276,6 +276,19 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
 
+	// The shared topbar has no identity block, so the owner tag of a session
+	// someone the project was shared with asked for leads the session actions.
+	it("tags a shared cloud session with its requester", () => {
+		const { container, unmount } = renderTopbar(sessionWith({ cloud: { orgId: "org", requestedBy: { userId: "u1", name: "Vaanya" } } }));
+		const tag = container.querySelector("[data-session-owner-tag]");
+		expect(tag).not.toBeNull();
+		expect(screen.getByTestId("workspace-topbar-actions").firstElementChild).toBe(tag);
+		unmount();
+
+		const plain = renderTopbar(sessionWith());
+		expect(plain.container.querySelector("[data-session-owner-tag]")).toBeNull();
+	});
+
 	it("renders only session actions when embedded in the terminal bar", () => {
 		renderTopbar(
 			sessionWith(),
