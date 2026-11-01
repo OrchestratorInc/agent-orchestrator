@@ -30,10 +30,12 @@ type conversation struct {
 	events chan ports.ChatEvent
 	ready  chan error
 
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	pending map[string]chan error
-	closed  bool
+	writeMu          sync.Mutex
+	mu               sync.Mutex
+	pending          map[string]chan error
+	closed           bool
+	backgroundReadMu sync.Mutex
+	backgroundTasks  []ports.ChatBackgroundTask
 
 	closeOnce sync.Once
 	closeErr  error
@@ -189,6 +191,12 @@ func (c *conversation) pump() {
 						resultErr = errors.New(incoming.Error)
 					}
 					c.finishRequest(incoming.RequestID, resultErr)
+				case "background_tasks":
+					c.mu.Lock()
+					if incoming.BackgroundTasks != nil {
+						c.backgroundTasks = *incoming.BackgroundTasks
+					}
+					c.mu.Unlock()
 				case "event":
 					if incoming.Event != nil {
 						c.emit(incoming.Event.chatEvent(incoming.EventID))
@@ -264,3 +272,24 @@ func (c *conversation) Terminate() error {
 	defer cancel()
 	return c.shutdownHost(ctx, c.cfg.DataDir, c.cfg.AOSessionID)
 }
+
+// BackgroundTasks reads the still-running provider rather than reconstructing
+// jobs from ACKed transcript events, which may no longer replay on reconnect.
+func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgroundTask, error) {
+	c.backgroundReadMu.Lock()
+	defer c.backgroundReadMu.Unlock()
+	c.mu.Lock()
+	c.backgroundTasks = nil
+	c.mu.Unlock()
+	if err := c.request(ctx, command{Type: "background_tasks"}); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.backgroundTasks == nil {
+		return nil, ports.ErrBackgroundTasksUnsupported
+	}
+	return append([]ports.ChatBackgroundTask{}, c.backgroundTasks...), nil
+}
+
+var _ ports.ChatBackgroundTaskInspector = (*conversation)(nil)

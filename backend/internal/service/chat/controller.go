@@ -224,6 +224,10 @@ type Controller struct {
 	started       time.Time
 
 	conv                   ports.ChatConversation
+	backgroundMu           sync.Mutex
+	backgroundTasks        []ports.ChatBackgroundTask
+	backgroundSampledAt    time.Time
+	backgroundPartial      bool
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder

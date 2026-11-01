@@ -173,6 +173,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainChatExcerptTurnMessage":                         "ChatExcerptTurnMessage",
 	"ControllersConversationFindResponse":                  "ConversationFindResponse",
 	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
+	"ControllersBackgroundTaskResponse":                    "BackgroundTaskResponse",
+	"ControllersBackgroundTasksResponse":                   "BackgroundTasksResponse",
+	"ControllersListBackgroundTasksResponse":               "ListBackgroundTasksResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentLoginActionRequest":                   "AgentLoginActionRequest",
@@ -1488,6 +1491,18 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/background-tasks", id: "listBackgroundTasks", tag: "conversations",
+			summary:    "List native background work for attached session controllers",
+			pathParams: []any{controllers.ListUsageSessionsQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.ListBackgroundTasksResponse{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks", id: "getBackgroundTasks", tag: "conversations",
+			summary:    "Inspect native background work without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTasksResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",

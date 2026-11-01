@@ -248,3 +248,6 @@ func (d *Driver) connect(
 	}
 	return conv, nil
 }
+
+// BackgroundTaskReporting describes the task reader shared by every conversation.
+func (d *Driver) BackgroundTaskReporting() string { return "native" }
