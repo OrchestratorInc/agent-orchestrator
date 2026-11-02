@@ -12,16 +12,17 @@ describe("pair screen", () => {
 		expect(page).toContain('const NATIVE_BAR = Platform.OS === "ios";');
 		expect(page).toContain('<NativeHeaderButton icon="close" label="Close" onPress={() => backOr(router)} />');
 		expect(page).not.toContain("Stack.Toolbar.Button");
-		expect(page).toContain('{NATIVE_BAR ? null : <View style={styles.topBar}><NativeHeaderButton icon="close" label="Close" onPress={back} /></View>}');
+		expect(page).toContain('<NativeHeaderButton icon="close" label="Close" onPress={back} />');
 		expect(page).not.toMatch(/icon="back"|chevron/);
 	});
 
-	// One name for the task: the reconnect flow's bar names the machine, and
-	// the body repeats it only on Android, which has no bar.
+	// One name for the task: the reconnect flow's bar names the machine. Android
+	// has no bar, so its page draws the same title beside Close.
 	it("titles a reconnect after the machine instead of as a new pairing", () => {
 		expect(page).toContain('const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";');
 		expect(page).toContain("useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);");
-		expect(page).toContain('{NATIVE_BAR ? null : <Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>}');
+		expect(page).toContain('<Text accessibilityRole="header" numberOfLines={1} style={styles.barTitle}>{title}</Text>');
+		expect(page).not.toContain("styles.repairTitle");
 	});
 
 	it("frames the code with one reticle in the on-camera colours", () => {

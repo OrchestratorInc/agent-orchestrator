@@ -365,13 +365,17 @@ export default function PairScreen() {
 	return (
 		<View style={[styles.screen, { paddingTop: NATIVE_BAR ? space.md : insets.top }]}>
 			{headerItems}
-			{/* Presented as a modal, so it closes rather than goes back. */}
-			{NATIVE_BAR ? null : <View style={styles.topBar}><NativeHeaderButton icon="close" label="Close" onPress={back} /></View>}
+			{/* Presented as a modal, so it closes rather than goes back. Android has
+			    no bar, so the page draws Material's: Close, then the page's title. */}
+			{NATIVE_BAR ? null : (
+				<View style={styles.topBar}>
+					<NativeHeaderButton icon="close" label="Close" onPress={back} />
+					<Text accessibilityRole="header" numberOfLines={1} style={styles.barTitle}>{title}</Text>
+				</View>
+			)}
 
 			{repairHost ? (
 				<View style={styles.repairIntro}>
-					{/* iOS shows this in the bar (see `title`); Android has no bar. */}
-					{NATIVE_BAR ? null : <Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>}
 					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : fromOnboarding ? null : <View style={styles.steps}>
@@ -516,11 +520,11 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	topBar: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
+	topBar: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
+	barTitle: { fontFamily: "DMSans_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
 
 	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
 	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg, gap: space.xs },
-	repairTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
 	repairText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
 	// A card in the theme until the camera runs: the permission prompt inside it
