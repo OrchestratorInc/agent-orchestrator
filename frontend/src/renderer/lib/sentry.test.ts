@@ -23,6 +23,13 @@ it("keeps typed daemon 503 errors as breadcrumbs while reporting untyped 503s", 
 	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "message" }));
 });
 
+it("classifies unhandled renderer errors as sampled nonfatal errors", () => {
+	captureExceptionToSentry(new TypeError("private"), { unhandled: true });
+	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "exception", level: "error" }));
+	captureExceptionToSentry(new TypeError("private"), { category: "render_crash", unhandled: true });
+	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "exception", level: "fatal" }));
+});
+
 it("sends only safe renderer stack frames and a standard exception type through the bridge", () => {
 	const error = new TypeError("resume agent ai-sports-coach-113");
 	error.stack = [
