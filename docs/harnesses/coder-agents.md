@@ -119,6 +119,8 @@ agent as having an unknown effect instead of being re-run.
 
 ## Limitations
 
+- Ephemeral background tasks are refused before provider requests. Prompt
+  suggestions and delegated titles cannot create persistent Coder chats.
 - Image and resource attachments are not sent.
 - AO's own MCP tools (`ao mcp`) are not offered, because Coder cannot start a
   local stdio server; the agent can still run `ao` commands through

@@ -48,3 +48,17 @@ func TestPublicDriverRefusesUnrestrictedServerTools(t *testing.T) {
 		})
 	}
 }
+
+func TestEphemeralTasksNeverCreatePersistentChats(t *testing.T) {
+	for _, driver := range []ports.ChatDriver{
+		New(forbiddenConnectPlugin{}, nil),
+		newDriver(forbiddenConnectPlugin{}, nil),
+	} {
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), Ephemeral: true, ReadOnly: true, DisableTools: true,
+		})
+		if conv != nil || !errors.Is(err, ports.ErrChatDriverIncompatible) {
+			t.Fatalf("ephemeral Start = %v, %v; want refusal before creating any native chat", conv, err)
+		}
+	}
+}

@@ -192,6 +192,9 @@ func validateLaunch(workspace string, permissions ports.PermissionMode, addition
 // the first message, because Coder's create call requires one; the
 // conversation key AO persists finds it again through its label.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if cfg.Ephemeral {
+		return nil, fmt.Errorf("%w: Coder Agents does not support ephemeral conversations", ports.ErrChatDriverIncompatible)
+	}
 	if err := validateLaunch(cfg.WorkspacePath, cfg.Permissions, cfg.AdditionalDirectories); err != nil {
 		return nil, err
 	}
