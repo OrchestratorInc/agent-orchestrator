@@ -216,6 +216,13 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 		emit = path
 		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
 	}
+	// A SQLite source commits into its write-ahead log first, so a change to
+	// either file is a change to the registered database.
+	if database := sqliteDatabaseForPath(path); database != "" &&
+		event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
+		withinRoot {
+		emit = database
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -277,19 +284,39 @@ func (w *TranscriptWatcher) desiredWatchSetLocked(ctx context.Context) (map[stri
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(path)
-		switch {
-		case err == nil && info.Mode().IsRegular():
-			result[path] = struct{}{}
-		case err == nil:
-			continue
-		case errors.Is(err, os.ErrNotExist):
-			continue
-		default:
-			return nil, fmt.Errorf("inspect transcript source: %w", redactFilesystemError(err))
+		candidates := []string{path}
+		if filepath.Ext(path) == ".db" {
+			candidates = append(candidates, path+sqliteWALSuffix)
+		}
+		for _, candidate := range candidates {
+			info, err := os.Stat(candidate)
+			switch {
+			case err == nil && info.Mode().IsRegular():
+				result[candidate] = struct{}{}
+			case err == nil:
+				continue
+			case errors.Is(err, os.ErrNotExist):
+				continue
+			default:
+				return nil, fmt.Errorf("inspect transcript source: %w", redactFilesystemError(err))
+			}
 		}
 	}
 	return result, nil
+}
+
+const sqliteWALSuffix = "-wal"
+
+// sqliteDatabaseForPath maps a SQLite database or its write-ahead log to the
+// database path that sources register, or returns "" for any other file.
+func sqliteDatabaseForPath(path string) string {
+	if strings.HasSuffix(path, ".db"+sqliteWALSuffix) {
+		return strings.TrimSuffix(path, sqliteWALSuffix)
+	}
+	if filepath.Ext(path) == ".db" {
+		return path
+	}
+	return ""
 }
 
 func (w *TranscriptWatcher) withinDesiredRoot(ctx context.Context, path string) bool {

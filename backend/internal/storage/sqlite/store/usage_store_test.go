@@ -1984,6 +1984,43 @@ func TestQwenUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGooseUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessGoose)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "20261103_1", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceGooseLedger,
+		NativeSessionID: "20261103_1", ArtifactPath: "/tmp/goose/sessions/sessions.db",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	reported := int64(12_500_000)
+	anthropic := usageEvent("goose-anthropic", canonicalUsageTokens(100, 30, 70, 20))
+	anthropic.ProviderID = domain.UsageProviderAnthropic
+	anthropic.ModelID = "claude-sonnet-4-5"
+	anthropic.Costs = domain.UsageEventCosts{EstimatedCostNanos: &reported, PricingVersion: "goose:provider_reported"}
+	openai := usageEvent("goose-openai", canonicalUsageTokens(50, 20, 30, 5))
+	openai.ProviderID = domain.UsageProviderOpenAI
+	openai.ModelID = "gpt-5"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 2, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{anthropic, openai}); err != nil {
+		t.Fatalf("apply Goose usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 2 {
+		t.Fatalf("Goose aggregates = %+v", models)
+	}
+	for _, model := range models {
+		if model.Harness != domain.HarnessGoose {
+			t.Fatalf("Goose aggregate harness = %+v", model)
+		}
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"
