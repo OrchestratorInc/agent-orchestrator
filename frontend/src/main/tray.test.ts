@@ -103,7 +103,7 @@ describe("createTrayController", () => {
 		expect(tray.tooltip).toContain("status unavailable");
 		controller.setAwakeState(false);
 		expect(tray.title).toBe("");
-		expect(tray.tooltip).toBe("Agent Orchestrator");
+		expect(tray.tooltip).toBe("Orchestrator");
 		expect(tray.icon).toMatchObject({ path: expect.stringContaining("trayIconTemplate.png") });
 	});
 
