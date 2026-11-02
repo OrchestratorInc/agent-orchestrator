@@ -2692,7 +2692,7 @@
 	"settings.versionRefresh.label": "Pasar las sesiones abiertas a las nuevas versiones automáticamente",
 	"settings.versionRefresh.description": "Tras actualizar un agente, las sesiones inactivas se reinician con la nueva versión en lugar de esperar a que las reinicies.",
 	"settings.cardSummaries.label": "Resúmenes en tarjetas",
-	"settings.cardSummaries.description": "Los workers mantienen en su tarjeta del tablero un resumen de una línea de lo que están haciendo. Usa un pequeño porcentaje más de tokens. Se aplica a los workers que se inicien después.",
+	"settings.cardSummaries.description": "Los workers muestran actualizaciones en vivo de su actividad.",
 	"chat.versionSwitch.pending": "Cambiando a {{version}}…",
 	"chat.versionSwitch.pendingHint": "Ocurre cuando el agente está inactivo o con tu próximo mensaje.",
 	"chat.versionSwitch.installed": "{{version}} instalada",

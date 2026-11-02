@@ -1752,7 +1752,7 @@
 	"settings.versionRefresh.label": "Автоматически переводить открытые сессии на новые версии",
 	"settings.versionRefresh.description": "После обновления агента свободные сессии перезапускаются на новой версии автоматически, без ручного перезапуска.",
 	"settings.cardSummaries.label": "Сводки на карточках",
-	"settings.cardSummaries.description": "Воркеры поддерживают на своей карточке доски однострочную сводку текущей работы. Расходует на несколько процентов больше токенов. Применяется к воркерам, запущенным после включения.",
+	"settings.cardSummaries.description": "Воркеры показывают свою активность в реальном времени.",
 	"chat.versionSwitch.pending": "Переход на {{version}}…",
 	"chat.versionSwitch.pendingHint": "Когда агент освободится или вы отправите следующее сообщение.",
 	"chat.versionSwitch.installed": "Версия {{version}} установлена",

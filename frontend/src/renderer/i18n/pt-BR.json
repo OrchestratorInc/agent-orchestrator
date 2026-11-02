@@ -2692,7 +2692,7 @@
 	"settings.versionRefresh.label": "Mover sessões abertas para novas versões automaticamente",
 	"settings.versionRefresh.description": "Após atualizar um agente, sessões ociosas reiniciam na nova versão em vez de esperar que você as reinicie.",
 	"settings.cardSummaries.label": "Resumos nos cartões",
-	"settings.cardSummaries.description": "Os workers mantêm no cartão do quadro um resumo de uma linha do que estão fazendo. Usa alguns por cento a mais de tokens. Vale para workers iniciados depois.",
+	"settings.cardSummaries.description": "Os workers mostram atualizações ao vivo da sua atividade.",
 	"chat.versionSwitch.pending": "Mudando para {{version}}…",
 	"chat.versionSwitch.pendingHint": "Acontece quando o agente fica ocioso ou com sua próxima mensagem.",
 	"chat.versionSwitch.installed": "{{version}} instalada",
