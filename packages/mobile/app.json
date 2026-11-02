@@ -78,6 +78,7 @@
 			"./plugins/withHarnessMenuIcons",
 			"./plugins/withAndroidDialogTheme",
 			"./plugins/withIosSceneLifecycle",
+			"./plugins/withIosSoftScrollEdge",
 			[
 				"expo-navigation-bar",
 				{
