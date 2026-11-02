@@ -2,7 +2,7 @@ import { useMemo, useRef } from "react";
 import { withFallbackEffort, type EffortChoice } from "../modelEffort";
 import { useEffortSliderOpen } from "../useEffortSlider";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { turnSettingsRows, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
+import { followsAgentLabel, turnSettingsRows, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
 
 /**
  * The chat's effort, picked on the slider over the composer. The slider
@@ -15,9 +15,12 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 		() => turnSettingsRows(snapshot, models, options).find((item) => item.kind === "select" && turnSettingTopic(item) === "effort"),
 		[snapshot, models, options],
 	);
-	// With no level reported, the fallback is shown checked; nothing is saved
-	// until a level is picked.
-	const choices = useMemo<EffortChoice[]>(() => withFallbackEffort(row?.choices.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected })) ?? []), [row]);
+	// A provider's "Use agent effort" choice names no level, so it is no stop
+	// on the slider. With it in effect, or no level reported, the fallback is
+	// shown checked; nothing is saved until a level is picked.
+	const choices = useMemo<EffortChoice[]>(() => withFallbackEffort(row?.choices
+		.filter((choice) => !followsAgentLabel(choice.label))
+		.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected })) ?? []), [row]);
 	const picked = useRef<string | undefined>(undefined);
 	const commit = () => {
 		const value = picked.current;

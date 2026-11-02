@@ -1,157 +1,131 @@
-import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
-import { useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { AgentLogo } from "../AgentLogo";
-import { AppSymbol } from "../AppSymbol";
+import { Button, DropdownMenu, Host, HorizontalDivider, Icon, IconButton, RNHostView, Row, Spacer, Text } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, height, padding, testID, weight } from "@expo/ui/jetpack-compose/modifiers";
+import { useState } from "react";
+import { HarnessMark, KEEP_KEYBOARD, MenuRow, useCloseMenuOnBack } from "../composeMenu.android";
 import { EffortGaugeButton } from "../effort-gauge";
 import { haptics } from "../haptics";
-import { usePressFeedback } from "../pressFeedback";
-import type { Theme } from "../theme";
-import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
-import { font, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
-import { chatMenuIcon } from "./chatMenuIcons";
+import { useTheme, useThemeState } from "../ThemeProvider";
+import { materialDrawable } from "../toolbarIcon.android";
+import { font, iconSize, space, touchTarget } from "../tokens";
 import { COMPOSER_DISC } from "./composerStyles";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
+import { splitModelChoices, turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
-/** The agent's mark in the capsule, at the size iOS's capsule draws it. */
-const HARNESS_MARK = 20;
-const approvalGlyph = { ios: "checkmark.shield", android: "verified_user" } as const;
+type OpenMenu = "model" | "older" | "approval";
+
+// The menus' width: wider than their longest label, so a row is an easy target
+// and the menu reads as a panel rather than a strip, and under Material's 280.
+const MENU_WIDTH = 240;
 
 /**
- * The chat's controls row on Android, laid out as the new task's: the model in
- * a filled capsule led by its agent's mark, as iOS's is, the effort as a
- * speedometer beside it that opens the composer's slider, and the approval
- * mode as its shield at the row's end. The model and the approval mode open
- * Compose's dropdown with their choices ticked; the model's also holds any
- * other setting the provider offers, an on/off one as a checkable item and
- * the rest one level down.
+ * The chat's controls row on Android, built as the new task's: the model in a
+ * filled capsule led by its agent's mark, the effort as a speedometer beside
+ * it that opens the composer's slider, and the approval mode as its shield at
+ * the row's end. The model and the approval mode open the same Material 3
+ * dropdown as the new task's, with the current choice ticked. The model's lists
+ * models only, the newest of each family first and older versions one level
+ * down; the provider's other settings, such as Fast mode or its agent, stay out.
  */
 export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort }: ChatTurnSettingsControlProps) {
 	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
+	const { scheme } = useThemeState();
+	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
+	const close = () => setOpenMenu(null);
+	useCloseMenuOnBack(Boolean(openMenu), close);
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
-	const effortRow = select("effort");
 	const approvalRow = select("permissions");
-	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
 
-	const choose = (row: TurnSettingRow, choice: string | boolean) => {
+	// Only a real change is worth a tick and a write.
+	const choose = (row: TurnSettingRow, value: string) => {
+		close();
+		if (row.choices.find((choice) => choice.value === value)?.selected) return;
 		haptics.select();
-		const write = turnSettingWrite(snapshot.settings, row, choice);
+		const write = turnSettingWrite(snapshot.settings, row, value);
 		if (write.kind === "option") void onOption(write.id, write.value).catch(() => {});
 		else void onSettings(write.settings).catch(() => {});
 	};
-	// A choice of one row, by its index; an on/off row flips.
-	const chooseIn = (row: TurnSettingRow | undefined) => (index: number) => {
-		if (!row) return;
-		const choice = row.kind === "boolean" ? !row.enabled : row.choices[index]?.value;
-		if (choice !== undefined) choose(row, choice);
-	};
-
-	const modelActions: MenuAction[] = [
-		...(modelRow?.choices.map((choice, index) => ({ id: `model:${index}`, title: choice.label, state: choice.selected ? "on" as const : "off" as const })) ?? []),
-		...otherRows.map((row, index) => otherAction(row, index)),
-	];
-	const onModelAction = (event: NativeActionEvent) => {
-		const [kind, first, second] = event.nativeEvent.event.split(":");
-		if (kind === "model") chooseIn(modelRow)(Number(first));
-		else if (kind === "other") chooseIn(otherRows[Number(first)])(Number(second));
-	};
 
 	return (
-		<View style={styles.row}>
-			<MenuTrigger
-				actions={modelActions}
-				onAction={onModelAction}
-				disabled={off}
-				accessibilityLabel={parts.model ? `Model, ${parts.model}` : "Model"}
-				testID="chat-model"
-			>
-				<View style={styles.capsule}>
-					{snapshot.harness ? <AgentLogo harness={snapshot.harness} size={HARNESS_MARK} /> : null}
-					<Text numberOfLines={1} style={styles.label}>{parts.model || "Model"}</Text>
-					<AppSymbol name="chevronUpDown" size={iconSize.sm} color={t.textTertiary} />
-				</View>
-			</MenuTrigger>
-			{/* The effort as a speedometer lit to the chosen level; a tap opens
-			    the slider over the composer. */}
-			{effort?.choices.length ? <EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" /> : null}
-			<View style={styles.spacer} />
-			{approvalRow ? (
-				<MenuTrigger
-					actions={approvalRow.choices.map((choice, index) => ({ id: `${index}`, title: choice.label, state: choice.selected ? "on" : "off" }))}
-					onAction={(event) => chooseIn(approvalRow)(Number(event.nativeEvent.event))}
-					disabled={off}
-					accessibilityLabel={`${approvalRow.label}, ${approvalRow.value}`}
-					testID="chat-approval"
-				>
-					<AppSymbol name={approvalGlyph} size={iconSize.lg} color={t.textSecondary} />
-				</MenuTrigger>
-			) : null}
-		</View>
+		// The composer's slot starts its child rather than stretching it, and a
+		// Host sized only to its height would take no width there at all.
+		<Host matchContents={{ vertical: true }} colorScheme={scheme} style={{ alignSelf: "stretch" }}>
+			<Row verticalAlignment="center" modifiers={[fillMaxWidth(), height(touchTarget)]}>
+				{/* The model and its agent's mark, in a capsule the circles' height,
+				    filled in the card colour as the plus's circle is. */}
+				<DropdownMenu expanded={openMenu === "model" || openMenu === "older"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
+					<DropdownMenu.Trigger>
+						<Button
+							onClick={() => setOpenMenu("model")}
+							colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary }}
+							contentPadding={{ start: space.md, end: space.xs }}
+							enabled={!off && Boolean(modelRow)}
+							modifiers={[height(COMPOSER_DISC), testID("chat-model")]}
+						>
+							{snapshot.harness ? <HarnessMark harness={snapshot.harness} /> : null}
+							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(snapshot.harness ? space.sm : 0, 0, space.xxs, 0)]}>
+								{parts.model || "Model"}
+							</Text>
+							<Icon source={materialDrawable("unfold_more")} size={iconSize.md} tint={t.textTertiary} />
+						</Button>
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Items>
+						{modelChoices.latest.map((choice) => (
+							<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(modelRow!, choice.value)} />
+						))}
+						{modelChoices.older.length ? (
+							<>
+								<HorizontalDivider color={t.borderDefault} />
+								<DropdownMenu expanded={openMenu === "older"} properties={KEEP_KEYBOARD} onDismissRequest={() => setOpenMenu("model")} color={t.bgElevated}>
+									<DropdownMenu.Trigger>
+										<MenuRow
+											label="Older models"
+											trailing={<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />}
+											width={MENU_WIDTH}
+											onClick={() => setOpenMenu("older")}
+										/>
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Items>
+										{modelChoices.older.map((choice) => (
+											<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(modelRow!, choice.value)} />
+										))}
+									</DropdownMenu.Items>
+								</DropdownMenu>
+							</>
+						) : null}
+					</DropdownMenu.Items>
+				</DropdownMenu>
+
+				{/* The effort as a speedometer lit to the chosen level; a tap opens
+				    the slider over the composer. */}
+				{effort?.choices.length ? (
+					<RNHostView matchContents>
+						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={() => { close(); effort.onToggle(); }} disabled={off} testID="chat-effort" />
+					</RNHostView>
+				) : null}
+
+				<Spacer modifiers={[weight(1)]} />
+
+				{/* The approval mode as its symbol alone; the menu and TalkBack name it. */}
+				{approvalRow ? (
+					<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
+						<DropdownMenu.Trigger>
+							<IconButton onClick={() => setOpenMenu("approval")} enabled={!off} colors={{ contentColor: t.textSecondary }} modifiers={[testID("chat-approval")]}>
+								<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`${approvalRow.label}, ${approvalRow.value}`} />
+							</IconButton>
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Items>
+							{approvalRow.choices.map((choice) => (
+								<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(approvalRow, choice.value)} />
+							))}
+						</DropdownMenu.Items>
+					</DropdownMenu>
+				) : null}
+			</Row>
+		</Host>
 	);
 }
-
-/** Any other setting: an on/off one as a checkable item, the rest one level down with its value in the title. */
-function otherAction(row: TurnSettingRow, index: number): MenuAction {
-	const topic = turnSettingTopic(row);
-	const image = topic && topic !== "model" ? chatMenuIcon(topic) : undefined;
-	if (row.kind === "boolean") return { id: `other:${index}:0`, title: row.label, image, state: row.enabled ? "on" : "off" };
-	return {
-		id: `other:${index}`,
-		title: `${row.label} · ${row.value}`,
-		image,
-		subactions: row.choices.map((choice, choiceIndex) => ({ id: `other:${index}:${choiceIndex}`, title: choice.label, state: choice.selected ? "on" : "off" })),
-	};
-}
-
-/**
- * A button that opens its own dropdown. Compose's trigger is no accessibility
- * node and draws no ripple, so the button is React Native's, and it opens the
- * menu itself, as the attach button does.
- */
-function MenuTrigger({ actions, onAction, disabled, accessibilityLabel, testID, children }: {
-	actions: MenuAction[];
-	onAction: (event: NativeActionEvent) => void;
-	disabled: boolean;
-	accessibilityLabel: string;
-	testID: string;
-	children: ReactNode;
-}) {
-	const styles = useThemedStyles(makeStyles);
-	const { scheme } = useThemeState();
-	const feedback = usePressFeedback("icon");
-	const menu = useRef<MenuComponentRef>(null);
-	return (
-		<MenuView ref={menu} colorScheme={scheme} actions={actions} onPressAction={onAction} testID={`${testID}-menu`}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={accessibilityLabel}
-				accessibilityState={{ disabled }}
-				disabled={disabled}
-				android_ripple={feedback.android_ripple}
-				onPress={() => menu.current?.show()}
-				testID={testID}
-				style={({ pressed }) => [styles.trigger, pressed && feedback.pressed, disabled && styles.disabled]}
-			>
-				{children}
-			</Pressable>
-		</MenuView>
-	);
-}
-
-const makeStyles = (t: Theme) => StyleSheet.create({
-	// Clipped, so a long model name gives way rather than painting over the round button.
-	row: { alignSelf: "stretch", minHeight: touchTarget, flexDirection: "row", alignItems: "center", overflow: "hidden" },
-	spacer: { flex: 1 },
-	trigger: { minWidth: touchTarget, minHeight: touchTarget, alignItems: "center", justifyContent: "center", flexShrink: 1 },
-	// iOS's capsule: filled in the card colour, the composer's discs' height,
-	// on the composer's darker sheet.
-	capsule: { height: COMPOSER_DISC, maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: t.bgElevated },
-	label: { fontFamily: font.medium, flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
-	disabled: { opacity: stateOpacity.disabled },
-});

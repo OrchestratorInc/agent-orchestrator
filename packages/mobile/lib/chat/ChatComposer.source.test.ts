@@ -183,8 +183,9 @@ describe("composer controls row", () => {
 	it("lets the settings label yield", () => {
 		expect(styleRule("settingsSlot")).toContain("flex: 1, minWidth: 0");
 		expect(styleRule("settingsSlot")).toContain("overflow: \"hidden\"");
-		expect(control).toContain('alignSelf: "stretch"');
-		expect(control).toContain('overflow: "hidden"');
+		expect(control).toContain("modifiers={[fillMaxWidth(), height(touchTarget)]}");
+		expect(control).toContain('style={{ alignSelf: "stretch" }}');
+		expect(control).toContain('<Text maxLines={1} overflow="ellipsis"');
 	});
 });
 

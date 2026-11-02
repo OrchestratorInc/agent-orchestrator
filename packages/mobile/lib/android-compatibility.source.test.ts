@@ -57,7 +57,8 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("Feather");
 		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
 		expect(android).toContain('project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder")');
-		expect(android).toContain("chipColorFor(harness)");
+		expect(android).toContain('import { HarnessMark, KEEP_KEYBOARD, MenuRow, useCloseMenuOnBack } from "./composeMenu.android";');
+		expect(source("./composeMenu.android.tsx")).toContain("chipColorFor(harness)");
 		// The approval mode sits in the composer's line, after the agent.
 		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf("settings={"));
 		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf('testID("spawn-harness")'));
@@ -121,8 +122,10 @@ describe("Android native compatibility boundaries", () => {
 	it("picks Android turn settings from the controls row's own menus", () => {
 		expect(existsSync(fileURLToPath(new URL("./chat/ChatSettingsModal.tsx", import.meta.url)))).toBe(false);
 		const control = source("./chat/ChatTurnSettingsControl.tsx");
-		expect(control).toContain("<MenuView ref={menu} colorScheme={scheme} actions={actions} onPressAction={onAction}");
-		expect(control).toContain("onPress={() => menu.current?.show()}");
+		// The new task's Material 3 dropdowns, built from the same pieces.
+		expect(control).toContain('import { HarnessMark, KEEP_KEYBOARD, MenuRow, useCloseMenuOnBack } from "../composeMenu.android";');
+		expect(control).toContain('<DropdownMenu expanded={openMenu === "model" || openMenu === "older"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>');
+		expect(control).not.toContain("MenuView");
 		expect(control).not.toContain("All turn settings");
 	});
 

@@ -54,6 +54,16 @@ describe("chat effort", () => {
 		expect(effort.choices).toEqual([]);
 	});
 
+	it("gives the agent's own effort no stop, and shows the fallback level while it is in effect", () => {
+		const native = [{ id: "opus", displayName: "Opus", default: true, efforts: ["default", "low", "medium", "high"] }] as ChatModel[];
+		render({ models: native, snapshot: snapshot({ settings: { model: "opus", approvalMode: "auto", reasoningEffort: "default" } }) });
+		expect(effort.choices).toEqual([
+			{ value: "low", label: "Low", selected: false },
+			{ value: "medium", label: "Medium", selected: true },
+			{ value: "high", label: "High", selected: false },
+		]);
+	});
+
 	// A drag walks the levels; the conversation hears only where it stopped.
 	it("saves once, the level the finger lifted on, and stays open", () => {
 		const { onSettings } = render();

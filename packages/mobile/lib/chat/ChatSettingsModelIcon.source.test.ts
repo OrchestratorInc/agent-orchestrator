@@ -10,7 +10,7 @@ const menuIcons = readFileSync(new URL("./chatMenuIcons.types.ts", import.meta.u
 describe("effort setting icon", () => {
 	it("draws the effort as a speedometer", () => {
 		expect(shared).not.toContain("EffortMenu");
-		expect(android).toContain('<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />');
+		expect(android).toContain('<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={() => { close(); effort.onToggle(); }} disabled={off} testID="chat-effort" />');
 		expect(menuIcons).toContain('effort: { ios: "gauge.medium", android: "speed" }');
 	});
 });
@@ -19,6 +19,6 @@ describe("approvals setting icon", () => {
 	// Each mode its own symbol on iOS; the shield on Android.
 	it("draws the mode's own symbol on iOS and the shield symbol on Android", () => {
 		expect(shared).toContain('label={<SymbolFace name={selected?.symbol ?? "checkmark.shield"} />}');
-		expect(android).toContain('const approvalGlyph = { ios: "checkmark.shield", android: "verified_user" } as const;');
+		expect(android).toContain('<Icon source={materialDrawable("verified_user")}');
 	});
 });

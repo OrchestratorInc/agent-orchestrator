@@ -1,32 +1,57 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { forwardRef, useImperativeHandle, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
 
-const fixtures = vi.hoisted(() => ({ show: vi.fn(), select: vi.fn() }));
-vi.mock("@expo/ui/community/menu", async () => {
-	const { createElement } = await import("react");
-	const MenuView = forwardRef<unknown, { children?: ReactNode }>(function MenuView(props, ref) {
-		useImperativeHandle(ref, () => ({ show: fixtures.show }));
-		return createElement("MenuView", props, props.children);
-	});
-	return { MenuView };
+const fixtures = vi.hoisted(() => ({
+	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
+	select: vi.fn(),
+	back: new Set<() => boolean>(),
+}));
+vi.mock("@expo/ui/jetpack-compose", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		Button: host("Button"),
+		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
+		Host: host("ComposeHost"),
+		HorizontalDivider: host("HorizontalDivider"),
+		Icon: host("Icon"),
+		IconButton: host("IconButton"),
+		RNHostView: host("RNHostView"),
+		Row: host("Row"),
+		Spacer: host("Spacer"),
+		Text: host("ComposeText"),
+	};
+});
+vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
+	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
+	return { fillMaxWidth: record("fillMaxWidth"), height: record("height"), padding: record("padding"), testID: record("testID"), weight: record("weight") };
+});
+vi.mock("../composeMenu.android", async () => {
+	const React = await import("react");
+	return {
+		KEEP_KEYBOARD: { focusable: false },
+		HarnessMark: (props: object) => React.createElement("HarnessMark", props),
+		MenuRow: (props: object) => React.createElement("MenuRow", props),
+		useCloseMenuOnBack: (open: boolean, close: () => void) => {
+			React.useEffect(() => {
+				if (!open) return;
+				const handler = () => { close(); return true; };
+				fixtures.back.add(handler);
+				return () => { fixtures.back.delete(handler); };
+			}, [open]);
+		},
+	};
 });
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" },
-	Pressable: "Pressable",
 	StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
-	Text: "Text",
-	View: "View",
 }));
-vi.mock("../AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+vi.mock("../toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("../effort-gauge", () => ({ EffortGaugeButton: "EffortGaugeButton" }));
-vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("../haptics", () => ({ haptics: { select: fixtures.select } }));
-vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: { color: "ripple" }, pressed: undefined }) }));
 vi.mock("../ThemeProvider", () => ({
-	useTheme: () => ({}),
-	useThemedStyles: (factory: (theme: object) => object) => factory({}),
+	useTheme: () => fixtures.theme,
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 
@@ -56,8 +81,8 @@ const fast: ChatConfigOption = { id: "fast", name: "Fast mode", type: "boolean",
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	fixtures.show.mockClear();
 	fixtures.select.mockClear();
+	fixtures.back.clear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -86,23 +111,27 @@ function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; o
 	return handlers;
 }
 const gauge = () => renderer!.root.findAll((node) => node.type === ("EffortGaugeButton" as never) && node.props.testID === "chat-effort")[0];
-const trigger = (id: string) => renderer!.root.find((node) => node.type === ("Pressable" as never) && node.props.testID === id);
-const menu = (id: string) => renderer!.root.find((node) => node.type === ("MenuView" as never) && node.props.testID === `${id}-menu`);
-const titles = (id: string) => menu(id).props.actions.map((action: { title: string; state?: string }) => [action.title, action.state]);
-const pick = (id: string, event: string) => act(() => menu(id).props.onPressAction({ nativeEvent: { event } }));
+const hasTestID = (node: { props: { modifiers?: Array<{ modifier: string; args: unknown[] }> } }, id: string) =>
+	node.props.modifiers?.some((modifier) => modifier.modifier === "testID" && modifier.args[0] === id) ?? false;
+const trigger = (id: string) => renderer!.root.find((node) => (node.type === ("Button" as never) || node.type === ("IconButton" as never)) && hasTestID(node, id));
+const menu = (id: string) => renderer!.root.findAll((node) => node.type === ("DropdownMenu" as never)).find((node) => node.findAll((child) => hasTestID(child, id)).length)!;
+const rows = (id: string) => menu(id).findAll((node) => node.type === ("MenuRow" as never));
+const titles = (id: string) => rows(id).map((row) => [row.props.label, row.props.selected ? "on" : "off"]);
+const open = (id: string) => act(() => trigger(id).props.onClick());
+const pick = (id: string, index: number) => act(() => rows(id)[index].props.onClick());
 
 describe("Android chat controls row", () => {
 	// The new task's row: the model's capsule, the effort's speedometer and the
-	// approval mode's shield, each opening its own menu.
-	it("names the model on its capsule and lists the agent's models, then any other setting", () => {
+	// approval mode's shield, each opening the new task's Material 3 dropdown.
+	it("names the model on its capsule and lists the agent's models, and nothing else", () => {
 		render();
-		expect(trigger("chat-model").props.accessibilityLabel).toBe("Model, Opus");
-		// Led by the agent's mark, as iOS's capsule is.
-		expect(trigger("chat-model").findByType("AgentLogo" as never).props).toEqual({ harness: "claude-code", size: 20 });
-		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
-		expect(menu("chat-model").props.actions[2].image).toBe("bolt");
-		act(() => trigger("chat-model").props.onPress());
-		expect(fixtures.show).toHaveBeenCalledOnce();
+		// Led by the agent's mark, as the new task's capsule is.
+		expect(trigger("chat-model").findByType("HarnessMark" as never).props).toEqual({ harness: "claude-code" });
+		expect(trigger("chat-model").findByType("ComposeText" as never).props.children).toBe("Opus");
+		expect(menu("chat-model").props).toMatchObject({ expanded: false, properties: { focusable: false } });
+		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"]]);
+		open("chat-model");
+		expect(menu("chat-model").props.expanded).toBe(true);
 	});
 
 	// The speedometer lit to the level, which opens the composer's slider.
@@ -122,25 +151,62 @@ describe("Android chat controls row", () => {
 
 	it("offers the approval modes from the shield", () => {
 		render();
-		expect(trigger("chat-approval").props.accessibilityLabel).toBe("Approvals, Ask when unsure");
-		expect(titles("chat-approval").find(([, state]: [string, string]) => state === "on")).toEqual(["Ask when unsure", "on"]);
+		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approvals, Ask when unsure");
+		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
 	});
 
-	it("saves each choice to the setting it belongs to", () => {
+	it("saves each choice to the setting it belongs to and closes its menu", () => {
 		const { onSettings, onOption } = render();
-		pick("chat-model", "model:1");
+		open("chat-model");
+		pick("chat-model", 1);
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
-		pick("chat-model", "other:0:0");
-		expect(onOption).toHaveBeenCalledExactlyOnceWith("fast", { enabled: true });
+		expect(menu("chat-model").props.expanded).toBe(false);
+		pick("chat-approval", 3);
+		expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ approvalMode: "bypass-permissions" }));
+		expect(onOption).not.toHaveBeenCalled();
 		expect(fixtures.select).toHaveBeenCalledTimes(2);
+	});
+
+	// A long catalog keeps the newest of each family on top and its older
+	// versions one level down, in menus wider than their labels.
+	it("tucks older versions under Older models", () => {
+		const claude = ["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Haiku 4.5", "Sonnet 5", "Opus 4.8"]
+			.map((displayName, index) => ({ id: `m${index}`, displayName })) as ChatModel[];
+		const { onSettings } = render({ models: claude, snapshot: snapshot({ settings: { model: "m0", approvalMode: "auto" } }) });
+		const older = () => menu("chat-model").findAll((node) => node.type === ("DropdownMenu" as never))[1];
+		const olderRows = () => older().findByType("DropdownMenuItems" as never).findAll((node) => node.type === ("MenuRow" as never));
+		const olderTrigger = () => older().findByType("DropdownMenuTrigger" as never).findByType("MenuRow" as never);
+		const top = rows("chat-model").filter((row) => !older().findAll((node) => node === row).length);
+		expect(top.map((row) => row.props.label)).toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
+		expect(olderTrigger().props.label).toBe("Older models");
+		expect([...top, olderTrigger(), ...olderRows()].every((row) => row.props.width === 240)).toBe(true);
+		expect(olderRows().map((row) => row.props.label)).toEqual(["Haiku 4.5", "Sonnet 5", "Opus 4.8"]);
+		open("chat-model");
+		act(() => olderTrigger().props.onClick());
+		expect(older().props.expanded).toBe(true);
+		expect(menu("chat-model").props.expanded).toBe(true);
+		act(() => olderRows()[2].props.onClick());
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "m6", approvalMode: "auto", reasoningEffort: undefined });
+		expect(menu("chat-model").props.expanded).toBe(false);
+	});
+
+	it("writes nothing when the current choice is picked again", () => {
+		const { onSettings } = render();
+		pick("chat-model", 0);
+		expect(onSettings).not.toHaveBeenCalled();
+		expect(fixtures.select).not.toHaveBeenCalled();
+	});
+
+	it("closes an open menu on back, since it does not take focus", () => {
+		render();
+		open("chat-approval");
+		act(() => { for (const handler of [...fixtures.back]) handler(); });
+		expect(menu("chat-approval").props.expanded).toBe(false);
 	});
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
 		expect(gauge().props.disabled).toBe(true);
-		for (const id of ["chat-model", "chat-approval"]) {
-			expect(trigger(id).props.disabled).toBe(true);
-			expect(trigger(id).props.accessibilityState).toEqual({ disabled: true });
-		}
+		for (const id of ["chat-model", "chat-approval"]) expect(trigger(id).props.enabled).toBe(false);
 	});
 });

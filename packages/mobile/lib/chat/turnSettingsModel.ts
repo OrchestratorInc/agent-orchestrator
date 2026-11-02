@@ -101,8 +101,8 @@ export function providerTurnControlKind(option: ChatConfigOption): ProviderTurnC
  *
  * Model and effort follow desktop's `resolveImplicitChoice` (TurnSettingsBar,
  * #5849): when the choice's description names another choice ("Opus 5.5"), it
- * takes that name and the duplicate goes, unless that model is the explicit
- * pick, when it reads "Use agent model (Opus 5.5)". Otherwise "Use agent
+ * takes that name and every copy of it goes, even while that model is the
+ * explicit pick, so the menu never lists a model twice. Otherwise "Use agent
  * model" / "Use agent effort" rather than a level we would have to guess.
  *
  * Permission modes: see `namePermissionChoice`. A provider's own names stay,
@@ -138,13 +138,17 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 		? option.choices.filter((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
 		: [];
 	const concrete = namedChoices.find((choice) => choice.value === option.currentValue) ?? namedChoices[0];
-	if (concrete && option.currentValue !== concrete.value) {
-		// The row that stays reads exactly like the one it replaces.
+	if (concrete) {
+		// One row per model: the agent's own choice takes the name of every copy
+		// it stands for, and is the one ticked while one of them runs. The row
+		// that stays reads exactly like the ones it replaces.
 		const name = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
+		const running = namedChoices.some((choice) => choice.value === option.currentValue);
 		return {
 			...option,
+			currentValue: running ? implicit.value : option.currentValue,
 			choices: option.choices
-				.filter((choice) => choice !== concrete)
+				.filter((choice) => !namedChoices.includes(choice))
 				.map((choice) => choice === implicit ? { ...choice, name, description: concrete.description } : choice),
 		};
 	}
@@ -153,7 +157,7 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	return {
 		...option,
 		choices: option.choices.map((choice) =>
-			choice === implicit ? { ...choice, name: concrete ? `${follow} (${concrete.name})` : follow, description: undefined } : choice),
+			choice === implicit ? { ...choice, name: follow, description: undefined } : choice),
 	};
 }
 
@@ -440,6 +444,31 @@ function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, val
 	if (row.target.kind !== "settings") return settings;
 	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;
+}
+
+/** A model menu shorter than this is listed whole: there is nothing to tuck away. */
+const SPLIT_MODEL_MENU_OVER = 6;
+
+/**
+ * A model menu's choices in two parts: the newest of each family first, in the
+ * provider's order, and the rest, older versions, to open one level down.
+ * Providers list their newest model of a family before its older ones (Claude:
+ * "Opus 5.5" before "Opus 4.8"), so the first of each family by the name's
+ * first word is its newest. The running model stays on top wherever it is
+ * listed. A short menu, or one with no older versions, is left whole.
+ */
+export function splitModelChoices(choices: readonly TurnSettingChoice[]): { latest: TurnSettingChoice[]; older: TurnSettingChoice[] } {
+	if (choices.length <= SPLIT_MODEL_MENU_OVER) return { latest: [...choices], older: [] };
+	const families = new Set<string>();
+	const latest: TurnSettingChoice[] = [];
+	const older: TurnSettingChoice[] = [];
+	for (const choice of choices) {
+		const family = choice.label.trim().split(/\s+/)[0].toLowerCase();
+		if (!families.has(family) || choice.selected) latest.push(choice);
+		else older.push(choice);
+		families.add(family);
+	}
+	return older.length ? { latest, older } : { latest: [...choices], older: [] };
 }
 
 function capitalize(value: string): string {
