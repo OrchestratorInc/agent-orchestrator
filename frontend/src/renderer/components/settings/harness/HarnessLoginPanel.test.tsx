@@ -87,6 +87,15 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
 		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
 	});
+	it("lists API keys before native sign-in, and keeps a real account sign-in first", () => {
+		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));
+		const { unmount } = render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "native", label: "Other native sign-in", secret: false }, { id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		const order = () => Array.from(document.querySelectorAll("[data-login-method]")).map((button) => button.getAttribute("aria-label"));
+		expect(order()).toEqual(["Provider API key", "Other native sign-in"]);
+		unmount();
+		render(<HarnessLoginPanel agentId="codex" methods={methods} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(order()[0]).toBe("ChatGPT in browser");
+	});
 	it("says the catalog is loading once, in the form, while the method keeps a plain description", () => {
 		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));
 		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);

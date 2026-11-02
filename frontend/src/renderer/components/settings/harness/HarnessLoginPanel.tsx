@@ -351,10 +351,15 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		: undefined;
 	// Account sign-ins and API keys are separate lists; the note that applies
 	// to every AO-managed key is said once, under its list.
-	const methodGroups = [
-		{ id: "signIn", title: t("settings.harness.loginUi.groupSignIn"), items: availableMethods.filter((item) => !item.secret), note: "" },
-		{ id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: availableMethods.filter((item) => item.secret), note: availableMethods.some((item) => item.id.startsWith("env_")) ? t("settings.harness.loginUi.envHint") : "" },
-	].filter((group) => group.items.length > 0);
+	const signInGroup = { id: "signIn", title: t("settings.harness.loginUi.groupSignIn"), items: availableMethods.filter((item) => !item.secret), note: "" };
+	const keysGroup = { id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: availableMethods.filter((item) => item.secret), note: availableMethods.some((item) => item.id.startsWith("env_")) ? t("settings.harness.loginUi.envHint") : "" };
+	// Native sign-in is the fallback, not the headline: when it is the only
+	// sign-in, the API keys come first. A real account sign-in (Claude,
+	// ChatGPT, GitHub, Kimi) keeps its place at the top.
+	const nativeOnlySignIn = signInGroup.items.length > 0 && signInGroup.items.every((item) => item.id === "native");
+	const methodGroups = (nativeOnlySignIn ? [keysGroup, signInGroup] : [signInGroup, keysGroup]).filter((group) => group.items.length > 0);
+	// Beside other methods, native sign-in takes a lighter, compact row.
+	const secondaryMethod = (id: string) => id === "native" && availableMethods.length > 1;
 	const methodKey = (id: string) => id !== "browser" || agentId === "codex" ? id : agentId === "claude-code" ? "claude" : agentId === "cline" ? "cline" : `${agentId}_browser`;
 	const selectedMethodKey = methodKey(selectedMethodId);
 	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? selectedMethodId });
@@ -396,10 +401,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 					const MethodIcon = item.id === "native" ? Terminal : item.secret ? KeyRound : item.id.startsWith("device_code") ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
 					const selected = selectedMethodId === item.id;
 					const open = item.secret && selected;
-					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
-						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
+					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className={`group/method relative flex w-full cursor-pointer items-center gap-3 px-4 ${secondaryMethod(item.id) ? "py-2" : "py-3"} text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60`}>
+						{secondaryMethod(item.id)
+							// Same 32px column as the icon tiles above, without a tile.
+							? <span className="flex size-8 shrink-0 items-center justify-center text-settings-muted"><MethodIcon className="size-3.5" aria-hidden="true" /></span>
+							: <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>}
 						<span className="min-w-0 flex-1 space-y-0.5">
-							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
+							<span className={`block text-[13px] leading-5 ${secondaryMethod(item.id) ? "text-settings-muted group-hover/method:text-settings-label" : "font-medium text-settings-label"}`}>{label}</span>
 							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{methodHint(item, key)}</span>
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
