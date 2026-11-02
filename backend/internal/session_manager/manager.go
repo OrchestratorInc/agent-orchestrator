@@ -3597,6 +3597,29 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		)
 	}
 
+	launchPath := ws.Path
+	if source := rec.Metadata.ImportSource; source != nil {
+		if source.ResumeCwd != "" {
+			pinned, pinErr := pinnedImportLaunchPath(ws.Path, source.ResumeCwd)
+			if pinErr != nil {
+				return RestoreResult{}, relaunchFailed("import launch directory", pinErr)
+			}
+			launchPath = pinned
+		} else if source.WorkingSubdir != "" {
+			launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
+		}
+		if rec.NeedsImportResume() {
+			if forceFresh {
+				return RestoreResult{}, ErrNotResumable
+			}
+			relocated, relocateErr := m.relocateImportedSession(ctx, rec, launchPath)
+			if relocateErr != nil {
+				return RestoreResult{}, relaunchFailed("import relocation", relocateErr)
+			}
+			rec = relocated
+		}
+	}
+
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
@@ -3639,9 +3662,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
+	m.applyImportedConfigEnv(ctx, rec, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
-		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
+		status, authErr := validator.ValidateLaunchAuth(ctx, launchPath, env)
 		if authErr != nil {
 			m.logger.Debug("restore: launch authentication probe inconclusive; continuing",
 				"sessionID", rec.ID, "harness", rec.Harness, "error", authErr)
@@ -3649,12 +3673,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, ports.ErrAgentAuthRequired)
 		}
 	}
-	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+	if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
-			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path,
+			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath,
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}
 			exists, probeErr := probe.NativeConversationExists(ctx, ref, rec.Metadata.AgentSessionID, env)
 			if probeErr != nil || !exists {
@@ -3683,10 +3707,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		if identityUnverified && requireNativeHistory {
 			err = ErrNotResumable
 		} else if identityUnverified {
-			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
-			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
 				argv = initialization.Argv()
 				for key, value := range initialization.LaunchEnv() {
@@ -3694,15 +3718,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 				}
 				delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
 			} else if errors.Is(err, ports.ErrNativeHistoryUnavailable) && !requireNativeHistory {
-				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 			}
 		}
 	} else if forceFresh {
-		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 	} else {
-		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
+		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
 	}
 	if err != nil {
@@ -3716,7 +3740,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	launchCfg := ports.LaunchConfig{
 		DataDir:          m.dataDir,
 		SessionID:        string(rec.ID),
-		WorkspacePath:    ws.Path,
+		WorkspacePath:    launchPath,
 		Kind:             rec.Kind,
 		Prompt:           rec.Metadata.Prompt,
 		SystemPrompt:     systemPrompt,
@@ -3748,7 +3772,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("supervisor", fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err))
 	}
-	if err := m.prepareRuntimeLaunch(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+	if err := m.prepareRuntimeLaunch(ctx, agent, rec.ID, launchPath, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, relaunchFailed("runtime preparation", fmt.Errorf("%s %s: runtime preparation: %w", operation, rec.ID, err))
 	}
@@ -3765,7 +3789,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	defer releaseCodexAdmission()
 	runtimeCfg := ports.RuntimeConfig{
 		SessionID:     rec.ID,
-		WorkspacePath: ws.Path,
+		WorkspacePath: launchPath,
 		Argv:          argv,
 		Env:           env,
 	}
@@ -3809,6 +3833,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 	}
 	metadata := domain.SessionMetadata{
+		ImportSource:              rec.Metadata.ImportSource,
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
 		WorkspacePath:             ws.Path,
@@ -3818,6 +3843,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		AgentSessionID:            rec.Metadata.AgentSessionID,
 		Prompt:                    savedPrompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
+	}
+	if rec.Metadata.ImportSource != nil {
+		metadata.ProviderConversationID = rec.Metadata.ProviderConversationID
+		metadata.NativeTranscriptPath = rec.Metadata.NativeTranscriptPath
 	}
 	// Bind an exact native resume to the target launch immediately. Passive Codex
 	// resumes do not necessarily emit SessionStart until the next user turn, and
@@ -3861,12 +3890,24 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, relaunchFailed("deliver prompt", fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err))
 		}
 	}
+
 	if savedNote {
 		m.clearHandoffNote(ctx, rec.ID)
 	}
 	updated, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
 		return RestoreResult{}, err
+	}
+	if rec.NeedsImportResume() {
+		// Terminal providers redraw native history themselves. There is no Chat
+		// replay boundary, and adoption follows successful native initialization.
+		adopted := *rec.Metadata.ImportSource
+		adopted.Adopted = true
+		updated.Metadata.ImportSource = &adopted
+		if err := m.store.UpdateSession(ctx, updated); err != nil {
+			m.destroySpawnRuntimeAfterFailure(ctx, handle)
+			return RestoreResult{}, relaunchFailed("adopt import", err)
+		}
 	}
 	return RestoreResult{Session: updated, Mode: mode}, nil
 }
