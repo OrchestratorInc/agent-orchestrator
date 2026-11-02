@@ -17,9 +17,11 @@ type importedHarnessHooks struct {
 	adoptedOwnedElsewhere func(context.Context, domain.SessionRecord) bool
 }
 
-var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{}
+var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
+	domain.HarnessCline: {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
+}
 
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "droid"}
+var importedProcessNames = []string{"claude", "codex", "droid", "cline"}
