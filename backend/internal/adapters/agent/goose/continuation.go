@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	_ "modernc.org/sqlite" // provider history is read-only
@@ -35,6 +36,11 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	}
 	if root := value("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "goose"), nil
+	}
+	if runtime.GOOS == "windows" {
+		if appData := value("APPDATA"); appData != "" {
+			return filepath.Join(appData, "Block", "goose", "data"), nil
+		}
 	}
 	home, err := os.UserHomeDir()
 	return filepath.Join(home, ".local", "share", "goose"), err
