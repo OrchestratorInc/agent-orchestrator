@@ -4070,18 +4070,17 @@ export function Timeline({
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
 	useLayoutEffect(() => {
-		if (!virtualized) return;
-		if (viewportResize.current) {
-			restoreViewportResize();
-			return;
-		}
+		restoreViewportResize();
+	}, [virtualHeight, restoreViewportResize]);
+	useEffect(() => {
+		if (!virtualized || viewportResize.current) return;
 		// Wait for measured sizes to reach the DOM before following new content.
 		// Resizing an already measured group only refreshes scroll metrics.
 		if (pendingVirtualLayout.current && virtualHeight === virtualizer.getTotalSize()) {
 			pendingVirtualLayout.current = false;
 			syncScrollLayout();
 		} else syncScrollMetrics();
-	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics, restoreViewportResize]);
+	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics]);
 
 	useEffect(() => {
 		const content = scrollContent.current;
