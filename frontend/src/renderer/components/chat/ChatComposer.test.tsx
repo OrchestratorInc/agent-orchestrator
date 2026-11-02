@@ -3205,7 +3205,10 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
 	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
-	expect(onSend.mock.calls[0][5]).toBeUndefined();
+	// The captures come along for the transcript only, with the message as typed;
+	// the text already carries them for the agent.
+	expect(onSend.mock.calls[0][5]?.map((item: { id: string })=>item.id)).toEqual([ref.id]);
+	expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
 	view.unmount();
 });
@@ -3229,6 +3232,51 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	expect(onSend.mock.calls[0][0]).toContain("cloud.ts#L1-L1");
 	expect(onSend.mock.calls[0][0]).not.toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][2]).toBe("legacy-receipt");
+});
+
+// A Cloud chat's composer delivers captures as text and searches files for "@";
+// the IME guard and the send-key preference hold there as in a local chat.
+describe("Cloud delivery under the send-key preference", () => {
+	it("sends a quoted selection and a capture only on Cmd/Ctrl+Enter in newline mode, never on an IME Enter", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const sessionId = "cloud-send-key-capture";
+		writeChatExcerptReferences(sessionId, EXCERPTS);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text" onFileQuery={vi.fn()} />);
+		const ref = captureFileReference({ path: "cloud.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "CLOUD_CAPTURE" }] }, sessionId);
+		act(() => { expect(sendReferenceToChat(sessionId, ref)).toBe(true); });
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "question");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: false, keyCode: 229, ctrlKey: true }); });
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); });
+		expect(onSend).not.toHaveBeenCalled();
+
+		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
+		expect(onSend.mock.calls[0][4]?.map((item: { id: string }) => item.id)).toEqual(["excerpt"]);
+		expect(onSend.mock.calls[0][5]?.map((item: { id: string }) => item.id)).toEqual([ref.id]);
+		expect(onSend.mock.calls[0][6]).toContain("question");
+		expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
+	});
+
+	it.each(["enter", "mod-enter"] as const)("in %s mode, an IME Enter leaves a searched @ file unpicked and the send key picks it", async (mode) => {
+		useUiStore.getState().setChatSendKeyMode(mode);
+		const onFileQuery = vi.fn();
+		const { onSend, field } = renderComposer({ filePaths: ["README.md"], onFileQuery, fileReferenceDelivery: "text" });
+		await typeInComposer(field, "@REA");
+		expect(onFileQuery).toHaveBeenLastCalledWith("REA");
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: true, keyCode: 13, ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).toBeNull();
+		expect(composerWireText(field)).toBe("@REA");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).not.toBeNull();
+		expect(onSend).not.toHaveBeenCalled();
+	});
 });
 
 it("retains file annotations when the connected daemon lacks support", async () => {
