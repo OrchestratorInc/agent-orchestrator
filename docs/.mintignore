@@ -1,0 +1,18 @@
+# Site build exclusions
+*.md
+*.ja.mdx
+*.zh-CN.mdx
+**/meta.json
+
+# Legacy engineering source files - excluded from the website build.
+# Their content is published as .mdx under engineering/ and archive/.
+/adr/
+/assets/
+/cli/
+/harnesses/
+/performance/
+/plans/
+/pr-evidence/
+/research/
+/screenshots/
+/superpowers/

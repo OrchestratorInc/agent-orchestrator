@@ -1,0 +1,42 @@
+---
+title: "PR #4932 visual evidence"
+---
+
+Captured 2026-09-05.
+
+Backend-only change. The image is a rendered report of fresh successful Go test output, not a product UI screenshot. The complete captured output is attached.
+
+Fresh SQLite evidence for literal paths, isolation, read-only access, and legacy-data protection.
+
+![Fresh SQLite evidence for literal paths, isolation, read-only access, and legacy-data protection.](/archive/screenshots/pr-4932/verification.png)
+
+Full test output (original file: `docs/screenshots/pr-4932/test-output.txt` in the repository):
+
+```text
+=== RUN   TestOpenPreservesDataDirectoryCharacters
+=== RUN   TestOpenPreservesDataDirectoryCharacters/fragment
+=== RUN   TestOpenPreservesDataDirectoryCharacters/query
+=== RUN   TestOpenPreservesDataDirectoryCharacters/percent
+=== RUN   TestOpenPreservesDataDirectoryCharacters/unicode
+--- PASS: TestOpenPreservesDataDirectoryCharacters (1.42s)
+    --- PASS: TestOpenPreservesDataDirectoryCharacters/fragment (0.46s)
+    --- PASS: TestOpenPreservesDataDirectoryCharacters/query (0.26s)
+    --- PASS: TestOpenPreservesDataDirectoryCharacters/percent (0.45s)
+    --- PASS: TestOpenPreservesDataDirectoryCharacters/unicode (0.25s)
+=== RUN   TestFragmentPathsKeepDatabasesIsolated
+--- PASS: TestFragmentPathsKeepDatabasesIsolated (0.46s)
+=== RUN   TestOpenRefusesToHideLegacyDatabase
+=== RUN   TestOpenRefusesToHideLegacyDatabase/fragment
+=== RUN   TestOpenRefusesToHideLegacyDatabase/query
+=== RUN   TestOpenRefusesToHideLegacyDatabase/percent
+--- PASS: TestOpenRefusesToHideLegacyDatabase (0.01s)
+    --- PASS: TestOpenRefusesToHideLegacyDatabase/fragment (0.00s)
+    --- PASS: TestOpenRefusesToHideLegacyDatabase/query (0.00s)
+    --- PASS: TestOpenRefusesToHideLegacyDatabase/percent (0.00s)
+=== RUN   TestOpenPrefersExistingIntendedDatabase
+--- PASS: TestOpenPrefersExistingIntendedDatabase (0.18s)
+=== RUN   TestDatabaseURIPreservesWindowsPaths
+--- PASS: TestDatabaseURIPreservesWindowsPaths (0.00s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite	3.709s
+```

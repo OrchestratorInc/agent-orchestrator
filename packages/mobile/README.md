@@ -44,7 +44,7 @@ blocks cleartext requests to `100.64.0.0/10`, so raw Tailscale is not an iOS pat
 desktop source contains an automatic secure-pairing attempt, but fresh configurations
 report no secure-pairing availability while the mode is off, and current v2 endpoint data
 do not establish a verified working path. Use a managed HTTPS endpoint whose pairing
-record is marked `secure: true` for remote access. Background: [`docs/adr/0001-lan-listener-for-mobile.md`](../../docs/adr/0001-lan-listener-for-mobile.md).
+record is marked `secure: true` for remote access. Background: [`docs/archive/adr/0001-lan-listener-for-mobile.mdx`](../../docs/archive/adr/0001-lan-listener-for-mobile.mdx).
 
 ## Forgetting a machine
 

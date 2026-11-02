@@ -1,0 +1,18 @@
+---
+title: Guides
+description: Current AO workflows for agents, parallel sessions, CI, reviews, projects, Chat, Terminal UI, and mobile.
+---
+
+These guides follow the current desktop workflow. The desktop app is the main place to manage Orchestrator; use the optional CLI for scripts and agent-driven tasks.
+
+<Columns cols={2}>
+	<Card title="Per-role agents" href="/guides/per-role-agents">Choose different worker and orchestrator harnesses.</Card>
+	<Card title="Parallel work" href="/guides/parallel-issues">Run isolated sessions across issues and projects.</Card>
+	<Card title="CI recovery" href="/guides/ci-recovery">See how failing checks reach the correct Chat or Terminal UI session.</Card>
+	<Card title="Review loop" href="/guides/review-loop">Combine GitHub feedback with Orchestrator reviewer-agent runs.</Card>
+	<Card title="Handle CI and review feedback" href="/guides/reactions">Understand built-in deduplication, notifications, and mode-aware delivery.</Card>
+	<Card title="Multi-project" href="/guides/multi-project">Manage repositories, workspaces, and Scratch from one desktop.</Card>
+	<Card title="Cloud sessions" href="/guides/cloud">Create a remote project when your account has Cloud access.</Card>
+</Columns>
+
+Orchestrator sessions use **Chat** or the agent's **Terminal UI**. Compatible Claude Code and Codex sessions can switch between them without changing the session or worktree. The mobile app connects to the same sessions through **Connect Mobile**.

@@ -1347,7 +1347,7 @@ const editorHandoff = createEditorHandoff({
 // the daemon then falls back to the static PATH floor.
 const SHELL_ENV_TIMEOUT_MS = 3_000;
 
-// The login-shell env resolved once at startup (see docs/daemon-environment.md),
+// The login-shell env resolved once at startup (see docs/engineering/daemon-environment.mdx),
 // or null when the probe failed/timed out. Read synchronously by daemonEnv().
 let cachedShellEnv: Record<string, string> | null = null;
 // Memoize the in-flight resolution so concurrent/repeat awaits are cheap.

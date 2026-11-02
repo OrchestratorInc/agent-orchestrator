@@ -18,7 +18,7 @@
 // it, every time, by construction. The cost is one client process (tmux) or one
 // loopback connection (conpty) per open pane per connection.
 //
-// Boundaries (see docs/architecture.md):
+// Boundaries (see docs/engineering/architecture.mdx):
 //
 //   - This package owns the product workflow: per-client PTY attach, liveness
 //     gating, re-attach resilience, and the ch-tagged wire protocol. It is

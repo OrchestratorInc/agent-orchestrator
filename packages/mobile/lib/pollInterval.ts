@@ -15,7 +15,7 @@ import { isQuickTunnelHost } from "./staleTunnel";
  * polling faster is what keeps it usable. A named tunnel already carries one,
  * so it keeps the normal interval.
  *
- * See docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md — this is a
+ * See docs/archive/adr/0004-cloudflare-tunnel-for-remote-mobile-access.mdx — this is a
  * stopgap, and the exit condition is concrete: conversation events move to the
  * existing /mux WebSocket, which already reaches the same daemon and already
  * round-trips small frames in 11ms over the tunnel. When that lands, both this

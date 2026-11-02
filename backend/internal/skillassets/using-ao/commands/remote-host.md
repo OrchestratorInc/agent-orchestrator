@@ -74,4 +74,4 @@ while its window is open.
 | Listed but does not connect, on a desktop that paired by hand earlier | The host's password changed since. The user removes the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
 | Link expired | Run `ao remote-host link` again. |
 
-Full guide: [docs/self-hosted-remote.md](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/self-hosted-remote.md).
+Full guide: [docs/engineering/self-hosted-remote.mdx](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/engineering/self-hosted-remote.mdx).

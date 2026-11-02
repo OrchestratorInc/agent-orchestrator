@@ -169,16 +169,16 @@ Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 
 | 문서 | 다음 정보가 필요할 때 |
 | :-- | :-- |
 | [제품 문서](https://docs.orchestrator.inc) | 설치, 에이전트 설정, 일상적인 제품 사용법. |
-| [docs/documentation-map.md](../docs/documentation-map.md) | 어떤 문서가 사람을 위한 것이고 어떤 문서가 기계 판독용 계약인지, 내용이 어긋날 때 어느 쪽이 우선하는지. |
-| [docs/architecture.md](../docs/architecture.md) | 백엔드 멘탈 모델, 라이프사이클, 영속성, CDC, 상태 도출, 데몬 경계. |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 패키지 소유권과 각 백엔드 관심사가 속하는 위치. |
-| [docs/cli/README.md](../docs/cli/README.md) | CLI 동작과 데몬 라우트 매핑. |
-| [docs/development.md](../docs/development.md) | 로컬 개발을 위한 사전 요구 사항, 빌드 단계, 테스트 실행, 문제 해결. |
-| [docs/STATUS.md](../docs/STATUS.md) | 현재 `main`에 출시된 내용과 아직 진행 중인 항목. |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | 어떤 문서가 사람을 위한 것이고 어떤 문서가 기계 판독용 계약인지, 내용이 어긋날 때 어느 쪽이 우선하는지. |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | 백엔드 멘탈 모델, 라이프사이클, 영속성, CDC, 상태 도출, 데몬 경계. |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | 패키지 소유권과 각 백엔드 관심사가 속하는 위치. |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | CLI 동작과 데몬 라우트 매핑. |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | 로컬 개발을 위한 사전 요구 사항, 빌드 단계, 테스트 실행, 문제 해결. |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | 현재 `main`에 출시된 내용과 아직 진행 중인 항목. |
 
 ## 기여하기
 
-사전 요구 사항, 로컬 설정, 테스트 명령은 [개발 가이드](../docs/development.md)부터 확인하세요. 풀 리퀘스트를 열기 전에 [CONTRIBUTING.md](../CONTRIBUTING.md)를 읽고, 버그와 기능 요청에는 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues)를 사용하세요.
+사전 요구 사항, 로컬 설정, 테스트 명령은 [개발 가이드](../docs/engineering/development.mdx)부터 확인하세요. 풀 리퀘스트를 열기 전에 [CONTRIBUTING.md](../CONTRIBUTING.md)를 읽고, 버그와 기능 요청에는 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues)를 사용하세요.
 
 ### 버그 신고
 
@@ -203,7 +203,7 @@ Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 
 
 ## 제품 텔레메트리
 
-Orchestrator.inc는 제한된 사용 및 안정성 텔레메트리를 수집하며, 코드, 프롬프트, 에이전트 대화, 자격 증명은 절대 수집하지 않습니다. 여기에는 설치 ID와 GitHub 사용자 이름이 포함됩니다. AO Cloud에 로그인하면 AO Cloud 사용자 ID와 해당 계정의 이메일 주소도 포함되며, 이는 PostHog person 속성으로 한 번 설정됩니다(git config에서 읽지 않음). Settings > General > Privacy > Share usage analytics에서 모두 끌 수 있으며, 이 설정은 데스크톱, 데몬, 페어링된 휴대폰에 모두 적용됩니다. [수집 항목과 옵트아웃 방법 자세히 보기](../docs/telemetry.md).
+Orchestrator.inc는 제한된 사용 및 안정성 텔레메트리를 수집하며, 코드, 프롬프트, 에이전트 대화, 자격 증명은 절대 수집하지 않습니다. 여기에는 설치 ID와 GitHub 사용자 이름이 포함됩니다. AO Cloud에 로그인하면 AO Cloud 사용자 ID와 해당 계정의 이메일 주소도 포함되며, 이는 PostHog person 속성으로 한 번 설정됩니다(git config에서 읽지 않음). Settings > General > Privacy > Share usage analytics에서 모두 끌 수 있으며, 이 설정은 데스크톱, 데몬, 페어링된 휴대폰에 모두 적용됩니다. [수집 항목과 옵트아웃 방법 자세히 보기](../docs/engineering/telemetry.mdx).
 
 ## 라이선스
 

@@ -1,0 +1,28 @@
+---
+title: "PR #4928 visual evidence"
+---
+
+Captured 2026-09-05.
+
+Backend-only change. The image is a rendered report of fresh successful Go test output, not a product UI screenshot. The complete captured output is attached.
+
+Fresh service and HTTP evidence that equivalent paths return the existing project identity.
+
+![Fresh service and HTTP evidence that equivalent paths return the existing project identity.](/archive/screenshots/pr-4928/verification.png)
+
+Full test output (original file: `docs/screenshots/pr-4928/test-output.txt` in the repository):
+
+```text
+=== RUN   TestManager_AddRejectsEquivalentRepositoryPaths
+=== RUN   TestManager_AddRejectsEquivalentRepositoryPaths/alias-first=false
+=== RUN   TestManager_AddRejectsEquivalentRepositoryPaths/alias-first=true
+--- PASS: TestManager_AddRejectsEquivalentRepositoryPaths (1.78s)
+    --- PASS: TestManager_AddRejectsEquivalentRepositoryPaths/alias-first=false (1.27s)
+    --- PASS: TestManager_AddRejectsEquivalentRepositoryPaths/alias-first=true (0.50s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/service/project	2.991s
+=== RUN   TestProjectsAPI_EquivalentPathsReturnRegisteredIdentity
+--- PASS: TestProjectsAPI_EquivalentPathsReturnRegisteredIdentity (0.84s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers	2.990s
+```

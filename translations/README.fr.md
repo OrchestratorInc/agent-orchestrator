@@ -169,16 +169,16 @@ Ouvrez Orchestrator.inc et sélectionnez le dépôt qu'il doit gérer. L'applica
 | Document | Commencez ici pour |
 | :-- | :-- |
 | [Documentation produit](https://docs.orchestrator.inc) | Installation, configuration des agents et utilisation quotidienne du produit. |
-| [docs/documentation-map.md](../docs/documentation-map.md) | Quels documents s'adressent aux humains, lesquels sont des contrats lisibles par machine, et lequel fait foi en cas de divergence. |
-| [docs/architecture.md](../docs/architecture.md) | Modèle mental du backend, cycle de vie, persistance, CDC, dérivation de l'état et limites du daemon. |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Responsabilité des paquets et emplacement de chaque domaine du backend. |
-| [docs/cli/README.md](../docs/cli/README.md) | Comportement de la CLI et correspondance avec les routes du daemon. |
-| [docs/development.md](../docs/development.md) | Prérequis, étapes de compilation, exécution des tests et dépannage pour le développement local. |
-| [docs/STATUS.md](../docs/STATUS.md) | Ce qui est actuellement livré sur `main` et ce qui reste en cours. |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | Quels documents s'adressent aux humains, lesquels sont des contrats lisibles par machine, et lequel fait foi en cas de divergence. |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | Modèle mental du backend, cycle de vie, persistance, CDC, dérivation de l'état et limites du daemon. |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | Responsabilité des paquets et emplacement de chaque domaine du backend. |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | Comportement de la CLI et correspondance avec les routes du daemon. |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | Prérequis, étapes de compilation, exécution des tests et dépannage pour le développement local. |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | Ce qui est actuellement livré sur `main` et ce qui reste en cours. |
 
 ## Contribuer
 
-Commencez par le [guide de développement](../docs/development.md) pour connaître les prérequis, la configuration locale et les commandes de test. Lisez [CONTRIBUTING.md](../CONTRIBUTING.md) avant d'ouvrir une pull request et utilisez les [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) pour les bugs et les demandes de fonctionnalités.
+Commencez par le [guide de développement](../docs/engineering/development.mdx) pour connaître les prérequis, la configuration locale et les commandes de test. Lisez [CONTRIBUTING.md](../CONTRIBUTING.md) avant d'ouvrir une pull request et utilisez les [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) pour les bugs et les demandes de fonctionnalités.
 
 ### Signaler un bug
 
@@ -203,7 +203,7 @@ Rejoignez [Discord](https://discord.com/invite/UZv7JjxbwG) pour obtenir de l'aid
 
 ## Télémétrie produit
 
-Orchestrator.inc collecte une télémétrie limitée d'usage et de fiabilité, jamais votre code, vos prompts, vos conversations avec les agents ni vos identifiants de connexion. Elle inclut un identifiant d'installation et votre nom d'utilisateur GitHub ; si vous vous connectez à AO Cloud, elle inclut aussi votre identifiant utilisateur AO Cloud et l'adresse e-mail de ce compte, définie une seule fois comme propriété de personne PostHog (jamais lue depuis la configuration git). Désactivez-la entièrement dans Settings > General > Privacy > Share usage analytics, ce qui couvre l'application de bureau, le daemon et un téléphone associé. [Découvrez précisément ce que nous collectons et comment la désactiver](../docs/telemetry.md).
+Orchestrator.inc collecte une télémétrie limitée d'usage et de fiabilité, jamais votre code, vos prompts, vos conversations avec les agents ni vos identifiants de connexion. Elle inclut un identifiant d'installation et votre nom d'utilisateur GitHub ; si vous vous connectez à AO Cloud, elle inclut aussi votre identifiant utilisateur AO Cloud et l'adresse e-mail de ce compte, définie une seule fois comme propriété de personne PostHog (jamais lue depuis la configuration git). Désactivez-la entièrement dans Settings > General > Privacy > Share usage analytics, ce qui couvre l'application de bureau, le daemon et un téléphone associé. [Découvrez précisément ce que nous collectons et comment la désactiver](../docs/engineering/telemetry.mdx).
 
 ## Licence
 

@@ -32,8 +32,8 @@ Use Discord for questions and the weekly contributor call.
 If an issue is waiting for a core-team decision, ask before starting work.
 
 Need the product/run overview first? Start with [README.md](README.md),
-[docs/architecture.md](docs/architecture.md), and
-[docs/development.md](docs/development.md).
+[docs/engineering/architecture.mdx](docs/engineering/architecture.mdx), and
+[docs/engineering/development.mdx](docs/engineering/development.mdx).
 
 Two onboarding notes matter on current `main`:
 

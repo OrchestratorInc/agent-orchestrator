@@ -169,16 +169,16 @@ Orchestrator.inc を開き、管理させたいリポジトリを指定します
 | ドキュメント | 次の情報が必要な場合 |
 | :-- | :-- |
 | [プロダクトドキュメント](https://docs.orchestrator.inc) | インストール、エージェントのセットアップ、日常的な製品の使い方。 |
-| [docs/documentation-map.md](../docs/documentation-map.md) | どのドキュメントが人向けで、どれが機械可読な契約か、内容が食い違ったときにどちらが優先されるか。 |
-| [docs/architecture.md](../docs/architecture.md) | バックエンドのメンタルモデル、ライフサイクル、永続化、CDC、ステータス導出、デーモン境界。 |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | パッケージの所有範囲と、バックエンドの各関心事を配置する場所。 |
-| [docs/cli/README.md](../docs/cli/README.md) | CLI の動作とデーモンルートの対応関係。 |
-| [docs/development.md](../docs/development.md) | ローカル開発の前提条件、ビルド手順、テスト実行、トラブルシューティング。 |
-| [docs/STATUS.md](../docs/STATUS.md) | `main` で現在提供されているものと、まだ進行中のもの。 |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | どのドキュメントが人向けで、どれが機械可読な契約か、内容が食い違ったときにどちらが優先されるか。 |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | バックエンドのメンタルモデル、ライフサイクル、永続化、CDC、ステータス導出、デーモン境界。 |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | パッケージの所有範囲と、バックエンドの各関心事を配置する場所。 |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | CLI の動作とデーモンルートの対応関係。 |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | ローカル開発の前提条件、ビルド手順、テスト実行、トラブルシューティング。 |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | `main` で現在提供されているものと、まだ進行中のもの。 |
 
 ## コントリビューション
 
-前提条件、ローカル環境のセットアップ、テストコマンドについては、まず[開発ガイド](../docs/development.md)を確認してください。プルリクエストを作成する前に [CONTRIBUTING.md](../CONTRIBUTING.md) を読み、バグや機能リクエストには [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) を利用してください。
+前提条件、ローカル環境のセットアップ、テストコマンドについては、まず[開発ガイド](../docs/engineering/development.mdx)を確認してください。プルリクエストを作成する前に [CONTRIBUTING.md](../CONTRIBUTING.md) を読み、バグや機能リクエストには [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) を利用してください。
 
 ### バグを報告する
 
@@ -203,7 +203,7 @@ Orchestrator.inc を開き、管理させたいリポジトリを指定します
 
 ## 製品テレメトリ
 
-Orchestrator.inc は限定的な利用状況と信頼性のテレメトリを収集しますが、コード、プロンプト、エージェントとの会話、認証情報を収集することはありません。収集対象にはインストール ID と GitHub ユーザー名が含まれます。AO Cloud にサインインしている場合は、AO Cloud のユーザー ID とそのアカウントのメールアドレスも含まれ、PostHog の person プロパティとして一度だけ設定されます（git config から読み取ることはありません）。Settings > General > Privacy > Share usage analytics ですべてオフにでき、この設定はデスクトップ、デーモン、ペアリングしたスマートフォンに適用されます。[収集内容とオプトアウト方法の詳細](../docs/telemetry.md)。
+Orchestrator.inc は限定的な利用状況と信頼性のテレメトリを収集しますが、コード、プロンプト、エージェントとの会話、認証情報を収集することはありません。収集対象にはインストール ID と GitHub ユーザー名が含まれます。AO Cloud にサインインしている場合は、AO Cloud のユーザー ID とそのアカウントのメールアドレスも含まれ、PostHog の person プロパティとして一度だけ設定されます（git config から読み取ることはありません）。Settings > General > Privacy > Share usage analytics ですべてオフにでき、この設定はデスクトップ、デーモン、ペアリングしたスマートフォンに適用されます。[収集内容とオプトアウト方法の詳細](../docs/engineering/telemetry.mdx)。
 
 ## ライセンス
 

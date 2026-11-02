@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>AO First-Run Scratch Project Design</title>
+		<style>
+			:root {
+				--bg: #f7f8fa;
+				--panel: #ffffff;
+				--muted-panel: #f1f5f9;
+				--text: #172033;
+				--muted: #64748b;
+				--border: #d9e2ec;
+				--accent: #0f766e;
+				--accent-soft: #d9f4ef;
+				--warning: #b45309;
+				--warning-soft: #fef3c7;
+				--danger: #b91c1c;
+				--danger-soft: #fee2e2;
+				--code: #0f172a;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family:
+					Inter,
+					ui-sans-serif,
+					system-ui,
+					-apple-system,
+					BlinkMacSystemFont,
+					"Segoe UI",
+					sans-serif;
+				line-height: 1.55;
+			}
+			.shell {
+				display: grid;
+				grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+				min-height: 100vh;
+			}
+			aside {
+				position: sticky;
+				top: 0;
+				height: 100vh;
+				overflow: auto;
+				border-right: 1px solid var(--border);
+				background: #0f172a;
+				color: #dbeafe;
+				padding: 28px 22px;
+			}
+			aside h1 {
+				margin: 0 0 8px;
+				color: #fff;
+				font-size: 18px;
+				line-height: 1.2;
+				letter-spacing: 0;
+			}
+			aside p {
+				margin: 0 0 20px;
+				color: #b6c5d8;
+				font-size: 13px;
+			}
+			nav {
+				display: grid;
+				gap: 5px;
+			}
+			nav a {
+				display: block;
+				border-radius: 6px;
+				color: #dbeafe;
+				font-size: 13px;
+				padding: 7px 9px;
+				text-decoration: none;
+			}
+			nav a:hover {
+				background: rgba(255, 255, 255, 0.08);
+			}
+			main {
+				min-width: 0;
+				padding: 40px min(5vw, 64px) 72px;
+			}
+			.hero,
+			section {
+				max-width: 1120px;
+				margin: 0 auto 18px;
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				background: var(--panel);
+				padding: 28px;
+			}
+			.eyebrow {
+				margin: 0 0 10px;
+				color: var(--accent);
+				font-size: 12px;
+				font-weight: 700;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+			}
+			h2 {
+				margin: 0 0 14px;
+				font-size: 22px;
+				letter-spacing: 0;
+			}
+			.hero h2 {
+				max-width: 900px;
+				font-size: clamp(28px, 4vw, 44px);
+				line-height: 1.08;
+			}
+			h3 {
+				margin: 22px 0 10px;
+				font-size: 16px;
+			}
+			p {
+				margin: 0 0 12px;
+			}
+			ul,
+			ol {
+				margin: 0;
+				padding-left: 21px;
+			}
+			li {
+				margin: 7px 0;
+			}
+			code,
+			pre {
+				font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+			}
+			code {
+				border-radius: 4px;
+				background: #e2e8f0;
+				color: #0f172a;
+				font-size: 0.92em;
+				padding: 1px 4px;
+			}
+			pre {
+				overflow-x: auto;
+				border-radius: 8px;
+				background: var(--code);
+				color: #e5e7eb;
+				font-size: 12px;
+				line-height: 1.55;
+				padding: 15px;
+			}
+			pre code {
+				background: transparent;
+				color: inherit;
+				padding: 0;
+			}
+			.meta-grid {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 12px;
+				margin-top: 24px;
+			}
+			.meta-card,
+			.mini-card {
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				background: var(--muted-panel);
+				padding: 14px;
+			}
+			.meta-card span {
+				display: block;
+				color: var(--muted);
+				font-size: 12px;
+				font-weight: 700;
+				text-transform: uppercase;
+			}
+			.meta-card strong {
+				display: block;
+				margin-top: 5px;
+				font-size: 14px;
+			}
+			.two-col {
+				display: grid;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 16px;
+			}
+			.note,
+			.warning,
+			.risk {
+				border-left: 4px solid var(--accent);
+				border-radius: 6px;
+				background: var(--accent-soft);
+				padding: 13px 14px;
+			}
+			.warning {
+				border-left-color: var(--warning);
+				background: var(--warning-soft);
+			}
+			.risk {
+				border-left-color: var(--danger);
+				background: var(--danger-soft);
+			}
+			.table-wrap {
+				overflow-x: auto;
+				border: 1px solid var(--border);
+				border-radius: 8px;
+			}
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				min-width: 720px;
+				background: var(--panel);
+				font-size: 13px;
+			}
+			th,
+			td {
+				border-bottom: 1px solid var(--border);
+				padding: 10px 12px;
+				text-align: left;
+				vertical-align: top;
+			}
+			th {
+				background: var(--muted-panel);
+				color: var(--muted);
+				font-size: 12px;
+				text-transform: uppercase;
+			}
+			tr:last-child td {
+				border-bottom: 0;
+			}
+			@media (max-width: 900px) {
+				.shell {
+					grid-template-columns: 1fr;
+				}
+				aside {
+					position: relative;
+					height: auto;
+				}
+				.meta-grid,
+				.two-col {
+					grid-template-columns: 1fr;
+				}
+				main {
+					padding: 18px 12px 40px;
+				}
+				.hero,
+				section {
+					padding: 18px;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div class="shell">
+			<aside>
+				<h1>First-Run Scratch Project</h1>
+				<p>Implementation design for using AO without initializing git first.</p>
+				<nav aria-label="Document sections">
+					<a href="#summary">Summary</a>
+					<a href="#goals">Goals</a>
+					<a href="#architecture">Architecture</a>
+					<a href="#storage">Storage</a>
+					<a href="#backend">Backend</a>
+					<a href="#frontend">Frontend</a>
+					<a href="#cli-mobile">CLI And Mobile</a>
+					<a href="#testing">Testing</a>
+					<a href="#risks">Risks</a>
+					<a href="#acceptance">Acceptance</a>
+				</nav>
+			</aside>
+			<main>
+				<header class="hero" id="summary">
+					<p class="eyebrow">Design Doc</p>
+					<h2>AO should boot into a managed Scratch project on first run and allow agents without a git repo.</h2>
+					<p>
+						The daemon seeds one built-in <code>scratch</code> project only for a truly fresh registry. Scratch sessions
+						run in isolated AO-managed directories under <code>AO_DATA_DIR</code>, have no branch metadata, and avoid
+						git-only PR, tracker, review, and worktree flows. Existing git-backed projects keep their current behavior.
+					</p>
+					<div class="meta-grid">
+						<div class="meta-card"><span>Scope</span><strong>First-run scratch only</strong></div>
+						<div class="meta-card">
+							<span>Project ID</span><strong><code>scratch</code></strong>
+						</div>
+						<div class="meta-card">
+							<span>State Root</span><strong><code>AO_DATA_DIR/scratch/default</code></strong>
+						</div>
+						<div class="meta-card"><span>Git Required</span><strong>No, for scratch only</strong></div>
+					</div>
+				</header>
+
+				<section id="goals">
+					<h2>Goals And Non-Goals</h2>
+					<div class="two-col">
+						<div class="mini-card">
+							<h3>Goals</h3>
+							<ul>
+								<li>Fresh AO installs show a usable Scratch project immediately.</li>
+								<li>Users can spawn orchestrator and worker agents without running <code>git init</code>.</li>
+								<li>Each scratch session gets an isolated plain directory.</li>
+								<li>Scratch state stays inside AO-managed data paths.</li>
+								<li><code>ao spawn</code> can fall back to scratch when it is the only active project.</li>
+								<li>Git project behavior stays unchanged.</li>
+							</ul>
+						</div>
+						<div class="mini-card">
+							<h3>Non-Goals</h3>
+							<ul>
+								<li>No arbitrary non-git folder import.</li>
+								<li>No scratch branches, PRs, review workflow, or tracker intake.</li>
+								<li>No automatic scratch-to-git conversion.</li>
+								<li>No shared scratch workspace across sessions.</li>
+								<li>No weakening of git validation for normal projects.</li>
+							</ul>
+						</div>
+					</div>
+				</section>
+
+				<section id="architecture">
+					<h2>Architecture</h2>
+					<p>
+						Add <code>ProjectKindScratch</code> as a third project kind. The daemon creates Scratch during startup after
+						core services are initialized and before the app surface depends on the project list. Session workspace
+						creation routes by project kind: git projects continue through the git worktree adapter, while scratch
+						projects use a plain-directory adapter.
+					</p>
+					<div class="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th>Kind</th>
+									<th>Workspace Strategy</th>
+									<th>Branch</th>
+									<th>Git Features</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<td><code>single_repo</code></td>
+									<td>Existing git worktree adapter</td>
+									<td>Required</td>
+									<td>Diffs, PRs, reviews, tracker intake</td>
+								</tr>
+								<tr>
+									<td><code>workspace</code></td>
+									<td>Existing multi-repo worktree adapter</td>
+									<td>Required</td>
+									<td>Per-repo worktrees and PR scan</td>
+								</tr>
+								<tr>
+									<td><code>scratch</code></td>
+									<td>Plain AO-managed session directories</td>
+									<td>Always empty</td>
+									<td>None</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</section>
+
+				<section id="storage">
+					<h2>Storage</h2>
+					<ul>
+						<li>
+							Add a new migration that widens the <code>projects.kind</code> check constraint to include
+							<code>scratch</code>.
+						</li>
+						<li>Do not edit old migrations.</li>
+						<li>Seed only when the total project count, including archived rows, is zero.</li>
+						<li>If Scratch was archived or any project previously existed, do not recreate Scratch on boot.</li>
+						<li>Scratch rows use empty <code>repo_origin_url</code> and empty default branch.</li>
+					</ul>
+					<div class="risk">
+						Counting only active projects is unsafe. A user who archived Scratch has made a durable choice, so startup
+						must not surprise them by reseeding it.
+					</div>
+				</section>
+
+				<section id="backend">
+					<h2>Backend</h2>
+					<h3>Project Service</h3>
+					<ul>
+						<li>
+							Add <code>EnsureDefaultScratchProject</code> with path normalization, directory creation, count guard, and
+							default agent validation.
+						</li>
+						<li>
+							Reject scratch config fields that require git, especially <code>defaultBranch</code> and enabled tracker
+							intake.
+						</li>
+						<li>Return scratch read models with empty repo/default branch.</li>
+					</ul>
+					<h3>Workspace And Lifecycle</h3>
+					<ul>
+						<li>Add a scratch workspace adapter that creates isolated per-session directories.</li>
+						<li>
+							Add a workspace router that delegates git projects to the git adapter and scratch to the scratch adapter.
+						</li>
+						<li>Reject explicit branch on scratch spawns before creating a session row.</li>
+						<li>
+							Restore scratch sessions with workspace path only; branch is required only for non-scratch projects.
+						</li>
+						<li>
+							Never stash or force-delete scratch workspaces during shutdown, reconcile, kill, cleanup, or orchestrator
+							replacement.
+						</li>
+						<li>Preserve non-empty scratch directories and remove only empty directories during normal cleanup.</li>
+					</ul>
+					<h3>File Browser</h3>
+					<ul>
+						<li>Detect scratch from the session project, not from git command failures.</li>
+						<li>Walk the filesystem with traversal and symlink-escape protection.</li>
+						<li>Return scratch files as added with line additions for text files and empty diffs.</li>
+						<li>Skip internal <code>.git</code> directories, but do not hide user-created dotfiles.</li>
+					</ul>
+				</section>
+
+				<section id="frontend">
+					<h2>Frontend</h2>
+					<ul>
+						<li>Preserve <code>kind: "scratch"</code> instead of mapping unknown kinds to <code>single_repo</code>.</li>
+						<li>Keep <code>session.branch</code> optional; do not synthesize <code>session/&lt;id&gt;</code>.</li>
+						<li>
+							Redirect the root shell route to <code>/projects/scratch</code> only when Scratch is the sole active
+							project.
+						</li>
+						<li>Hide the New Task branch field for scratch and omit <code>branch</code> from spawn requests.</li>
+						<li>Hide scratch settings controls for Worktrees, Reviewers, and Tracker intake.</li>
+						<li>Use branch-neutral copy in board, inspector, terminal, restore, and session metadata surfaces.</li>
+					</ul>
+				</section>
+
+				<section id="cli-mobile">
+					<h2>CLI And Mobile</h2>
+					<ul>
+						<li>Update CLI help from git-worktree-only language to isolated workspace language.</li>
+						<li>
+							If no project resolves from flags, environment, session, or cwd, default to Scratch when it is the only
+							active project.
+						</li>
+						<li>Reject <code>--branch</code> and <code>--claim-pr</code> for scratch before spawning.</li>
+						<li>Update mobile spawn copy to avoid claiming every session has a git branch or worktree.</li>
+					</ul>
+				</section>
+
+				<section id="testing">
+					<h2>Testing</h2>
+					<ul>
+						<li>Storage migration accepts <code>scratch</code> and archived-inclusive count suppresses reseeding.</li>
+						<li>Project service seeds Scratch only for fresh registries and rejects git-only scratch config.</li>
+						<li>Daemon boot seeds Scratch under the configured data dir.</li>
+						<li>Scratch workspace adapter and router cover spawn, destroy, dirty preservation, and git delegation.</li>
+						<li>
+							Session manager covers branchless spawn/restore, shutdown, reconcile, cleanup, and orchestrator
+							replacement.
+						</li>
+						<li>Workspace file service covers scratch listing/detail, traversal rejection, and symlink escapes.</li>
+						<li>
+							Renderer tests cover kind preservation, root redirect, New Task, settings, inspector, topbar, and terminal
+							copy.
+						</li>
+						<li>CLI tests cover scratch fallback and scratch rejection of branch/PR flags.</li>
+					</ul>
+					<pre><code>npm run sqlc
+npm run api
+cd backend && go test ./internal/storage/sqlite/store ./internal/service/project ./internal/adapters/workspace/... ./internal/daemon ./internal/session_manager ./internal/service/session ./internal/cli ./internal/httpd/controllers
+npm run frontend:typecheck
+cd frontend && npm run test -- scratch-related files</code></pre>
+				</section>
+
+				<section id="risks">
+					<h2>Risks And Mitigations</h2>
+					<div class="table-wrap">
+						<table>
+							<thead>
+								<tr>
+									<th>Risk</th>
+									<th>Mitigation</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<td>Scratch cleanup deletes user output.</td>
+									<td>Preserve any non-empty scratch directory; remove only empty directories in normal cleanup.</td>
+								</tr>
+								<tr>
+									<td>Branch assumptions reject scratch restore.</td>
+									<td>Load project kind before branch guards and require branch only for git projects.</td>
+								</tr>
+								<tr>
+									<td>Frontend leaks branch or PR UI into scratch.</td>
+									<td>Preserve scratch kind and make branch optional through shared renderer types.</td>
+								</tr>
+								<tr>
+									<td>Archived Scratch reappears.</td>
+									<td>Seed from archived-inclusive project count, not active list count.</td>
+								</tr>
+								<tr>
+									<td>Git projects lose existing safety checks.</td>
+									<td>Keep scratch routing explicit; do not convert git errors into scratch behavior.</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</section>
+
+				<section id="acceptance">
+					<h2>Acceptance Criteria</h2>
+					<ol>
+						<li>A fresh database contains exactly one built-in Scratch project.</li>
+						<li>AO opens to the Scratch board when Scratch is the only active project.</li>
+						<li>Users can spawn orchestrator and worker sessions without a git repo.</li>
+						<li>Scratch sessions are isolated per session and branchless in API/UI metadata.</li>
+						<li>Scratch file inspection works without git and rejects path escapes.</li>
+						<li>Scratch shutdown, reconcile, cleanup, and replacement preserve user output.</li>
+						<li><code>ao spawn</code> works on fresh Scratch and rejects branch/PR flags for scratch.</li>
+						<li>Existing git-backed project behavior and validation continue to pass.</li>
+					</ol>
+					<div class="note">
+						Implementation should remain explicit about the boundary: Scratch is a first-run built-in project, not a
+						general non-git project import system.
+					</div>
+				</section>
+			</main>
+		</div>
+	</body>
+</html>

@@ -33,7 +33,7 @@ export const PROBE_TIMEOUT_MS = 3_000;
  *
  * Unauthenticated by design: the answer is what decides whether this endpoint
  * is safe to send a credential to, so it has to come first. See
- * docs/adr/0003-unauthenticated-identity-probe.md.
+ * docs/archive/adr/0003-unauthenticated-identity-probe.mdx.
  */
 export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean } = {}): Promise<ProbeAnswer> {
 	// A tunnel hostname may simply not have propagated yet; see probeRetry.

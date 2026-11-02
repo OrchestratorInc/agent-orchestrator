@@ -1,0 +1,364 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Orchestrator",
+  "theme": "luma",
+  "logo": {
+    "light": "/logo/ao-logo.svg",
+    "dark": "/logo/ao-logo.svg",
+    "href": "https://orchestrator.inc"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#e8e8e3",
+    "light": "#e8e8e3",
+    "dark": "#e8e8e3"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "weight": 700
+    },
+    "body": {
+      "family": "Geist",
+      "weight": 400
+    }
+  },
+  "appearance": {
+    "default": "dark",
+    "strict": true
+  },
+  "search": {
+    "prompt": "Search Orchestrator docs..."
+  },
+  "footerSocials": {
+    "github": "https://github.com/OrchestratorInc/agent-orchestrator",
+    "x": "https://x.com/aoagents"
+  },
+  "navigation": {
+    "languages": [
+      {
+        "language": "en",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "index",
+              "installation",
+              "quickstart",
+              "platforms"
+            ]
+          },
+          {
+            "group": "Using Orchestrator",
+            "pages": [
+              "dashboard",
+              "examples",
+              {
+                "group": "Guides",
+                "pages": [
+                  "guides/index",
+                  "guides/per-role-agents",
+                  "guides/parallel-issues",
+                  "guides/ci-recovery",
+                  "guides/review-loop",
+                  "guides/reactions",
+                  "guides/multi-project",
+                  "guides/cloud"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Built-in capabilities",
+            "pages": [
+              {
+                "group": "Built-in capabilities",
+                "pages": [
+                  "plugins/index",
+                  {
+                    "group": "Agents",
+                    "pages": [
+                      "plugins/agents/index",
+                      "plugins/agents/claude-code",
+                      "plugins/agents/codex",
+                      "plugins/agents/cursor",
+                      "plugins/agents/aider",
+                      "plugins/agents/opencode"
+                    ]
+                  },
+                  {
+                    "group": "Runtimes",
+                    "pages": [
+                      "plugins/runtimes/index",
+                      "plugins/runtimes/tmux"
+                    ]
+                  },
+                  {
+                    "group": "Workspaces",
+                    "pages": [
+                      "plugins/workspaces/index",
+                      "plugins/workspaces/worktree"
+                    ]
+                  },
+                  {
+                    "group": "Trackers",
+                    "pages": [
+                      "plugins/trackers/index",
+                      "plugins/trackers/github"
+                    ]
+                  },
+                  {
+                    "group": "SCM",
+                    "pages": [
+                      "plugins/scm/index",
+                      "plugins/scm/github"
+                    ]
+                  },
+                  {
+                    "group": "Notifications",
+                    "pages": [
+                      "plugins/notifiers/index",
+                      "plugins/notifiers/dashboard"
+                    ]
+                  },
+                  {
+                    "group": "Terminals",
+                    "pages": [
+                      "plugins/terminals/index",
+                      "plugins/terminals/web"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "cli",
+              {
+                "group": "Configuration",
+                "root": "configuration/index",
+                "pages": [
+                  "configuration/projects",
+                  "configuration/lifecycle-automation",
+                  "configuration/remote-access"
+                ]
+              },
+              "architecture"
+            ]
+          },
+          {
+            "group": "Help",
+            "pages": [
+              "troubleshooting",
+              "faq",
+              "migration",
+              "changelog"
+            ]
+          },
+          {
+            "group": "Engineering",
+            "pages": [
+              "engineering/index",
+              "engineering/status",
+              "engineering/ao-start-bootstrapper-and-npm-deprecation",
+              "engineering/architecture",
+              "engineering/awake-follow-up-controls",
+              "engineering/backend-code-structure",
+              "engineering/chat-ui-improvements-checklist",
+              "engineering/cloud-project-settings",
+              "engineering/daemon-environment",
+              "engineering/development",
+              "engineering/documentation-coverage",
+              "engineering/documentation-map",
+              "engineering/fonts-readme",
+              "engineering/gemini-cli",
+              "engineering/harness-version-refresh",
+              "engineering/onboarding-contract-review",
+              "engineering/onboarding-recovery-testing",
+              "engineering/posthog-cost-controls",
+              "engineering/scm-observer",
+              "engineering/self-hosted-remote",
+              "engineering/side-chat-6564-reliability",
+              "engineering/stack",
+              "engineering/startup-cues",
+              "engineering/stay-awake-physical-tests",
+              "engineering/telemetry",
+              {
+                "group": "CLI",
+                "pages": [
+                  "engineering/cli/index"
+                ]
+              },
+              {
+                "group": "Harnesses",
+                "pages": [
+                  "engineering/harnesses/codewhale",
+                  "engineering/harnesses/command-code",
+                  "engineering/harnesses/deepseek-harness",
+                  "engineering/harnesses/mimo-code",
+                  "engineering/harnesses/model-catalogs",
+                  "engineering/harnesses/omp",
+                  "engineering/harnesses/openhands",
+                  "engineering/harnesses/pi",
+                  "engineering/harnesses/unreal-agent"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Archive (historical)",
+            "pages": [
+              "archive/index",
+              {
+                "group": "ADRs",
+                "pages": [
+                  "archive/adr/0001-lan-listener-for-mobile",
+                  "archive/adr/0002-secure-interactive-reviewer-gateway",
+                  "archive/adr/0003-persistent-chat-provider-host",
+                  "archive/adr/0003-unauthenticated-identity-probe",
+                  "archive/adr/0004-cloudflare-tunnel-for-remote-mobile-access",
+                  "archive/adr/0005-mobile-closed-lid-wake",
+                  "archive/adr/0006-desktop-awake"
+                ]
+              },
+              {
+                "group": "Plans",
+                "pages": [
+                  "archive/plans/2026-06-26-import-offer",
+                  "archive/plans/2026-07-20-first-run-scratch-project-design",
+                  "archive/plans/2026-10-13-desktop-performance-overhaul",
+                  "archive/plans/chinese-ui-i18n",
+                  "archive/plans/session-lifecycle-persistence"
+                ]
+              },
+              {
+                "group": "Research",
+                "pages": [
+                  "archive/research/interface-handoff-connectors",
+                  "archive/research/persistent-acp-chat-hosts",
+                  "archive/research/project-script-path-help"
+                ]
+              },
+              {
+                "group": "Superpowers plans",
+                "pages": [
+                  "archive/superpowers/plans/2026-07-07-connect-mobile-lan-listener",
+                  "archive/superpowers/plans/2026-07-25-kill-state-isolation",
+                  "archive/superpowers/plans/2026-08-09-amp-pi-auggie-kanban-status",
+                  "archive/superpowers/plans/2026-08-24-session-file-tabs",
+                  "archive/superpowers/plans/2026-08-29-agent-owned-model-catalogs",
+                  "archive/superpowers/plans/2026-08-31-safe-harness-installer",
+                  "archive/superpowers/plans/2026-08-31-safe-harness-installer-design",
+                  "archive/superpowers/plans/2026-09-01-one-click-vendor-installers",
+                  "archive/superpowers/plans/2026-09-04-session-rename-surfaces",
+                  "archive/superpowers/plans/2026-09-05-macos-blockmap-pr1-verification",
+                  "archive/superpowers/plans/2026-09-05-macos-differential-v2",
+                  "archive/superpowers/plans/2026-09-29-opencode-v2-harness",
+                  "archive/superpowers/plans/2026-10-02-mobile-remote-browser-host",
+                  "archive/superpowers/plans/2026-10-02-zero-lag-file-viewer",
+                  "archive/superpowers/plans/2026-10-03-command-palette-workspace-file-search"
+                ]
+              },
+              {
+                "group": "Superpowers specs",
+                "pages": [
+                  "archive/superpowers/specs/2026-07-25-kill-state-isolation-design",
+                  "archive/superpowers/specs/2026-08-09-amp-pi-auggie-kanban-status-design",
+                  "archive/superpowers/specs/2026-08-24-session-file-tabs-design",
+                  "archive/superpowers/specs/2026-08-29-agent-owned-model-catalogs-design",
+                  "archive/superpowers/specs/2026-09-01-one-click-vendor-installers-design",
+                  "archive/superpowers/specs/2026-09-04-session-rename-surfaces-design",
+                  "archive/superpowers/specs/2026-09-20-cloud-pr-review-design",
+                  "archive/superpowers/specs/2026-09-20-cloud-workspace-review-parity-design",
+                  "archive/superpowers/specs/2026-09-29-opencode-v2-harness-design"
+                ]
+              },
+              {
+                "group": "Performance",
+                "pages": [
+                  "archive/performance/chat-responsiveness/index",
+                  "archive/performance/file-viewer"
+                ]
+              },
+              {
+                "group": "PR evidence",
+                "pages": [
+                  "archive/pr-evidence/pr-5921-review-feedback"
+                ]
+              },
+              {
+                "group": "Screenshots",
+                "pages": [
+                  "archive/screenshots/index",
+                  "archive/screenshots/issue-5280/index",
+                  "archive/screenshots/pr-4924/index",
+                  "archive/screenshots/pr-4925/index",
+                  "archive/screenshots/pr-4926/index",
+                  "archive/screenshots/pr-4928/index",
+                  "archive/screenshots/pr-4932/index"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "language": "ja",
+        "groups": [
+          {
+            "group": "はじめに",
+            "pages": [
+              "ja/index",
+              "ja/installation",
+              "ja/quickstart"
+            ]
+          }
+        ]
+      },
+      {
+        "language": "zh-CN",
+        "groups": [
+          {
+            "group": "入门",
+            "pages": [
+              "zh-CN/index",
+              "zh-CN/installation",
+              "zh-CN/quickstart"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "styles": [
+    {
+      "path": "_styles/custom.css"
+    }
+  ],
+  "navbar": {
+    "links": [
+      {
+        "label": "Main site",
+        "href": "https://orchestrator.inc"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/OrchestratorInc/agent-orchestrator"
+      }
+    ]
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt"
+    ]
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": "github-dark"
+    }
+  }
+}

@@ -33,7 +33,7 @@ This installs the latest stable AO; for the newest nightly, end the command with
 
 It installs AO as a service that keeps running after you log out, then prints a sign-in link and a QR code. Open the link on any device, or scan the code with your phone, check that the page shows the same code as the terminal, and sign in to your AO account. The VM joins your account the same way as a desktop, at a fixed address, and keeps none of your sign-in. Your desktops and phones signed in to that account list it within about 30 seconds; the desktop looks for new machines only while its window is open.
 
-If AO is already installed on the machine, or the link expired, run `ao remote-host link` there for a new link. See [Self-hosted remote hosts](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/self-hosted-remote.md) for other install options, agent setup over SSH, and troubleshooting.
+If AO is already installed on the machine, or the link expired, run `ao remote-host link` there for a new link. See [Self-hosted remote hosts](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/engineering/self-hosted-remote.mdx) for other install options, agent setup over SSH, and troubleshooting.
 
 ## Pair without an account
 
@@ -134,7 +134,7 @@ on one macOS 26 MacBook. Full physical compatibility validation, including crash
 recovery and macOS 27, is pending. A successful probe or "armed"
 status is not a connectivity guarantee on every OS/hardware combination. Test a
 short lid-closed session on your machine before relying on it unattended.
-[ADR 0005](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/adr/0005-mobile-closed-lid-wake.md)
+[ADR 0005](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/archive/adr/0005-mobile-closed-lid-wake.mdx)
 records current evidence and the release gate.
 
 Helper versions, plist, leases and recovery journal live under `~/.ao/data/wake`,

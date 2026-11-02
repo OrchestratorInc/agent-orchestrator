@@ -169,16 +169,16 @@ Lade die App von [orchestrator.inc/download](https://orchestrator.inc/download/)
 | Dokument | Hier beginnen, wenn du Folgendes brauchst |
 | :-- | :-- |
 | [Produktdokumentation](https://docs.orchestrator.inc) | Installation, Einrichtung von Agenten und tägliche Produktnutzung. |
-| [docs/documentation-map.md](../docs/documentation-map.md) | Welche Dokumente sich an Menschen richten, welche maschinenlesbare Verträge sind und welche bei Abweichungen Vorrang haben. |
-| [docs/architecture.md](../docs/architecture.md) | Backend-Mentalmodell, Lifecycle, Persistenz, CDC, Statusableitung und Daemon-Grenzen. |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Paketverantwortung und Zuordnung der einzelnen Backend-Bereiche. |
-| [docs/cli/README.md](../docs/cli/README.md) | CLI-Verhalten und Zuordnung der Daemon-Routen. |
-| [docs/development.md](../docs/development.md) | Voraussetzungen, Build-Schritte, Testausführung und Fehlerbehebung für lokale Entwicklung. |
-| [docs/STATUS.md](../docs/STATUS.md) | Was aktuell auf `main` ausgeliefert wird und woran noch gearbeitet wird. |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | Welche Dokumente sich an Menschen richten, welche maschinenlesbare Verträge sind und welche bei Abweichungen Vorrang haben. |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | Backend-Mentalmodell, Lifecycle, Persistenz, CDC, Statusableitung und Daemon-Grenzen. |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | Paketverantwortung und Zuordnung der einzelnen Backend-Bereiche. |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | CLI-Verhalten und Zuordnung der Daemon-Routen. |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | Voraussetzungen, Build-Schritte, Testausführung und Fehlerbehebung für lokale Entwicklung. |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | Was aktuell auf `main` ausgeliefert wird und woran noch gearbeitet wird. |
 
 ## Mitwirken
 
-Der [Entwicklungsleitfaden](../docs/development.md) erklärt Voraussetzungen, lokale Einrichtung und Testbefehle. Lies [CONTRIBUTING.md](../CONTRIBUTING.md), bevor du einen Pull Request öffnest, und nutze [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) für Bugs und Funktionswünsche.
+Der [Entwicklungsleitfaden](../docs/engineering/development.mdx) erklärt Voraussetzungen, lokale Einrichtung und Testbefehle. Lies [CONTRIBUTING.md](../CONTRIBUTING.md), bevor du einen Pull Request öffnest, und nutze [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) für Bugs und Funktionswünsche.
 
 ### Einen Bug melden
 
@@ -203,7 +203,7 @@ Komm auf unseren [Discord](https://discord.com/invite/UZv7JjxbwG), wenn du Hilfe
 
 ## Produkttelemetrie
 
-Orchestrator.inc erfasst begrenzte Nutzungs- und Zuverlässigkeitstelemetrie, niemals deinen Code, deine Prompts, Agenten-Konversationen oder Zugangsdaten. Sie umfasst eine Installations-ID und deinen GitHub-Benutzernamen; wenn du dich bei AO Cloud anmeldest, zusätzlich deine AO-Cloud-Benutzer-ID und die E-Mail-Adresse dieses Kontos, einmalig als PostHog-Personeneigenschaft gesetzt (niemals aus der Git-Konfiguration gelesen). Unter Settings > General > Privacy > Share usage analytics schaltest du alles ab, für Desktop, Daemon und ein gekoppeltes Smartphone. [Genau nachlesen, was wir erfassen und wie du widersprichst](../docs/telemetry.md).
+Orchestrator.inc erfasst begrenzte Nutzungs- und Zuverlässigkeitstelemetrie, niemals deinen Code, deine Prompts, Agenten-Konversationen oder Zugangsdaten. Sie umfasst eine Installations-ID und deinen GitHub-Benutzernamen; wenn du dich bei AO Cloud anmeldest, zusätzlich deine AO-Cloud-Benutzer-ID und die E-Mail-Adresse dieses Kontos, einmalig als PostHog-Personeneigenschaft gesetzt (niemals aus der Git-Konfiguration gelesen). Unter Settings > General > Privacy > Share usage analytics schaltest du alles ab, für Desktop, Daemon und ein gekoppeltes Smartphone. [Genau nachlesen, was wir erfassen und wie du widersprichst](../docs/engineering/telemetry.mdx).
 
 ## Lizenz
 

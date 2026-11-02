@@ -169,16 +169,16 @@
 | 文档 | 需要以下内容时从这里开始 |
 | :-- | :-- |
 | [产品文档](https://docs.orchestrator.inc) | 安装、智能体设置和日常产品使用。 |
-| [docs/documentation-map.md](../docs/documentation-map.md) | 哪些文档面向人阅读，哪些是机器可读的契约，以及内容不一致时以哪个为准。 |
-| [docs/architecture.md](../docs/architecture.md) | 后端心智模型、生命周期、持久化、CDC、状态推导和守护进程边界。 |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 包职责以及各项后端关注点应归属的位置。 |
-| [docs/cli/README.md](../docs/cli/README.md) | CLI 行为和守护进程路由映射。 |
-| [docs/development.md](../docs/development.md) | 本地开发的先决条件、构建步骤、测试运行方法和故障排除。 |
-| [docs/STATUS.md](../docs/STATUS.md) | `main` 当前已提供的功能和尚在开发中的内容。 |
+| [docs/engineering/documentation-map.mdx](../docs/engineering/documentation-map.mdx) | 哪些文档面向人阅读，哪些是机器可读的契约，以及内容不一致时以哪个为准。 |
+| [docs/engineering/architecture.mdx](../docs/engineering/architecture.mdx) | 后端心智模型、生命周期、持久化、CDC、状态推导和守护进程边界。 |
+| [docs/engineering/backend-code-structure.mdx](../docs/engineering/backend-code-structure.mdx) | 包职责以及各项后端关注点应归属的位置。 |
+| [docs/engineering/cli/index.mdx](../docs/engineering/cli/index.mdx) | CLI 行为和守护进程路由映射。 |
+| [docs/engineering/development.mdx](../docs/engineering/development.mdx) | 本地开发的先决条件、构建步骤、测试运行方法和故障排除。 |
+| [docs/engineering/status.mdx](../docs/engineering/status.mdx) | `main` 当前已提供的功能和尚在开发中的内容。 |
 
 ## 参与贡献
 
-请先阅读[开发指南](../docs/development.md)，了解先决条件、本地设置和测试命令。提交拉取请求前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)，并通过 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) 报告 bug 和提出功能请求。
+请先阅读[开发指南](../docs/engineering/development.mdx)，了解先决条件、本地设置和测试命令。提交拉取请求前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)，并通过 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) 报告 bug 和提出功能请求。
 
 ### 报告 bug
 
@@ -203,7 +203,7 @@
 
 ## 产品遥测
 
-Orchestrator.inc 收集有限的使用情况和可靠性遥测数据，绝不收集你的代码、提示词、智能体对话或凭据。这些数据包括安装 ID 和你的 GitHub 用户名；如果你登录了 AO Cloud，还会包括你的 AO Cloud 用户 ID 和该账号的电子邮件地址，它们只会作为 PostHog 人员属性设置一次（绝不从 git config 读取）。你可以在 Settings > General > Privacy > Share usage analytics 中将其全部关闭，该设置同时适用于桌面端、守护进程和已配对的手机。[详细了解我们收集哪些数据以及如何选择退出](../docs/telemetry.md)。
+Orchestrator.inc 收集有限的使用情况和可靠性遥测数据，绝不收集你的代码、提示词、智能体对话或凭据。这些数据包括安装 ID 和你的 GitHub 用户名；如果你登录了 AO Cloud，还会包括你的 AO Cloud 用户 ID 和该账号的电子邮件地址，它们只会作为 PostHog 人员属性设置一次（绝不从 git config 读取）。你可以在 Settings > General > Privacy > Share usage analytics 中将其全部关闭，该设置同时适用于桌面端、守护进程和已配对的手机。[详细了解我们收集哪些数据以及如何选择退出](../docs/engineering/telemetry.mdx)。
 
 ## 许可证
 

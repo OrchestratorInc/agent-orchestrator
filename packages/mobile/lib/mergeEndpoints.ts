@@ -19,7 +19,7 @@ import type { Endpoint, EndpointKind } from "./endpoints";
  * the entry preserved here is in practice a dead one. It does not restore a
  * route home after a rotation; nothing on the phone can, because a phone with
  * no working path cannot learn the new hostname. That needs a stable hostname
- * — see docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md.
+ * — see docs/archive/adr/0004-cloudflare-tunnel-for-remote-mobile-access.mdx.
  *
  * What it does buy is that the list stays structurally correct, at the cost of
  * one failed probe in a race that runs its candidates concurrently. A kind is
