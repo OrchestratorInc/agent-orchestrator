@@ -60,6 +60,8 @@ type Config struct {
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// ResetsConversation: see acpdriver.Config.ResetsConversation.
+	ResetsConversation func([]acpsdk.ContentBlock) bool
 	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
 	SuppressSessionModes bool
 	// ImplicitWorkspaceDirectories: see acpdriver.Config.
@@ -170,6 +172,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
+		ResetsConversation:           cfg.ResetsConversation,
 		SuppressSessionModes:         cfg.SuppressSessionModes,
 		ImplicitWorkspaceDirectories: cfg.ImplicitWorkspaceDirectories,
 		HistoryReconciler:            cfg.HistoryReconciler,

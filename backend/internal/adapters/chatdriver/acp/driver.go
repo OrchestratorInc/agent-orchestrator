@@ -92,6 +92,11 @@ type Config struct {
 	// resumed conversation that already has turns received it then, so it is not
 	// repeated (see conversation.setSessionPreamble).
 	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
+	// ResetsConversation reports a prompt the agent answers by clearing its
+	// conversation in place (Hermes' `/reset`). The session id survives, so no
+	// relaunch re-delivers SessionPreamble: the reset prompt is sent without it,
+	// and once that turn completes the preamble leads the next prompt again.
+	ResetsConversation func([]acpsdk.ContentBlock) bool
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
@@ -819,6 +824,7 @@ func (d *Driver) initialize(
 	)
 	conv.harness = d.cfg.Harness
 	conv.suppressSessionModes = d.cfg.SuppressSessionModes
+	conv.resetsConversation = d.cfg.ResetsConversation
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.promptFailureCode = d.cfg.PromptFailureCode

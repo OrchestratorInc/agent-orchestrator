@@ -41,6 +41,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
 		SessionPreamble:    SessionPreamble,
+		ResetsConversation: resetsConversation,
 		PermissionPolicy:   permissionPolicy,
 		HistoryReconciler:  reconcileReplay,
 		PromptErrorFailure: promptErrorFailure,
@@ -81,7 +82,9 @@ const outputLanguageInstruction = "Output language: all user-visible output (nar
 // the first turn is the only channel it follows. The output-language pin rides
 // in the same block. The preamble leads only the first prompt of a new
 // provider session; that is correct here, because a fresh provider session is
-// created on every chat-host relaunch and each one gets it.
+// created on every chat-host relaunch and each one gets it. A `/reset` clears
+// it from the same provider session, so resetsConversation re-arms it for the
+// prompt after the reset.
 func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if standing == "" {
@@ -90,6 +93,31 @@ func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	return []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock(
 		standing + "\n" + outputLanguageInstruction,
 	)}
+}
+
+// resetsConversation reports a prompt Hermes runs as its history-clearing
+// command instead of a model turn: `/reset` or its aliases `/new` and `/clear`.
+// It matches the way Hermes' ACP adapter dispatches slash commands: a
+// text-only prompt, the command name case-insensitive, arguments allowed. The
+// ACP session id survives the reset, so nothing relaunches to re-deliver
+// SessionPreamble.
+func resetsConversation(prompt []acpsdk.ContentBlock) bool {
+	var text strings.Builder
+	for _, block := range prompt {
+		if block.Text == nil {
+			return false
+		}
+		text.WriteString(block.Text.Text)
+	}
+	fields := strings.Fields(text.String())
+	if len(fields) == 0 {
+		return false
+	}
+	switch strings.ToLower(fields[0]) {
+	case "/reset", "/new", "/clear":
+		return true
+	}
+	return false
 }
 
 // configure adds provider-native arguments and environment overlays. Hermes'

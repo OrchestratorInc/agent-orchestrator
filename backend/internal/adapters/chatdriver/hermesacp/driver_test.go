@@ -128,6 +128,44 @@ func TestSessionPreambleNilWithoutStandingPrompt(t *testing.T) {
 	}
 }
 
+// Hermes' ACP adapter runs /reset and its /new and /clear aliases as a
+// history-clearing command only for a text-only prompt whose first word is the
+// command, case-insensitively; anything else reaches the model as a prompt.
+func TestResetsConversationMatchesHermesResetCommands(t *testing.T) {
+	text := func(parts ...string) []acpsdk.ContentBlock {
+		blocks := make([]acpsdk.ContentBlock, 0, len(parts))
+		for _, part := range parts {
+			blocks = append(blocks, acpsdk.TextBlock(part))
+		}
+		return blocks
+	}
+	tests := []struct {
+		name   string
+		prompt []acpsdk.ContentBlock
+		want   bool
+	}{
+		{"reset", text("/reset"), true},
+		{"new alias", text("/new"), true},
+		{"clear alias", text("/clear"), true},
+		{"case-insensitive", text("/RESET"), true},
+		{"surrounding whitespace", text("  /reset\n"), true},
+		{"with an argument", text("/new release prep"), true},
+		{"ordinary prompt", text("please reset the branch"), false},
+		{"other command", text("/compress"), false},
+		{"command prefix only", text("/resetting"), false},
+		{"path", text("/reset/now"), false},
+		{"empty", nil, false},
+		{"with an image", []acpsdk.ContentBlock{acpsdk.TextBlock("/reset"), acpsdk.ImageBlock("aGk=", "image/png")}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resetsConversation(tc.prompt); got != tc.want {
+				t.Fatalf("resetsConversation(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 	tests := []struct {
 		mode ports.PermissionMode

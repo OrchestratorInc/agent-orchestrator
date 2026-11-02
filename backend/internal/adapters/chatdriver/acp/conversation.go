@@ -165,6 +165,14 @@ type conversation struct {
 	// so a rejected or discarded turn leaves it armed for the next one.
 	preamble      []acpsdk.ContentBlock
 	preambleSpent bool
+	// standingPreamble is the launch's preamble before setSessionPreamble drops
+	// it for a conversation with prior turns. A completed reset turn re-arms it:
+	// the provider has just discarded whichever turn carried it.
+	standingPreamble []acpsdk.ContentBlock
+	// resetsConversation: see Config.ResetsConversation.
+	resetsConversation func([]acpsdk.ContentBlock) bool
+	// resetTurn is the provider turn id of the reset prompt in flight, if any.
+	resetTurn string
 
 	contextTokens     int64
 	contextWindow     int64
@@ -373,10 +381,12 @@ func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
 	// mid-conversation would read as a new user message. AO's durable history
 	// covers a live reconnect, which replays nothing; session/load replay covers
 	// turns made in the terminal.
+	standing := blocks
 	if c.hasPriorTurns() {
 		blocks = nil
 	}
 	c.mu.Lock()
+	c.standingPreamble = standing
 	c.preamble = blocks
 	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
@@ -716,8 +726,12 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	// guaranteed to reach the provider: settings validation, a busy conversation
 	// and a discarded prepared turn all fail in SendTurn, and spending the
 	// preamble on any of them would silently drop AO's instructions from the
-	// session's first real turn.
-	if !c.preambleSpent && len(c.preamble) > 0 {
+	// session's first real turn. A reset prompt never carries it: the agent
+	// recognizes the command only when the prompt is the command alone, and the
+	// preamble is re-armed for the prompt after it (see finishPrompt).
+	if c.resetsConversation != nil && c.resetsConversation(turn.prompt) {
+		c.resetTurn = turn.id
+	} else if !c.preambleSpent && len(c.preamble) > 0 {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
 	}
@@ -859,6 +873,17 @@ func (c *conversation) finishPrompt(
 		// reauthentication demand exists.
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
 	}
+	c.mu.Lock()
+	if c.resetTurn == turnID {
+		c.resetTurn = ""
+		// Only a completed reset cleared the provider's history. A failed or
+		// interrupted one left the turn that carried the preamble in place.
+		if turnErr == nil && state == domain.TurnStateCompleted && len(c.standingPreamble) > 0 {
+			c.preamble = c.standingPreamble
+			c.preambleSpent = false
+		}
+	}
+	c.mu.Unlock()
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
 			c.settleCompaction(turnID)

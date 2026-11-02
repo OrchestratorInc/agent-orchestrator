@@ -1920,6 +1920,81 @@ func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
 	}
 }
 
+// An agent command that clears the conversation in place (Hermes' /reset)
+// keeps the session id, so no relaunch re-delivers the standing context. The
+// reset prompt must go out as the bare command, which is the only form the
+// agent recognizes, and the prompt after a completed reset must carry the
+// standing context again. A reset that failed cleared nothing, so it re-arms
+// nothing.
+func TestACPDriverRearmsSessionPreambleAfterConversationReset(t *testing.T) {
+	start := func(t *testing.T, agent *fakeAgent) ports.ChatConversation {
+		t.Helper()
+		config := preambleConfig()
+		config.ResetsConversation = func(prompt []acpsdk.ContentBlock) bool {
+			return len(prompt) == 1 && prompt[0].Text != nil && prompt[0].Text.Text == "/reset"
+		}
+		driver := New(config, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		t.Cleanup(func() { conv.Close() })
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		return conv
+	}
+	assertBareReset := func(t *testing.T, prompt []acpsdk.ContentBlock) {
+		t.Helper()
+		if len(prompt) != 1 || prompt[0].Text == nil || prompt[0].Text.Text != "/reset" {
+			t.Fatalf("reset prompt = %#v; want the bare /reset command", prompt)
+		}
+	}
+
+	t.Run("after the first turn", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv := start(t, agent)
+		if got := preambleText(runOneTurn(t, agent, conv, "first")); got != standingInstructions {
+			t.Fatalf("first prompt standing context = %q", got)
+		}
+		assertBareReset(t, runOneTurn(t, agent, conv, "/reset"))
+		if got := preambleText(runOneTurn(t, agent, conv, "after reset")); got != standingInstructions {
+			t.Fatalf("prompt after reset standing context = %q, want %q", got, standingInstructions)
+		}
+		if got := preambleText(runOneTurn(t, agent, conv, "later")); got != "" {
+			t.Fatalf("second prompt after reset repeated standing context %q", got)
+		}
+	})
+
+	t.Run("as the first prompt", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv := start(t, agent)
+		assertBareReset(t, runOneTurn(t, agent, conv, "/reset"))
+		if got := preambleText(runOneTurn(t, agent, conv, "first real turn")); got != standingInstructions {
+			t.Fatalf("first real prompt standing context = %q; a reset must not spend it", got)
+		}
+	})
+
+	t.Run("failed reset", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv := start(t, agent)
+		if got := preambleText(runOneTurn(t, agent, conv, "first")); got != standingInstructions {
+			t.Fatalf("first prompt standing context = %q", got)
+		}
+		agent.mu.Lock()
+		agent.promptErr = errors.New("reset refused")
+		agent.mu.Unlock()
+		assertBareReset(t, runOneTurn(t, agent, conv, "/reset"))
+		agent.mu.Lock()
+		agent.promptErr = nil
+		agent.mu.Unlock()
+		if got := preambleText(runOneTurn(t, agent, conv, "after failed reset")); got != "" {
+			t.Fatalf("prompt after a failed reset carried standing context %q; the history it rides in was never cleared", got)
+		}
+	})
+}
+
 // A first turn that never reaches the provider must not spend the standing
 // context. Both paths here fail in SendTurn, after the prompt is built but
 // before any session/prompt is sent: spending the preamble in SendTurn would
