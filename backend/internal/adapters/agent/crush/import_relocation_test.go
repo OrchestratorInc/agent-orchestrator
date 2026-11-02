@@ -3,6 +3,7 @@ package crush
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,5 +62,37 @@ func TestCrushImportRelocationKeepsSourceAndRefusesExistingCopy(t *testing.T) {
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("source = %d, %v", count, err)
+	}
+}
+
+func TestCrushImportConfigPinFailureCanRetry(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "crush.db")
+	db, err := sql.Open("sqlite", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT); INSERT INTO sessions VALUES ('12345678-1234-1234-1234-123456789012', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	config := filepath.Join(workspace, ".crush.json")
+	if err := os.WriteFile(config, []byte(`{"options":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := ports.ImportedSessionRelocation{NativeSessionID: "12345678-1234-1234-1234-123456789012", TranscriptPath: filepath.Join(source, "12345678-1234-1234-1234-123456789012"), LaunchCWD: workspace}
+	p := New()
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("accepted invalid workspace config")
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".crush", "crush.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed config pin left destination database: %v", err)
+	}
+	if err := os.WriteFile(config, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil || ref.NativeSessionID != r.NativeSessionID || ref.TranscriptPath != filepath.Join(workspace, ".crush", "crush.db", r.NativeSessionID) {
+		t.Fatalf("prepared retry = %#v, %v", ref, err)
 	}
 }

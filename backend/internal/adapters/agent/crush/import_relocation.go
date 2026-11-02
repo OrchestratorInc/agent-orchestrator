@@ -69,6 +69,11 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
+	// A failed config pin must not strand a final DB that the next attempt
+	// correctly refuses. The S2 preparer checkpoints only after both succeed.
+	if err := pinCrushImportStore(r.LaunchCWD, dir); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(target); err == nil {
 		return errors.New("crush import destination database appeared during import")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -77,7 +82,7 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	if err := os.Rename(tmp, target); err != nil {
 		return err
 	}
-	return pinCrushImportStore(r.LaunchCWD, dir)
+	return nil
 }
 
 // Local config wins over a user-level data_directory override. Preserve the
