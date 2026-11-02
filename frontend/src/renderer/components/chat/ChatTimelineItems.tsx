@@ -1774,7 +1774,6 @@ function CommandOutput({
 	const output = useMemo(() => stripAnsi(raw), [raw]);
 	// A scroll container still lays out all its text. Bound both a single long
 	// line and newline-heavy logs before Chromium measures the expanding row.
-	// The complete terminal-text projection remains available as a download.
 	const preview = useMemo(() => {
 		let tail = output.slice(-64 * 1024);
 		const first = tail.charCodeAt(0);
@@ -1807,23 +1806,9 @@ function CommandOutput({
 				{preview}
 			</pre>
 			{preview.length < output.length ? (
-				<div className="flex flex-wrap items-center gap-x-2 px-2.5 py-1 text-xs text-muted-foreground">
-					<span>Showing the end of this large output.</span>
-					<button
-						type="button"
-						className="text-accent underline underline-offset-2"
-						onClick={() => {
-							const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }));
-							const link = document.createElement("a");
-							link.href = url;
-							link.download = "command-output.txt";
-							link.click();
-							setTimeout(() => URL.revokeObjectURL(url), 0);
-						}}
-					>
-						Download full output
-					</button>
-				</div>
+				<p className="px-2.5 py-1 text-xs text-muted-foreground">
+					Showing the end of this large output.
+				</p>
 			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
