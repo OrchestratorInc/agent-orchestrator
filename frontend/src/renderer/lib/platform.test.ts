@@ -3,9 +3,7 @@ import {
 	isLinuxPlatform,
 	isMacPlatform,
 	isWindowsPlatform,
-	usesFramedAppTopbar,
 	hidesShellTopbar,
-	usesBoardActionsInPanel,
 } from "./platform";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
@@ -47,9 +45,7 @@ describe("renderer platform behavior", () => {
 
 		expect(isMacPlatform()).toBe(true);
 		expect(isWindowsPlatform()).toBe(false);
-		expect(usesFramedAppTopbar()).toBe(true);
 		expect(hidesShellTopbar()).toBe(true);
-		expect(usesBoardActionsInPanel()).toBe(true);
 	});
 
 	it("keeps Windows board controls in the inset panel topbar", () => {
@@ -57,9 +53,7 @@ describe("renderer platform behavior", () => {
 
 		expect(isWindowsPlatform()).toBe(true);
 		expect(isMacPlatform()).toBe(false);
-		expect(usesFramedAppTopbar()).toBe(true);
 		expect(hidesShellTopbar()).toBe(false);
-		expect(usesBoardActionsInPanel()).toBe(false);
 	});
 
 	it("shows the shell topbar on Linux (same as Windows, not macOS)", () => {
@@ -67,8 +61,6 @@ describe("renderer platform behavior", () => {
 
 		expect(isLinuxPlatform()).toBe(true);
 		expect(isWindowsPlatform()).toBe(false);
-		expect(usesFramedAppTopbar()).toBe(true);
 		expect(hidesShellTopbar()).toBe(false);
-		expect(usesBoardActionsInPanel()).toBe(false);
 	});
 });

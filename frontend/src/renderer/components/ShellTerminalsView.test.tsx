@@ -5,6 +5,8 @@ import { useUiStore } from "../stores/ui-store";
 import { ShellTerminalsView } from "./ShellTerminalsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }

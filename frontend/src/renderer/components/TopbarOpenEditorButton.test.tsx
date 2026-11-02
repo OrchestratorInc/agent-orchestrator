@@ -202,7 +202,7 @@ describe("TopbarOpenEditorButton", () => {
 		// fire pointer events, so the hoverable element has to be the wrapper) —
 		// the actual topbar group is one level up.
 		const group = button.parentElement?.parentElement;
-		expect(group).toHaveClass("gap-0", "rounded-md", "hover:bg-interactive-hover", "data-[state=open]:bg-interactive-hover");
+		expect(group).toHaveClass("gap-0", "rounded-md", "bg-transparent", "group/nav-row");
 		expect(group).toHaveAttribute("data-state", "closed");
 		await userEvent.click(button);
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
@@ -216,7 +216,7 @@ describe("TopbarOpenEditorButton", () => {
 		await userEvent.click(options);
 
 		expect(group).toHaveAttribute("data-state", "open");
-		expect(group).toHaveClass("data-[state=open]:bg-interactive-hover");
+		expect(group?.querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 	});
 
 	// No supported editor means the control is simply blocked: no long guidance
