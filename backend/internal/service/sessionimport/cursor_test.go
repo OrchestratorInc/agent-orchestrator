@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -93,5 +94,73 @@ func TestCursorImportUsesTerminalDespiteChatCapability(t *testing.T) {
 	files, err := discoverCursor(context.Background(), root)
 	if err != nil || len(files) != 2 {
 		t.Fatalf("native buckets = %#v, %v", files, err)
+	}
+}
+
+func TestCursorScanInvalidatesWALAndSidecarChanges(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	path := cursorFixture(t, root, cwd)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-wal", Path: cwd}}}
+	svc := New(st, "", func(domain.AgentHarness) bool { return true })
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessCursor: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("initial scan = %#v, %v", preview, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded string
+	if err := db.QueryRow("SELECT value FROM meta WHERE key='0'").Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	body, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["name"] = "changed only in WAL"
+	body, err = json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE meta SET value=? WHERE key='0'", hex.EncodeToString(body)); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.Stat(path); err != nil || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("test changed the main database stat: %v", err)
+	}
+	preview, err = svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].Title != "changed only in WAL" {
+		t.Fatalf("WAL scan = %#v, %v", preview, err)
+	}
+	otherCWD := t.TempDir()
+	sidecar := filepath.Join(filepath.Dir(path), "meta.json")
+	body, err = json.Marshal(map[string]any{"cwd": otherCWD, "updatedAtMs": 1793600000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecar, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Unix(1793600010, 0)
+	if err := os.Chtimes(sidecar, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	preview, err = svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 0 {
+		t.Fatalf("sidecar moved outside registered project: %#v, %v", preview, err)
 	}
 }

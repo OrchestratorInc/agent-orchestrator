@@ -3,9 +3,11 @@ package sessionimport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -56,18 +58,50 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil || !filepath.IsLocal(rel) || filepath.Dir(filepath.Dir(filepath.Dir(rel))) != "." {
 			return nil //nolint:nilerr // Only chats/<cwd hash>/<id>/store.db is native state.
 		}
-		archive, err := cursorstore.Read(ctx, root, path)
+		fingerprint, err := cursorFingerprint(root, path)
 		if err != nil {
-			return nil //nolint:nilerr // A corrupt conversation must not hide its neighbors.
+			return nil //nolint:nilerr // Missing or unsafe archive inputs are ineligible.
 		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil //nolint:nilerr // A file can disappear during discovery.
 		}
+		archive, err := cursorstore.Read(ctx, root, path)
+		if err != nil {
+			return nil //nolint:nilerr // A corrupt conversation must not hide its neighbors.
+		}
 		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
 		// a newer AO copy could hide the eligible original with the same id.
-		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: archive.ID, modTime: info.ModTime(), size: info.Size()})
+		files = append(files, sourceFiles{harness: domain.HarnessCursor, root: root, paths: []string{path}, key: archive.ID, modTime: info.ModTime(), size: info.Size(), fingerprint: fingerprint})
 		return nil
 	})
 	return files, err
+}
+
+func cursorFingerprint(root, path string) (string, error) {
+	provider, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = provider.Close() }()
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", errors.New("cursor database is outside provider home")
+	}
+	var fingerprint strings.Builder
+	for _, input := range []string{rel, rel + "-wal", filepath.Join(filepath.Dir(rel), "meta.json")} {
+		info, err := provider.Lstat(input)
+		if errors.Is(err, os.ErrNotExist) && input == rel+"-wal" {
+			fingerprint.WriteString("wal:absent;")
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if !info.Mode().IsRegular() {
+			return "", errors.New("cursor archive input is not a regular file")
+		}
+		_, _ = fmt.Fprintf(&fingerprint, "%s:%d:%d;", input, info.Size(), info.ModTime().UnixNano())
+	}
+	return fingerprint.String(), nil
 }

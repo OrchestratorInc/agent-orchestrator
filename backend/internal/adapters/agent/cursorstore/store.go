@@ -267,6 +267,10 @@ func Find(ctx context.Context, root, id string) (string, bool, error) {
 
 // Copy publishes a private native snapshot once, leaving the source unchanged.
 func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
+	return copyWithPublisher(ctx, root, source, launchCWD, publishDirectory)
+}
+
+func copyWithPublisher(ctx context.Context, root, source, launchCWD string, publish func(string, string) error) (string, error) {
 	db, tx, actual, err := snapshot(ctx, root, source)
 	if err != nil {
 		return "", err
@@ -348,19 +352,10 @@ func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
 	if err := provider.MkdirAll(filepath.Dir(filepath.Dir(relTarget)), 0o700); err != nil {
 		return "", err
 	}
-	// Reserve the session directory exclusively; never replace native state.
-	if err := provider.Mkdir(filepath.Dir(relTarget), 0o700); err != nil {
-		return "", fmt.Errorf("reserve cursor target: %w", err)
-	}
-	relStage, err := filepath.Rel(root, stage)
-	if err != nil {
-		return "", err
-	}
-	if err := provider.Link(filepath.Join(relStage, "meta.json"), filepath.Join(filepath.Dir(relTarget), "meta.json")); err != nil {
-		return "", err
-	}
-	if err := provider.Link(filepath.Join(relStage, "store.db"), relTarget); err != nil {
-		return "", err
+	// The complete directory appears in one no-replace operation. A failure or
+	// interruption before publication leaves no reservation blocking a retry.
+	if err := publish(stage, filepath.Dir(target)); err != nil {
+		return "", fmt.Errorf("publish cursor target: %w", err)
 	}
 	return target, nil
 }

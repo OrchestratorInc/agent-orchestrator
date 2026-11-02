@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,6 +147,33 @@ func TestCopyUsesResolvedLaunchDirectory(t *testing.T) {
 	want, pathErr := SessionPath(root, launch, testID)
 	if err != nil || pathErr != nil || target != want {
 		t.Fatalf("target = %q, %v; want %q, %v", target, err, want, pathErr)
+	}
+}
+
+func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	source := fixture(t, root, cwd)
+	failure := errors.New("synthetic publication failure")
+	_, err := copyWithPublisher(context.Background(), root, source, launch, func(stage, target string) error {
+		// At this boundary the complete native directory is ready, but no
+		// target exists yet. An interruption cannot leave a partial target.
+		if _, err := Read(context.Background(), root, filepath.Join(stage, "store.db")); err == nil {
+			t.Fatal("staging directory must not masquerade as a native UUID")
+		}
+		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("target already reserved: %v", err)
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("publication error = %v", err)
+	}
+	target, err := Copy(context.Background(), root, source, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archive, err := Read(context.Background(), root, target); err != nil || archive.ID != testID {
+		t.Fatalf("retry = %#v, %v", archive, err)
 	}
 }
 
