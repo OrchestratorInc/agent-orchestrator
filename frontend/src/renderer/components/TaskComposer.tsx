@@ -76,6 +76,7 @@ type CreateTaskInput = {
 	clientRequestId?: string;
 	projectId: string;
 	brief: string;
+	branch?: string;
 	agent?: DelegateAgent;
 	model?: string;
 	effort?: string;
@@ -179,6 +180,16 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	const [approvalMode, setApprovalMode] = useState<ApprovalMode>();
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [error, setError] = useState<string | undefined>();
+	const [status, setStatus] = useState<string | undefined>();
+	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
+	const [branchOverride, setBranchOverride] = useState("");
+	const [branchDraft, setBranchDraft] = useState("");
+	useEffect(() => {
+		setBranchOverride("");
+		setBranchDraft("");
+		setErrorAction(undefined);
+		setStatus(undefined);
+	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
 	// The preparation a send in flight will claim. Leaving the page or project does not
@@ -304,6 +315,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 						clientRequestId: input.clientRequestId,
 						projectId: input.projectId,
 						brief: input.brief,
+						...(input.branch ? { branch: input.branch } : {}),
 						agent: input.agent,
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
@@ -455,19 +467,13 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	// (the single source), with readiness derived from the user's provider connections.
 	const cloudConnectionsQuery = useProviderConnections();
 	const cloudAgents = useMemo(() => cloudAgentInfos(cloudConnectionsQuery.data), [cloudConnectionsQuery.data]);
-	const standaloneDefaultAgent = useMemo(() => {
-		if (!isStandalone || !agentCatalog) return "";
-		return (
-			buildRankedAgentOptions({
-				agents: agentCatalog.agents,
-				priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
-				fallbackAgents: [],
-			}).find(isReadyAgent)?.id ?? ""
-		);
-	}, [agentCatalog, isStandalone]);
-	const configuredDefaultAgent = isStandalone
-		? standaloneDefaultAgent
-		: configuredProjectAgent;
+	const readyFallbackAgent = agentCatalog && (isStandalone || projectQuery.data) ? buildRankedAgentOptions({
+		agents: agentCatalog.agents,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: [],
+	}).find(isReadyAgent)?.id ?? "" : "";
+	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
+		: configuredProjectAgent || (isCloudProject ? "" : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
@@ -841,6 +847,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
 		(!isStandalone || selectedAgent !== "") &&
+		(isCloudProject || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
@@ -849,7 +856,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	// a cloud project must not linger as its error.
 	// Scratchpad has no project agent to fall back to: with no ready agent, or no agent
 	// list at all, a send could never start, so it says why at once.
-	const standaloneAgentError = isStandalone && !isCloudProject && selectedAgent === ""
+	const standaloneAgentError = !isCloudProject && selectedAgent === ""
 		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
 		: undefined;
 	// Scratchpad never reads a project, but its disabled query still sees an entry
@@ -857,7 +864,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	const projectError = isCloudProject || isStandalone ? undefined : projectQuery.error;
 	const remoteLoadError = !hostId ? (projectError instanceof Error ? projectError.message : standaloneAgentError) : !hostConnected ? t("remote.hostOffline") :
 		[projectError, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
-			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
+			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : standaloneAgentError);
 	const refreshSelectedModels = useCallback(async () => {
 		if (isCloudProject) {
 			// A cloud task's catalog is the control plane's: ask it again, and this
@@ -912,6 +919,8 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 
 		setIsSubmitting(true);
 		setError(undefined);
+		setStatus(undefined);
+		setErrorAction(undefined);
 		setFallbackAction(undefined);
 		const heldPreparation = taskPreparationRef.current;
 		launchingPreparationRef.current = heldPreparation;
@@ -934,6 +943,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 			const request: CreateTaskInput = {
 				projectId,
 				brief,
+				...(branchOverride && !isCloudProject && !isStandalone ? { branch: branchOverride } : {}),
 				...(replay ? {
 					agent: replay.agent as CreateTaskInput["agent"],
 					model: replay.model,
@@ -1017,9 +1027,40 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 			);
 			// A page that has since left this preparation no longer offers it for a retry.
 			if (submittedPreparation && taskPreparationRef.current !== submittedPreparation) cancelTaskPreparation(submittedPreparation, hostId);
-			const message = err instanceof Error ? err.message : t("newTask.unableToStart");
+			let message = err instanceof Error ? err.message : t("newTask.unableToStart");
+			if (err instanceof TaskCreateError) {
+				if (err.code === "UNSUPPORTED_MODEL") {
+					if (!modelTouched && catalogDefaultOption) {
+						if (catalogUsesModes) setMode(catalogDefaultOption);
+						else setModel(catalogDefaultOption);
+						setModelTouched(true);
+						message = t("newTask.savedModelUnsupported", { defaultValue: "The saved model is unavailable. The agent default is selected. Review it and start again." });
+					} else message = t("newTask.selectedModelUnsupported", { defaultValue: "The selected model is unavailable. Choose another model before starting." });
+				} else if (err.code === "UNSUPPORTED_EFFORT") {
+					if (!effortTouched) {
+						setEffort(effortModel?.defaultEffort ?? "");
+						setEffortTouched(true);
+						message = t("newTask.savedEffortUnsupported", { defaultValue: "The saved effort is unavailable. The agent default is selected. Review it and start again." });
+					} else message = t("newTask.selectedEffortUnsupported", { defaultValue: "The selected effort is unavailable. Choose another level before starting." });
+				} else if (err.code === "AGENT_BINARY_NOT_FOUND") {
+					setErrorAction("install-agent");
+					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
+				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
+					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
+				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
+					setErrorAction("choose-branch");
+					message = err.message;
+				} else if (err.code === "BRANCH_CHECKED_OUT_ELSEWHERE") {
+					if (!isCloudProject && !isStandalone) {
+						setErrorAction("choose-branch");
+						message = t("newTask.branchInUse", { defaultValue: "That branch is open in another worktree. Choose a new branch to start this task." });
+					} else message = t("newTask.branchInUseElsewhere", { defaultValue: "That branch is open elsewhere. Choose another project or try again later." });
+				}
+			}
 			setError(message);
-			throw err instanceof Error ? err : new Error(message);
+			throw err instanceof TaskCreateError
+				? new TaskCreateError(message, err.code, err.details)
+				: err instanceof Error ? err : new Error(message);
 		} finally {
 			launchingPreparationRef.current = "";
 			setIsSubmitting(false);
@@ -1092,6 +1133,10 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
+		setError(undefined);
+		setStatus(undefined);
+		setErrorAction(undefined);
+		setBranchOverride("");
 		if (selectedAgent) {
 			agentDrafts[selectedAgent] = {
 				model: selectedModel ? requestedModel ?? "" : "",
@@ -1207,6 +1252,25 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
 		error,
+		status,
+		errorAction: errorAction === "install-agent" ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
+		} : errorAction === "choose-branch" ? {
+			label: t("newTask.chooseNewBranch", { defaultValue: "Choose new branch" }),
+			input: {
+				label: t("newTask.newBranchPrompt", { defaultValue: "New branch name" }),
+				value: branchDraft,
+				onChange: setBranchDraft,
+			},
+			onClick: () => {
+				if (!branchDraft.trim()) return;
+				setBranchOverride(branchDraft.trim());
+				setErrorAction(undefined);
+				setError(undefined);
+				setStatus(t("newTask.newBranchReady", { branch: branchDraft.trim(), defaultValue: "Branch {{branch}} selected for your next task." }));
+			},
+		} : undefined,
 		remoteLoadError,
 		modelWarning,
 		fallbackAction,
@@ -1389,6 +1453,8 @@ export function TaskComposer({
 			submission={{
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
+				status: task.status,
+				errorAction: task.errorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),

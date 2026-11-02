@@ -2290,6 +2290,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
 		Brief:             domain.SanitizeControlChars(in.Brief),
+		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),

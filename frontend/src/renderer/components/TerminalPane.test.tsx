@@ -634,7 +634,7 @@ describe("TerminalPane empty states", () => {
 	it("shows a no-selection message when no session is selected", () => {
 		const view = renderPane();
 		try {
-			expect(screen.getByText("Agent Orchestrator")).toBeInTheDocument();
+			expect(screen.getByText("Orchestrator")).toBeInTheDocument();
 			expect(screen.getByText("No session selected. Pick a worker to attach its terminal.")).toBeInTheDocument();
 		} finally {
 			view.restore();

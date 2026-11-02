@@ -5,6 +5,7 @@ import type { ConversationMessage, ConversationSnapshot } from "../types/convers
 
 const inactiveQueryKey = ["conversation-prompt-suggestion", "inactive"] as const;
 const busyError = new Error("Prompt suggestion capacity is busy");
+const staleError = new Error("Prompt suggestion controller state changed");
 // Navigation and query GC must not undo Escape. Bound this to recent contexts and
 // let the QueryClient's lifetime own it, rather than retaining every past turn.
 const dismissedContextsByClient = new WeakMap<QueryClient, Set<string>>();
@@ -26,17 +27,20 @@ export function useConversationPromptSuggestion(
 	hostId?: string,
 ): { id: string; text: string; onDismiss: () => void } | undefined {
 	return usePromptSuggestion(snapshot, enabled, hostId ?? "local", async ({ sessionId, turnId, signal }) => {
-		const { data, error } = await clientForSessionHost(hostId).POST(
+		const { data, error, response } = await clientForSessionHost(hostId).POST(
 			"/api/v1/sessions/{sessionId}/conversation/prompt-suggestion",
 			{ params: { path: { sessionId } }, body: { turnId }, signal },
 		);
 		if (error?.code === "CHAT_PROMPT_SUGGESTION_BUSY") throw promptSuggestionBusy;
+		if (response?.status === 409) throw promptSuggestionStale;
 		return error || data?.turnId !== turnId ? "" : data.prompt;
 	});
 }
 
 /** Thrown by a suggestion fetch when the suggester is busy, so it is asked again shortly. */
 export const promptSuggestionBusy = busyError;
+/** Thrown by a suggestion fetch when the controller state changed under it, so the answer is not cached. */
+export const promptSuggestionStale = staleError;
 
 /**
  * The next-message suggestion after a settled turn, fetched by `fetchPrompt`
@@ -93,13 +97,13 @@ export function usePromptSuggestion(
 		retryDelay: 1000,
 		queryFn: async ({ signal }) => {
 			const current = snapshotRef.current;
-			if (!turnId || !current) return null;
+			if (!turnId || !current || signal.aborted) return null;
 			try {
 				const prompt = (await fetchPrompt({ sessionId, turnId, snapshot: current, signal })).trim();
 				if (!prompt) return null;
 				return { id, text: prompt };
 			} catch (error) {
-				if (signal.aborted || error === busyError) throw error;
+				if (signal.aborted || error === busyError || error === staleError) throw error;
 				// Successful omissions are cached like hints; capacity errors stay transient.
 				return null;
 			}

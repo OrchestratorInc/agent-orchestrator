@@ -1994,14 +1994,15 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			baseBranch = ""
 		}
 		workspaceCfg := ports.WorkspaceConfig{
-			ProjectID:     cfg.ProjectID,
-			SessionID:     id,
-			Kind:          cfg.Kind,
-			SessionPrefix: sessionPrefix(project),
-			Branch:        branch,
-			FreshBranch:   cfg.TaskPreparation != "",
-			BaseBranch:    baseBranch,
-			BaseRef:       baseRefs[filepath.Clean(project.Path)],
+			ProjectID:        cfg.ProjectID,
+			SessionID:        id,
+			Kind:             cfg.Kind,
+			SessionPrefix:    sessionPrefix(project),
+			Branch:           branch,
+			FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+			RequireNewBranch: cfg.RequireNewBranch,
+			BaseBranch:       baseBranch,
+			BaseRef:          baseRefs[filepath.Clean(project.Path)],
 		}
 		ws, err := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
@@ -2046,17 +2047,18 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		})
 	}
 	info, err := workspaceProject.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
-		ProjectID:     cfg.ProjectID,
-		SessionID:     id,
-		Kind:          cfg.Kind,
-		SessionPrefix: sessionPrefix(project),
-		Branch:        branch,
-		FreshBranch:   cfg.TaskPreparation != "",
-		RootRepoPath:  project.Path,
-		BaseBranch:    project.Config.WorktreeBaseBranch(),
-		BaseRef:       baseRefs[filepath.Clean(project.Path)],
-		Repos:         childRepos,
-		Assets:        assets,
+		ProjectID:        cfg.ProjectID,
+		SessionID:        id,
+		Kind:             cfg.Kind,
+		SessionPrefix:    sessionPrefix(project),
+		Branch:           branch,
+		FreshBranch:      cfg.TaskPreparation != "" || cfg.RequireNewBranch,
+		RequireNewBranch: cfg.RequireNewBranch,
+		RootRepoPath:     project.Path,
+		BaseBranch:       project.Config.WorktreeBaseBranch(),
+		BaseRef:          baseRefs[filepath.Clean(project.Path)],
+		Repos:            childRepos,
+		Assets:           assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
