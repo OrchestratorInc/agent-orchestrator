@@ -127,11 +127,9 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 			}
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
-		if len(items)%100 == 0 {
-			before := len(items)
-			items = trimVisible(items)
-			t.shortened = t.shortened || len(items) < before
-		}
+		before := len(items)
+		items = trimVisible(items)
+		t.shortened = t.shortened || len(items) < before
 	}
 	if err := rows.Err(); err != nil {
 		return t, err
