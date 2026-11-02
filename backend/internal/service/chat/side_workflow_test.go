@@ -354,8 +354,12 @@ func TestSideOrchestratorReconstructedContextKeepsNewestHistoryPastLimit(t *test
 			if err != nil || !found || record.Kind != domain.KindOrchestrator {
 				t.Fatalf("expected orchestrator fixture: %+v, found=%v, err=%v", record, found, err)
 			}
-			for i, reply := range []string{"oldest " + strings.Repeat("o", 300*1024), "newest " + strings.Repeat("n", 300*1024)} {
-				turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: fmt.Sprint("ask ", i), ClientMessageID: fmt.Sprint("ask-", i), Origin: domain.MessageOriginHuman})
+			for i, reply := range []string{"oldest answer " + strings.Repeat("o", 100*1024), "newest " + strings.Repeat("n", 300*1024)} {
+				question := fmt.Sprint("ask ", i)
+				if i == 0 {
+					question = "oldest question " + strings.Repeat("q", 300*1024)
+				}
+				turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: question, ClientMessageID: fmt.Sprint("ask-", i), Origin: domain.MessageOriginHuman})
 				if err != nil {
 					t.Fatal(err)
 				}

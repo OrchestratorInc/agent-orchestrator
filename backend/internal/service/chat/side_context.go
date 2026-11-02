@@ -30,11 +30,13 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if anchor == "" {
 		return "", nil
 	}
-	allowed := map[string]bool{}
+	allowed := map[string]int{}
+	var turnSizes []int
 	found := false
 	for _, turn := range rows.Turns {
 		if turn.RolledBackAt == nil && turn.State == domain.TurnStateCompleted {
-			allowed[turn.ID] = true
+			allowed[turn.ID] = len(turnSizes)
+			turnSizes = append(turnSizes, 0)
 		}
 		if turn.ID == anchor {
 			found = true
@@ -44,28 +46,40 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if !found {
 		return "", ErrSideAnchorUnavailable
 	}
-	var entries []string
+	type historyEntry struct {
+		turn int
+		text string
+	}
+	var entries []historyEntry
 	for _, message := range rows.Messages {
-		if !allowed[message.TurnID] || message.Streaming || strings.TrimSpace(message.Text) == "" {
+		turn, ok := allowed[message.TurnID]
+		if !ok || message.Streaming || strings.TrimSpace(message.Text) == "" {
 			continue
 		}
 		if message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant {
 			continue
 		}
-		entries = append(entries, fmt.Sprintf("%s:\n---\n%s\n---\n", message.Role, message.Text))
+		text := fmt.Sprintf("%s:\n---\n%s\n---\n", message.Role, message.Text)
+		entries = append(entries, historyEntry{turn: turn, text: text})
+		turnSizes[turn] += len(text)
 	}
 	// Long-lived chats, such as a project orchestrator, outgrow the budget. Keep
-	// the newest messages that fit instead of refusing to open the side chat.
-	start, size := len(entries), 0
-	for start > 0 && size+len(entries[start-1]) <= sideSeedHistoryLimit {
+	// the newest complete turns that fit, without separating questions and replies.
+	start, size := len(turnSizes), 0
+	for start > 0 && size+turnSizes[start-1] <= sideSeedHistoryLimit {
 		start--
-		size += len(entries[start])
+		size += turnSizes[start]
 	}
-	history := strings.Join(entries[start:], "")
+	var history strings.Builder
 	if start > 0 {
-		history = sideSeedHistoryOmitted + history
+		history.WriteString(sideSeedHistoryOmitted)
 	}
-	return history, nil
+	for _, entry := range entries {
+		if entry.turn >= start {
+			history.WriteString(entry.text)
+		}
+	}
+	return history.String(), nil
 }
 
 const (
