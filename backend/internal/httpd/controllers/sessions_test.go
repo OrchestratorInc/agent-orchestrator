@@ -3016,6 +3016,82 @@ func TestSessionsAPI_SetPreviewAbsoluteWorkspaceFileUsesConfinedOrigin(t *testin
 	}
 }
 
+func TestSessionsAPI_SetPreviewAbsoluteArtifactFileUsesArtifactOrigin(t *testing.T) {
+	svc := newFakeSessionService()
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	report := filepath.Join(artifacts, "q3", "report.html")
+	notes := filepath.Join(artifacts, "notes.md")
+	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte(`<html>artifact report</html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notes, []byte("# Review notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+
+	setPreview := func(target string) string {
+		t.Helper()
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(target)+`}`)
+		if status != http.StatusOK {
+			t.Fatalf("set preview %q = %d, want 200; body=%s", target, status, body)
+		}
+		var resp struct {
+			Session struct {
+				PreviewURL string `json:"previewUrl"`
+			} `json:"session"`
+		}
+		mustJSON(t, body, &resp)
+		return resp.Session.PreviewURL
+	}
+
+	reportURLPath := filepath.ToSlash(report)
+	if filepath.VolumeName(report) != "" {
+		reportURLPath = "/" + reportURLPath
+	}
+	for _, target := range []string{report, (&url.URL{Scheme: "file", Path: reportURLPath}).String()} {
+		previewURL := setPreview(target)
+		parsed, err := url.Parse(previewURL)
+		if err != nil {
+			t.Fatalf("parse preview url: %v", err)
+		}
+		if !strings.HasPrefix(parsed.Hostname(), "ao-preview-artifact.") || parsed.Path != "/q3/report.html" {
+			t.Fatalf("previewUrl for %q = %q, want artifact origin at /q3/report.html", target, previewURL)
+		}
+		body, status, _ := doPreviewOriginRequest(t, srv, previewURL, parsed.Path)
+		if status != http.StatusOK || string(body) != `<html>artifact report</html>` {
+			t.Fatalf("artifact preview = %d, %q; want 200 and the artifact file", status, body)
+		}
+	}
+
+	notesURL := setPreview(notes)
+	body, status, _ := doPreviewOriginRequest(t, srv, notesURL, "/notes.md")
+	if status != http.StatusOK || !bytes.Contains(body, []byte("Review notes</h1>")) {
+		t.Fatalf("markdown artifact preview = %d, %q; want rendered Markdown", status, body)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(artifacts, "escape.html")
+	if err := os.Symlink(outside, escape); err != nil {
+		if runtime.GOOS == "windows" || errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatalf("create symlink escape: %v", err)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(escape)+`}`)
+	if status != http.StatusForbidden || !bytes.Contains(body, []byte(`"code":"PREVIEW_FILE_OUTSIDE_WORKSPACE"`)) {
+		t.Fatalf("set artifact symlink escape = %d, body=%s; want 403", status, body)
+	}
+}
+
 func TestSessionsAPI_SetPreviewRejectsAbsoluteFilesOutsideWorkspace(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()

@@ -48,7 +48,8 @@ func newPreviewCommand(ctx *commandContext) *cobra.Command {
 			"With no argument it opens the workspace's static entry point, falling\n" +
 			"back to this session's existing preview target when no entry point exists.\n" +
 			"A workspace-root-relative Markdown or HTML path opens through AO's isolated\n" +
-			"file preview. Use `ao preview start` for a configured dev server and\n" +
+			"file preview. An absolute path in this session's artifact directory opens\n" +
+			"the same way. Use `ao preview start` for a configured dev server and\n" +
 			"`ao preview clear` to empty the panel.",
 		Example: `  ao preview
   ao preview README.md
