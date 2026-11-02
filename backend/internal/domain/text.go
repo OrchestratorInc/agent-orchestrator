@@ -48,3 +48,23 @@ func NormalizeCardSummary(s string) string {
 	}
 	return s
 }
+
+// CardSummaryFromNote turns free text, such as a worker's final report note,
+// into a card summary. It cleans the text like NormalizeCardSummary, but a
+// note longer than MaxCardSummaryRunes is cut at a word boundary and marked
+// with an ellipsis instead of being refused.
+func CardSummaryFromNote(note string) string {
+	s := NormalizeCardSummary(note)
+	if s != "" {
+		return s
+	}
+	runes := []rune(strings.Join(strings.Fields(SanitizeControlChars(note)), " "))
+	if len(runes) <= MaxCardSummaryRunes {
+		return "" // nothing usable was left after cleaning
+	}
+	cut := string(runes[:MaxCardSummaryRunes-1])
+	if i := strings.LastIndex(cut, " "); i > 0 {
+		cut = cut[:i]
+	}
+	return NormalizeCardSummary(strings.TrimRight(cut, " ,;:-") + "…")
+}

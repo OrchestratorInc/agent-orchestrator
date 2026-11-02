@@ -33,22 +33,30 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
-// Service validates and creates durable worker reports.
-type Service struct {
-	store     Store
-	now       func() time.Time
-	newID     func() string
-	onCreated func(domain.ReportRecord)
-	artifacts ArtifactRecorder
+// CardSummaryFiller sets a session's kanban card summary only if the agent has
+// not set one.
+type CardSummaryFiller interface {
+	FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary string) (bool, error)
 }
 
-// Deps configures a Service. Artifacts is optional.
+// Service validates and creates durable worker reports.
+type Service struct {
+	store         Store
+	now           func() time.Time
+	newID         func() string
+	onCreated     func(domain.ReportRecord)
+	artifacts     ArtifactRecorder
+	cardSummaries CardSummaryFiller
+}
+
+// Deps configures a Service. Artifacts and CardSummaries are optional.
 type Deps struct {
-	Store     Store
-	Now       func() time.Time
-	NewID     func() string
-	OnCreated func(domain.ReportRecord)
-	Artifacts ArtifactRecorder
+	Store         Store
+	Now           func() time.Time
+	NewID         func() string
+	OnCreated     func(domain.ReportRecord)
+	Artifacts     ArtifactRecorder
+	CardSummaries CardSummaryFiller
 }
 
 // New constructs a report Service.
@@ -59,7 +67,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts, cardSummaries: d.CardSummaries}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -149,5 +157,23 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 			}
 		}
 	}
+	s.fillCardSummary(ctx, created)
 	return created, nil
+}
+
+// fillCardSummary gives a finished worker's card its done report as a summary
+// when the agent never set one with `ao summary`. Agents reliably file the
+// done report but often skip the summary. Best effort: it never fails the
+// report, and a summary the agent set is never replaced.
+func (s *Service) fillCardSummary(ctx context.Context, report domain.ReportRecord) {
+	if s.cardSummaries == nil || report.State != domain.ReportDone {
+		return
+	}
+	text := domain.CardSummaryFromNote(report.Note)
+	if text == "" {
+		text = domain.CardSummaryFromNote(report.Message)
+	}
+	if text != "" {
+		_, _ = s.cardSummaries.FillSessionCardSummary(ctx, report.SessionID, text)
+	}
 }

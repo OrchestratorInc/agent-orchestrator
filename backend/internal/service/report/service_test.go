@@ -134,3 +134,41 @@ func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
 		t.Fatalf("unknown session: err = %v, recorded %q", err, calls)
 	}
 }
+
+type cardSummaryFills map[domain.SessionID]string
+
+func (f cardSummaryFills) FillSessionCardSummary(_ context.Context, id domain.SessionID, summary string) (bool, error) {
+	if _, set := f[id]; set {
+		return false, nil
+	}
+	f[id] = summary
+	return true, nil
+}
+
+// A finished worker's card gets its done note when the agent never set a
+// summary; other reports, and a summary the agent set, are left alone.
+func TestCreateFillsTheCardSummaryFromTheDoneReport(t *testing.T) {
+	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-8", ProjectID: "ao", Kind: domain.KindWorker}}
+	fills := cardSummaryFills{}
+	svc := New(Deps{Store: st, CardSummaries: fills})
+	ctx := context.Background()
+
+	if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: domain.ReportCheckpoint, Note: "Halfway"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, filled := fills["ao-8"]; filled {
+		t.Fatal("a checkpoint report filled the card summary")
+	}
+	if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: domain.ReportDone, Note: "Listed every API route\nin a markdown summary"}); err != nil {
+		t.Fatal(err)
+	}
+	if fills["ao-8"] != "Listed every API route in a markdown summary" {
+		t.Fatalf("card summary = %q", fills["ao-8"])
+	}
+	if _, err := svc.Create(ctx, CreateInput{SessionID: "ao-8", State: domain.ReportDone, Note: "A later note"}); err != nil {
+		t.Fatal(err)
+	}
+	if fills["ao-8"] != "Listed every API route in a markdown summary" {
+		t.Fatalf("a later done report replaced the summary: %q", fills["ao-8"])
+	}
+}

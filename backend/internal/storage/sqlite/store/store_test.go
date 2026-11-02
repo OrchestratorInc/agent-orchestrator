@@ -214,6 +214,26 @@ func TestSessionRoundTripsOpenCodeHarnessVersions(t *testing.T) {
 	}
 }
 
+func TestFillCardSummaryOnlyWritesAnEmptySummary(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "card-fill")
+	rec, err := s.CreateSession(ctx, sampleRecord("card-fill"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filled, err := s.FillSessionCardSummary(ctx, rec.ID, "From the done report"); err != nil || !filled {
+		t.Fatalf("fill empty summary = %v, %v", filled, err)
+	}
+	if filled, err := s.FillSessionCardSummary(ctx, rec.ID, "A second fill"); err != nil || filled {
+		t.Fatalf("fill over a summary = %v, %v; want no write", filled, err)
+	}
+	got, _, err := s.GetSession(ctx, rec.ID)
+	if err != nil || got.Metadata.CardSummary != "From the done report" {
+		t.Fatalf("summary = %q, %v", got.Metadata.CardSummary, err)
+	}
+}
+
 func TestCardSummaryUpdatePreservesNewerSessionState(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

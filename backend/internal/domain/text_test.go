@@ -43,3 +43,17 @@ func TestNormalizeCardSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestCardSummaryFromNote(t *testing.T) {
+	if got := CardSummaryFromNote("  Added the 404 page;\n build passes "); got != "Added the 404 page; build passes" {
+		t.Fatalf("short note = %q", got)
+	}
+	long := strings.Repeat("word ", 60)
+	got := CardSummaryFromNote(long)
+	if n := len([]rune(got)); n == 0 || n > MaxCardSummaryRunes || !strings.HasSuffix(got, "word…") {
+		t.Fatalf("long note = %q (%d runes), want a word-boundary cut ending in an ellipsis", got, n)
+	}
+	if got := CardSummaryFromNote(" \t "); got != "" {
+		t.Fatalf("blank note = %q, want empty", got)
+	}
+}
