@@ -27,7 +27,9 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 			}
 		});
 		child.on("error", () => send({ type: "error", message: "Dictation is not available." }));
-		child.on("exit", () => {
+		// "close", not "exit": exit can arrive before the last stdout lines, so the
+		// renderer would hear "exit" ahead of the helper's final "end".
+		child.on("close", () => {
 			send({ type: "exit" });
 			if (helper === child) helper = null;
 		});
