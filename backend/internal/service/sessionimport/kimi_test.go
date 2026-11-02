@@ -75,6 +75,20 @@ func TestKimiDiscoverAndParse(t *testing.T) {
 	}
 }
 
+func TestScanDoesNotOfferKimiWithReadableHistory(t *testing.T) {
+	root := t.TempDir()
+	kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: "/work/repo"}}}, "")
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimi: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Candidates) != 0 {
+		t.Fatalf("Kimi must not be offered until tools run in AO's worktree: %+v", preview.Candidates)
+	}
+}
+
 func TestKimiStateReadThroughProviderRootAlias(t *testing.T) {
 	root := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "provider-alias")

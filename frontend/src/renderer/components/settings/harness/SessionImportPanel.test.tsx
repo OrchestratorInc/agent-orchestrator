@@ -22,6 +22,10 @@ it("gates session import to the agents with a readable local history", () => {
 it("does not offer OpenCode imports while resumed tools use the saved directory", () => {
 	expect(IMPORTABLE_AGENTS.has("opencode")).toBe(false);
 });
+
+it("does not offer Kimi imports while resumed tools use the saved directory", () => {
+	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(false);
+});
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -69,8 +73,6 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 
 it("gates importable harnesses to the ones with a verified resume path", () => {
 	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
-	// Kimi chats import and resume by the native session_<uuid> id over ACP session/load.
-	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(true);
 });
 
 it("reports new, existing and failed imports separately", async () => {
