@@ -15,10 +15,10 @@ func devinImportOwnedElsewhere(_ context.Context, rec domain.SessionRecord) bool
 		return false
 	}
 	id := source.NativeID
-	if len(rec.Metadata.ProviderConversationID) > 0 {
+	if rec.Metadata.ProviderConversationID != "" {
 		id = rec.Metadata.ProviderConversationID
 	}
-	if len(id) == 0 || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
 		return false
 	}
 	return providerLockHeld(filepath.Join(source.ConfigDir, "session_locks", id+".lock"))

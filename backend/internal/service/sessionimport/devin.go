@@ -15,7 +15,7 @@ import (
 )
 
 func devinRoot(home string) string {
-	if root := os.Getenv("XDG_DATA_HOME"); len(root) > 0 {
+	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "devin", "cli")
 	}
 	return filepath.Join(home, ".local", "share", "devin", "cli")
@@ -53,7 +53,7 @@ func discoverDevin(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err := rows.Scan(&id, &updated, &count); err != nil {
 			return nil, err
 		}
-		if len(id) == 0 || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
+		if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\\`) {
 			continue
 		}
 		out = append(out, sourceFiles{harness: domain.HarnessDevin, root: root, key: id, paths: []string{id}, modTime: time.UnixMilli(updated), size: count})
@@ -103,7 +103,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 		if err := rows.Scan(&raw, &size, &at); err != nil {
 			return t, err
 		}
-		if size > int64(maxVisibleBytes) {
+		if size > int64(maxVisibleBytes) || len(raw) > maxVisibleBytes {
 			t.shortened = true
 			continue
 		}
@@ -121,12 +121,12 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 			continue
 		}
 		text := strings.TrimSpace(string(m.Content))
-		if len(text) == 0 {
+		if text == "" {
 			continue
 		}
 		if m.Role == "user" {
 			hasUser = true
-			if len(t.title) == 0 {
+			if t.title == "" {
 				t.title = text
 			}
 		}
@@ -149,7 +149,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	if len(strings.TrimSpace(title.String)) > 0 {
+	if strings.TrimSpace(title.String) != "" {
 		t.title = title.String
 	}
 	t.title = strings.Join(strings.Fields(t.title), " ")

@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// NativeSessionConfigDir resolves the data root used by the native CLI.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -21,11 +22,11 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 		}
 		return os.Getenv(key)
 	}
-	if root := lookup("XDG_DATA_HOME"); len(root) > 0 {
+	if root := lookup("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "devin", "cli"), nil
 	}
 	home := lookup("HOME")
-	if len(home) == 0 {
+	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -35,7 +36,7 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return filepath.Join(home, ".local", "share", "devin", "cli"), nil
 }
 
-// A database row is the native transcript handle; it is not a file suitable for
+// ProbeNativeSession checks the native SQLite row. A row is not suitable for
 // LocateTranscript. Unknown query failures must never imply deletion.
 func (*Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	path := filepath.Join(ref.ConfigDir, "sessions.db")
