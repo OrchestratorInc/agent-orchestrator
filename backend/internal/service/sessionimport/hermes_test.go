@@ -47,3 +47,43 @@ func TestHermesMissingStore(t *testing.T) {
 		t.Fatalf("files=%+v err=%v", files, err)
 	}
 }
+
+func TestHermesCompressionLineageIsOneNativeConversation(t *testing.T) {
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, statement := range []string{
+		`CREATE TABLE sessions(id TEXT,source TEXT,cwd TEXT,title TEXT,started_at REAL,hidden INTEGER,parent_session_id TEXT,end_reason TEXT,ended_at REAL,model_config TEXT)`,
+		`CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,timestamp REAL,_compressed_summary INTEGER)`,
+		`INSERT INTO sessions VALUES('root','cli','/work/repo','native title',1790000000,1,NULL,'compression',1790000003,'{}'),('tip','cli','/work/repo',NULL,1790000004,0,'root',NULL,NULL,'{}'),('branch','cli','/work/repo','branch',1790000005,0,'root',NULL,NULL,'{"_branched_from":"root"}'),('reset','cli','/work/repo','reset',1790000006,0,'root',NULL,NULL,'{"_reset_from":"root"}')`,
+		`INSERT INTO messages VALUES(1,'root','user','original request',1790000001,0),(2,'root','assistant','original answer',1790000002,0),(3,'tip','user','compressed summary',1790000004,1),(4,'tip','user','follow up',1790000005,0),(5,'tip','assistant','continued answer',1790000006,0),(6,'branch','user','independent branch',1790000007,0),(7,'reset','user','independent reset',1790000008,0)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := discoverHermes(context.Background(), root)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("lineages=%+v err=%v", files, err)
+	}
+	for _, file := range files {
+		if file.nativeID() == "tip" {
+			t.Fatal("compression tip offered as a second conversation")
+		}
+	}
+	got, err := readHermesTranscript(context.Background(), root, "root")
+	if err != nil || got.nativeID != "root" || got.title != "native title" || len(got.messages) != 4 {
+		t.Fatalf("lineage=%+v err=%v", got, err)
+	}
+	for i, want := range []string{"original request", "original answer", "follow up", "continued answer"} {
+		if got.messages[i].Text != want {
+			t.Fatalf("message %d=%q want=%q", i, got.messages[i].Text, want)
+		}
+	}
+	if _, err := readHermesTranscript(context.Background(), root, "tip"); err == nil {
+		t.Fatal("accepted a duplicate continuation handle")
+	}
+}

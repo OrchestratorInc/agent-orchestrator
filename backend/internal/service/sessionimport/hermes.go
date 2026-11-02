@@ -41,28 +41,26 @@ func discoverHermes(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
-	rows, err := db.QueryContext(ctx, `SELECT s.id,COALESCE(MAX(m.timestamp),s.started_at),COUNT(m.id)
-		FROM sessions s LEFT JOIN messages m ON m.session_id=s.id
-		WHERE s.source IN ('cli','tui','oneshot') AND COALESCE(s.hidden,0)=0
-		GROUP BY s.id ORDER BY 2 DESC`)
+	groups, err := hermesLineages(ctx, db)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 	var out []sourceFiles
-	for rows.Next() {
-		var id string
+	for id, lineage := range groups {
 		var updated float64
 		var count int64
-		if err := rows.Scan(&id, &updated, &count); err != nil {
-			return nil, err
+		for _, segment := range lineage {
+			count += segment.count
+			if segment.updated > updated {
+				updated = segment.updated
+			}
 		}
-		if id == "" {
+		if id == "" || !hermesLineageVisible(lineage) {
 			continue
 		}
 		out = append(out, sourceFiles{harness: domain.HarnessHermes, root: root, key: id, paths: []string{id}, modTime: time.UnixMilli(int64(updated * 1000)), size: count})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func readHermesTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
@@ -79,17 +77,30 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, errors.New("no readable native conversation")
 	}
 	defer func() { _ = db.Close() }()
-	var cwd, title sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT cwd,title FROM sessions WHERE id=? AND source IN ('cli','tui','oneshot') AND COALESCE(hidden,0)=0`, t.nativeID).Scan(&cwd, &title); err != nil {
+	groups, err := hermesLineages(ctx, db)
+	if err != nil {
 		return t, err
 	}
-	t.cwd = cwd.String
+	lineage := groups[t.nativeID]
+	if !hermesLineageVisible(lineage) {
+		return t, errors.New("no readable native conversation")
+	}
+	t.cwd = lineage[0].cwd
+	title := lineage[0].title
 	if !filepath.IsAbs(t.cwd) {
 		return t, errors.New("transcript working directory must be absolute")
 	}
-	rows, err := db.QueryContext(ctx, `SELECT role,substr(content,1,?),length(content),timestamp FROM messages
-		WHERE session_id=? AND role IN ('user','assistant') AND COALESCE(_compressed_summary,0)=0
-		ORDER BY id`, maxVisibleBytes, t.nativeID)
+	values := make([]string, 0, len(lineage))
+	args := make([]any, 0, 2*len(lineage)+1)
+	for position, segment := range lineage {
+		values = append(values, "(?,?)")
+		args = append(args, segment.id, position)
+	}
+	args = append(args, maxVisibleBytes)
+	rows, err := db.QueryContext(ctx, `WITH lineage(id,position) AS (VALUES `+strings.Join(values, ",")+`)
+		SELECT m.role,substr(m.content,1,?),length(m.content),m.timestamp FROM messages m
+		JOIN lineage l ON l.id=m.session_id WHERE m.role IN ('user','assistant') AND COALESCE(m._compressed_summary,0)=0
+		ORDER BY l.position,m.id`, args...)
 	if err != nil {
 		return t, err
 	}
@@ -143,8 +154,8 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	if strings.TrimSpace(title.String) != "" {
-		t.title = title.String
+	if strings.TrimSpace(title) != "" {
+		t.title = title
 	}
 	t.title = importTitle(t.title)
 	return t, nil
