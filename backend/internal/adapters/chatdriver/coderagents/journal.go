@@ -16,6 +16,7 @@ const (
 	callStarted   = "started"
 	callDone      = "done"
 	callSubmitted = "submitted"
+	callRetired   = "retired"
 )
 
 // callRecord is the durable state of one Coder tool call ID.
@@ -97,4 +98,15 @@ func (j *toolJournal) finish(callID string, outcome toolOutcome) error {
 // that the call completed is kept, so a replay still never re-runs it.
 func (j *toolJournal) submitted(callID string) error {
 	return j.store(callID, callRecord{State: callSubmitted})
+}
+
+// retire drops a completed output once Coder no longer needs the result. Keep
+// the small execution tombstone: AO termination is resumable, and deleting the
+// record would let a replay run the same side effect again.
+func (j *toolJournal) retire(callID string) error {
+	record, known, err := j.load(callID)
+	if err != nil || !known || record.State != callDone {
+		return err
+	}
+	return j.store(callID, callRecord{State: callRetired})
 }

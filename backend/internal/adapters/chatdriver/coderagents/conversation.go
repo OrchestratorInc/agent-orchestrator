@@ -137,6 +137,16 @@ func newConversation(log *slog.Logger, s session, cfg conversationConfig) (*conv
 		}
 		var activeTurnID string
 		c.history, activeTurnID = replayHistory(cfg.key, *cfg.chat, messages)
+		for _, message := range messages {
+			for _, part := range message.Content {
+				idle := cfg.chat.Status == coderapi.ChatStatusWaiting || cfg.chat.Status == coderapi.ChatStatusError
+				if part.ToolCallID != "" && (part.Type == coderapi.PartToolResult || idle && part.Type == coderapi.PartToolCall) {
+					if err := c.journal.retire(part.ToolCallID); err != nil {
+						c.log.Warn("coder agents: discard settled history tool output", "error", err)
+					}
+				}
+			}
+		}
 		c.chatID = cfg.chat.ID
 		close(c.chatReady)
 		switch cfg.chat.Status {
@@ -436,6 +446,7 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		// result), so no further status event may arrive for this turn.
 		c.emitMu.Lock()
 		events := c.finishLocked(t, nil)
+		c.retireAfterTools(t)
 		for _, event := range events {
 			c.emit(event)
 		}
@@ -507,14 +518,21 @@ func (c *conversation) Close() error {
 // Terminate stops Coder's in-flight run before detaching, so killing an AO
 // session does not leave the agent working on.
 func (c *conversation) Terminate() error {
+	if !c.enter() {
+		return nil
+	}
+	defer c.wg.Done()
 	c.mu.Lock()
-	chatID, active := c.chatID, c.turn != nil
+	chatID, t := c.chatID, c.turn
 	c.mu.Unlock()
 	var err error
-	if chatID != "" && active {
+	if chatID != "" && t != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, err = c.client.InterruptChat(ctx, chatID)
 		cancel()
+	}
+	if err == nil {
+		c.retireAfterTools(t)
 	}
 	return errors.Join(err, c.Close())
 }
@@ -775,7 +793,9 @@ func (c *conversation) completeTurn(t *turnState) {
 			bindingErr = errWorkspaceBound
 		}
 	}
-	for _, event := range c.finishLocked(t, bindingErr) {
+	events := c.finishLocked(t, bindingErr)
+	c.retireAfterTools(t)
+	for _, event := range events {
 		c.emit(event)
 	}
 }

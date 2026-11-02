@@ -139,6 +139,11 @@ func (c *conversation) executeCall(t *turnState, call coderapi.ToolCall) (toolOu
 		return errorOutcome("AO could not read its record of this tool call, so it was not run: " + err.Error()), true
 	}
 	if known {
+		// Replayed results belong to this turn's cleanup too, even though the
+		// tool itself is not executed again.
+		c.mu.Lock()
+		t.started[call.ToolCallID] = true
+		c.mu.Unlock()
 		switch record.State {
 		case callDone:
 			if record.Outcome != nil {
@@ -146,6 +151,8 @@ func (c *conversation) executeCall(t *turnState, call coderapi.ToolCall) (toolOu
 			}
 		case callSubmitted:
 			return errorOutcome("AO already completed this tool call and returned its result."), true
+		case callRetired:
+			return errorOutcome("AO already completed this tool call. Its output was discarded after the run ended; it was not run again."), true
 		}
 		return errorOutcome("AO stopped while this tool call was running, so its effect is unknown. It was not run again; inspect the worktree before retrying."), true
 	}
@@ -194,6 +201,36 @@ func (c *conversation) executeCall(t *turnState, call coderapi.ToolCall) (toolOu
 	}
 	c.toolCompleted(t, call, outcome, status)
 	return outcome, true
+}
+
+// retireAfterTools waits for any local batch to finish writing its last record
+// before dropping this ended turn's outputs. The calling operation still owns
+// a wait-group reference, so Close waits for this cleanup before closing Events.
+func (c *conversation) retireAfterTools(t *turnState) {
+	if t == nil {
+		return
+	}
+	c.mu.Lock()
+	ids := make([]string, 0, len(t.started))
+	for id := range t.started {
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	c.wg.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.wg.Done()
+		c.toolMu.Lock()
+		defer c.toolMu.Unlock()
+		for _, id := range ids {
+			if err := c.journal.retire(id); err != nil {
+				c.log.Warn("coder agents: discard ended tool output", "error", err)
+			}
+		}
+	}()
 }
 
 func (c *conversation) toolCompleted(t *turnState, call coderapi.ToolCall, outcome toolOutcome, status domain.ActivityStatus) {

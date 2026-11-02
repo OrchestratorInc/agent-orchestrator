@@ -100,6 +100,12 @@ that Coder replays after a reconnect or restart is answered from the journal
 and never run twice; a call that was interrupted mid-run is reported to the
 agent as having an unknown effect instead of being re-run.
 
+Once a native turn ends or termination is accepted, completed tool outputs are
+discarded after the local tool batch settles. Idle resume also discards stale
+outputs from ended native turns. Detaching an active run retains the result it
+still needs. Small execution tombstones remain because terminated AO sessions
+can be restored; removing those records would permit duplicate side effects.
+
 ## Lifecycle
 
 - **Start:** AO creates the Coder chat with your first message, AO's system
