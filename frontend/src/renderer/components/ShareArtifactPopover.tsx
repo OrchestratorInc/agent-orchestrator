@@ -5,6 +5,7 @@ import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLi
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
+import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -117,7 +118,8 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	const button = (
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
-			className={className}
+			// Muted like the header's other actions, bright while hovered or open.
+			className={cn("text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", className)}
 			disabled={video}
 			size="sm"
 			type="button"
