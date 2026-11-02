@@ -179,10 +179,11 @@ import {
 import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -3166,7 +3167,18 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
-registerCloudArtifactIpc({ ipcMain });
+registerCloudArtifactIpc({
+	ipcMain,
+	openInFileManager: async (target, isFile) => {
+		if (isFile) shell.showItemInFolder(target);
+		else {
+			const error = await shell.openPath(target);
+			if (error) throw new Error(error);
+		}
+	},
+});
+// Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
+void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
 
 // Share links: publishing reads the file and holds the token here, in the main
 // process; the renderer asks for it when the person presses Publish.
@@ -3809,6 +3821,14 @@ app.whenReady().then(async () => {
 			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
+	}
+	if (trayController) {
+		const awakeTray = createAwakeTrayMonitor({
+			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+			request: (url, init) => fetch(url, init),
+			setState: (active) => trayController?.setAwakeState(active),
+		});
+		app.once("will-quit", () => awakeTray.dispose());
 	}
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());

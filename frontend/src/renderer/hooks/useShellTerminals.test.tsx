@@ -52,6 +52,7 @@ import {
 	useRenameShellTerminal,
 	useShellTerminals,
 } from "./useShellTerminals";
+import { takeCloudShellInput } from "../lib/cloud-shell-input";
 
 const shells: ShellTerminal[] = [
 	{
@@ -285,6 +286,40 @@ describe("useOpenShellTerminal", () => {
 		await act(async () => close.result.current.mutateAsync(shell.handleId));
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([]);
+	});
+});
+
+describe("useOpenShellTerminal initial input", () => {
+	it("queues a cloud shell's input before the shell is listed, so its terminal always finds it", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		// What a terminal connecting to the shell the moment it is listed would find.
+		const foundOnListing = new Map<string, string | undefined>();
+		const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+			for (const shell of queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey) ?? []) {
+				if (!shell.optimistic && !foundOnListing.has(shell.handleId)) foundOnListing.set(shell.handleId, takeCloudShellInput(shell.handleId));
+			}
+		});
+		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+
+		const shell = (await act(async () =>
+			open.result.current.mutateAsync({
+				projectId: "cloud-project",
+				sessionId: "cloud-session",
+				cloud: { orgId: "cloud-org" },
+				initialInput: "npm test\r",
+			}),
+		))!;
+		unsubscribe();
+		try {
+			expect(foundOnListing.get(shell.handleId)).toBe("npm test\r");
+			expect(takeCloudShellInput(shell.handleId)).toBeUndefined();
+		} finally {
+			const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+			await act(async () => close.result.current.mutateAsync(shell.handleId));
+		}
 	});
 });
 
