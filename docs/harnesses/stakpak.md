@@ -6,10 +6,15 @@ Orchestrator as an interactive Terminal UI harness. AO launches the user's own
 
 ## Install
 
-AO's installer offers, on macOS and Linux:
+AO's installer offers, on macOS and Linux, one of:
 
-- Homebrew: `brew install stakpak/stakpak/stakpak`
-- the official installer: `curl -sSL https://stakpak.dev/install.sh | bash`
+- Homebrew, when `brew` is on PATH: `brew install stakpak/stakpak/stakpak`
+- otherwise the official installer, which installs the release binary:
+  `curl -sSL https://stakpak.dev/install.sh | bash`
+
+`install.sh` itself switches to Homebrew whenever `brew` is present (its
+"use Homebrew?" prompt defaults to yes when it has no terminal), so offering it
+next to Homebrew would only repeat the same install.
 
 Windows has no installer: download `stakpak-windows-x86_64.zip` from the
 [GitHub release](https://github.com/stakpak/agent/releases) and put
@@ -42,6 +47,8 @@ api_key = "..."
 AO verifies the login with a provider round-trip and never reports a key as
 connected just because it exists:
 
+- With no credentials, `stakpak auth status` prints "No credentials
+  configured.", which reads as signed out, so the Log in action is offered.
 - With a Stakpak API key, `stakpak auth status` checks it against the Stakpak
   API.
 - Otherwise AO reads the active profile's providers (`STAKPAK_PROFILE`, else
@@ -51,6 +58,10 @@ connected just because it exists:
   (the provider rejects it as invalid only after accepting the key). One
   accepting provider is enough. All rejecting reads as logged out; anything
   else as configured but unverified.
+- A provider's key is read from `auth = { type = "api", key = "..." }`, which
+  `stakpak auth login` and onboarding write, or the older `api_key`. An OAuth
+  login (`auth = { type = "oauth", ... }`) can't be checked without a real
+  request, so it reads as configured but unverified.
 
 ## Terminal UI
 
@@ -80,8 +91,12 @@ is waiting for a decision.
 
 Stakpak creates a session id on the first message. AO records the worktree and
 launch time, then takes the newest session `stakpak sessions list --json`
-reports for that worktree since the launch. Restore checks the id with
-`stakpak sessions show` first, and launches fresh when Stakpak no longer has it.
+reports for that worktree since the launch, and keeps it in the launch record.
+The list runs only until the id is known (on a remote profile it is a Stakpak
+API call), so a conversation started with `/new` inside the TUI is not
+followed. A restore already knows the id it resumes. Restore checks the id with
+`stakpak sessions show` first, and launches fresh when Stakpak no longer has
+it, locally or on the Stakpak API.
 
 ### Permissions
 

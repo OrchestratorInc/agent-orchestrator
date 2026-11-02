@@ -28,6 +28,9 @@ type launchRecord struct {
 	// PromptDigest fingerprints the standing instructions this launch gave
 	// Stakpak, which stores them in the conversation.
 	PromptDigest string `json:"promptDigest,omitempty"`
+	// ResolvedID is the conversation a fresh launch started, once found in
+	// Stakpak's session list, so later lookups need no list.
+	ResolvedID string `json:"resolvedId,omitempty"`
 }
 
 // matches reports whether this launch's conversation is nativeID: the one it
@@ -129,6 +132,12 @@ func parseSessionList(out []byte) ([]nativeSession, error) {
 // ResolveNativeSessionID names the Stakpak conversation of the current launch:
 // the one it resumed, else the newest conversation Stakpak started in the
 // same worktree after the launch. ok is false before the first turn.
+//
+// The activity observer calls this on every state change, and the list can be
+// a Stakpak API call, so it runs only until the id is known: a resumed
+// launch already has it, and a fresh launch records it once found. A
+// conversation the user starts with /new inside the TUI is therefore not
+// followed.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -137,17 +146,27 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 	if err != nil || !ok {
 		return "", false, err
 	}
+	for _, known := range []string{record.ResolvedID, record.NativeID} {
+		if validSessionID(known) {
+			return known, true, nil
+		}
+	}
 	sessions, err := p.listSessions(ctx, nil)
 	if err != nil {
 		return "", false, err
 	}
 	id, found := matchLaunch(record, sessions)
+	if found {
+		record.ResolvedID = id
+		if err := writeLaunchRecord(cfg.DataDir, string(cfg.SessionID), record); err != nil {
+			return "", false, err
+		}
+	}
 	return id, found, nil
 }
 
-// matchLaunch picks the conversation for a launch from a newest-first list. A
-// conversation started in the TUI after a resume (/new) supersedes the one it
-// resumed, so the resumed id is only the fallback.
+// matchLaunch picks the newest conversation Stakpak started in the launch's
+// worktree since the launch, from a newest-first list.
 func matchLaunch(record launchRecord, sessions []nativeSession) (string, bool) {
 	workspace := canonicalPath(record.Workspace)
 	var newest nativeSession
@@ -162,13 +181,7 @@ func matchLaunch(record launchRecord, sessions []nativeSession) (string, bool) {
 			newest = s
 		}
 	}
-	if newest.ID != "" {
-		return newest.ID, true
-	}
-	if validSessionID(record.NativeID) {
-		return record.NativeID, true
-	}
-	return "", false
+	return newest.ID, newest.ID != ""
 }
 
 // canonicalPath resolves symlinks: Stakpak records the process's real cwd
@@ -208,7 +221,9 @@ func (p *Plugin) NativeConversationExists(ctx context.Context, _ ports.SessionRe
 }
 
 // sessionShowResult reads `stakpak sessions show`: it prints the session's
-// "ID:" line on success and "Not found: Session <id> not found" otherwise.
+// "ID:" line on success. A missing conversation fails with "Session <id> not
+// found" from the local store, or with the Stakpak API's not-found message or
+// "API error 404 ..." on a remote profile. Any other failure stays an error.
 func sessionShowResult(nativeID, out string, err error) (bool, error) {
 	if err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -218,7 +233,8 @@ func sessionShowResult(nativeID, out string, err error) (bool, error) {
 		}
 		return false, fmt.Errorf("stakpak: sessions show %s printed no matching ID", nativeID)
 	}
-	if strings.Contains(out, "Session "+nativeID+" not found") {
+	lower := strings.ToLower(out)
+	if strings.Contains(lower, "not found") || strings.Contains(out, "API error 404") {
 		return false, nil
 	}
 	return false, fmt.Errorf("stakpak: sessions show %s: %w", nativeID, err)

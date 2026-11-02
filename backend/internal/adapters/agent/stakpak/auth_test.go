@@ -13,11 +13,12 @@ import (
 
 func TestAPICheck(t *testing.T) {
 	for out, want := range map[string]apiCheckResult{
-		"Active profile: default\nAPI check:      ✓ reachable as user@example.com\n": apiCheckPassed,
-		"API check:      ✗ access token expired (run `stakpak auth login`)\n":        apiCheckFailed,
-		"API check:      skipped (no stakpak credential on profile 'default')\n":     apiCheckSkipped,
-		"Configured credentials:\n  profile 'default':\n    - zai (api_key)\n":       apiCheckUnknown,
-		"Ops! something went wrong: Failed to load config\n":                         apiCheckUnknown,
+		"Active profile: default\nAPI check:      ✓ reachable as user@example.com\n":   apiCheckPassed,
+		"API check:      ✗ access token expired (run `stakpak auth login`)\n":          apiCheckFailed,
+		"API check:      skipped (no stakpak credential on profile 'default')\n":       apiCheckSkipped,
+		"Configured credentials:\n  profile 'default':\n    - zai (api_key)\n":         apiCheckUnknown,
+		"No credentials configured.\n\nRun 'stakpak auth login' to add credentials.\n": apiCheckNoCredentials,
+		"Ops! something went wrong: Failed to load config\n":                           apiCheckUnknown,
 	} {
 		if got := apiCheck(out); got != want {
 			t.Errorf("apiCheck(%q) = %d, want %d", out, got, want)
@@ -134,4 +135,64 @@ func TestProbeProvidersVerdict(t *testing.T) {
 			t.Fatalf("probeProviders = %q, %v", got, err)
 		}
 	})
+}
+
+// `stakpak auth login` and TUI onboarding save `auth = { type = "api", key }`
+// and clear `api_key`; an OAuth login saves `{ type = "oauth", access, ... }`.
+func TestActiveProvidersReadsStakpakAuthTable(t *testing.T) {
+	providers, err := activeProviders([]byte(`
+[profiles.default.providers.anthropic]
+type = "anthropic"
+auth = { type = "api", key = "saved-by-login" }
+
+[profiles.default.providers.claude]
+type = "anthropic"
+auth = { type = "oauth", access = "token", refresh = "r", expires = 1 }
+`), "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 2 {
+		t.Fatalf("providers = %+v", providers)
+	}
+	byName := map[string]provider{}
+	for _, p := range providers {
+		byName[p.Name] = p
+	}
+	if got := byName["anthropic"]; got.APIKey != "saved-by-login" || got.OAuth {
+		t.Fatalf("api auth table = %+v, want its key", got)
+	}
+	if got := byName["claude"]; !got.OAuth || got.APIKey != "" {
+		t.Fatalf("oauth auth table = %+v, want an OAuth login", got)
+	}
+	// A subscription login cannot be checked without a real request, so it
+	// reads as configured rather than signed out.
+	if got := probeProvider(context.Background(), http.DefaultClient, byName["claude"]); got != probeInconclusive {
+		t.Fatalf("oauth probe = %d, want inconclusive", got)
+	}
+}
+
+func TestProbeProvidersUsesAuthTableKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "good" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("STAKPAK_PROFILE", "")
+	if err := os.MkdirAll(filepath.Join(home, ".stakpak"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "[profiles.default.providers.anthropic]\ntype = \"anthropic\"\napi_endpoint = \"" + server.URL + "/v1/\"\nauth = { type = \"api\", key = \"good\" }\n"
+	if err := os.WriteFile(filepath.Join(home, ".stakpak", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := probeProviders(context.Background(), server.Client()); err != nil || got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("probeProviders = %q, %v; want authorized from the auth table key", got, err)
+	}
 }

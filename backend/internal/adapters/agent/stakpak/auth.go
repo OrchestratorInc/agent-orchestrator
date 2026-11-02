@@ -44,6 +44,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	defer cancel()
 	out, runErr := process.CommandContext(statusCtx, binary, "auth", "status").CombinedOutput()
 	switch apiCheck(string(out)) {
+	case apiCheckNoCredentials:
+		// A fresh install: report signed out so the Log in action is offered.
+		return ports.AgentAuthStatusUnauthorized, nil
 	case apiCheckPassed:
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath()).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
@@ -65,11 +68,16 @@ const (
 	apiCheckPassed
 	apiCheckFailed
 	apiCheckSkipped
+	apiCheckNoCredentials
 )
 
-// apiCheck reads the "API check:" row of `stakpak auth status`.
+// apiCheck reads the "API check:" row of `stakpak auth status`. With no
+// credentials at all it prints "No credentials configured." instead.
 func apiCheck(out string) apiCheckResult {
 	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "No credentials configured." {
+			return apiCheckNoCredentials
+		}
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "API check:")
 		if !ok {
 			continue
@@ -96,12 +104,25 @@ func configPath() string {
 	return filepath.Join(home, ".stakpak", "config.toml")
 }
 
-// provider is one configured LLM provider of the active profile.
+// provider is one configured LLM provider of the active profile. Stakpak's
+// own login (`stakpak auth login` and TUI onboarding) saves the credential as
+// `auth = { type = "api", key = "..." }` or `{ type = "oauth", access = ... }`
+// and clears `api_key`, the older form.
 type provider struct {
 	Name     string
-	Type     string `toml:"type"`
-	Endpoint string `toml:"api_endpoint"`
-	APIKey   string `toml:"api_key"`
+	Type     string       `toml:"type"`
+	Endpoint string       `toml:"api_endpoint"`
+	APIKey   string       `toml:"api_key"`
+	Auth     providerAuth `toml:"auth"`
+	// OAuth marks a subscription login, which AO cannot check without
+	// spending a request on the provider's own terms.
+	OAuth bool `toml:"-"`
+}
+
+type providerAuth struct {
+	Type   string `toml:"type"`
+	Key    string `toml:"key"`
+	Access string `toml:"access"`
 }
 
 type stakpakConfig struct {
@@ -129,7 +150,13 @@ func activeProviders(data []byte, profile string) ([]provider, error) {
 		if value.Type == "" {
 			value.Type = value.Name
 		}
-		if value.APIKey == "" {
+		switch {
+		case value.APIKey != "":
+		case value.Auth.Type == "api" && value.Auth.Key != "":
+			value.APIKey = value.Auth.Key
+		case value.Auth.Type == "oauth" && value.Auth.Access != "":
+			value.OAuth = true
+		default:
 			value.APIKey = os.Getenv(providerKeyEnv[value.Type])
 		}
 		out = append(out, value)
@@ -199,6 +226,9 @@ func probeProviders(ctx context.Context, client *http.Client) (ports.AgentAuthSt
 // than a clear accept or an auth rejection (a timeout, a 5xx, an unknown
 // provider type) is inconclusive.
 func probeProvider(ctx context.Context, client *http.Client, p provider) probeVerdict {
+	if p.OAuth {
+		return probeInconclusive
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var req *http.Request

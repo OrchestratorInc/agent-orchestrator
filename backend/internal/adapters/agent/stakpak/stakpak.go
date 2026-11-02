@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -44,7 +45,11 @@ import (
 const adapterID = "stakpak"
 
 // Plugin is the Stakpak Agent adapter.
-type Plugin struct{ agentbase.Base }
+type Plugin struct {
+	agentbase.Base
+	binaryMu       sync.Mutex
+	resolvedBinary string
+}
 
 // New returns a ready-to-register Stakpak adapter.
 func New() *Plugin { return &Plugin{} }
@@ -53,6 +58,7 @@ var (
 	_ adapters.Adapter                        = (*Plugin)(nil)
 	_ ports.Agent                             = (*Plugin)(nil)
 	_ ports.AgentBinaryResolver               = (*Plugin)(nil)
+	_ ports.AgentBinaryResolutionInvalidator  = (*Plugin)(nil)
 	_ ports.AgentExitDetector                 = (*Plugin)(nil)
 	_ ports.AgentNativeSessionResolver        = (*Plugin)(nil)
 	_ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
@@ -106,8 +112,28 @@ func parseVersion(out string) string {
 }
 
 // ResolveBinary finds the official `stakpak` executable.
-func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
-	return binaryutil.ResolveBinary(ctx, binarySpec)
+// The path is cached: the identity check runs `stakpak --version`, and the
+// activity observer resolves the binary for each session-list read.
+func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	p.binaryMu.Lock()
+	defer p.binaryMu.Unlock()
+	if p.resolvedBinary != "" {
+		return p.resolvedBinary, nil
+	}
+	binary, err := binaryutil.ResolveBinary(ctx, binarySpec)
+	if err != nil {
+		return "", err
+	}
+	p.resolvedBinary = binary
+	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable, so the next call
+// resolves it again: after AO installs or updates Stakpak, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }
 
 // GetConfigSpec reports the model override. Stakpak takes provider-prefixed

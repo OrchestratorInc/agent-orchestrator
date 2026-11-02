@@ -287,8 +287,15 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetStakpak:
 		// Stakpak publishes a Homebrew tap and a release-binary installer for
 		// macOS and Linux. Windows has only a release zip, with no installer.
+		// install.sh asks "use Homebrew?" on /dev/tty and, run headless,
+		// takes the default yes whenever brew is on PATH, so it is offered
+		// only without Homebrew, where it installs the release binary.
 		if s.goos == "darwin" || s.goos == "linux" {
-			plans = []Plan{s.planBrew(target, "stakpak/stakpak/stakpak"), s.planShellInstaller(target, "https://stakpak.dev/install.sh", "bash")}
+			if _, err := s.executables.LookPath("brew"); err == nil {
+				plans = []Plan{s.planBrew(target, "stakpak/stakpak/stakpak")}
+			} else {
+				plans = []Plan{s.planShellInstaller(target, "https://stakpak.dev/install.sh", "bash")}
+			}
 		} else {
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Download stakpak-windows-x86_64.zip from the official GitHub release and put stakpak.exe on PATH", DocsURL: agentDocumentationURLs[target]}}
 		}

@@ -182,17 +182,55 @@ func TestResolveNativeSessionIDMatchesWorktreeAndLaunchTime(t *testing.T) {
 	}
 }
 
-func TestMatchLaunchPrefersNewConversationOverResumedOne(t *testing.T) {
+func TestMatchLaunchTakesTheNewestConversationSinceLaunch(t *testing.T) {
 	ws := t.TempDir()
 	launched := time.Now().UTC()
-	record := launchRecord{Workspace: ws, LaunchedAt: launched, NativeID: nativeA}
-	if id, ok := matchLaunch(record, nil); !ok || id != nativeA {
-		t.Fatalf("resumed id = %q, %t", id, ok)
+	record := launchRecord{Workspace: ws, LaunchedAt: launched}
+	if _, ok := matchLaunch(record, nil); ok {
+		t.Fatal("matched a conversation in an empty list")
 	}
-	fresh := "33333333-3333-4333-8333-333333333333"
-	id, ok := matchLaunch(record, []nativeSession{{ID: fresh, Cwd: ws, CreatedAt: launched.Add(time.Second)}})
-	if !ok || id != fresh {
-		t.Fatalf("id after /new = %q, %t; want %s", id, ok, fresh)
+	older, newer := "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"
+	id, ok := matchLaunch(record, []nativeSession{
+		{ID: newer, Cwd: ws, CreatedAt: launched.Add(2 * time.Second)},
+		{ID: older, Cwd: ws, CreatedAt: launched.Add(time.Second)},
+	})
+	if !ok || id != newer {
+		t.Fatalf("id = %q, %t; want %s", id, ok, newer)
+	}
+}
+
+// The observer resolves the id on every activity change; once known it must
+// not run the session list (a Stakpak API call on remote profiles) again.
+func TestResolveNativeSessionIDListsOnlyUntilKnown(t *testing.T) {
+	ws := t.TempDir()
+	launched := time.Now().UTC().Add(-time.Minute)
+	list, err := json.Marshal(map[string]any{"sessions": []map[string]any{{"id": nativeA, "cwd": ws, "created_at": launched.Add(time.Second)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := fakeStakpak(t, string(list), "")
+	data := t.TempDir()
+	if err := writeLaunchRecord(data, "ao-1", launchRecord{Workspace: ws, LaunchedAt: launched}); err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	cfg := ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"}
+	if id, ok, err := p.ResolveNativeSessionID(context.Background(), cfg); err != nil || !ok || id != nativeA {
+		t.Fatalf("first lookup = %q, %t, %v", id, ok, err)
+	}
+	// Break the CLI: a second lookup that still listed would now fail.
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // test-only executable
+		t.Fatal(err)
+	}
+	if id, ok, err := p.ResolveNativeSessionID(context.Background(), cfg); err != nil || !ok || id != nativeA {
+		t.Fatalf("cached lookup = %q, %t, %v", id, ok, err)
+	}
+	// A resumed launch knows its conversation without any list.
+	if err := writeLaunchRecord(data, "ao-2", launchRecord{Workspace: ws, LaunchedAt: launched, NativeID: nativeA}); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok, err := p.ResolveNativeSessionID(context.Background(), ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-2"}); err != nil || !ok || id != nativeA {
+		t.Fatalf("resumed lookup = %q, %t, %v", id, ok, err)
 	}
 }
 
@@ -202,6 +240,13 @@ func TestSessionShowResult(t *testing.T) {
 	}
 	if ok, err := sessionShowResult(nativeA, "Error: Not found: Session "+nativeA+" not found\n", errors.New("exit 1")); ok || err != nil {
 		t.Fatalf("missing = %t, %v", ok, err)
+	}
+	// A remote profile reports the Stakpak API's error instead.
+	if ok, err := sessionShowResult(nativeA, "Error: API error 404 Not Found: {}\n", errors.New("exit 1")); ok || err != nil {
+		t.Fatalf("remote missing = %t, %v", ok, err)
+	}
+	if ok, err := sessionShowResult(nativeA, "Error: Session not found\n", errors.New("exit 1")); ok || err != nil {
+		t.Fatalf("remote not-found message = %t, %v", ok, err)
 	}
 	if _, err := sessionShowResult(nativeA, "Failed to load config", errors.New("exit 1")); err == nil {
 		t.Fatal("an unrelated failure must not read as a missing conversation")
