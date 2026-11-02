@@ -14,6 +14,7 @@ vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: settingsMock(), isLoading: false, error: null }),
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
+	useUpdateCardSummaries: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
 }));
 
