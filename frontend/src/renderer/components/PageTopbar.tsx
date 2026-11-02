@@ -48,15 +48,16 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 	return (
 		<TopbarTrailingActionsContext.Provider value={showControls && !settingsOpen ? actionsHost : null}>
 			<div className={cn("center-panel-surface relative", showControls && "has-topbar-controls")} ref={surfaceRef}>
-				{/* Positioned over the header, but first in DOM order so keyboard and
-				    screen-reader users reach the bell before the page body. */}
+				{children}
+				{/* MUST follow the page in the DOM: Electron builds the macOS window-drag
+				    region in document order, so a no-drag group placed before the page
+				    header would be swallowed by the header's drag rect. */}
 				{showControls ? (
 					<PageTopbarActions className="panel-topbar-controls" data-testid="panel-topbar-controls">
 						<div className="contents" ref={setActionsHost} />
 						<NotificationCenter style={noDragStyle} />
 					</PageTopbarActions>
 				) : null}
-				{children}
 			</div>
 		</TopbarTrailingActionsContext.Provider>
 	);

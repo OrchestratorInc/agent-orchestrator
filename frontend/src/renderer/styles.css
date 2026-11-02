@@ -3385,8 +3385,7 @@ html.sidebar-reordering * {
 	position: absolute;
 	top: 0;
 	right: var(--gap-topbar-control);
-	/* Rendered before the page so it leads the tab order; sit above its header. */
-	z-index: calc(var(--z-index-chrome) + 1);
+	z-index: var(--z-index-chrome);
 }
 
 .has-topbar-controls .center-panel-titlebar,
