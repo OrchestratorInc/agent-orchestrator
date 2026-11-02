@@ -1358,7 +1358,7 @@ describe("TaskComposer", () => {
 	});
 
 	it("rejects cloud task attachments instead of silently dropping them", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 		const onCreated = vi.fn();
 		const { container } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
 		const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -1455,7 +1455,7 @@ describe("TaskComposer", () => {
 	});
 
 	it("starts a cloud task in the terminal when that is the default", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
@@ -1472,7 +1472,7 @@ describe("TaskComposer", () => {
 	});
 
 	it("leaves the sandbox provider to the project and org default on the control plane", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { sandboxProvider: "coder" } });
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { sandboxProvider: "coder", worker: { agent: "claude-code" } } });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
@@ -3359,7 +3359,39 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-3"])).toBeUndefined();
 	});
 
-	it("creates a Coder project's session only on send too, through the same create", async () => {
+	it("starts a Cloud project with no agent of its own on the agent this account connected, shown in the picker", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		queryClient.setQueryData(providerConnectionsQueryKey, [
+			{ id: "codex-connection", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-24T00:00:00Z", config: {} },
+		]);
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-5", harness: "codex" } });
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		expect(task.agent.value).toBe("codex");
+		await act(async () => { await task.launch("Fix the bug", { clientRequestId: "req-5" }); });
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ harness: "codex" });
+	});
+
+it("starts nothing for a Cloud project with no agent and none connected, and says why, never falling back to Claude Code", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		queryClient.setQueryData(providerConnectionsQueryKey, []);
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([]));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await waitFor(() => expect(task.remoteLoadError).toBe("No agent is ready. Set one up in Settings."));
+		expect(task.canSubmit).toBe(false);
+		expect(task.agent.value).toBe("");
+		await act(async () => { await task.launch("Fix the bug", { clientRequestId: "req-6" }).catch(() => undefined); });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+it("creates a Coder project's session only on send too, through the same create", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudProjects[0].config = { ...h.cloudProjects[0].config, sandboxProvider: "coder" };
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "c-1", harness: "codex" } });

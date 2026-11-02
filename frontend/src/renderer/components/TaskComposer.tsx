@@ -230,6 +230,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 			try {
 				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
+				// The agent is always the one the picker shows; with none there is nothing to start.
+				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
 				const sentAt = new Date().toISOString();
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
@@ -239,8 +241,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
-					harness: input.agent ?? "claude-code",
-					displayName: input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code"),
+					harness: input.agent,
+					displayName: input.brief.trim().slice(0, 100) || input.agent,
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
@@ -441,8 +443,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents: [],
 	}).find(isReadyAgent)?.id ?? "" : "";
+	// A Cloud project without an agent of its own starts with the first agent this
+	// account has connected, shown in the picker, never one picked out of sight.
+	const readyCloudAgent = isCloudProject && cloudConnectionsQuery.isSuccess ? buildRankedAgentOptions({
+		agents: cloudAgents,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: [],
+	}).find(isReadyAgent)?.id ?? "" : "";
 	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
-		: configuredProjectAgent || (isCloudProject ? "" : readyFallbackAgent);
+		: configuredProjectAgent || (isCloudProject ? readyCloudAgent : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
@@ -816,7 +825,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
 		(!isStandalone || selectedAgent !== "") &&
-		(isCloudProject || selectedAgent !== "") &&
+		selectedAgent !== "" &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
 		(!hostId || (agentsQuery.isSuccess && settings !== undefined));
@@ -827,7 +836,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// list at all, a send could never start, so it says why at once.
 	const standaloneAgentError = !isCloudProject && selectedAgent === ""
 		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
-		: undefined;
+		: isCloudProject && selectedAgent === "" && cloudConnectionsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined;
 	// Scratchpad never reads a project, but its disabled query still sees an entry
 	// another view cached under the same key, so that entry's error is not its own.
 	const projectError = isCloudProject || isStandalone ? undefined : projectQuery.error;
