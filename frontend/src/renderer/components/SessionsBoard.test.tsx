@@ -318,7 +318,7 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
+	it("shows AO memory pressure before the Task button, and no archive bar with nothing archived", async () => {
 		const GIB = 1024 ** 3;
 		appMemoryMock.mockReturnValue({
 			isError: false,
@@ -335,6 +335,10 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
+		// In the board's action row, ahead of the Task button.
+		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
+		const task = screen.getByRole("button", { name: "New task" });
+		expect(indicator.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
 		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
