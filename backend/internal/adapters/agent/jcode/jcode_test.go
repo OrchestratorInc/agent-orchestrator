@@ -228,6 +228,31 @@ func TestSessionInfoReadsNativeTitle(t *testing.T) {
 	}
 }
 
+func TestSessionInfoUsesProjectHome(t *testing.T) {
+	t.Setenv("JCODE_HOME", t.TempDir())
+	home, workspace := t.TempDir(), t.TempDir()
+	writeNativeSession(t, home, testSessionID, workspace)
+	info, ok, err := testPlugin(t).SessionInfo(context.Background(), ports.SessionRef{
+		WorkspacePath: workspace, Env: map[string]string{"JCODE_HOME": home},
+		Metadata: map[string]string{ports.MetadataKeyAgentSessionID: testSessionID},
+	})
+	if err != nil || !ok || info.Title != "say hi" {
+		t.Fatalf("project-home session info = %+v, %v, %v", info, ok, err)
+	}
+}
+
+func TestProjectCanClearInheritedJCodeHome(t *testing.T) {
+	t.Setenv("JCODE_HOME", t.TempDir())
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := jcodeHome(map[string]string{"JCODE_HOME": ""})
+	if err != nil || home != filepath.Join(userHome, ".jcode") {
+		t.Fatalf("cleared project home = %q, %v", home, err)
+	}
+}
+
 func TestGetAgentHooksInstallsHiddenInstructionsAsIgnoredOverlay(t *testing.T) {
 	workspace := t.TempDir()
 	dataDir := shortDir(t)

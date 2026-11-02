@@ -2048,7 +2048,7 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	writeUsageFixture(t, filepath.Join(root, "project", "native-session.jsonl"), "{}\n")
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*")
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "")
 	mustNoError(t, err)
 	if path != "" {
 		t.Fatalf("invalid Claude native ID discovered %q", path)

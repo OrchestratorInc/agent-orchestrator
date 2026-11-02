@@ -193,7 +193,7 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 		return ports.SessionInfo{}, false, err
 	}
 	info, ok := agentbase.StandardSessionInfo(session)
-	if native, found := workspaceSession(info.AgentSessionID, session.WorkspacePath, nil); found && info.Title == "" {
+	if native, found := workspaceSession(info.AgentSessionID, session.WorkspacePath, session.Env); found && info.Title == "" {
 		info.Title = native.Title
 		ok = true
 	}
@@ -253,11 +253,12 @@ func samePath(a, b string) bool {
 
 // jcodeHome is JCode's state root: $JCODE_HOME, else ~/.jcode.
 func jcodeHome(env map[string]string) (string, error) {
-	if home := strings.TrimSpace(env["JCODE_HOME"]); home != "" {
-		return home, nil
+	configured, present := env["JCODE_HOME"]
+	if !present {
+		configured = os.Getenv("JCODE_HOME")
 	}
-	if home := strings.TrimSpace(os.Getenv("JCODE_HOME")); home != "" {
-		return home, nil
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

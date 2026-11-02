@@ -126,13 +126,54 @@ func TestDiscoverJCodePathRejectsUnsafeIDsAndMissingSessions(t *testing.T) {
 	writeJCodeSession(t, jcodeHome, jcodeAssistant1)
 	collector := NewCollector(collectorTestStore(t), SourceRoots{JCodeHome: jcodeHome, JCodeLedger: ledgerRoot}, nil)
 	for _, id := range []string{"*", "../escape", "session_missing_1793375224099_0000000000000000", "fox"} {
-		path, err := collector.discoverPath(context.Background(), domain.HarnessJCode, id)
+		path, err := collector.discoverPath(context.Background(), domain.HarnessJCode, id, "")
 		if err != nil || path != "" {
 			t.Fatalf("discoverPath(%q) = %q, %v; want no source", id, path, err)
 		}
 	}
 	if entries, _ := os.ReadDir(ledgerRoot); len(entries) != 0 {
 		t.Fatalf("ledger created for unsafe ids: %v", entries)
+	}
+}
+
+func TestJCodeUsageUsesTheProjectHomeAcrossCollectionPaths(t *testing.T) {
+	for _, mode := range []string{"hook", "backfill", "finalize"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			store := collectorTestStore(t)
+			session := collectorTestSession(t, store, domain.HarnessJCode, jcodeTestNativeID, false)
+			session.Metadata.RuntimeLaunchID = "launch-1"
+			mustNoError(t, store.UpdateSession(ctx, session))
+			home := t.TempDir()
+			project, ok, err := store.GetProject(ctx, string(session.ProjectID))
+			mustNoError(t, err)
+			if !ok {
+				t.Fatal("project missing")
+			}
+			project.Config.Env = map[string]string{"JCODE_HOME": home}
+			mustNoError(t, store.UpsertProject(ctx, project))
+			writeJCodeSession(t, home, jcodeAssistant1)
+			root := t.TempDir()
+			collector := NewCollector(store, SourceRoots{JCodeHome: t.TempDir(), JCodeLedger: root}, nil)
+			hook := HookSignal{Harness: domain.HarnessJCode, Event: "stop", LaunchID: "launch-1", NativeSessionID: jcodeTestNativeID}
+			want := "message_2"
+			switch mode {
+			case "hook":
+				mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+			case "backfill":
+				mustNoError(t, collector.BackfillActive(ctx))
+			case "finalize":
+				mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+				writeJCodeSession(t, home, jcodeAssistant1, jcodeAssistant2)
+				current, _, err := store.GetSession(ctx, session.ID)
+				mustNoError(t, err)
+				mustNoError(t, collector.FinalizeSession(ctx, session.ID, "launch-1", current.Revision))
+				want += ",message_4"
+			}
+			if got := strings.Join(readLedgerIDs(t, filepath.Join(root, jcodeTestNativeID+".jsonl")), ","); got != want {
+				t.Fatalf("project-home usage = %s, want %s", got, want)
+			}
+		})
 	}
 }
 

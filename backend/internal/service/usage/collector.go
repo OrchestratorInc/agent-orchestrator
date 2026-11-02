@@ -110,6 +110,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 }
 
 type collectorStore interface {
+	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
 	UpsertUsageBinding(context.Context, domain.UsageBindingRecord) (domain.UsageBindingRecord, error)
@@ -214,7 +215,7 @@ func (c *Collector) FinalizeSession(
 	for _, binding := range bindings {
 		if binding.Harness == domain.HarnessJCode {
 			// jcode's last turn can be saved after its last hook.
-			if _, err := c.syncJCodeLedger(ctx, binding.NativeRootID); err != nil {
+			if _, err := c.syncJCodeLedger(ctx, binding.NativeRootID, binding.SessionID); err != nil {
 				return err
 			}
 		}
@@ -310,7 +311,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessJCode ||
 			finalizing && !existsForDiscovery) {
-		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID)
+		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
 			return err
 		}
@@ -598,7 +599,7 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 	if err != nil {
 		return err
 	}
-	path, err := c.discoverPath(ctx, session.Harness, nativeID)
+	path, err := c.discoverPath(ctx, session.Harness, nativeID, session.ID)
 	if err != nil {
 		return err
 	}
@@ -885,7 +886,7 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 		targetState = domain.UsageBindingFinalizing
 	}
 
-	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID)
+	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID, binding.SessionID)
 	if err != nil {
 		return err
 	}
@@ -2125,7 +2126,7 @@ func pathWithinRoot(ctx context.Context, path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string) (string, error) {
+func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string, sessionID domain.SessionID) (string, error) {
 	if !nativeUsageIDPattern.MatchString(nativeID) {
 		return "", nil
 	}
@@ -2138,7 +2139,7 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 	case domain.HarnessKimi:
 		return c.discoverKimiPath(ctx, nativeID)
 	case domain.HarnessJCode:
-		return c.syncJCodeLedger(ctx, nativeID)
+		return c.syncJCodeLedger(ctx, nativeID, sessionID)
 	}
 	type candidate struct {
 		path string

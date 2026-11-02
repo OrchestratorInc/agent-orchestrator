@@ -131,6 +131,7 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		return false
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
+	ref.Env = env
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Env: env, Config: agentConfig, Permissions: agentConfig.Permissions,
 	})

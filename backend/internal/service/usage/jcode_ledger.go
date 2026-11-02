@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // jcodeSessionIDPattern is jcode's session id: session_<word>_<millis>_<16 hex>.
@@ -66,11 +68,15 @@ type jcodeLedgerLine struct {
 // message is exported once, whatever happens to the native file. A message is
 // attributed to the session's model at export time; exports run on every hook,
 // so that is the model of the turn that just ran.
-func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string) (string, error) {
-	if !jcodeSessionIDPattern.MatchString(nativeID) || c.roots.JCodeHome == "" || c.roots.JCodeLedger == "" {
+func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessionID domain.SessionID) (string, error) {
+	if !jcodeSessionIDPattern.MatchString(nativeID) || c.roots.JCodeLedger == "" {
 		return "", nil
 	}
-	native, err := readJCodeSession(filepath.Join(c.roots.JCodeHome, "sessions", nativeID+".json"))
+	home, err := c.jcodeHomeForSession(ctx, sessionID)
+	if err != nil || home == "" {
+		return "", err
+	}
+	native, err := readJCodeSession(filepath.Join(home, "sessions", nativeID+".json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -80,7 +86,7 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string) (strin
 	if native.ID != nativeID {
 		return "", nil
 	}
-	if err := applyJCodeJournal(filepath.Join(c.roots.JCodeHome, "sessions", nativeID+".journal.jsonl"), &native); err != nil {
+	if err := applyJCodeJournal(filepath.Join(home, "sessions", nativeID+".journal.jsonl"), &native); err != nil {
 		return "", fmt.Errorf("read jcode session journal: %w", err)
 	}
 	if err := os.MkdirAll(c.roots.JCodeLedger, 0o700); err != nil {
@@ -135,6 +141,41 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string) (strin
 		return "", err
 	}
 	return path, nil
+}
+
+// jcodeHomeForSession mirrors the project override used by the native launch.
+// JCode's runtime augmentation changes sockets and hooks, not JCODE_HOME. Only
+// AO's exported ledger is registered as an ingestor source; native roots do not
+// widen the ledger allow-list.
+func (c *Collector) jcodeHomeForSession(ctx context.Context, id domain.SessionID) (string, error) {
+	if id == "" {
+		return c.roots.JCodeHome, nil
+	}
+	session, ok, err := c.store.GetSession(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrUsageSessionNotFound
+	}
+	if session.ProjectID == "" {
+		return c.roots.JCodeHome, nil
+	}
+	project, ok, err := c.store.GetProject(ctx, string(session.ProjectID))
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("jcode usage project %s is missing", session.ProjectID)
+	}
+	if home, configured := project.Config.Env["JCODE_HOME"]; configured {
+		if home = strings.TrimSpace(home); home != "" {
+			return home, nil
+		}
+		home, err := os.UserHomeDir()
+		return filepath.Join(home, ".jcode"), err
+	}
+	return c.roots.JCodeHome, nil
 }
 
 func readJCodeSession(path string) (jcodeNativeSession, error) {
