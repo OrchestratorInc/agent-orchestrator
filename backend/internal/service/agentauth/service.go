@@ -150,7 +150,9 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 		device, _ := providerkeys.DeviceNames(dataDir)
 		republish := map[string]string{}
 		for name, value := range keys {
-			_ = os.Setenv(name, value)
+			// Recorded first, so a value the user exported before starting AO
+			// still reaches the sessions that must not receive AO's copy.
+			_ = providerkeys.ExportForProbes(name, value)
 			if device[name] && runtime.GOOS != "windows" {
 				republish[name] = value
 			}

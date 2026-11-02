@@ -2,7 +2,6 @@ package agentauth
 
 import (
 	"context"
-	"os"
 	"sort"
 	"strings"
 
@@ -185,7 +184,7 @@ func (s *Service) storeProviderKey(ctx context.Context, name, secret string, dev
 	}
 	// Make the key visible to local authentication probes immediately. New
 	// session launches also read the durable store independently.
-	if err := os.Setenv(name, secret); err != nil {
+	if err := providerkeys.ExportForProbes(name, secret); err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be activated.")
 	}
 	return nil
@@ -266,7 +265,8 @@ func (s *Service) RemoveProviderKey(ctx context.Context, name string) (ProviderK
 		if err := providerkeys.Remove(ctx, s.dataDir, n); err != nil {
 			return ProviderKey{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be removed.")
 		}
-		_ = os.Unsetenv(n)
+		// Put back what the user exported before AO replaced it, if anything.
+		_ = providerkeys.RestoreInherited(n)
 	}
 	return s.providerKey(ctx, name)
 }

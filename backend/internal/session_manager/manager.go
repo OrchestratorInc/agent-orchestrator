@@ -6377,13 +6377,22 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 				}
 			}
 			// The daemon exports stored keys to itself for auth probes, and
-			// runtimes start from its environment. Blank a withheld key's
-			// inherited copy, but only when AO put it there.
-			if stored, loadErr := providerkeys.Load(m.dataDir); loadErr == nil {
-				for _, key := range withhold {
-					if !overridden(key) && os.Getenv(key) == stored[key] {
+			// runtimes start from its environment. A withheld key gets back
+			// what the user exported before AO replaced it, or is blanked
+			// when they exported nothing; a value AO never touched is kept.
+			stored, loadErr := providerkeys.Load(m.dataDir)
+			for _, key := range withhold {
+				if overridden(key) {
+					continue
+				}
+				if value, set, exported := providerkeys.Inherited(key); exported {
+					if set {
+						setProtectedEnv(env, key, value, caseInsensitive)
+					} else {
 						setProtectedEnv(env, key, "", caseInsensitive)
 					}
+				} else if loadErr == nil && os.Getenv(key) == stored[key] {
+					setProtectedEnv(env, key, "", caseInsensitive)
 				}
 			}
 		} else {

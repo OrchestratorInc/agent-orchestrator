@@ -99,6 +99,35 @@ func TestRuntimeEnvIncludesSavedProviderKeysAndProjectOverride(t *testing.T) {
 	}
 }
 
+func TestRuntimeEnvKeepsAUserExportedKeyForAHarnessThatMustNotGetAOs(t *testing.T) {
+	dir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dir, "OPENAI_API_KEY", "ao-saved"); err != nil {
+		t.Fatal(err)
+	}
+	// The user exported their own key before starting AO; the daemon then
+	// exports AO's copy to itself for authentication probes.
+	t.Setenv("OPENAI_API_KEY", "user-exported")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("OPENAI_API_KEY") })
+	if err := providerkeys.ExportForProbes("OPENAI_API_KEY", "ao-saved"); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	// Codex never claimed AO's key, so it gets the user's own value back.
+	codex, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "codex")
+	if err != nil || codex["OPENAI_API_KEY"] != "user-exported" {
+		t.Fatalf("codex OPENAI_API_KEY=%q err=%v", codex["OPENAI_API_KEY"], err)
+	}
+	// Other harnesses still receive AO's saved key.
+	goose, err := manager.runtimeEnvChecked("session", "project", "", nil, "", "goose")
+	if err != nil || goose["OPENAI_API_KEY"] != "ao-saved" {
+		t.Fatalf("goose OPENAI_API_KEY=%q err=%v", goose["OPENAI_API_KEY"], err)
+	}
+}
+
 func TestRuntimeEnvInjectsBrowserCapability(t *testing.T) {
 	manager := &Manager{
 		dataDir:             "/data",
