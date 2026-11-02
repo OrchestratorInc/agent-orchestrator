@@ -95,6 +95,9 @@ export const aoBridge: AoBridge =
 				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
 				return new Uint8Array(await response.arrayBuffer());
 			},
+			openFolder: async () => {
+				throw new Error("Opening a folder needs the desktop app");
+			},
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {

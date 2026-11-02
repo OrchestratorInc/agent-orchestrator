@@ -1,4 +1,5 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
@@ -469,6 +470,9 @@ export function toCloudWorkspaceSession(
 		workspaceId: project.id,
 		workspaceName: project.displayName,
 		title: session.displayName || session.id,
+		// The caller's own pin; older control planes send none.
+		isPinned: session.pinned ?? false,
+		pinnedAt: session.pinnedAt,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
@@ -662,6 +666,8 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
+			// Sessions an earlier build started ahead of a brief and never used.
+			void cleanUpLegacyPreparedCloudSessions(client, orgId);
 			return response.items;
 		},
 	});

@@ -192,6 +192,7 @@ if (typeof window !== "undefined") {
 		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
+			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
