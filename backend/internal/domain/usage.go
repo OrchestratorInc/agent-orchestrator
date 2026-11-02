@@ -17,6 +17,7 @@ const (
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
 	UsageSourcePiSession      UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.

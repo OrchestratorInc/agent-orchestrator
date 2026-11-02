@@ -307,6 +307,8 @@ func (w *coordinatorTestWatcher) Start(ctx context.Context) <-chan struct{} {
 	return w.done
 }
 
+func (w *coordinatorTestWatcher) SetRoots(context.Context, []string) error { return nil }
+
 func (w *coordinatorTestWatcher) Rebuild(_ context.Context, paths []string) error {
 	w.rebuilds.Add(1)
 	w.pathsMu.Lock()

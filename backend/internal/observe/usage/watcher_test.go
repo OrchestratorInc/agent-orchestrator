@@ -81,6 +81,32 @@ func TestTranscriptWatcherAddsOnlyRegisteredSources(t *testing.T) {
 	}
 }
 
+func TestTranscriptWatcherRefreshesWorkspaceRoot(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := filepath.Join(t.TempDir(), ".qwen-runtime", "usage")
+	mustNoError(t, os.MkdirAll(workspaceRoot, 0o700))
+	source := filepath.Join(workspaceRoot, "token-usage-2026-08.jsonl")
+	mustNoError(t, os.WriteFile(source, []byte("{}\n"), 0o600))
+	watcher, err := NewTranscriptWatcher(context.Background(), []string{globalRoot})
+	mustNoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := watcher.Start(ctx)
+	t.Cleanup(func() { cancel(); <-done })
+
+	mustNoError(t, watcher.Rebuild(ctx, []string{source}))
+	watcher.mu.Lock()
+	_, watched := watcher.watched[source]
+	watcher.mu.Unlock()
+	if watched {
+		t.Fatal("workspace source was watched before its root was registered")
+	}
+	mustNoError(t, watcher.SetRoots(ctx, []string{globalRoot, workspaceRoot}))
+	mustNoError(t, watcher.Rebuild(ctx, []string{source}))
+	waitForWatchedPath(t, watcher, source)
+	mustNoError(t, os.WriteFile(source, []byte("{\"updated\":true}\n"), 0o600))
+	waitForTranscriptEvent(t, watcher.Events(), source)
+}
+
 func TestTranscriptWatcherResolvesSymlinkedRoot(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "transcripts")

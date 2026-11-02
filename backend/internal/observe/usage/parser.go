@@ -48,6 +48,8 @@ func parseRecordsWithState(
 		parseKimi(source, records, &result)
 	case domain.UsageSourcePiSession:
 		parsePi(source, records, &result)
+	case domain.UsageSourceQwenMonthly:
+		parseQwen(source, records, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -210,7 +212,7 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateCodexDirectParent(source, state.Codex); err != nil {
 			return nil, err
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession:
+	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly:
 		if state.Claude != nil || state.Codex != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
@@ -233,8 +235,8 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession:
-		// Both formats carry replay-stable native IDs, so no provider-specific
+	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly:
+		// These formats carry replay-stable native IDs, so no provider-specific
 		// cumulative baseline is required.
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", kind)
