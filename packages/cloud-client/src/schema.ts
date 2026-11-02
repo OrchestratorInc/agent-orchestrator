@@ -245,9 +245,9 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The project's environment variables, which every session of the project gets (its coding agent, shells, and Setup and Cleanup commands). They are stored encrypted. Only an organization owner or admin sees their values; other members see their names. */
+        /** @description The project's environment variables, which every session of the project gets (its coding agent, shells, and Setup and Cleanup commands), except sessions issue intake starts. They are stored encrypted. Only an organization owner or admin sees their values here; other members see their names. That is not a secrecy boundary: everyone who can use one of the project's sessions, and its coding agent, can read every value. */
         get: operations["getProjectEnvironment"];
-        /** @description Replace the project's environment variables as a whole; an empty map removes them. Organization owners and admins only. New sessions get them. */
+        /** @description Replace the project's environment variables as a whole; an empty map removes them. Organization owners and admins only. They are delivered into the sandbox of every new session of the project, except sessions issue intake starts, where everyone using the session and its coding agent can read them. A reserved name, in any case, is refused with 422 validation_error and a message naming it. */
         put: operations["putProjectEnvironment"];
         post?: never;
         delete?: never;
@@ -2830,7 +2830,7 @@ export interface components {
         };
         /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
         ProjectWorkersRequestReview: boolean;
-        /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
+        /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. Only issues opened by the repository's owners, members and collaborators are taken; an issue anyone else opens is skipped. The sessions intake starts get none of the project's environment variables. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
         ProjectTrackerIntake: {
             enabled?: boolean;
             /** @enum {string} */
@@ -2851,7 +2851,7 @@ export interface components {
             value?: string;
         };
         PutProjectEnvironmentInput: {
-            /** @description Name to value. Names are shell variable names, unique without case; AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved. Values are text of at most 32 KB, 64 KB in all. */
+            /** @description Name to value. Names are shell variable names, unique without case; AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved, and so are coding-agent logins and model relay settings (ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_OAUTH_TOKEN and the like), which belong in the coding agent's connection instead. Values are text of at most 32 KB, 64 KB in all, readable by everyone who can use the project's sessions. */
             variables: {
                 [key: string]: string;
             };
