@@ -1,6 +1,7 @@
 package sessionimport
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,7 +87,16 @@ func discoverOpenHands(ctx context.Context, root string) ([]sourceFiles, error) 
 				files.modTime = info.ModTime()
 			}
 		}
-		slices.Sort(paths)
+		slices.SortFunc(paths, func(a, b string) int {
+			aParts := strings.SplitN(filepath.Base(a), "-", 3)
+			bParts := strings.SplitN(filepath.Base(b), "-", 3)
+			aIndex, aErr := strconv.ParseUint(aParts[1], 10, 64)
+			bIndex, bErr := strconv.ParseUint(bParts[1], 10, 64)
+			if aErr == nil && bErr == nil && aIndex != bIndex {
+				return cmp.Compare(aIndex, bIndex)
+			}
+			return strings.Compare(a, b)
+		})
 		files.paths = append(files.paths, paths...)
 		if len(paths) > 0 {
 			out = append(out, files)

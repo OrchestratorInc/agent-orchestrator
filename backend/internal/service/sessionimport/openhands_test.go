@@ -65,3 +65,20 @@ func TestOpenHandsRoot(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestOpenHandsImportOrdersWideEventIndices(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "12345678123412341234123456789012")
+	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"}}`)
+	writeFile(t, filepath.Join(dir, "events", "event-99999-user.json"), `{"id":"user","source":"user","timestamp":"2026-11-02T10:00:00Z","llm_message":{"role":"user","content":[{"type":"text","text":"Synthetic prompt"}]}}`)
+	writeFile(t, filepath.Join(dir, "events", "event-100000-reply.json"), `{"id":"reply","source":"agent","timestamp":"2026-11-02T10:01:00Z","llm_message":{"role":"assistant","content":[{"type":"text","text":"Synthetic answer"}]}}`)
+	files, err := discoverOpenHands(context.Background(), root)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("discover = %v, %v", files, err)
+	}
+	got, err := readOpenHandsTranscript(context.Background(), root, files[0].paths...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: Synthetic prompt", "assistant: Synthetic answer")
+}
