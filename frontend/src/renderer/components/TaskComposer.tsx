@@ -833,9 +833,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: showModelNotice ? (
+		: modelAuthIssue && showModelNotice ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
+			issue={modelAuthIssue}
 			detail={modelWarningText}
 			onLogin={startAgentLogin}
 			onRetry={refreshSelectedModels}

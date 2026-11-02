@@ -2631,8 +2631,12 @@ describe("TaskComposer", () => {
 				? { data: { agents: [claude] } }
 				: { data: {} });
 			render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
-			expect(await screen.findByTestId("model-catalog-notice")).toBeInTheDocument();
-			expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
+			const notice = await screen.findByTestId("model-catalog-notice");
+			// The host's login only expired, so say that rather than "not logged in
+			// on this computer".
+			expect(notice).toHaveTextContent("Claude Code's saved login has expired.");
+			expect(notice).not.toHaveTextContent("isn't logged in on this computer");
+			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 		});
 
 		it("recognizes a login error from a daemon that predates warning codes", async () => {
