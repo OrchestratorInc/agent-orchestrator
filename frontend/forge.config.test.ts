@@ -123,6 +123,12 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("wake-helper");
 	});
 
+	it("bundles the dictation helper only on macOS", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("dictation-helper");
+		expect(extraResourcesForPlatform("linux")).not.toContain("dictation-helper");
+		expect(extraResourcesForPlatform("win32")).not.toContain("dictation-helper");
+	});
+
 	it("bundles cloudflared only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("cloudflared");
 		expect(extraResourcesForPlatform("linux")).not.toContain("cloudflared");
@@ -191,6 +197,13 @@ describe("macOS signing", () => {
 		expect(macSignOptionsForFile(acpNodeWith(fatMachO([CPU_TYPE_X86_64, CPU_TYPE_ARM64])))).toEqual({
 			entitlements: NODE_ENTITLEMENTS,
 		});
+	});
+
+	it("lets the dictation helper bundle and its executable record audio", () => {
+		const helper = "/Applications/Orchestrator.app/Contents/Resources/dictation-helper/Orchestrator.app";
+		const audio = { entitlements: ["com.apple.security.device.audio-input"] };
+		expect(macSignOptionsForFile(helper)).toEqual(audio);
+		expect(macSignOptionsForFile(`${helper}/Contents/MacOS/Orchestrator`)).toEqual(audio);
 	});
 
 	it("keeps electron-osx-sign defaults for every other bundle file", () => {
