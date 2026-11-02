@@ -12,7 +12,7 @@ export type ConversationUsageEntry = {
 	subscribeSnapshot(listener: (snapshot: ConversationSnapshot) => void): () => void;
 };
 
-/** The conversation's actions page, kept current while it is up: a running action says so, and one that can run again comes back. */
+/** The conversation's actions sheet, kept current while it is up: a running action says so, and one that can run again comes back. */
 export type ConversationActionsEntry = {
 	kind: "conversation-actions";
 	title: string;
@@ -47,7 +47,7 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 		"conversation-map": "/sheets/conversation-map",
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
-		// A pushed page on iOS and a sheet on Android; it shares the hand-off either way.
+		// Outside sheets/ for its own options: iOS bars it, the other sheets do not.
 		"conversation-actions": "/conversation-actions",
 	}[entry.kind];
 	return { pathname, params: { sheetKey } } as const;

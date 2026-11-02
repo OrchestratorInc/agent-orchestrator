@@ -6,7 +6,8 @@ import { radius, space, type } from "../tokens";
 
 /**
  * What the bar leaves the title between its back button and actions menu: two
- * 44pt glass buttons, their 16pt margins and the gaps beside them.
+ * 44pt glass buttons, their 16pt margins and the gaps beside them. Another
+ * button in the bar has to come out of this, or the title runs under it.
  */
 const BAR_CHROME = 180;
 const MAX_TITLE_WIDTH = 260;

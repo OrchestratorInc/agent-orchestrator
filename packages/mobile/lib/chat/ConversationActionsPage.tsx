@@ -10,10 +10,11 @@ import type { ConversationActionsPageProps } from "./ConversationActionsPage.typ
 export type { ConversationActionsPageProps } from "./ConversationActionsPage.types";
 
 /**
- * The conversation's actions as a page, on iOS a grouped SwiftUI Form like
- * Settings: each action a row with its glyph, the running ones saying so,
- * Compact with its context use as a ring, and Archive last and in red. A pull-down menu had grown too long to read at a
- * glance; a page keeps every action one tap away with room for its hint.
+ * The conversation's actions as a bottom sheet, on iOS a grouped SwiftUI Form
+ * like Settings: each action a row with its glyph, the running ones saying so,
+ * Compact with its context use as a ring, and Archive last and in red. A
+ * pull-down menu had grown too long to read at a glance; a sheet keeps every
+ * action one tap away with room for its hint.
  */
 export function ConversationActionsPage({ groups, onSelect }: ConversationActionsPageProps) {
 	const t = useTheme();

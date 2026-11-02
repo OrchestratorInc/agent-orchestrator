@@ -55,8 +55,8 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
 	});
 
-	// The actions page holds only Terminal, Preview, Pin, PR Review, Compact and Archive.
-	it("offers no rename, history, refresh, usage or MCP reload from the actions page", () => {
+	// The actions sheet holds only Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive.
+	it("offers no rename, history, refresh, usage or MCP reload from the actions sheet", () => {
 		expect(screenSource).not.toContain("<ConversationRenamePrompt");
 		expect(screenSource).not.toContain('kind: "conversation-map"');
 		expect(screenSource).toContain("contextPercent: menuContextPercent,");

@@ -6,8 +6,8 @@ import { readChatSheet, releaseChatSheet } from "../lib/chat/chatSheetRegistry";
 import { useSheetEntryPresent } from "../lib/chat/useSheetEntryPresent";
 
 /**
- * The conversation's "⋯": its actions as a page pushed over the chat. Choosing
- * one comes back to the chat first and runs it there, so what it opens (a
+ * The conversation's "⋯": its actions as a bottom sheet over the chat. Choosing
+ * one closes the sheet first and runs the action in the chat, so what it opens (a
  * sheet, a prompt, another page) opens over the conversation it acts on.
  */
 export default function ConversationActionsRoute() {

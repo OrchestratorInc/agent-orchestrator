@@ -16,7 +16,7 @@ const layout = (state: ConversationMenuState) => conversationMenuGroups(state).m
 describe("conversationMenuGroups", () => {
 	// Only these seven, each in its group, on both platforms.
 	it("offers Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive in four groups", () => {
-		expect(layout(base)).toEqual([
+		expect(layout({ ...base, artifactCount: 2, hasPullRequest: true })).toEqual([
 			["Open", ["Terminal", "Preview", "Artifacts"]],
 			["Worker", ["Pin", "PR Review"]],
 			["Context", ["Compact"]],
@@ -24,9 +24,23 @@ describe("conversationMenuGroups", () => {
 		]);
 	});
 
+	// On an empty session both led to an empty page.
+	it("offers Artifacts and PR Review only once there is something to open", () => {
+		expect(layout(base)).toEqual([
+			["Open", ["Terminal", "Preview"]],
+			["Worker", ["Pin"]],
+			["Context", ["Compact"]],
+			["Session", ["Archive"]],
+		]);
+		expect(layout({ ...base, artifactCount: 0 })[0][1]).not.toContain("Artifacts");
+	});
+
 	it("drops what the session cannot do, and never shows an empty group", () => {
 		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false })).toEqual([
-			["Open", ["Terminal", "Preview", "Artifacts"]],
+			["Open", ["Terminal", "Preview"]],
+		]);
+		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false, hasPullRequest: true })).toEqual([
+			["Open", ["Terminal", "Preview"]],
 			["Worker", ["PR Review"]],
 		]);
 	});
@@ -48,9 +62,9 @@ describe("conversationMenuGroups", () => {
 		expect(conversationMenuGroups({ ...base, turnInFlight: true })[2].items[0].disabled).toBe(true);
 	});
 
-	it("counts the artifacts under their label once there are any", () => {
+	it("counts the artifacts under their label", () => {
 		expect(conversationMenuGroups({ ...base, artifactCount: 3 })[0].items[2]).toMatchObject({ action: "artifacts", subtitle: "3 files" });
-		expect(conversationMenuGroups({ ...base, artifactCount: 0 })[0].items[2].subtitle).toBeUndefined();
+		expect(conversationMenuGroups({ ...base, artifactCount: 1 })[0].items[2].subtitle).toBe("1 file");
 	});
 
 	it("draws Archive in red with its hint", () => {

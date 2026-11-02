@@ -44,7 +44,6 @@ import { sessionStartupView, startupVisible } from "../session/sessionStartup";
 import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
-import { sessionHeaderButtons } from "../session/sessionHeaderButtons";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
@@ -191,14 +190,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				: "The interface switch failed; the current interface remains available.");
 	const turnActive = Boolean(
 		conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
-	);
-	const turnWaiting = Boolean(
-		conversation.snapshot?.items.some(
-			(item) =>
-				item.kind === "activity" &&
-				(item.activityKind === "approval" || item.activityKind === "user_input") &&
-				item.status === "pending",
-		),
 	);
 
 	// Loaded again when the provider comes up: a chat opened while hibernated or
@@ -407,39 +398,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		void resume(true);
 	}, [config, resume, session, terminated]);
 
-	const startInterfaceSwitch = useCallback(
-		async (policy: "drain" | "interrupt") => {
-			try {
-				await interfaceSwitch.start("tui", policy);
-			} catch (cause) {
-				Alert.alert("Couldn't switch interface", userFacingError(cause));
-			}
-		},
-		[interfaceSwitch],
-	);
-
-	const requestInterfaceSwitch = useCallback(() => {
-		if (!interfaceSwitch.status?.supported) {
-			Alert.alert("Terminal UI unavailable", interfaceSwitch.status?.reason || interfaceSwitch.error || "This agent cannot resume the same native conversation in Terminal UI.");
-			return;
-		}
-		if (!turnActive) {
-			void startInterfaceSwitch("drain");
-			return;
-		}
-		Alert.alert(
-			"Switch to Terminal UI?",
-			turnWaiting
-				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
-			[
-				{ text: "Keep Chat", style: "cancel" },
-				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
-				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
-			],
-		);
-	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
-
 	// Chat sheets take the keyboard's place rather than opening under it.
 	const presentSheet = useCallback(async (entry: ChatSheetEntry) => {
 		await dismissKeyboardBeforeSheet(keyboardVisible);
@@ -462,15 +420,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
 	const menuCompacting = conversation.pendingActions.includes("compact");
 	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
-	// Android's bar keeps only the "⋯"; iOS's leads with the switch, preview and files.
-	const sessionToolsInMenu = Platform.OS === "android";
+	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
-	const interfaceSwitchReady = Boolean(interfaceSwitch.status?.supported);
-	const interfaceSwitchBusy = interfaceSwitch.starting;
-	const menuSwitchBusy = interfaceSwitchBusy || interfaceTransitionActive;
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
+		hasPullRequest: menuHasPullRequest,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
 		canPin: !isOrchestrator,
 		canDelete: !isOrchestrator,
@@ -480,8 +435,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCompacting, menuContextPercent, menuPinned, menuReady, openingShell, previewReady, turnActive]);
-	// The actions page follows what it shows while it is up (see `ConversationActionsEntry`).
+	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, openingShell, previewReady, turnActive]);
+	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
 	useEffect(() => {
@@ -532,38 +487,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	menuActionsRef.current = menuActions;
 	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
 
-	// The header leads with the same buttons as the terminal's (see
-	// `sessionHeaderButtons`), and its "⋯" opens the rest of the actions as a
-	// page. A folded PR card comes back from the strip it leaves in the composer,
-	// not from here. Each button's work is read when it is pressed, so the header
-	// is registered again only when what it shows changes.
-	const headerPress = useRef({ requestInterfaceSwitch, openPreview: () => {}, openFiles: filesNavigation.openChanges });
-	headerPress.current = {
-		requestInterfaceSwitch,
-		openPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
-		openFiles: filesNavigation.openChanges,
-	};
+	// The header holds only "⋯", which opens the actions as a bottom sheet, as
+	// Android's always has. The terminal's switch, preview and files buttons
+	// beside it cut the iOS title to about nine characters; the preview is a
+	// row of the sheet and the files open from the changes strip in the
+	// composer. A folded PR card comes back from the strip it leaves there too.
 	const openActions = useCallback(() => {
 		const groups = latestMenuGroups.current;
 		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
 	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
 	const headerItems = useMemo(() => menuReady ? (
 		<Stack.Toolbar placement="right">
-			{sessionToolsInMenu ? null : sessionHeaderButtons({
-				switchTo: "terminal",
-				switchReady: interfaceSwitchReady,
-				switchBusy: interfaceSwitchBusy,
-				switchBusyLabel: "Switching to Terminal UI",
-				switchDisabled: interfaceTransitionActive,
-				previewReady,
-				onSwitch: () => headerPress.current.requestInterfaceSwitch(),
-				onPreview: () => headerPress.current.openPreview(),
-				onFiles: () => headerPress.current.openFiles(),
-				t,
-			})}
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
-	) : null, [interfaceSwitchBusy, interfaceSwitchReady, interfaceTransitionActive, menuReady, openActions, previewReady, sessionToolsInMenu, t]);
+	) : null, [menuReady, openActions]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else

@@ -13,7 +13,6 @@ function source(relativePath: string): string {
 // you only catch on device.
 describe("session header controls", () => {
 	const session = source("./ChatSessionScreen.tsx");
-	const buttons = source("../session/sessionHeaderButtons.tsx");
 	const route = source("../../app/conversation-actions.tsx");
 
 	it("declares the header items as a native toolbar from the page", () => {
@@ -24,38 +23,29 @@ describe("session header controls", () => {
 		}
 	});
 
-	// The same buttons, in the same order, with the same glyphs, as the
-	// terminal's header: the switch to the other interface, the preview, the
-	// files, then "⋯". Android's bar keeps only the "⋯" and moves the three
-	// into the top of its sheet.
-	it("leads with the terminal's buttons, built by the same function", () => {
-		expect(session).toContain("{sessionToolsInMenu ? null : sessionHeaderButtons({");
-		expect(session).toContain('const sessionToolsInMenu = Platform.OS === "android";');
-		expect(session).toContain('switchTo: "terminal",');
-		expect(source("../session/TerminalSessionScreen.tsx")).toContain('switchTo: "chat",');
-		const order = ['key="switch"', 'key="preview"', 'key="files"'].map((key) => buttons.lastIndexOf(key));
-		expect(order).toEqual([...order].sort((a, b) => a - b));
-		expect(buttons).toContain("icon={toolbarIcon(switchTo)}");
-		expect(buttons).toContain('icon={toolbarIcon(previewReady && ios ? PREVIEW_READY_GLYPH : "globe")}');
-		expect(buttons).toContain('icon={toolbarIcon("fileSearch")}');
-		// Both globes read the same detector, so they agree on what is ready.
-		expect(session).toContain("const previewReady = useSessionPreview(config, session.id);");
+	// The bar holds only "⋯" on both platforms. The terminal's switch, preview
+	// and files buttons beside it clipped the iOS title to about nine
+	// characters.
+	it("keeps only the actions button in the bar", () => {
+		expect(session).not.toContain("sessionHeaderButtons");
+		expect(session).not.toContain("sessionToolsInMenu");
+		expect(session).toContain(") : null, [menuReady, openActions]);");
 	});
 
-	it("opens the conversation actions as a pushed page on iOS and a bottom sheet on Android, never a menu", () => {
+	it("opens the conversation actions as a bottom sheet on both platforms, never a menu or a page", () => {
 		expect(session).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
 		expect(session).toContain('kind: "conversation-actions"');
 		expect(session).not.toContain("Stack.Toolbar.Menu");
 		expect(source("./chatSheetRegistry.ts")).toContain('"conversation-actions": "/conversation-actions",');
 		const layout = source("../../app/_layout.tsx");
-		expect(layout).toMatch(/name="conversation-actions"\s*options=\{Platform\.OS === "android" \? \{\s*presentation: "formSheet",/);
-		expect(layout).toContain('} : { title: "Actions" }}');
+		expect(layout).toMatch(/name="conversation-actions"\s*options=\{\{\s*presentation: "formSheet",/);
+		expect(layout).toMatch(/name="conversation-actions"[\s\S]*?sheetAllowedDetents: \[0\.75\],/);
 		// Back to the chat first, then the action, with no wait for an animation.
 		expect(route).toMatch(/backOr\(router\);\s*actions\.onSelect\(action\);/);
 		expect(session).not.toMatch(/setTimeout\([^)]*220/);
 	});
 
-	// The page follows what it shows while it is up; the header is rebuilt only
+	// The sheet follows what it shows while it is up; the header is rebuilt only
 	// when its own buttons change, not on every streamed event.
 	it("keeps the header still while the conversation streams", () => {
 		expect(session).toContain("const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({");
@@ -71,9 +61,8 @@ describe("session header controls", () => {
 		expect(readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8")).toContain("<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />");
 	});
 
-	it("opens the session's files from the header", () => {
-		expect(session).toContain("openFiles: filesNavigation.openChanges,");
-		expect(session).toContain("onFiles: () => headerPress.current.openFiles(),");
+	it("opens the session's files from the composer's changes strip", () => {
+		expect(session).toContain("changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}");
 	});
 
 	// Pull Requests is a page of its own, opened over the session so back

@@ -3,10 +3,11 @@ import type { MaterialDrawableName } from "../toolbarIcon.types";
 import { ARCHIVE_SESSION_HINT } from "../worker-action-model";
 
 /**
- * What the conversation's actions page offers, and nothing more: the
+ * What the conversation's actions sheet offers, and nothing more: the
  * worktree's terminal, the preview and the artifacts, pinning the worker and reviewing its
  * PR, compacting the history (its context use drawn as a ring), and archiving
- * the session.
+ * the session. Artifacts and PR Review show only once there is something to
+ * open: on an empty session they led to an empty page.
  */
 export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" | "pull_requests" | "compact" | "delete";
 
@@ -18,17 +19,18 @@ export type ConversationMenuSection = {
 	actions: ConversationMenuAction[];
 };
 
-export function conversationMenuSections({ canPin, canCompact, canDelete }: { canPin: boolean; canCompact: boolean; canDelete: boolean }): ConversationMenuSection[] {
+export function conversationMenuSections({ canPin, canCompact, canDelete, artifactCount, hasPullRequest }: Pick<ConversationMenuState, "canPin" | "canCompact" | "canDelete" | "artifactCount" | "hasPullRequest">): ConversationMenuSection[] {
+	const worker: ConversationMenuAction[] = [...(canPin ? ["pin" as const] : []), ...(hasPullRequest ? ["pull_requests" as const] : [])];
 	return [
-		{ title: "Open", actions: ["shell", "preview", "artifacts"] },
-		{ title: "Worker", actions: [...(canPin ? ["pin" as const] : []), "pull_requests"] },
-		// A section only when it has something in it: no page shows an empty group.
+		{ title: "Open", actions: ["shell", "preview", ...(artifactCount ? ["artifacts" as const] : [])] },
+		// A section only when it has something in it: the sheet never shows an empty group.
+		...(worker.length ? [{ title: "Worker" as const, actions: worker }] : []),
 		...(canCompact ? [{ title: "Context" as const, actions: ["compact" as const] }] : []),
 		...(canDelete ? [{ title: "Session" as const, actions: ["delete" as const] }] : []),
 	];
 }
 
-/** Everything the actions page shows, as plain values, so it can be compared and kept still. */
+/** Everything the actions sheet shows, as plain values, so it can be compared and kept still. */
 export type ConversationMenuState = {
 	canPin: boolean;
 	canCompact: boolean;
@@ -37,6 +39,8 @@ export type ConversationMenuState = {
 	previewReady?: boolean;
 	/** Files in the session's artifact directory, when known. */
 	artifactCount?: number;
+	/** The worker has opened at least one PR. */
+	hasPullRequest?: boolean;
 	pinned: boolean;
 	openingShell: boolean;
 	compacting: boolean;
@@ -62,7 +66,7 @@ export type ConversationMenuItem = {
 export type ConversationMenuGroup = { title: ConversationMenuSection["title"]; items: ConversationMenuItem[] };
 
 /**
- * The conversation's actions page: every action, grouped as the sections
+ * The conversation's actions sheet: every action, grouped as the sections
  * above, with the label, state and glyph it shows right now. An action that is
  * running says so in its label and cannot be chosen again until it finishes.
  */
@@ -77,7 +81,7 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 	switch (action) {
 		case "shell": return { action, label: state.openingShell ? "Opening terminal…" : "Terminal", disabled: state.openingShell, icon: { ios: "terminal", android: "terminal" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
-		case "artifacts": return { action, label: "Artifacts", subtitle: state.artifactCount ? `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}` : undefined, icon: { ios: "doc.text", android: "description" } };
+		case "artifacts": return { action, label: "Artifacts", subtitle: `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}`, icon: { ios: "doc.text", android: "description" } };
 		case "pin": return { action, label: state.pinned ? "Unpin" : "Pin", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };
 		case "pull_requests": return { action, label: "PR Review", icon: { ios: "arrow.triangle.pull", android: "rate_review" } };
 		case "compact": return {

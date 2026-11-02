@@ -218,22 +218,23 @@ function Shell() {
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts" }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
 				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version" }} />
-				{/* The conversation's "⋯". On iOS a page pushed over the chat with the
-				    stack's own push, titled with the conversation; on Android a bottom
-				    sheet, pinned to one detent so any decisive swipe down closes it
-				    (see SHEET_ROUTES). */}
+				{/* The conversation's "⋯", a bottom sheet over the chat at three
+				    quarters height, pinned to one detent so any decisive swipe down
+				    closes it on Android (see SHEET_ROUTES). iOS titles it with the
+				    conversation in a native bar, as the picker sheets do. */}
 				<Stack.Screen
 					name="conversation-actions"
-					options={Platform.OS === "android" ? {
+					options={{
 						presentation: "formSheet",
 						sheetAllowedDetents: [0.75],
 						sheetInitialDetentIndex: 0,
 						sheetGrabberVisible: true,
 						sheetCornerRadius,
-						headerShown: false,
+						headerShown: Platform.OS === "ios",
 						title: "Actions",
+						headerStyle: { backgroundColor: t.bgBase },
 						contentStyle: { backgroundColor: t.bgSurface },
-					} : { title: "Actions" }}
+					}}
 				/>
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
