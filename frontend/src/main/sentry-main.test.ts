@@ -294,20 +294,20 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
 	});
 
-	it("groups minified renderer functions by app chunk and line while retaining source map filenames", async () => {
+	it("groups minified renderer functions by app chunk, line, and column while retaining source map filenames", async () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
-		const capture = (filename: string, lineno: number, functionName: string) => {
-			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno }] } });
+		const capture = (filename: string, lineno: number, colno: number, functionName: string) => {
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno, colno }] } });
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
-		const first = capture("assets/_shell-A1B2C3D4.js", 42, "a");
-		const same = capture("assets/_shell-Z9Y8X7W6.js", 42, "b");
-		const otherLine = capture("assets/_shell-A1B2C3D4.js", 43, "a");
-		expect(first.message).toBe("Renderer TypeError in assets/_shell:42 (unknown)");
+		const first = capture("assets/_shell-A1B2C3D4.js", 42, 7, "a");
+		const same = capture("assets/_shell-Z9Y8X7W6.js", 42, 7, "b");
+		const otherColumn = capture("assets/_shell-A1B2C3D4.js", 42, 138_000, "a");
+		expect(first.message).toBe("Renderer TypeError in assets/_shell:42:7 (unknown)");
 		expect(first.fingerprint).toEqual(same.fingerprint);
-		expect(otherLine.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, in_app: true }]);
+		expect(otherColumn.fingerprint).not.toEqual(first.fingerprint);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
 	});
 
 	it("separates dev renderer sites by line when no packaged asset name exists", async () => {
@@ -437,6 +437,9 @@ describe("sanitizeRendererCapture", () => {
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "/Users/alice/private-repo" }] } })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "assets/../private.js" }] } })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "private-repo" }] } })).toBeNull();
-		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", filename: "assets/app-A1B2C3D4.js", lineno: 5 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 5 }]);
+		for (const colno of [0, -1, 10_000_001, 1.5, "private", null]) {
+			expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", colno }] } })).toBeNull();
+		}
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }]);
 	});
 });

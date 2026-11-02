@@ -17,9 +17,9 @@ function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
 	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
-function safeRendererFrames(error: unknown): Array<{ function: string; filename?: string; lineno?: number }> {
+function safeRendererFrames(error: unknown): Array<{ function: string; filename?: string; lineno?: number; colno?: number }> {
 	if (!(error instanceof Error) || !error.stack) return [];
-	const frames: Array<{ function: string; filename?: string; lineno?: number }> = [];
+	const frames: Array<{ function: string; filename?: string; lineno?: number; colno?: number }> = [];
 	for (const line of error.stack.split("\n")) {
 		const match = /^\s*at\s+([^\s()]+)\s+\(([^)]+)\)\s*$/.exec(line);
 		if (!match || !SAFE_FUNCTION.test(match[1]) || match[1].length > 128) continue;
@@ -28,9 +28,10 @@ function safeRendererFrames(error: unknown): Array<{ function: string; filename?
 		const source = location.replace(/:\d+:\d+$/, "");
 		const appPath = source.startsWith("app://renderer/") ? source.slice("app://renderer/".length) : undefined;
 		const filename = appPath && SAFE_APP_ASSET.test(appPath) ? appPath : undefined;
-		const lineNumber = /:(\d+):\d+$/.exec(location)?.[1];
-		const lineno = lineNumber ? Number(lineNumber) : undefined;
-		frames.push({ function: safeSentryFunctionName(match[1], "renderer_frame"), ...(filename ? { filename } : {}), ...(lineno && Number.isSafeInteger(lineno) && lineno <= 1_000_000 ? { lineno } : {}) });
+		const position = /:(\d+):(\d+)$/.exec(location);
+		const lineno = position ? Number(position[1]) : undefined;
+		const colno = position ? Number(position[2]) : undefined;
+		frames.push({ function: safeSentryFunctionName(match[1], "renderer_frame"), ...(filename ? { filename } : {}), ...(lineno && Number.isSafeInteger(lineno) && lineno <= 1_000_000 ? { lineno } : {}), ...(colno && Number.isSafeInteger(colno) && colno <= 10_000_000 ? { colno } : {}) });
 		if (frames.length === 8) break;
 	}
 	return frames.reverse();

@@ -45,8 +45,8 @@ separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type, bounded function names,
-line numbers, and a validated app relative JavaScript asset filename. The
-asset filename preserves the location needed for source map matching. Local
+bounded line and column numbers, and a validated app relative JavaScript asset
+filename. The asset filename preserves the location needed for source map matching. Local
 filesystem paths, full URLs, and raw exception messages are removed before sending.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.

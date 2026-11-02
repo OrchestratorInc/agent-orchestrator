@@ -36,7 +36,7 @@ it("sends only safe renderer stack frames and a standard exception type through 
 	captureExceptionToSentry(error, { category: "render_crash" });
 	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
 		kind: "exception",
-		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26 }, { function: "SessionView", lineno: 13 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42 }] },
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26, colno: 3 }, { function: "SessionView", lineno: 13, colno: 4 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, colno: 7 }] },
 	}));
 	expect(JSON.stringify(capture.mock.calls[0]?.[0].exception)).not.toMatch(/private-repo|\/Users\/alice|app:\/\/|localhost/);
 });
