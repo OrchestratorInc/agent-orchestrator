@@ -39,7 +39,7 @@ func hermesImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) b
 		return false
 	}
 	id := source.NativeID
-	if len(rec.Metadata.ProviderConversationID) > 0 {
+	if rec.Metadata.ProviderConversationID != "" {
 		id = rec.Metadata.ProviderConversationID
 	}
 	for _, entry := range registry.Entries {

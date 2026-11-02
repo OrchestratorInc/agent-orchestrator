@@ -57,7 +57,7 @@ func discoverHermes(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err := rows.Scan(&id, &updated, &count); err != nil {
 			return nil, err
 		}
-		if len(id) == 0 {
+		if id == "" {
 			continue
 		}
 		out = append(out, sourceFiles{harness: domain.HarnessHermes, root: root, key: id, paths: []string{id}, modTime: time.UnixMilli(int64(updated * 1000)), size: count})
@@ -117,12 +117,12 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 		if strings.HasPrefix(text, "[") && json.Valid([]byte(text)) {
 			text = visibleText([]byte(text))
 		}
-		if len(text) == 0 || strings.HasPrefix(text, "[Context from previous conversation]") {
+		if text == "" || strings.HasPrefix(text, "[Context from previous conversation]") {
 			continue
 		}
 		if role == "user" {
 			hasUser = true
-			if len(t.title) == 0 {
+			if t.title == "" {
 				t.title = text
 			}
 		}
@@ -145,7 +145,7 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	if len(strings.TrimSpace(title.String)) > 0 {
+	if strings.TrimSpace(title.String) != "" {
 		t.title = title.String
 	}
 	t.title = strings.Join(strings.Fields(t.title), " ")

@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// NativeSessionConfigDir resolves the state home used for native resume.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -19,6 +20,7 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return ResolveHome(env)
 }
 
+// ProbeNativeSession checks for the native conversation without writing state.
 func (*Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if _, err := os.Stat(filepath.Join(ref.ConfigDir, "state.db")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -45,7 +47,7 @@ func (*Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRe
 // a corrupt/unreadable title file: that would hide damage to a managed session.
 func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if len(id) == 0 || cfg.Session.Metadata["importedNativeSession"] != "true" {
+	if id == "" || cfg.Session.Metadata["importedNativeSession"] != "true" {
 		return nil, false, nil
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "native-title")); !errors.Is(err, os.ErrNotExist) {
