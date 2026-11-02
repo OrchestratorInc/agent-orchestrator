@@ -7,6 +7,15 @@ function source(relativePath: string): string {
 }
 
 describe("Android native compatibility boundaries", () => {
+	// React Native registers its back callback only when both the device and
+	// the target SDK are Android 16. Opted in to predictive back, Android 13–15
+	// never call onBackPressed(), so Back skips JavaScript, no stack pops, and the
+	// app goes to the launcher from any pushed page.
+	it("leaves Android Back to React Native rather than opting in to predictive back", () => {
+		const android = JSON.parse(source("../app.json")).expo.android;
+		expect(android.predictiveBackGestureEnabled).toBe(false);
+	});
+
 	// Material's own icon button: the 48dp target, the ripple and the click all
 	// come from Compose, so no touch is recognised by hand in JavaScript.
 	it("draws the header button as a Compose icon button with a Material Symbol", () => {
