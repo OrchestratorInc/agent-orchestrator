@@ -91,9 +91,9 @@ export default function PairScreen() {
 		mounted.current = true;
 		return () => { mounted.current = false; };
 	}, []);
-	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId ? undefined : null);
+	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId !== undefined ? undefined : null);
 	useEffect(() => {
-		if (!repairHostId) {
+		if (repairHostId === undefined) {
 			setRepairHost(null);
 			return;
 		}
@@ -326,7 +326,7 @@ export default function PairScreen() {
 	if (repairHost === undefined) {
 		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	}
-	if (repairHostId && !repairHost) {
+	if (repairHostId !== undefined && !repairHost) {
 		return (
 			<View style={[styles.screen, styles.missing, { paddingTop: insets.top + space.xl }]}>
 				<Feather name="monitor-off" size={iconSize.xl} color={t.textTertiary} />
