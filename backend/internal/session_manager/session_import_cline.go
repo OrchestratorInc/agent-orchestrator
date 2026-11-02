@@ -42,7 +42,7 @@ func clineImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bo
 	if err != nil || live.ID != source.NativeID || live.PID <= 0 || live.Status != "running" && live.Status != "idle" && live.Status != "pending" {
 		return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
 	}
-	if len(rec.Metadata.WorkspacePath) > 0 && pathWithin(rec.Metadata.WorkspacePath, live.CWD) {
+	if rec.Metadata.WorkspacePath != "" && pathWithin(rec.Metadata.WorkspacePath, live.CWD) {
 		return false
 	}
 	if !processalive.Alive(live.PID) {

@@ -21,10 +21,10 @@ import (
 var clineImportID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$`)
 
 func clineRoot(home string) string {
-	if root := os.Getenv("CLINE_DATA_DIR"); len(root) > 0 {
+	if root := os.Getenv("CLINE_DATA_DIR"); root != "" {
 		return root
 	}
-	if root := os.Getenv("CLINE_DIR"); len(root) > 0 {
+	if root := os.Getenv("CLINE_DIR"); root != "" {
 		return filepath.Join(root, "data")
 	}
 	return filepath.Join(home, ".cline", "data")
@@ -200,7 +200,7 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 		}
 		t.shortened = t.shortened || m.Omitted || strings.Contains(text, omittedText)
 		text = strings.ReplaceAll(text, omittedText, "")
-		if len(strings.TrimSpace(text)) == 0 {
+		if strings.TrimSpace(text) == "" {
 			return
 		}
 		at := time.UnixMilli(m.TS)
@@ -210,7 +210,7 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 		if at.After(t.last) {
 			t.last = at
 		}
-		if len(t.title) == 0 && m.Role == "user" {
+		if t.title == "" && m.Role == "user" {
 			t.title = strings.Join(strings.Fields(text), " ")
 			if runes := []rune(t.title); len(runes) > 100 {
 				t.title = string(runes[:100]) + "…"
@@ -234,7 +234,7 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 	if header.Updated.After(t.last) && header.Updated.Before(now) {
 		t.last = header.Updated
 	}
-	if len(t.title) == 0 {
+	if t.title == "" {
 		return t, errors.New("no readable cline prompt")
 	}
 	t.path, t.paths = paths[1], append([]string(nil), paths...)

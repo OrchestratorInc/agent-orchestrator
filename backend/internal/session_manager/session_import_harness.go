@@ -19,7 +19,7 @@ type importedHarnessHooks struct {
 }
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
-	domain.HarnessCline: {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
+	domain.HarnessCline:  {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
 	domain.HarnessGemini: {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
 }
 
