@@ -6,7 +6,7 @@ import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 func SupportedHarness(h domain.AgentHarness) bool {
 	switch h {
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi, domain.HarnessPi, domain.HarnessQwen,
-		domain.HarnessGoose:
+		domain.HarnessGoose, domain.HarnessHermes:
 		return true
 	default:
 		return false

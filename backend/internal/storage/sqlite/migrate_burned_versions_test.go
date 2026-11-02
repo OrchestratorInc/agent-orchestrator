@@ -247,6 +247,7 @@ var shippedMigrations = map[int64]string{
 	20261102174444568: "20261102174444568_allow_pi_usage.sql",
 	20261102174702749: "20261102174702749_allow_qwen_usage.sql",
 	20261102185757162: "20261102185757162_allow_goose_usage.sql",
+	20261102191515391: "20261102191515391_allow_hermes_usage.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
