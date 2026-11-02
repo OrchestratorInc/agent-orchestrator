@@ -1288,6 +1288,7 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	if (session.status === "ci_failed") add("ci_failed");
 	if (session.status === "changes_requested") add("changes_requested");
 	if (session.status === "commented") add("commented");
+	// Only open and draft PRs contribute live PR signals.
 	for (const pr of openPRs(session)) {
 		if (pr.ci === "failing") add("ci_failed");
 		if (pr.review === "changes_requested") add("changes_requested");

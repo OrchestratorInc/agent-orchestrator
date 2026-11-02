@@ -1761,11 +1761,11 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
   });
 
-  it("ignores a conflict and changes requested left on a closed PR when the open PR is clean", () => {
+  it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
     renderWithQuery(
       <SessionInspector
         session={session(
-          [pr(5134, "closed", { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
+          [pr(5134, state, { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
           {
             status: "working",
             activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1779,6 +1779,26 @@ describe("SessionInspector Activity section", () => {
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
     expect(within(activityRow).queryByText("Conflict")).not.toBeInTheDocument();
     expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
+  it.each(["open", "draft"] as const)("keeps a %s PR's conflict and requested changes beside a clean closed PR", (state) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(7, state, { mergeability: "conflicting", review: "changes_requested" }), pr(8, "closed", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+    expect(within(activityRow).getByText("Changes Requested")).toBeInTheDocument();
   });
 
   it("timestamps the live Activity state so it participates in chronological ordering", () => {
