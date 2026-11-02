@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +13,37 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestGeminiWindowsProjectOwnershipRetainsExistingSlug(t *testing.T) {
+	cwd := `C:\Users\Alice\Project`
+	for _, registry := range []bool{true, false} {
+		root := t.TempDir()
+		dir := filepath.Join(root, "tmp", "existing-slug")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if registry {
+			body, err := json.Marshal(map[string]any{"projects": map[string]string{strings.ToLower(cwd): "existing-slug"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "projects.json"), body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(filepath.Join(dir, ".project_root"), []byte(strings.ToLower(cwd)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		provider, err := os.OpenRoot(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := geminiProjectDirectory(provider, cwd, "new-hash", true)
+		_ = provider.Close()
+		if got != "existing-slug" {
+			t.Fatalf("Windows project (registry=%v) = %q", registry, got)
+		}
+	}
+}
 
 func TestImportedGeminiCopyKeepsIDAndSurvivesRetry(t *testing.T) {
 	if runtime.GOOS == "windows" {
