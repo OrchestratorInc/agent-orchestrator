@@ -484,11 +484,13 @@ export interface SystemEventDetail {
 		| "workspace.setup"
 		| "workspace.script.run"
 		| "account.switched"
+		/** A usage limit moved the session to another account; AO retries the refused prompt there once. */
+		| "account.limit_handoff"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
 		| "approval_mode.substituted";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
-	/** account.switched: the account a stopped turn's conversation continues on. */
+	/** account.switched, account.limit_handoff: the account the conversation continues on. */
 	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";

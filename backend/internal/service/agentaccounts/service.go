@@ -930,6 +930,109 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
+// HandoffTarget picks the account a session refused for a usage limit moves
+// to: another signed-in account of its harness's provider whose native limits,
+// read now rather than from the display cache, verify room in the meters a
+// request for model draws on. The one with the most room wins; "" means none
+// qualifies. exclude names accounts the session must not move to.
+func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string, exclude map[string]bool) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", ports.ErrAgentAccountProviderMismatch
+	}
+	current, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return "", err
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return "", err
+	}
+	headroom := make([]float64, len(accounts))
+	rejected := make([]string, len(accounts))
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		switch {
+		case account.Provider != p:
+			continue
+		case account.ID == current.ID:
+			rejected[i] = "current"
+			continue
+		case exclude[account.ID] || s.beingRemoved(account.ID):
+			rejected[i] = "excluded"
+			continue
+		}
+		wg.Go(func() {
+			r := s.read(ctx, account)
+			switch {
+			case r == nil:
+				rejected[i] = "unreadable"
+			case r.identityErr != "":
+				rejected[i] = "identity: " + r.identityErr
+			case !r.identity.SignedIn:
+				rejected[i] = "signed out"
+			case r.limitsErr != "" || r.limits == nil:
+				rejected[i] = "limits: " + r.limitsErr
+			default:
+				if room, ok := r.limits.HandoffHeadroom(p, model); ok {
+					headroom[i] = room
+				} else {
+					rejected[i] = "no verified room"
+				}
+			}
+		})
+	}
+	wg.Wait()
+	reasons := map[string]string{}
+	for i, reason := range rejected {
+		if reason != "" {
+			reasons[accounts[i].ID] = reason
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	best := -1
+	for i, room := range headroom {
+		if room > 0 && (best < 0 || room > headroom[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		s.log.Info("account handoff: no target", "session", id, "model", model, "rejected", reasons)
+		return "", nil
+	}
+	s.log.Info("account handoff: target", "session", id, "model", model, "target", accounts[best].ID, "rejected", reasons)
+	return accounts[best].ID, nil
+}
+
+// sessionPinStore is the "Stay on this account" choice, optional so the
+// narrow account store port and its fakes do not grow.
+type sessionPinStore interface {
+	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
+	SetSessionAccountPinned(context.Context, domain.SessionID, bool, time.Time) error
+}
+
+// SessionStaysOnAccount reports whether the user asked the session to stay on
+// its account, so a usage limit never moves it automatically.
+func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID) (bool, error) {
+	pins, ok := s.store.(sessionPinStore)
+	if !ok {
+		return false, nil
+	}
+	return pins.SessionAccountPinned(ctx, id)
+}
+
+// SetSessionStaysOnAccount records or clears the session's "Stay on this
+// account" choice.
+func (s *Service) SetSessionStaysOnAccount(ctx context.Context, id domain.SessionID, stay bool) error {
+	pins, ok := s.store.(sessionPinStore)
+	if !ok {
+		return ports.ErrAgentAccountProviderMismatch
+	}
+	return pins.SetSessionAccountPinned(ctx, id, stay, s.now())
+}
+
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	accountID, bound, err := s.store.GetSessionAgentAccount(ctx, id, p)
 	if err != nil {

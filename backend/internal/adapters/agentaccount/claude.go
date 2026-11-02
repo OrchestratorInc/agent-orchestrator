@@ -222,11 +222,11 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 	if r == nil {
 		return out
 	}
-	add := func(id, label string, w *claudeUsageWindow) {
+	add := func(id, label, scope string, w *claudeUsageWindow) {
 		if w == nil || w.Utilization == nil {
 			return
 		}
-		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100)}
+		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), Scope: scope}
 		if w.ResetsAt != nil {
 			if at, err := time.Parse(time.RFC3339, *w.ResetsAt); err == nil {
 				window.ResetsAt = &at
@@ -234,13 +234,13 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		}
 		out.Windows = append(out.Windows, window)
 	}
-	add("five_hour", "Session (5h)", r.FiveHour)
-	add("seven_day", "Weekly", r.SevenDay)
-	add("seven_day_opus", "Weekly · Opus", r.Opus)
-	add("seven_day_sonnet", "Weekly · Sonnet", r.Sonnet)
+	add("five_hour", "Session (5h)", "", r.FiveHour)
+	add("seven_day", "Weekly", "", r.SevenDay)
+	add("seven_day_opus", "Weekly · Opus", "opus", r.Opus)
+	add("seven_day_sonnet", "Weekly · Sonnet", "sonnet", r.Sonnet)
 	for _, scoped := range r.ModelScoped {
 		w := scoped.claudeUsageWindow
-		add("model:"+scoped.DisplayName, "Weekly · "+scoped.DisplayName, &w)
+		add("model:"+scoped.DisplayName, "Weekly · "+scoped.DisplayName, scoped.DisplayName, &w)
 	}
 	out.AutoResumeResetsAt = b.autoResumeResetAt(now)
 	if e := r.Spend; e != nil {
