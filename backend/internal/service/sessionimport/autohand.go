@@ -21,7 +21,7 @@ import (
 var autohandImportID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-[0-9]+$`)
 
 func autohandRoot(home string) string {
-	if root := strings.TrimSpace(os.Getenv("AUTOHAND_HOME")); root != "" {
+	if root := strings.TrimSpace(os.Getenv("AUTOHAND_HOME")); len(root) > 0 {
 		return root
 	}
 	return filepath.Join(home, ".autohand")
@@ -81,7 +81,7 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 		return t, err
 	}
 	defer func() { _ = provider.Close() }()
-	rel, err := filepath.Rel(t.root, paths[0])
+	rel, err := filepath.Rel(t.root, canonical(paths[0]))
 	if err != nil || !filepath.IsLocal(rel) {
 		return t, errors.New("autohand metadata outside provider home")
 	}
@@ -144,10 +144,10 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 			t.shortened = true
 			text = strings.ReplaceAll(text, omittedText, "")
 		}
-		if strings.TrimSpace(text) == "" {
+		if len(strings.TrimSpace(text)) == 0 {
 			return nil
 		}
-		if t.title == "" && message.Role == "user" {
+		if len(t.title) == 0 && message.Role == "user" {
 			t.title = strings.Join(strings.Fields(text), " ")
 			if runes := []rune(t.title); len(runes) > 100 {
 				t.title = string(runes[:100]) + "…"
@@ -162,7 +162,7 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 	if err != nil {
 		return t, err
 	}
-	if t.title == "" {
+	if len(t.title) == 0 {
 		return t, errors.New("no readable autohand prompt")
 	}
 	t.path, t.paths = paths[1], append([]string(nil), paths...)

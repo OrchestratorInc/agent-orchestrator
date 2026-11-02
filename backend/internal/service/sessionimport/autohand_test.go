@@ -111,7 +111,7 @@ func TestAutohandImportsTerminalAndRefreshesSidecar(t *testing.T) {
 	writeFile(t, filepath.Join(filepath.Dir(path), "metadata.json"), string(meta))
 	store := &importStore{}
 	svc := New(store, "", nil)
-	svc.home = cwd
+	svc.home = canonical(cwd)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessAutohand: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {

@@ -29,11 +29,11 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	if !set {
 		root = os.Getenv("AUTOHAND_HOME")
 	}
-	if root = strings.TrimSpace(root); root != "" {
+	if root = strings.TrimSpace(root); len(root) > 0 {
 		return filepath.Abs(root)
 	}
 	home := env["HOME"]
-	if home == "" {
+	if len(home) == 0 {
 		var err error
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -50,7 +50,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	if !autohandNativeID.MatchString(ref.NativeSessionID) {
 		return "", false, errors.New("autohand invalid native session id")
 	}
-	if ref.ConfigDir == "" {
+	if len(ref.ConfigDir) == 0 {
 		return "", false, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)
@@ -73,7 +73,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 }
 
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if ref.ConfigDir == "" {
+	if len(ref.ConfigDir) == 0 {
 		return ports.NativeSessionAvailabilityUnknown, ctx.Err()
 	}
 	_, exists, err := p.LocateTranscript(ctx, ref)
