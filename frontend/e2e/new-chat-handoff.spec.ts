@@ -65,7 +65,8 @@ test("renderer: the first send from the new chat page never blanks the composer 
 	await page.keyboard.type("Hand this over");
 	const delegated = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/orchestrators/delegate" && request.method() === "POST");
 	await page.keyboard.press("Enter");
-	expect((await delegated).postDataJSON()).toMatchObject({ approvalMode: "auto" });
+	// Leave an unselected policy to the daemon's project and harness defaults.
+	expect((await delegated).postDataJSON()).not.toHaveProperty("approvalMode");
 	await expect(page).toHaveURL(/sessions\/handoff-w1/);
 	await expect(prompt).toBeVisible();
 	await page.waitForTimeout(500);
