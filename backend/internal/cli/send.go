@@ -26,8 +26,12 @@ type sendOptions struct {
 type sendAPIRequest struct {
 	UserAuthored    bool   `json:"userAuthored,omitempty"`
 	SenderSessionID string `json:"senderSessionId,omitempty"`
+	SenderName      string `json:"senderName,omitempty"`
 	Message         string `json:"message"`
 }
+
+// outsideSenderName is how the timeline names a send from outside AO's sessions.
+const outsideSenderName = "ao send"
 
 // The steering DTOs mirror the daemon conversation API without coupling the
 // thin CLI to the HTTP controller package.
@@ -91,7 +95,11 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	// from sanitized issue refs; keep the URL well-formed regardless.
 	path := "sessions/" + url.PathEscape(session)
 	if !opts.steer {
-		return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)
+		request := sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID"))}
+		if request.SenderSessionID == "" {
+			request.UserAuthored, request.SenderName = true, outsideSenderName
+		}
+		return c.postJSON(ctx, path+"/send", request, nil)
 	}
 	return c.steerMessage(ctx, path, message, strings.TrimSpace(opts.clientMessageID), opts.recoverOnly)
 }
