@@ -3349,6 +3349,33 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(h.cloudCreateSession.mock.calls.map((call) => call[2])).toEqual([{ idempotencyKey: "req-2" }, { idempotencyKey: "req-2" }]);
 	});
 
+	it("keeps a Cloud create's HTTP status on its error, so the page can tell a server error from a refusal", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudCreateSession.mockRejectedValue(new CloudCpError("The control plane could not finish the request.", { status: 500, code: "internal_error" }));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => { outcome = await task.launch("Fix the bug", { clientRequestId: "req-7" }).catch((error: unknown) => error); });
+		expect(outcome).toMatchObject({ name: "TaskCreateError", status: 500, code: "internal_error" });
+	});
+
+	it("retries a New Task dialog create that met a server error with the same request id", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudCreateSession
+			.mockRejectedValueOnce(new CloudCpError("Bad gateway", { status: 502 }))
+			.mockResolvedValue({ session: { id: "s-8", harness: "codex" } });
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		// The dialog passes no request id of its own: the launch keeps one per brief.
+		await act(async () => { await task.launch("Fix the bug").catch(() => undefined); });
+		let sessionId!: string;
+		await act(async () => { sessionId = await task.launch("Fix the bug"); });
+		expect(sessionId).toBe("s-8");
+		const [first, second] = h.cloudCreateSession.mock.calls.map((call) => call[2]);
+		expect(first?.idempotencyKey).toEqual(expect.any(String));
+		expect(second).toEqual(first);
+	});
+
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudCreateSession.mockRejectedValue(new CloudCpError("All your plan's running sessions are in use. Pause or archive one, or upgrade your plan.", { status: 409, code: "WORKER_SLOTS_FULL" }));

@@ -111,6 +111,8 @@ class TaskCreateError extends Error {
 		message: string,
 		readonly code?: string,
 		readonly details?: components["schemas"]["APIError"]["details"],
+		/** The control plane's HTTP status for a Cloud create: a 5xx says nothing about whether it went through. */
+		readonly status?: number,
 	) {
 		super(message);
 		this.name = "TaskCreateError";
@@ -271,7 +273,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			} catch (err) {
 				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
-				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code);
+				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
@@ -966,6 +968,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 							defaultValue: "Couldn't confirm {{agent}}'s models right now. Try again in a moment.",
 						}),
 						retryErr.code,
+						undefined,
+						retryErr.status,
 					);
 				}
 			}
@@ -1038,7 +1042,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			}
 			setError(message);
 			throw err instanceof TaskCreateError
-				? new TaskCreateError(message, err.code, err.details)
+				? new TaskCreateError(message, err.code, err.details, err.status)
 				: err instanceof Error ? err : new Error(message);
 		} finally {
 			launchingPreparationRef.current = "";

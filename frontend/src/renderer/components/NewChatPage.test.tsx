@@ -250,6 +250,50 @@ describe("NewChatPage", () => {
 		expect(h.navigate).not.toHaveBeenCalled();
 	});
 
+	// A Cloud create's error carries the control plane's HTTP status.
+	const createError = (message: string, status: number, code?: string) =>
+		Object.assign(new Error(message), { name: "TaskCreateError", status, ...(code ? { code } : {}) });
+
+	it.each([
+		{ status: 500, code: "internal_error" },
+		{ status: 502, code: undefined },
+		{ status: 503, code: "unavailable" },
+		{ status: 504, code: undefined },
+		{ status: 429, code: "rate_limited" },
+		{ status: 429, code: undefined },
+	])("leaves a $status ($code) answer to a create uncertain, so the composer retries it with the same request id", async ({ status, code }) => {
+		h.isCloudProject = true;
+		// The composer holds the send while it is in flight, as it does in the app.
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] });
+		h.launch.mockRejectedValue(createError("The control plane could not finish the request.", status, code));
+		renderPage();
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		// The error itself, not a final refusal: the composer keeps the send and offers "Retry message safely".
+		expect(outcome).toMatchObject({ status });
+		expect(outcome).not.toMatchObject({ code: "TASK_CREATE_FAILED" });
+		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1" });
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ status: 409, code: "WORKER_SLOTS_FULL", message: "All your plan's running sessions are in use." },
+		{ status: 402, code: "PLAN_REQUIRED", message: "Cloud sessions need a plan." },
+		{ status: 429, code: "WEEKLY_LIMIT_REACHED", message: "You have used this week's Cloud hours." },
+		{ status: 422, code: "validation_error", message: "The brief is too long." },
+	])("keeps a $status $code refusal final, with its own message", async ({ status, code, message }) => {
+		h.isCloudProject = true;
+		h.launch.mockRejectedValue(createError(message, status, code));
+		renderPage();
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ message, code: "TASK_CREATE_FAILED" });
+	});
+
 	it("becomes a fresh new chat when it moved to another project during the hand-off", async () => {
 		let resolve!: (sessionId: string) => void;
 		h.launch.mockReturnValue(new Promise<string>((done) => { resolve = done; }));
