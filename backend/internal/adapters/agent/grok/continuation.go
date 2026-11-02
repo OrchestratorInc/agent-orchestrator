@@ -180,5 +180,47 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSe
 			return closeErr
 		}
 	}
+	if err := copyGrokImportCheckpoints(ctx, r, src, stage); err != nil {
+		return err
+	}
 	return r.Rename(stage, dest)
+}
+
+// Checkpoints may hold the compacted context required by the next native load.
+func copyGrokImportCheckpoints(ctx context.Context, root *os.Root, src, stage string) error {
+	base := filepath.Join(src, "compaction_checkpoints")
+	return fs.WalkDir(root.FS(), base, func(path string, entry fs.DirEntry, walkErr error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(walkErr, os.ErrNotExist) && path == base {
+			return nil
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || !filepath.IsLocal(rel) {
+			return errors.New("invalid grok checkpoint path")
+		}
+		dest := filepath.Join(stage, rel)
+		if entry.IsDir() {
+			return root.MkdirAll(dest, 0o700)
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<30 {
+			return errors.New("invalid grok checkpoint file")
+		}
+		in, err := root.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = in.Close() }()
+		out, err := root.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, io.LimitReader(in, info.Size()))
+		return errors.Join(copyErr, out.Close())
+	})
 }

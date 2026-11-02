@@ -27,11 +27,26 @@ func TestImportRelocationKeepsSourceAndExistingCopy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cfg := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: filepath.Join(src, "updates.jsonl"), LaunchCWD: workspace}
+	checkpointDir := filepath.Join(src, "compaction_checkpoints")
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkpointDir, "checkpoint.json"), []byte(`{"synthetic":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	launch := workspace
+	if err := os.Symlink(workspace, link); err == nil {
+		launch = link
+	}
+	cfg := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: filepath.Join(src, "updates.jsonl"), LaunchCWD: launch}
 	if err := New().RelocateImportedSession(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(root, "sessions", grokImportBucket(resolved), id)
+	if _, err := os.Stat(filepath.Join(dest, "compaction_checkpoints", "checkpoint.json")); err != nil {
+		t.Fatal(err)
+	}
 	body, err := os.ReadFile(filepath.Join(dest, "summary.json"))
 	if err != nil || !strings.Contains(string(body), resolved) {
 		t.Fatalf("copy=%s err=%v", body, err)
