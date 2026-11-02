@@ -1852,6 +1852,7 @@ function ChatWorkspaceContent({
 					}
 					role="tabpanel"
 				>
+				<HoldWhileHidden hidden={reviewerActive || shellActive}>
 					{snapshot.account ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
 							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
@@ -2104,6 +2105,7 @@ function ChatWorkspaceContent({
 							</div>
 						</div>
 					</div>
+				</HoldWhileHidden>
 				</div>
 			</div>
 
@@ -2263,6 +2265,18 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 }
 
 /* -------------------------------------------------------------------------- */
+
+// The conversation panel stays mounted (display:none, inert) while a terminal
+// or reviewer tab covers it. Re-rendering its timeline on every workspace
+// update while nobody can see it made opening a terminal re-render the whole
+// transcript. Hold it while hidden; it catches up when it is shown again.
+// Components inside still re-render on their own state and subscriptions.
+const HoldWhileHidden = memo(
+	function HoldWhileHidden({ children }: { hidden: boolean; children: ReactNode }) {
+		return <>{children}</>;
+	},
+	(_previous, next) => next.hidden,
+);
 
 function ChatHeader({
 	snapshot,

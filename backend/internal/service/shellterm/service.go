@@ -353,6 +353,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
+		cols:            in.Cols,
+		rows:            in.Rows,
 	})
 }
 
@@ -636,6 +638,7 @@ type openTerminalConfig struct {
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
 	startOnAttach            bool
+	cols, rows               int
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -666,6 +669,8 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
 		StartOnAttach:           cfg.startOnAttach,
+		InitialCols:             clampGridDimension(cfg.cols),
+		InitialRows:             clampGridDimension(cfg.rows),
 		// Only agent terminals are probed for their rendered screen.
 		LazyStyledOutput: true,
 	})
@@ -1085,4 +1090,13 @@ func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
 		Title:      rec.Title,
 		CreatedAt:  rec.CreatedAt,
 	}
+}
+
+// clampGridDimension bounds a client-supplied grid dimension to what a PTY
+// accepts; out-of-range values mean "no initial grid".
+func clampGridDimension(n int) uint16 {
+	if n < 2 || n > 1000 {
+		return 0
+	}
+	return uint16(n)
 }

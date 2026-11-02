@@ -1652,8 +1652,12 @@ textarea,
 	padding-bottom: 18px;
 }
 
-/* The layout's siblings (errors, host menu, remote note) keep their height. */
-[data-section="harness"] div:has(> [data-harness-detail]) > :not([data-harness-detail]) {
+/* The layout's siblings (errors, host menu, remote note) keep their height.
+   Matched as siblings rather than div:has(> [data-harness-detail]) > *: that
+   form made Chromium restyle the whole document on every DOM change anywhere
+   in the app (each terminal frame paid a full style recalc). */
+[data-section="harness"] :not([data-harness-detail]):has(~ [data-harness-detail]),
+[data-section="harness"] [data-harness-detail] ~ * {
 	flex-shrink: 0;
 }
 
@@ -3394,7 +3398,8 @@ html.sidebar-reordering * {
 	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control));
 }
 
-.has-topbar-controls .session-split:has([data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions:not([data-fullscreen]) {
+/* data-inspector-expanded is set by SessionInspectorRail (see useElementFlag). */
+.has-topbar-controls .session-split[data-inspector-expanded] .session-topbar-actions:not([data-fullscreen]) {
 	padding-right: var(--gap-topbar-control);
 }
 
@@ -4832,10 +4837,9 @@ html[data-native-browser-composition="true"][data-ao-platform="win32"] .files-po
 }
 
 /* Web preview has no preload platform attribute. The popouts are direct body
-   portals, so detect the Windows shell in #root instead of using a descendant
-   selector that cannot reach them. */
-body:has(#root .platform-windows) > .browser-popout-overlay,
-body:has(#root .platform-windows) > .files-popout-overlay {
+   portals outside #root, so the shell publishes its platform on <html>. */
+html[data-shell-windows] body > .browser-popout-overlay,
+html[data-shell-windows] body > .files-popout-overlay {
 	top: var(--size-window-titlebar);
 	--browser-popout-top: var(--size-window-titlebar);
 }
@@ -4887,12 +4891,12 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 	--browser-popout-top: var(--size-shell-topbar);
 }
 
-body:has(#root .platform-linux) > .browser-popout-overlay {
+html[data-shell-linux] body > .browser-popout-overlay {
 	top: var(--size-shell-topbar);
 	--browser-popout-top: var(--size-shell-topbar);
 }
 
-body:has(#root .platform-linux) > .files-popout-overlay {
+html[data-shell-linux] body > .files-popout-overlay {
 	top: var(--size-shell-topbar);
 	--browser-popout-top: var(--size-shell-topbar);
 }
@@ -5773,9 +5777,12 @@ body:has(#root .platform-linux) > .files-popout-overlay {
  * path remains available for web-only development; these rules remove the
  * opaque paint layers that would otherwise hide the native page behind the
  * shell. Toolbar and controls stay opaque so the app chrome remains readable. */
-html[data-native-browser-composition="true"] body:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay),
-html[data-native-browser-composition="true"] #root:has(.browser-panel[data-browser-native-page="live"]) {
+/* data-browser-native-live and data-browser-popout-open are published on
+ * <html> by BrowserPanel and SessionBrowserPopOut (see useElementFlag); a
+ * container-level :has() here restyled the whole app on every DOM change. */
+html[data-native-browser-composition="true"][data-browser-native-live] body,
+html[data-native-browser-composition="true"][data-browser-popout-open] body,
+html[data-native-browser-composition="true"][data-browser-native-live] #root {
 	background: transparent;
 }
 
@@ -5784,9 +5791,9 @@ html[data-native-browser-composition="true"] #root:has(.browser-panel[data-brows
  * and this opaque `bg-sidebar` wrapper painted over the live native page
  * whenever an overlay raised the shell. Match it by its own class so every
  * platform is covered. */
-html[data-native-browser-composition="true"] .app-shell-root:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .platform-windows:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .platform-linux:has(.browser-panel[data-browser-native-page="live"]) {
+html[data-native-browser-composition="true"][data-browser-native-live] .app-shell-root,
+html[data-native-browser-composition="true"][data-browser-native-live] .platform-windows,
+html[data-native-browser-composition="true"][data-browser-native-live] .platform-linux {
 	background: transparent;
 }
 
@@ -5802,19 +5809,19 @@ html[data-native-browser-composition="true"] .platform-linux:has(.browser-panel[
  * and once the panel is portaled to <body> the panel is no longer a descendant,
  * so `:has()` never matches. Symptom without this line: opening any overlay over
  * a maximized browser panel on macOS blanks the live page to black. */
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .app-shell-root,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .platform-windows,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .platform-linux,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .center-panel-shell,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .center-panel-surface,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-testid="session-detail"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-split,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-inspector,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-inspector__body,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-container"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-inner"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-topbar-surface {
+html[data-native-browser-composition="true"][data-browser-popout-open] #root,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .app-shell-root,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .platform-windows,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .platform-linux,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .center-panel-shell,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-testid="session-detail"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-split,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-inspector,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-inspector__body,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-container"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-inner"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-topbar-surface {
 	background: transparent !important;
 }
 
@@ -5823,14 +5830,14 @@ html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #
  * the transparent compositor when the shell is raised for a menu portal. The
  * BrowserPanel portal and the Windows titlebar remain outside this wrapper and
  * stay interactive. */
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-wrapper"] {
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-wrapper"] {
 	visibility: hidden;
 }
 
-html[data-native-browser-composition="true"] .center-panel-shell--session:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .center-panel-shell--session:has(.browser-panel[data-browser-native-page="live"]) > .center-panel-surface,
-html[data-native-browser-composition="true"] [data-testid="session-detail"]:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .session-split:has(.browser-panel[data-browser-native-page="live"]) {
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-native-live] [data-testid="session-detail"],
+html[data-native-browser-composition="true"][data-browser-native-live] .session-split {
 	background: transparent;
 }
 
@@ -6166,7 +6173,7 @@ html[data-window-translucent="true"] .ao-startup-screen {
 /* A loader inside the running shell (remote host loading, missing
  * dependency) would let the shell show through it. Hide the shell, tint
  * included, and keep only the loader visible. */
-html[data-window-translucent="true"] .app-shell-root:has(.ao-startup-screen) {
+html[data-window-translucent="true"] .app-shell-root[data-startup-screen] {
 	visibility: hidden;
 }
 

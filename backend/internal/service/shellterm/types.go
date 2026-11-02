@@ -50,6 +50,12 @@ type OpenShellTerminalInput struct {
 	// title it shows, so the tab keeps its name when the shell arrives; empty
 	// numbers it after the existing shells.
 	Title string `json:"title,omitempty"`
+	// Cols and Rows give the grid the requesting client will show. When both
+	// are set the shell starts immediately at that grid, in parallel with the
+	// client mounting its terminal, instead of waiting for the attach that
+	// StartOnAttach waits for (saving that round trip before the first prompt).
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state relevant to the command's

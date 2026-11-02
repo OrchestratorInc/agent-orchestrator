@@ -16,6 +16,9 @@ type HostOptions struct {
 	StartOnAttach bool
 	// LazySurface builds the rendered surface only when it is first read.
 	LazySurface bool
+	// Cols and Rows, when both set, start the process immediately at that grid
+	// (taking precedence over StartOnAttach).
+	Cols, Rows uint16
 }
 
 // hostSpawner starts a detached pty-host for the session and returns its
@@ -29,6 +32,7 @@ type hostSpawner func(ctx context.Context, sessionID, cwd string, argv []string,
 const (
 	startOnAttachArg = "--start=attach"
 	lazySurfaceArg   = "--surface=lazy"
+	sizeArgPrefix    = "--size="
 )
 
 // ptyHostArgs builds the pty-host subcommand argv:
@@ -40,6 +44,9 @@ func ptyHostArgs(sessionID, cwd string, argv []string, opts HostOptions) []strin
 	}
 	if opts.LazySurface {
 		args = append(args, lazySurfaceArg)
+	}
+	if opts.Cols > 0 && opts.Rows > 0 {
+		args = append(args, fmt.Sprintf("%s%dx%d", sizeArgPrefix, opts.Cols, opts.Rows))
 	}
 	args = append(args, sessionID, cwd)
 	return append(args, argv...)
@@ -56,7 +63,13 @@ func splitHostOptionArgs(args []string) (HostOptions, []string) {
 		case lazySurfaceArg:
 			opts.LazySurface = true
 		default:
-			return opts, args
+			if !strings.HasPrefix(args[0], sizeArgPrefix) {
+				return opts, args
+			}
+			var cols, rows uint16
+			if _, err := fmt.Sscanf(strings.TrimPrefix(args[0], sizeArgPrefix), "%dx%d", &cols, &rows); err == nil && cols > 0 && rows > 0 {
+				opts.Cols, opts.Rows = cols, rows
+			}
 		}
 		args = args[1:]
 	}

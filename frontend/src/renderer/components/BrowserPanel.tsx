@@ -14,6 +14,7 @@ import {
 	type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -453,6 +454,7 @@ export function BrowserPanelView({
 		annotationAction = async () => undefined,
 	} = browserView;
 	const [urlInput, setUrlInput] = useState(navState.url);
+	useDocumentFlag("data-browser-native-live", Boolean(navState.url));
 	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
 	const historyMenuId = useId();

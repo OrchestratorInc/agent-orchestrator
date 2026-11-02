@@ -55,6 +55,7 @@ export function preloadXtermTerminal(): void {
 	void loadXtermTerminal().catch(() => undefined);
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type TerminalPaneProps = {
@@ -1430,6 +1431,7 @@ function AttachedTerminal({
 					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
+					onGridChange={rememberPaneTerminalGrid}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
