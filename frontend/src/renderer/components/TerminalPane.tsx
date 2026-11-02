@@ -39,6 +39,7 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
+import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
@@ -1111,6 +1112,21 @@ function AttachedTerminal({
 	onTerminalReady?: (terminal: AttachableTerminal) => void;
 }) {
 	const { t } = useTranslation();
+	const { baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudBaseUrlRef = useRef(cloudBaseUrl);
+	cloudBaseUrlRef.current = cloudBaseUrl;
+	// A file dropped on a cloud terminal is uploaded to the session and placed
+	// in its sandbox, so the path typed at the prompt is one the agent can open.
+	const cloudSessionId = session?.cloud ? session.id : undefined;
+	const cloudOrgId = session?.cloud?.orgId;
+	const saveCloudDrop = useMemo(() => {
+		if (!cloudSessionId || !cloudOrgId) return undefined;
+		return async (file: { name: string; bytes: Uint8Array }) => {
+			const baseUrl = cloudBaseUrlRef.current;
+			const attachment = await uploadCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, file);
+			return placeCloudAttachment(baseUrl, cloudOrgId, cloudSessionId, attachment.id);
+		};
+	}, [cloudOrgId, cloudSessionId]);
 	const attachSession =
 		terminalTarget?.kind === "shell"
 			? undefined
@@ -1419,6 +1435,7 @@ function AttachedTerminal({
 				<Suspense fallback={null}>
 				<XtermTerminal
 					ariaLabel={terminalTarget?.kind === "shell" ? t("terminal.shellAria") : t("terminal.sessionAria")}
+					saveDroppedFile={saveCloudDrop}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
 					isFullscreen={isFullscreen}

@@ -5422,8 +5422,15 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 65536
+          description: The message. It may be empty only when attachmentIds names at least one file.
+        attachmentIds:
+          type: array
+          maxItems: 10
+          description: Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message.
+          items:
+            type: string
+            format: uuid
         model:
           type: string
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
@@ -5440,6 +5447,25 @@ components:
           format: int64
           minimum: 0
           description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+    MessageAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, size, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false
@@ -7169,6 +7195,11 @@ components:
             authorName:
               type: string
               description: The sender's display name when the message was sent. Never an email address, so a share guest can see it.
+            attachments:
+              type: array
+              description: The files the message carries.
+              items:
+                $ref: "#/components/schemas/MessageAttachment"
         createdAt:
           type: string
           format: date-time

@@ -55,6 +55,8 @@ import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-loca
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
+	CloudCpProxyBinaryRequestInit,
+	CloudCpProxyBinaryResponse,
 	CloudCpStreamEvent,
 } from "./main/cloud-cp-proxy";
 import type { UpdateOutcome } from "./shared/update-telemetry";
@@ -838,6 +840,9 @@ const api = {
 	cloudCp: {
 		request: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:request", init) as Promise<CloudCpProxyResponse>,
+		/** A request with a bytes body or response (session attachments). */
+		requestBinary: (init: CloudCpProxyBinaryRequestInit) =>
+			ipcRenderer.invoke("cloudCp:requestBinary", init) as Promise<CloudCpProxyBinaryResponse>,
 		openStream: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:openStream", init) as Promise<{ streamId: string }>,
 		closeStream: (streamId: string) => {

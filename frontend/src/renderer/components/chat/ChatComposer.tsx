@@ -556,8 +556,8 @@ export const ChatComposer = memo(function ChatComposer({
 		async (attachments: FileAttachment[]): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			const paths = await onStageAttachments(
-				attachments.flatMap(({ mimeType, data }) =>
-					data ? [{ mimeType, data }] : [],
+				attachments.flatMap(({ mimeType, data, name }) =>
+					data ? [{ mimeType, data, name }] : [],
 				),
 			);
 			if (paths.length !== attachments.length) {

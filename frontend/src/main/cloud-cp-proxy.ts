@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { getCloudAccessToken } from "./cloud-auth";
 
 export const CLOUD_CP_REQUEST_CHANNEL = "cloudCp:request";
+export const CLOUD_CP_REQUEST_BINARY_CHANNEL = "cloudCp:requestBinary";
 export const CLOUD_CP_OPEN_STREAM_CHANNEL = "cloudCp:openStream";
 export const CLOUD_CP_CLOSE_STREAM_CHANNEL = "cloudCp:closeStream";
 
@@ -50,6 +51,27 @@ export interface CloudCpProxyResponse {
 	body: string;
 }
 
+/**
+ * A request whose body or response is bytes: a session attachment's upload or
+ * download. The text channel above cannot carry binary.
+ */
+export interface CloudCpProxyBinaryRequestInit {
+	baseUrl: string;
+	path: string;
+	method: string;
+	headers?: Record<string, string>;
+	body?: Uint8Array;
+}
+
+export interface CloudCpProxyBinaryResponse {
+	status: number;
+	headers: Record<string, string>;
+	body: Uint8Array;
+}
+
+/** Bytes either way on the binary channel; the control plane takes attachments up to 25 MiB. */
+export const MAX_CLOUD_CP_BINARY_BYTES = 32 * 1024 * 1024;
+
 export type CloudCpStreamEvent =
 	| { type: "chunk"; data: string }
 	| { type: "end" }
@@ -68,6 +90,7 @@ export interface CloudCpStreamSender {
 
 export interface CloudCpProxy {
 	request(init: unknown): Promise<CloudCpProxyResponse>;
+	requestBinary(init: unknown): Promise<CloudCpProxyBinaryResponse>;
 	openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }>;
 	closeStream(sender: Pick<CloudCpStreamSender, "id">, streamId: unknown): void;
 }
@@ -110,6 +133,19 @@ export function parseCloudBaseUrl(baseUrl: unknown): URL {
 }
 
 function validateInit(init: unknown): CloudCpProxyRequestInit {
+	const { body } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
+	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
+	return validateRequestTarget(init) as CloudCpProxyRequestInit;
+}
+
+function validateBinaryInit(init: unknown): CloudCpProxyBinaryRequestInit {
+	const { body } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
+	if (body !== undefined && !(body instanceof Uint8Array)) throw invalid("body must be bytes when present.");
+	if (body instanceof Uint8Array && body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) throw invalid("body is too large.");
+	return validateRequestTarget(init) as CloudCpProxyBinaryRequestInit;
+}
+
+function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCpProxyBinaryRequestInit {
 	if (typeof init !== "object" || init === null) {
 		throw invalid("the request payload must be an object.");
 	}
@@ -119,7 +155,6 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	if (typeof method !== "string" || !/^[A-Za-z]+$/.test(method)) {
 		throw invalid("method must be an HTTP method token.");
 	}
-	if (body !== undefined && typeof body !== "string") throw invalid("body must be a string when present.");
 	if (headers !== undefined) {
 		if (typeof headers !== "object" || headers === null || Array.isArray(headers)) {
 			throw invalid("headers must be a plain record of strings.");
@@ -142,8 +177,8 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 		path,
 		method,
 		headers: headers as Record<string, string> | undefined,
-		body: body as string | undefined,
-	};
+		body: body as string | Uint8Array | undefined,
+	} as CloudCpProxyRequestInit | CloudCpProxyBinaryRequestInit;
 }
 
 /**
@@ -151,7 +186,7 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
  * resolves dot segments (including percent-encoded ones) and backslashes, so
  * a raw-string prefix check alone would let "/api/cloud/v1/../../x" escape.
  */
-function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
+function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">): string {
 	const base = new URL(init.baseUrl);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const target = new URL(base.origin + basePath + init.path);
@@ -291,6 +326,35 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		return { status: response.status, headers, body: await response.text() };
 	}
 
+	async function requestBinary(init: unknown): Promise<CloudCpProxyBinaryResponse> {
+		const valid = validateBinaryInit(init);
+		const url = resolveTargetUrl(valid);
+		const token = await getCloudAccessToken(getDataDir());
+		if (token === null || token === "") {
+			const unauthorized = unauthorizedResponse();
+			return { ...unauthorized, body: new TextEncoder().encode(unauthorized.body) };
+		}
+		const response = await doFetch(url, {
+			method: valid.method.toUpperCase(),
+			headers: buildHeaders(valid.headers, token),
+			// A Uint8Array over IPC may view a SharedArrayBuffer-typed buffer; copy
+			// into a plain ArrayBuffer that fetch accepts as a body.
+			body: valid.body === undefined ? undefined : new Uint8Array(valid.body).buffer,
+		});
+		const headers: Record<string, string> = {};
+		response.headers.forEach((value, key) => {
+			headers[key] = value;
+		});
+		const declared = Number(response.headers.get("content-length"));
+		if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
+			await response.body?.cancel();
+			throw new Error("The cloud response is too large.");
+		}
+		const body = new Uint8Array(await response.arrayBuffer());
+		if (body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) throw new Error("The cloud response is too large.");
+		return { status: response.status, headers, body };
+	}
+
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
 		const valid = validateInit(init);
 		const url = resolveTargetUrl(valid);
@@ -344,12 +408,13 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		teardown(streamId, stream);
 	}
 
-	return { request, openStream, closeStream };
+	return { request, requestBinary, openStream, closeStream };
 }
 
 export function installCloudCpProxy(getDataDir: () => string): void {
 	const proxy = createCloudCpProxy(getDataDir);
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
+	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (_event, init: unknown) => proxy.requestBinary(init));
 	ipcMain.handle(CLOUD_CP_OPEN_STREAM_CHANNEL, (event, init: unknown) => proxy.openStream(event.sender, init));
 	ipcMain.on(CLOUD_CP_CLOSE_STREAM_CHANNEL, (event, streamId: unknown) => {
 		proxy.closeStream(event.sender, streamId);

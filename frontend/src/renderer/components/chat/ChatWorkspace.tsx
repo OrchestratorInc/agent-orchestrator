@@ -557,7 +557,7 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string }[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[]) => Promise<string[]>;
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
 	/**

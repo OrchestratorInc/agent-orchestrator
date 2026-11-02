@@ -2288,7 +2288,7 @@ describe("attachments", () => {
 
 		await waitFor(() => expect(stage).toHaveBeenCalledTimes(1));
 		expect(stage.mock.calls[0]?.[0]).toEqual([
-			{ mimeType: "image/png", data: expect.any(String) },
+			{ mimeType: "image/png", data: expect.any(String), name: "shot.png" },
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(

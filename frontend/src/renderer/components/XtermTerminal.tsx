@@ -66,6 +66,12 @@ import {
 
 export type XtermTerminalProps = {
 	ariaLabel?: string;
+	/**
+	 * Puts a file dropped on the terminal where the terminal's program can open
+	 * it and answers with that path, which is typed at the prompt. Absent, the
+	 * file is saved on this machine (a local terminal).
+	 */
+	saveDroppedFile?: (file: { name: string; bytes: Uint8Array }) => Promise<string | null | undefined>;
 	className?: string;
 	fontSize?: number;
 	isFullscreen?: boolean;
@@ -466,6 +472,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	const translucent = macPlatform && windowTranslucency;
 	const shellRef = useRef<HTMLDivElement | null>(null);
 	const hostRef = useRef<HTMLDivElement | null>(null);
+	const saveDroppedFileRef = useRef(props.saveDroppedFile);
+	saveDroppedFileRef.current = props.saveDroppedFile;
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<Terminal | null>(null);
@@ -1624,10 +1632,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// never shows the overlay.
 			void (async () => {
 				const paths: string[] = [];
+				const save = saveDroppedFileRef.current ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
 				for (const file of files) {
 					try {
 						const bytes = new Uint8Array(await file.arrayBuffer());
-						const saved = await aoBridge.terminal.saveDroppedFile({ name: file.name, bytes });
+						const saved = await save({ name: file.name, bytes });
 						if (saved) paths.push(saved);
 					} catch (error) {
 						console.warn("Unable to attach dropped file", error);

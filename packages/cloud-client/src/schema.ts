@@ -2988,7 +2988,10 @@ export interface components {
             branch?: string;
         };
         ChatMessageInput: {
+            /** @description The message. It may be empty only when attachmentIds names at least one file. */
             text: string;
+            /** @description Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message. */
+            attachmentIds?: string[];
             model?: string;
             /** @enum {string} */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -3000,6 +3003,15 @@ export interface components {
              * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
              */
             composerEpoch?: number;
+        };
+        MessageAttachment: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -3815,6 +3827,8 @@ export interface components {
                 authorUserId?: string;
                 /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
                 authorName?: string;
+                /** @description The files the message carries. */
+                attachments?: components["schemas"]["MessageAttachment"][];
             };
             /** Format: date-time */
             createdAt: string;

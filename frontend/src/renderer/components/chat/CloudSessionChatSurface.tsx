@@ -20,11 +20,15 @@ import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspa
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
+import { cloudAttachmentReference, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.user_message: the files the message carries. */
+	attachments?: unknown;
 	/** workspace.setup */
 	status?: unknown;
 	step?: unknown;
@@ -151,6 +155,18 @@ function readRememberedApprovalMode(key: string): ApprovalMode | undefined {
 
 function eventPayload(event: CloudCpClientEvent): EventPayload {
 	return event.payload && typeof event.payload === "object" ? (event.payload as EventPayload) : {};
+}
+
+/** The files a chat.user_message event lists. */
+function eventAttachments(event: CloudCpClientEvent): CloudAttachment[] {
+	const listed = eventPayload(event).attachments;
+	if (!Array.isArray(listed)) return [];
+	return listed.flatMap((item: unknown) => {
+		if (!item || typeof item !== "object") return [];
+		const { id, fileName, contentType, size } = item as Record<string, unknown>;
+		return typeof id === "string" && typeof fileName === "string" && typeof contentType === "string" && typeof size === "number"
+			? [{ id, fileName, contentType, size }] : [];
+	});
 }
 
 function eventText(event: CloudCpClientEvent): string | undefined {
@@ -559,7 +575,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			continue;
 		}
 		const text = eventText(event);
-		if (!text) continue;
+		// A message of only files has no text.
+		const attachments = event.type === "chat.user_message" ? eventAttachments(event) : [];
+		if (!text && attachments.length === 0) continue;
 		if (event.type === "chat.user_message") {
 			const payload = eventPayload(event);
 			const automation = payload.origin === "automation";
@@ -570,13 +588,15 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
-				text: automation && typeof payload.displayText === "string" ? payload.displayText : text,
+				text: automation && typeof payload.displayText === "string" ? payload.displayText : text ?? "",
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
+				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});
 			continue;
 		}
+		if (!text) continue;
 		if (event.type === "chat.turn_steered") {
 			const clientMessageID = eventPayload(event).clientMessageId;
 			items.push({
@@ -999,8 +1019,21 @@ export function CloudSessionChatSurface({
 	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: !readOnly });
 	const leaseRef = useRef(lease);
 	leaseRef.current = lease;
+	const attachmentSource = useMemo(
+		() => cloud && ready && baseUrl ? { baseUrl, orgId: cloud.orgId, sessionId: session.id } : undefined,
+		[baseUrl, cloud, ready, session.id],
+	);
+	// A file attached in the composer is uploaded to the session right away;
+	// the composer lists it by reference until the message is sent.
+	const stageAttachments = useMemo(() => {
+		if (!attachmentSource || readOnly || session.isTerminated === true) return undefined;
+		return (attachments: { mimeType: string; data: string; name?: string }[]) => Promise.all(attachments.map(async (attachment) =>
+			cloudAttachmentReference(await uploadCloudAttachment(attachmentSource.baseUrl, attachmentSource.orgId, attachmentSource.sessionId, {
+				name: attachment.name || "attachment", data: attachment.data,
+			}))));
+	}, [attachmentSource, readOnly, session.isTerminated]);
 	const send = useMutation({
-		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
+		mutationFn: async ({ text, attachmentIds, clientMessageId }: { text: string; attachmentIds?: string[]; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
@@ -1015,6 +1048,7 @@ export function CloudSessionChatSurface({
 			const composerEpoch = leaseRef.current.epoch;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
 				text,
+				...(attachmentIds?.length ? { attachmentIds } : {}),
 				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
 				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
 				...(mode ? { mode } : {}),
@@ -1148,6 +1182,7 @@ export function CloudSessionChatSurface({
 		[catalogDefaultUnknown, choiceModels],
 	);
 	return (
+		<CloudAttachmentSourceProvider source={attachmentSource}>
 		<ChatWorkspace
 			snapshot={snapshot}
 			onSessionLinkOpen={openSessionLink}
@@ -1229,7 +1264,13 @@ export function CloudSessionChatSurface({
 			steerPending={steer.isPending}
 			showSteerButton
 			fileReferenceDelivery="text"
-			onSend={(text, _attachments, clientMessageId, _excerpts, fileReferences) => send.mutateAsync({ text: formatCapturedFileReferences(text, fileReferences), clientMessageId })}
+			onStageAttachments={stageAttachments}
+			onSend={(text, _attachments, clientMessageId, _excerpts, fileReferences) => {
+				// Staged cloud files are listed as references; they travel as the
+				// message's attachment ids, and the worker writes the real paths.
+				const { text: body, attachmentIds } = splitCloudAttachmentReferences(text);
+				return send.mutateAsync({ text: formatCapturedFileReferences(body, fileReferences), attachmentIds, clientMessageId });
+			}}
 			session={chatSession}
 			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
@@ -1252,5 +1293,6 @@ export function CloudSessionChatSurface({
 			auxiliaryTabOrder={auxiliaryTabOrder}
 			onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 		/>
+		</CloudAttachmentSourceProvider>
 	);
 }

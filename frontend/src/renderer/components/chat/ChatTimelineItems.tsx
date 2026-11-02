@@ -11,6 +11,8 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { CloudMessageAttachments } from "./CloudMessageAttachments";
+import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
@@ -893,7 +895,9 @@ export function HumanMessage({
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
-	const visibleMessageText = humanVisibleText(message.text);
+	// A cloud message's files are listed by the message itself; the references
+	// its local echo carries until the server's copy arrives are not prose.
+	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
@@ -969,6 +973,7 @@ export function HumanMessage({
 						ariaLabel="Attached files"
 						className={cn(body && "mt-2")}
 					/>
+					<CloudMessageAttachments attachments={message.cloudAttachments} className={cn((body || attachments.length > 0) && "mt-2")} />
 				</div>
 			)}
 			{editing ? null : (
