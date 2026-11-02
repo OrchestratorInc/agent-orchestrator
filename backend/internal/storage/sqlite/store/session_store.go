@@ -475,13 +475,14 @@ func (s *Store) UpdateSessionCardSummary(ctx context.Context, id domain.SessionI
 	return rows > 0, nil
 }
 
-// FillSessionCardSummary sets the card summary only if the session has none,
-// reporting whether it wrote one.
-func (s *Store) FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary string) (bool, error) {
+// FillSessionCardSummary sets the card summary only if the session has none
+// or it is still previous, the text an earlier fill wrote, reporting whether it
+// wrote one.
+func (s *Store) FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary, previous string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.FillSessionCardSummary(ctx, gen.FillSessionCardSummaryParams{
-		ID: id, Summary: summary,
+		ID: id, Summary: summary, Previous: previous,
 	})
 	if err != nil {
 		return false, fmt.Errorf("fill card summary for %s: %w", id, err)

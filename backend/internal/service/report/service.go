@@ -33,10 +33,11 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
-// CardSummaryFiller sets a session's kanban card summary only if the agent has
-// not set one.
+// CardSummaryFiller sets a session's kanban card summary only while it is empty
+// or still previous, the text an earlier fill wrote, so it never replaces a
+// summary the agent set.
 type CardSummaryFiller interface {
-	FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary string) (bool, error)
+	FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary, previous string) (bool, error)
 }
 
 // Service validates and creates durable worker reports.
@@ -169,11 +170,36 @@ func (s *Service) fillCardSummary(ctx context.Context, report domain.ReportRecor
 	if s.cardSummaries == nil || report.State != domain.ReportDone {
 		return
 	}
-	text := domain.CardSummaryFromNote(report.Note)
-	if text == "" {
-		text = domain.CardSummaryFromNote(report.Message)
+	if text := doneReportSummary(report); text != "" {
+		_, _ = s.cardSummaries.FillSessionCardSummary(ctx, report.SessionID, text, s.previousDoneSummary(ctx, report))
 	}
-	if text != "" {
-		_, _ = s.cardSummaries.FillSessionCardSummary(ctx, report.SessionID, text)
+}
+
+func doneReportSummary(report domain.ReportRecord) string {
+	if text := domain.CardSummaryFromNote(report.Note); text != "" {
+		return text
 	}
+	return domain.CardSummaryFromNote(report.Message)
+}
+
+// previousDoneSummary is the card text the session's previous done report
+// would have filled in, so a newer done report can replace it. Empty when
+// there is none or the reports cannot be read.
+func (s *Service) previousDoneSummary(ctx context.Context, current domain.ReportRecord) string {
+	reader, ok := s.store.(interface {
+		ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error)
+	})
+	if !ok {
+		return ""
+	}
+	reports, err := reader.ListReportsBySession(ctx, current.SessionID)
+	if err != nil {
+		return ""
+	}
+	for i := len(reports) - 1; i >= 0; i-- {
+		if reports[i].ID != current.ID && reports[i].State == domain.ReportDone {
+			return doneReportSummary(reports[i])
+		}
+	}
+	return ""
 }

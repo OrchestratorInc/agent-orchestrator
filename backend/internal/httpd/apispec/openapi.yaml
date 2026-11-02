@@ -12875,6 +12875,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
       summary: Update the kanban card summary for a session
       tags:
       - sessions

@@ -59,7 +59,7 @@ func TestSummarySendsNormalizedText(t *testing.T) {
 	if got.SessionID != "worker-1" || got.Summary != "Fixing the login redirect" || got.Done {
 		t.Fatalf("request = %+v", got)
 	}
-	if !strings.Contains(stdout, "Try again in 2m10s") {
+	if !strings.Contains(stdout, "Do not retry") {
 		t.Fatalf("held-back summary output = %q", stdout)
 	}
 	stdout, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "summary", "--done", "Fixed the login redirect")

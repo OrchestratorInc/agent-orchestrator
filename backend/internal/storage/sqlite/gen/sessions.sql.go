@@ -194,18 +194,20 @@ func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBin
 const fillSessionCardSummary = `-- name: FillSessionCardSummary :execrows
 UPDATE sessions
 SET card_summary = ?1
-WHERE id = ?2 AND is_terminated = 0 AND card_summary = ''
+WHERE id = ?2 AND is_terminated = 0 AND card_summary IN ('', ?3)
 `
 
 type FillSessionCardSummaryParams struct {
-	Summary string
-	ID      domain.SessionID
+	Summary  string
+	ID       domain.SessionID
+	Previous string
 }
 
-// Sets the card summary only while it is empty, so a fallback never replaces
-// one the agent set itself. The check and the write are one statement.
+// Sets the card summary only while it is empty or still the text an earlier
+// fallback wrote (previous), so a fallback never replaces one the agent set
+// itself. The check and the write are one statement.
 func (q *Queries) FillSessionCardSummary(ctx context.Context, arg FillSessionCardSummaryParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, fillSessionCardSummary, arg.Summary, arg.ID)
+	result, err := q.db.ExecContext(ctx, fillSessionCardSummary, arg.Summary, arg.ID, arg.Previous)
 	if err != nil {
 		return 0, err
 	}

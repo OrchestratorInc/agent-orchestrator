@@ -901,6 +901,8 @@ func summaryOperations() []operation {
 			{http.StatusOK, controllers.UpdateSummaryResponse{}},
 			{http.StatusBadRequest, envelope.APIError{}},
 			{http.StatusNotFound, envelope.APIError{}},
+			{http.StatusInternalServerError, envelope.APIError{}},
+			{http.StatusNotImplemented, envelope.APIError{}},
 		},
 	}}
 }

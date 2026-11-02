@@ -26,8 +26,7 @@ type summaryAPIRequest struct {
 }
 
 type summaryAPIResponse struct {
-	Updated           bool `json:"updated"`
-	RetryAfterSeconds int  `json:"retryAfterSeconds"`
+	Updated bool `json:"updated"`
 }
 
 func newSummaryCommand(ctx *commandContext) *cobra.Command {
@@ -63,8 +62,7 @@ func (c *commandContext) summary(ctx context.Context, out io.Writer, args []stri
 		return err
 	}
 	if !resp.Updated {
-		_, err := fmt.Fprintf(out, "Summary not updated: the previous one is too recent. Try again in %s, or carry on.\n",
-			time.Duration(resp.RetryAfterSeconds)*time.Second)
+		_, err := fmt.Fprintln(out, "Summary not updated: the previous one was less than a minute ago. Do not retry; carry on and set the next one at your next step.")
 		return err
 	}
 	return nil

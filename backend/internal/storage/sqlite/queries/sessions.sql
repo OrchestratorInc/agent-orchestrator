@@ -153,11 +153,12 @@ SET card_summary = sqlc.arg(summary)
 WHERE id = sqlc.arg(id) AND is_terminated = 0;
 
 -- name: FillSessionCardSummary :execrows
--- Sets the card summary only while it is empty, so a fallback never replaces
--- one the agent set itself. The check and the write are one statement.
+-- Sets the card summary only while it is empty or still the text an earlier
+-- fallback wrote (previous), so a fallback never replaces one the agent set
+-- itself. The check and the write are one statement.
 UPDATE sessions
 SET card_summary = sqlc.arg(summary)
-WHERE id = sqlc.arg(id) AND is_terminated = 0 AND card_summary = '';
+WHERE id = sqlc.arg(id) AND is_terminated = 0 AND card_summary IN ('', sqlc.arg(previous));
 
 -- name: UpdateBrowserCapabilityVerifier :execrows
 -- Rotate only the browser credential for the exact controller owner observed by

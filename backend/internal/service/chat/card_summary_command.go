@@ -44,7 +44,9 @@ func extractAOSummary(commandInput string) (string, bool) {
 
 // shellWords splits the arguments of one simple command. It stops at the first
 // unquoted control operator. It reports false for an unterminated quote and for
-// a `$` or backtick outside single quotes, whose text the shell would replace.
+// text the shell would change: a `$` or backtick outside single quotes, and
+// outside any quotes a glob or brace character, or a `#` or `~` starting a word
+// (a comment or a home directory).
 func shellWords(s string) ([]string, bool) {
 	var (
 		words   []string
@@ -106,7 +108,9 @@ func shellWords(s string) ([]string, bool) {
 				return nil, false
 			}
 			inWord, digitsO = true, false
-		case r == '$' || r == '`':
+		case r == '$' || r == '`' || strings.ContainsRune("*?[{", r):
+			return nil, false
+		case (r == '#' || r == '~') && !inWord:
 			return nil, false
 		case r == '\\' && i+1 < len(runes):
 			i++
