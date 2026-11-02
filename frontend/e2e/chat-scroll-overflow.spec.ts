@@ -4,7 +4,7 @@ import { installFakeAgent } from "./support/fake-bridge";
 const sessionId = "chat-scroll";
 const now = "2026-08-08T08:00:00Z";
 
-const turns = Array.from({ length: 3 }, (_, index) => ({
+const turns = Array.from({ length: 40 }, (_, index) => ({
 	id: `turn-${index}`,
 	state: "completed",
 	requestedAt: now,
@@ -39,7 +39,7 @@ const messages = turns.flatMap((turn, index) => [
 	},
 ]);
 
-test("chat minimap does not make the session pane scroll horizontally", async ({ page }) => {
+test.beforeEach(async ({ page }) => {
 	await installFakeAgent(page, {
 		workers: [{ id: sessionId, title: "Debug chat scroll", mode: "chat" }],
 	});
@@ -85,10 +85,12 @@ test("chat minimap does not make the session pane scroll horizontally", async ({
 	});
 
 	await page.goto(`/#/projects/fake-proj/sessions/${sessionId}`);
-	await expect(page.getByRole("log", { name: "Conversation" })).toBeVisible();
+	await expect(page.getByRole("log", { name: "Conversation" })).toBeVisible({ timeout: 15000 });
+});
 
-	// Minimap markers only render when the inspector rail is closed.
-	await page.getByRole("button", { name: "Close inspector panel" }).click();
+test("chat minimap does not make the session pane scroll horizontally", async ({ page }) => {
+
+	// The inspector is closed by default, so minimap markers are available.
 
 	const marker = page.locator("[data-chat-scroll-marker]").first();
 	await expect(marker).toBeVisible();
@@ -106,4 +108,53 @@ test("chat minimap does not make the session pane scroll horizontally", async ({
 	// the pane must clip that visual flourish instead of offering a native scrollbar.
 	expect(pane.overflow).toBeGreaterThan(0);
 	expect(pane.overflowX).toBe("hidden");
+});
+
+test("chat keeps the latest prompt still while either sidebar animates", async ({ page }) => {
+	await page.emulateMedia({ reducedMotion: "no-preference" });
+	await page.waitForTimeout(1500);
+	for (const name of ["Open inspector panel", "Collapse sidebar", "Expand sidebar", "Close inspector panel"]) {
+		const frames = page.evaluate(async () => {
+			const log = document.querySelector<HTMLElement>('[role="log"]')!;
+			const prompt = [...log.querySelectorAll<HTMLElement>('[data-chat-turn]')].at(-1)!;
+			const samples: number[][] = [];
+			const start = performance.now();
+			while (performance.now() - start < 1000) {
+				await new Promise(requestAnimationFrame);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				samples.push([performance.now() - start, log.clientWidth, log.scrollTop, log.scrollHeight, prompt.getBoundingClientRect().top]);
+			}
+			return samples;
+		});
+		await page.getByRole("button", { name, exact: true }).last().click();
+		const samples = await frames;
+		const tops = samples.map((sample) => sample[4]!);
+		expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2);
+	}
+});
+
+test("chat keeps an older turn still while either sidebar animates", async ({ page }) => {
+	await page.emulateMedia({ reducedMotion: "no-preference" });
+	await page.waitForTimeout(1500);
+	await page.getByRole("log").evaluate((log) => { log.scrollTop = log.scrollHeight / 2; });
+	await page.waitForTimeout(500);
+	for (const name of ["Open inspector panel", "Collapse sidebar", "Expand sidebar", "Close inspector panel"]) {
+		const frames = page.evaluate(async () => {
+			const log = document.querySelector<HTMLElement>('[role="log"]')!;
+			const top = log.getBoundingClientRect().top;
+			const prompt = [...log.querySelectorAll<HTMLElement>('[data-chat-turn]')].find((row) => row.getBoundingClientRect().top <= top && row.getBoundingClientRect().bottom > top)!;
+			const samples: number[][] = [];
+			const start = performance.now();
+			while (performance.now() - start < 1000) {
+				await new Promise(requestAnimationFrame);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				samples.push([performance.now() - start, log.clientWidth, log.scrollTop, log.scrollHeight, prompt.getBoundingClientRect().top]);
+			}
+			return samples;
+		});
+		await page.getByRole("button", { name, exact: true }).last().click();
+		const samples = await frames;
+		const tops = samples.map((sample) => sample[4]!);
+		expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2);
+	}
 });

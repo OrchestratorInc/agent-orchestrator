@@ -51,6 +51,7 @@ import {
 	measureElement,
 	observeElementRect,
 	useVirtualizer,
+	type Virtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
@@ -2718,6 +2719,10 @@ export function Timeline({
 	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
 	const pendingVirtualLayout = useRef(false);
 	const renderedVirtualHeight = useRef(0);
+	// Width reflow must settle in place, even when virtual measurements reach the
+	// DOM in a later commit. Smooth follow is reserved for conversation growth.
+	const viewportSize = useRef<{ width: number; height: number } | undefined>(undefined);
+	const viewportResize = useRef<{ anchor?: { index: number; offset: number } } | undefined>(undefined);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -3637,6 +3642,19 @@ export function Timeline({
 	const previews = useMemo(() => navigableGroups.map(groupPreview), [navigableGroups]);
 	const virtualized = groups.length > CHAT_VIRTUALIZE_THRESHOLD;
 	const virtualItemKey = useCallback((index: number) => groups[index]!.key, [groups]);
+	const captureViewportResize = useCallback((instance: Virtualizer<HTMLDivElement, Element>) => {
+		const node = instance.scrollElement;
+		if (!node) return;
+		const previous = viewportSize.current;
+		const next = { width: node.clientWidth, height: node.clientHeight };
+		if (previous && (previous.width !== next.width || previous.height !== next.height) && !viewportResize.current) {
+			const row = instance.getVirtualItemForOffset(node.scrollTop);
+			viewportResize.current = {
+				anchor: !pinnedRef.current && row ? { index: row.index, offset: row.start - node.scrollTop } : undefined,
+			};
+		}
+		viewportSize.current = next;
+	}, []);
 	const virtualizer = useVirtualizer({
 		// Scroll anchoring may notify during a layout effect; defer the React
 		// update rather than attempting a synchronous flush inside that effect.
@@ -3664,9 +3682,13 @@ export function Timeline({
 		// prompt spacer; the virtualizer's own follow would snap past both.
 		followOnAppend: false,
 		// Bootstrap unmeasurable panels until their real geometry is available.
-		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) =>
-			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT })),
+		observeElementRect: (instance, callback) => observeElementRect(instance, (rect) => {
+			captureViewportResize(instance);
+			callback(rect.height ? rect : { width: rect.width, height: CHAT_INITIAL_VIEWPORT_HEIGHT });
+		}),
 		measureElement: (element, entry, instance) => {
+			// Capture the old row positions before the first width remeasurement.
+			captureViewportResize(instance);
 			const group = groups[Number(element.getAttribute("data-index"))];
 			if (group && !measuredVirtualGroups.current.has(group)) {
 				measuredVirtualGroups.current.add(group);
@@ -3676,6 +3698,8 @@ export function Timeline({
 		},
 		scrollToFn: (offset, { adjustments = 0 }, instance) => {
 			if (!instance.scrollElement) return;
+			// A resize restores its anchor after the new row positions reach the DOM.
+			if (viewportResize.current) return;
 			// An instant write would abort our smooth glide (and land at a stale offset).
 			// Let the glide carry the adjustment: re-aim it at the new end instead. The
 			// next scroll event re-syncs the virtualizer's offset.
@@ -3898,13 +3922,14 @@ export function Timeline({
 	// over the first frames (and may arrive in more than one snapshot), so keep
 	// snapping briefly after the first real layout instead of animating across them.
 	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
-		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+		if (viewportResize.current || !initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+			if (viewportResize.current) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
 			markWritten(node.scrollTop);
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten]);
+	}, [followEnd, markWritten, cancelScrollFollow]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
@@ -3926,6 +3951,22 @@ export function Timeline({
 		}
 		updateScrollbar();
 	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd]);
+
+	const restoreViewportResize = useCallback(() => {
+		const resize = viewportResize.current;
+		const node = scroller.current;
+		if (!resize || !node || (virtualized && renderedVirtualHeight.current !== virtualizer.getTotalSize())) return;
+		syncPromptSpacer();
+		if (pinnedRef.current) followOrSnapToEnd(node);
+		else if (resize.anchor) {
+			const row = virtualizer.measurementsCache[resize.anchor.index];
+			if (row) node.scrollTop = row.start - resize.anchor.offset;
+		}
+		markWritten(node.scrollTop);
+		lastScrollTop.current = node.scrollTop;
+		viewportResize.current = undefined;
+		updateScrollbar();
+	}, [virtualized, virtualizer, syncPromptSpacer, followOrSnapToEnd, markWritten, updateScrollbar]);
 
 	// Streamed text grows the content without a new sequence. While following, let
 	// the reply fill the prompt spacer first (the view holds still), then follow the
@@ -4027,15 +4068,19 @@ export function Timeline({
 	useEffect(() => {
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (!virtualized) return;
+		if (viewportResize.current) {
+			restoreViewportResize();
+			return;
+		}
 		// Wait for measured sizes to reach the DOM before following new content.
 		// Resizing an already measured group only refreshes scroll metrics.
 		if (pendingVirtualLayout.current && virtualHeight === virtualizer.getTotalSize()) {
 			pendingVirtualLayout.current = false;
 			syncScrollLayout();
 		} else syncScrollMetrics();
-	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics]);
+	}, [virtualized, virtualHeight, virtualizer, syncScrollLayout, syncScrollMetrics, restoreViewportResize]);
 
 	useEffect(() => {
 		const content = scrollContent.current;
@@ -4056,17 +4101,24 @@ export function Timeline({
 	// down and re-arm the observer, which would re-run a full layout per chunk.
 	const onContentResize = useRef(syncScrollMetrics);
 	onContentResize.current = () => {
+		if (viewportResize.current) {
+			restoreViewportResize();
+			return;
+		}
 		if (pinnedRef.current) syncStreamedGrowth();
 		else syncScrollMetrics();
 	};
 	useEffect(() => {
 		syncScrollLayout();
 		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(() => onContentResize.current());
+		const observer = new ResizeObserver(() => {
+			captureViewportResize(virtualizer);
+			onContentResize.current();
+		});
 		if (scroller.current) observer.observe(scroller.current);
 		if (scrollContent.current) observer.observe(scrollContent.current);
 		return () => observer.disconnect();
-	}, [groups.length]);
+	}, [groups.length, captureViewportResize, virtualizer]);
 
 	// The pause-then-resume for a reader who only nudged up a little: armed by their
 	// scroll, re-armed by each further scroll, dropped once they go past the band or
