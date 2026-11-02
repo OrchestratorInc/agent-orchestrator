@@ -696,6 +696,12 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
 	}
+	// A reply must be reported as the turn-boundary permission-resolved event,
+	// not generic active: active is suppressed while the session is blocked,
+	// which leaves the session stuck on Needs You until the turn ends.
+	if !strings.Contains(body, `callHookSync("permission-resolved"`) {
+		t.Fatalf("installed plugin does not emit permission-resolved for replies:\n%s", body)
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)

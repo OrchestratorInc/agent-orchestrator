@@ -8,7 +8,7 @@
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
 //                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
-//   permission/question reply or rejection -> `ao hooks opencode active`
+//   permission/question reply or rejection -> `ao hooks opencode permission-resolved`
 //
 // The opencode-native session id (and prompt/model where known) is piped to the
 // hook command as JSON on stdin, run with cwd set to the worktree so AO can
@@ -198,9 +198,12 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
           case "permission.replied":
           case "question.replied":
           case "question.rejected": {
+            // A reply is proof the dialog is gone; generic `active` is
+            // suppressed while blocked, so this must be the turn-boundary event
+            // AO already understands (matching the OpenCode 2 plugin).
             const sessionID = (event as any).properties?.sessionID ?? currentSessionID
             if (!sessionID) break
-            callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+            callHookSync("permission-resolved", { session_id: sessionID, model: currentModel ?? "" })
             break
           }
 

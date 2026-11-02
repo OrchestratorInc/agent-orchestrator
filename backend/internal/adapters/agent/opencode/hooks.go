@@ -72,10 +72,10 @@ const (
 //go:embed assets/ao-activity.ts
 var opencodePluginSource string
 
-// opencodeManagedEvents are the three normalized activity events the embedded
-// plugin reports. They are defined here (not parsed from the file) so tests can
+// opencodeManagedEvents are the normalized activity events the embedded plugin
+// reports. They are defined here (not parsed from the file) so tests can
 // assert the plugin wires every one via the `ao hooks opencode <event>` command.
-var opencodeManagedEvents = []string{"session-start", "user-prompt-submit", "active", "stop", "permission-blocked"}
+var opencodeManagedEvents = []string{"session-start", "user-prompt-submit", "active", "stop", "permission-blocked", "permission-resolved"}
 
 // GetAgentHooks installs AO's opencode activity plugin into the worktree-local
 // .opencode/plugins/ directory, and materializes the using-ao skill into
