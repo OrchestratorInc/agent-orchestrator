@@ -26,6 +26,7 @@ import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspa
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
+import { cloudModelLabel } from "../../lib/agent-model-choices";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
@@ -1208,10 +1209,13 @@ export function CloudSessionChatSurface({
 	// has answered (or failed): the device's own may differ.
 	const catalogDefaultUnknown = !modelsQuery.data &&
 		(!eventsQuery.data || (!lastChosen && catalogQuery.isPending && catalogQuery.fetchStatus !== "idle"));
-	const listedModels = useMemo(() => {
-		const models = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
-		return catalogDefaultUnknown ? models.map((model) => model.default ? { ...model, default: false } : model) : models;
-	}, [catalogDefaultUnknown, catalogQuery.data, modelsQuery.data]);
+	// Named from the session's own list, as New Task names Cloud's catalog: Claude's
+	// "haiku" is the model its description names, which this worker's CLI runs.
+	const listedModels = useMemo(() => (modelsQuery.data?.models ?? catalogQuery.data?.models ?? []).map((model) => ({
+		...model,
+		displayName: cloudModelLabel(session.provider, model),
+		...(catalogDefaultUnknown && model.default ? { default: false } : {}),
+	})), [catalogDefaultUnknown, catalogQuery.data, modelsQuery.data, session.provider]);
 	const pendingSettings: Pick<CloudTurnSettings, "model" | "reasoningEffort"> | undefined =
 		modelsQuery.data || !eventsQuery.data ? undefined
 			: lastChosen ?? (catalogQuery.data && { model: catalogQuery.data.models.find((model) => model.default)?.id });
@@ -1543,8 +1547,9 @@ export function CloudSessionChatSurface({
 	}), [session.provider, session.workspaceId]);
 	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
 	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model, undefined, true, false);
-	// Claude's choices come from the device's own catalog, which marks its own
-	// default: not the session's either until its messages have loaded.
+	// With no list of the session's own yet, Claude's choices come from the device's
+	// own catalog, which marks its own default: not the session's either until its
+	// messages have loaded.
 	const models = useMemo(
 		() => catalogDefaultUnknown ? choiceModels.map((model) => model.default ? { ...model, default: false } : model) : choiceModels,
 		[catalogDefaultUnknown, choiceModels],

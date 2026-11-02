@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	claudeChoiceModel,
+	cloudModelLabel,
 	filterDisabledModels,
 	foldClaudeAliasDefault,
 	offeredCatalogModels,
@@ -128,6 +129,29 @@ describe("claudeChoiceModel", () => {
 		expect(choiceModel("haiku", "Haiku 4.5")?.id).toBe("claude-haiku-4-5-20251001");
 		expect(choiceModel("opus", "Opus 5.5")?.id).toBe("claude-opus-5-5");
 		expect(choiceModel("haiku", "Haiku 4.1")).toBeUndefined();
+	});
+});
+
+describe("cloudModelLabel", () => {
+	const cloud = (id: string, displayName: string, description?: string) => ({ id, displayName, description });
+
+	it("names a Claude alias by the model its own list describes, which can be older than this computer's", () => {
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku", "Haiku 4.5 · Fastest for quick answers"))).toBe("Haiku 4.5");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Opus", "Opus 5.5 · Most capable for complex work"))).toBe("Opus 5.5");
+		expect(cloudModelLabel("claude-code", cloud("sonnet[1m]", "Sonnet (1M context)", "Sonnet 4.6 with 1M context · Billed as extra usage"))).toBe("Sonnet 4.6 (1M context)");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Claude Opus", "Claude Opus 5 · Best for everyday tasks"))).toBe("Claude Opus 5");
+	});
+
+	it("keeps a name that has a version, a placeholder, and one its description does not explain", () => {
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku 4.5", "Haiku 5.5 · Fastest"))).toBe("Haiku 4.5");
+		expect(cloudModelLabel("claude-code", cloud("claude-opus-5", "Claude Opus 5"))).toBe("Claude Opus 5");
+		expect(cloudModelLabel("claude-code", cloud("default", "Default (recommended)", "Opus 5.5 · Most capable"))).toBe("Default (recommended)");
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku", "Fastest for quick answers"))).toBe("Haiku");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Opus", "Sonnet 4.6 · Best for everyday tasks"))).toBe("Opus");
+	});
+
+	it("leaves other agents' names as their list gives them", () => {
+		expect(cloudModelLabel("codex", cloud("gpt-6-luna", "Luna", "Haiku 4.5 · not a Claude model"))).toBe("Luna");
 	});
 });
 

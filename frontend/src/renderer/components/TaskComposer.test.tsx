@@ -2760,6 +2760,21 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(screen.queryByRole("menuitem", { name: "Sonnet" })).not.toBeInTheDocument();
 	});
 
+	it("matches the Cloud catalog to Settings by its own ids, as a Cloud chat does", async () => {
+		const queryClient = cloudFixture("claude-code");
+		// This computer's Haiku 5.5 is switched off, which is not Cloud's "haiku" (Haiku 4.5).
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-haiku-5-5"] } } } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true },
+			{ id: "haiku", displayName: "Haiku 4.5", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		expect(await screen.findByRole("menuitem", { name: "Haiku 4.5" })).toBeInTheDocument();
+	});
+
 	it("says when Cloud workers verified the catalog and sends the chosen model and effort", async () => {
 		const queryClient = cloudFixture("codex");
 		h.cloudListUserAgentModels.mockResolvedValue({ source: "worker", cliVersion: "0.130.0", models: [

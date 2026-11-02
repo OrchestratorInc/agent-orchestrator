@@ -3,12 +3,16 @@ import { captureFileReference } from "../../../shared/chat-file-reference";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
+import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
 import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
+import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
+import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -31,6 +35,23 @@ vi.mock("./ChatWorkspace", () => ({
 		return <div data-testid="cloud-chat" />;
 	},
 }));
+// What the composer's agent and model picker is given, for the settings bar drawn from the chat's props.
+const composerPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+vi.mock("./AgentSwitchPicker", async (original) => ({
+	...await original<typeof import("./AgentSwitchPicker")>(),
+	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+		composerPicker.current = current;
+		return null;
+	},
+}));
+
+/** The chat's settings bar as ChatWorkspace draws it from these props, by what its picker shows. */
+function composerFor(props: { models: ChatModel[]; configOptions?: ChatConfigOption[]; snapshot: { settings: TurnSettings }; agentSwitch?: AgentSwitchProps }): PickerSource {
+	composerPicker.current = undefined;
+	render(<TurnSettingsBar harness="claude-code" models={props.models} settings={props.snapshot.settings} configOptions={props.configOptions}
+		onChange={vi.fn()} onChangeConfigOption={vi.fn()} agentSwitch={props.agentSwitch} />);
+	return composerPicker.current!;
+}
 
 const session = {
 	id: "session-1",
@@ -329,7 +350,7 @@ describe("CloudSessionChatSurface", () => {
 		);
 	});
 
-	it("offers Claude models the way local Chat does: catalog list, model and effort options", async () => {
+	it("offers Claude models the way local Chat does: the session's list, model and effort options", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ model: "opus", models: [
 			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Best for complex tasks", default: true, efforts: ["low", "high"], defaultEffort: "high" },
@@ -348,11 +369,66 @@ describe("CloudSessionChatSurface", () => {
 		);
 		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
 		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")?.currentValue).toBe("opus"));
-		expect(props().models.map((model: { id: string }) => model.id)).toEqual(["claude-opus-5", "claude-opus-5-5"]);
+		// The session's own list, named by it: this computer's catalog is not the worker's.
+		expect(props().models.map((model: ChatModel) => [model.id, model.displayName])).toEqual([["opus", "Opus 5.5"], ["claude-opus-5", "Claude Opus 5"]]);
 		expect(props().configOptions.find((option: { id: string }) => option.id === "effort")).toMatchObject({ currentValue: "high", choices: [{ value: "low" }, { value: "high" }] });
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("names a Claude alias by the model the session's own list describes, never this computer's", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		// The worker's CLI runs Haiku 4.5 for "haiku".
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ model: "haiku", models: [
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: true },
+			{ id: "haiku", displayName: "Haiku", description: "Haiku 4.5 · Fastest for quick answers", default: false },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// This computer's newer CLI runs Haiku 5.5 for it.
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+			{ id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")?.currentValue).toBe("haiku"));
+		const composer = composerFor(props());
+		expect(composer.modelLabel).toBe("Haiku 4.5");
+		expect(composer.models.map((model) => [model.id, model.label])).toEqual([["opus", "Opus 5.5"], ["haiku", "Haiku 4.5"]]);
+	});
+
+	it("filters a Claude chat by the session's own ids, as New Task filters Cloud's catalog", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ model: "opus", models: [
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: true },
+			{ id: "haiku", displayName: "Haiku", description: "Haiku 4.5 · Fastest for quick answers", default: false },
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+		] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+			{ id: "claude-opus-5", label: "Claude Opus 5" },
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+		] });
+		// This computer's Haiku 5.5 is switched off, which is not the session's Haiku 4.5; Opus 5 is the same model in both.
+		queryClient.setQueryData(settingsQueryKey, { defaultSessionMode: "chat", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-haiku-5-5", "claude-opus-5"] } } });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const modelChoices = () => props().configOptions?.find((option: { id: string }) => option.id === "model")?.choices.map((choice: { value: string }) => choice.value);
+		await waitFor(() => expect(modelChoices()).toEqual(["opus", "haiku"]));
+		expect(props().models.map((model: ChatModel) => model.id)).toEqual(["opus", "haiku"]);
 	});
 
 	it("shows the agent's catalog while the worker cannot list its models yet", async () => {
