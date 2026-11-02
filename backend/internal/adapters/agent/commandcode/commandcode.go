@@ -169,6 +169,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	MigrateNativeHistory(cfg.DataDir, domain.SessionID(cfg.Session.ID), agentSessionID)
+	if err := PrepareNativeResume(ctx, cfg.DataDir, domain.SessionID(cfg.Session.ID), cfg.Session.WorkspacePath, agentSessionID); err != nil {
+		return nil, false, err
+	}
 
 	cmd = make([]string, 0, 8)
 	cmd = append(cmd, binary, "--skip-onboarding", "--no-auto-update", "--trust")

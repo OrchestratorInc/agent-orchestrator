@@ -71,9 +71,12 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 
 // configure passes model/permission flags for agents that reject runtime setters.
 // Standing instructions use memory; ACP ignores mods (upstream issue #6784).
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	env, err := prepareSessionHome(cfg)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := commandcode.PrepareNativeResume(ctx, cfg.DataDir, cfg.SessionID, cfg.WorkspacePath, cfg.ProviderConversationID); err != nil {
 		return nil, nil, err
 	}
 	args := []string{
