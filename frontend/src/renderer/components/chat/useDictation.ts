@@ -3,6 +3,9 @@ import { aoBridge } from "../../lib/bridge";
 
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
+/** The composer whose dictation is running. Starting another one finishes it first. */
+let owner: { end(keep: boolean): void } | null = null;
+
 type DictationTarget = {
 	/** Shows the transcript so far in place of the previous one. */
 	onText(text: string): void;
@@ -18,19 +21,21 @@ type DictationTarget = {
 export function useDictation(target: DictationTarget) {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string>();
-	const active = useRef(false);
 	const targetRef = useRef(target);
 	targetRef.current = target;
+	const self = useRef<{ end(keep: boolean): void }>(null!);
+	const owns = () => owner === self.current;
 
 	const end = useCallback((keep: boolean) => {
-		active.current = false;
+		if (owner === self.current) owner = null;
 		setPhase("idle");
 		targetRef.current.onEnd(keep);
 	}, []);
+	self.current ??= { end };
 
 	useEffect(() => aoBridge.dictation.onEvent((event) => {
 		// Every composer hears the events; only the one that started acts on them.
-		if (!active.current) return;
+		if (!owns()) return;
 		switch (event.type) {
 			case "listening":
 				setPhase("listening");
@@ -64,17 +69,21 @@ export function useDictation(target: DictationTarget) {
 
 	/** Stops listening at once, keeping or dropping the dictated text. */
 	const halt = useCallback((keep: boolean) => {
-		if (!active.current) return;
+		if (!owns()) return;
 		end(keep);
 		void aoBridge.dictation.cancel();
 	}, [end]);
 
 	useEffect(() => () => {
-		if (active.current) void aoBridge.dictation.cancel();
+		if (!owns()) return;
+		owner = null;
+		void aoBridge.dictation.cancel();
 	}, []);
 
 	const start = useCallback(() => {
-		active.current = true;
+		// The main process replaces the running helper; the composer it belonged to keeps its words.
+		owner?.end(true);
+		owner = self.current;
 		setError(undefined);
 		setPhase("starting");
 		void aoBridge.dictation.start();
@@ -82,7 +91,7 @@ export function useDictation(target: DictationTarget) {
 
 	/** Ends the audio and waits for the recognizer's final wording. */
 	const stop = useCallback(() => {
-		if (!active.current) return;
+		if (!owns()) return;
 		setPhase("finishing");
 		void aoBridge.dictation.stop();
 	}, []);
@@ -101,7 +110,7 @@ export function useDictation(target: DictationTarget) {
 	}, [phase, stop]);
 
 	const toggle = useCallback(() => {
-		if (!active.current) start();
+		if (!owns()) start();
 		else if (phase !== "finishing") stop();
 	}, [phase, start, stop]);
 

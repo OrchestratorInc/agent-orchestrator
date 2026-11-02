@@ -7,9 +7,11 @@ import Speech
 
 let output = DispatchQueue(label: "ao.dictation.output")
 
+// Serialized on the output queue: the meter's levels come from the real-time
+// audio thread, which must not do this work.
 func emit(_ event: [String: Any]) {
-	guard let data = try? JSONSerialization.data(withJSONObject: event) else { return }
 	output.async {
+		guard let data = try? JSONSerialization.data(withJSONObject: event) else { return }
 		FileHandle.standardOutput.write(data)
 		FileHandle.standardOutput.write(Data([0x0A]))
 	}
@@ -119,6 +121,8 @@ final class Dictation {
 	func stop() {
 		guard !stopping else { return }
 		stopping = true
+		// Stopped before access was granted and listening began: nothing to finish.
+		guard task != nil else { finish(["type": "end", "text": ""], code: 0) }
 		emit(["type": "finishing"])
 		engine.stop()
 		engine.inputNode.removeTap(onBus: 0)
@@ -167,11 +171,11 @@ Thread.detachNewThread {
 
 SFSpeechRecognizer.requestAuthorization { status in
 	guard status == .authorized else {
-		fail("Allow Speech Recognition for Agent Orchestrator in System Settings > Privacy & Security.")
+		fail("Allow Speech Recognition for Orchestrator in System Settings > Privacy & Security.")
 	}
 	AVCaptureDevice.requestAccess(for: .audio) { granted in
 		guard granted else {
-			fail("Allow Microphone access for Agent Orchestrator in System Settings > Privacy & Security.")
+			fail("Allow Microphone access for Orchestrator in System Settings > Privacy & Security.")
 		}
 		DispatchQueue.main.async { dictation.start() }
 	}
