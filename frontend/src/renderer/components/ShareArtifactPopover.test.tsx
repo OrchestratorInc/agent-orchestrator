@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { aoBridge } from "../lib/bridge";
-import { formatBytes, ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -63,12 +63,13 @@ describe("ShareArtifactButton", () => {
 		expect(signIn).toHaveBeenCalled();
 	});
 
-	it("shows what goes public, the size, the plan usage and any credential found", async () => {
+	it("shows the plan usage beside Publish and any credential found, but no status before publishing", async () => {
 		stub({ ...inspection, secretFindings: ["AWS access key"] }, links);
 		await openPopover();
-		expect(await screen.findByText("Anyone with the link can view this file.")).toBeTruthy();
-		expect(screen.getByText("2.0 KB · Free plan: 2 of 3 links left.")).toBeTruthy();
+		expect(await screen.findByText("2 of 3 free links left")).toBeTruthy();
 		expect(screen.getByRole("alert").textContent).toContain("AWS access key");
+		expect(screen.queryByText(/anyone with the link/i)).toBeNull();
+		expect(screen.queryByText("2.0 KB")).toBeNull();
 	});
 
 	it("publishes on Publish and offers the link to copy", async () => {
@@ -82,6 +83,11 @@ describe("ShareArtifactButton", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
 		expect(writeText).toHaveBeenCalledWith("https://viewer.test/artifact/abc");
 		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+		// Once published, it says who can open it.
+		expect(screen.getByText("Public · anyone with the link can view")).toBeTruthy();
+		// Unpublish sits at the left of the action row, before Copy.
+		const unpublish = screen.getByRole("button", { name: "Unpublish" });
+		expect(unpublish.compareDocumentPosition(screen.getByRole("button", { name: "Copied" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("opens a published file to its link, with only Copy and Unpublish", async () => {
@@ -99,8 +105,11 @@ describe("ShareArtifactButton", () => {
 		// A publish that never ends outlives this test: give it its own file.
 		await openPopover("docs/slow.html");
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
-		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publishing…" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+		// The progress is the row's left side, and the bar.
+		expect(screen.getByText("0% uploaded")).toBeTruthy();
+		expect(screen.getByRole("progressbar", { name: "0% uploaded" })).toHaveAttribute("aria-valuenow", "0");
 	});
 
 	it("unpublishes after an inline confirmation, then offers to publish again", async () => {
@@ -118,7 +127,7 @@ describe("ShareArtifactButton", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
 		expect(unpublish).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
-		expect(screen.getByText("2.0 KB · Free plan: 3 of 3 links left.")).toBeTruthy();
+		expect(screen.getByText("3 of 3 free links left")).toBeTruthy();
 	});
 
 	it("treats a record of an unpublished link as unpublished", async () => {
@@ -140,7 +149,8 @@ describe("ShareArtifactButton", () => {
 		stub({ ...inspection, size: 5 * 1024 ** 3 }, { ...links, used: 3, unlimited: true });
 		await openPopover();
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
-		expect(screen.getByText("5.0 GB")).toBeTruthy();
+		// A paid plan has no count to show.
+		expect(screen.queryByText(/free links left/)).toBeNull();
 	});
 
 	it("shows the server's limit refusal at once, even when another link has the file's name", async () => {
@@ -160,7 +170,7 @@ describe("ShareArtifactButton", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
 		expect(await screen.findByText("This file changed since you opened Share. Check it and publish again.")).toBeTruthy();
 		expect(screen.getByRole("alert").textContent).toContain("GitHub token");
-		expect(screen.getByText("4.0 KB · Free plan: 2 of 3 links left.")).toBeTruthy();
+		expect(screen.getByText("2 of 3 free links left")).toBeTruthy();
 		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
 		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
 		expect(publishSpy).toHaveBeenLastCalledWith({ ...file, baseUrl: "https://cp.test", fingerprint: "fp-2" });
@@ -173,12 +183,12 @@ describe("ShareArtifactButton", () => {
 		const cancel = vi.spyOn(aoBridge.cloudShare, "cancel").mockResolvedValue();
 		await openPopover("docs/long.html", "long.html");
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
-		await screen.findByRole("button", { name: "Publishing… 0%" });
+		await screen.findByRole("button", { name: "Publishing…" });
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 		expect(cancel).not.toHaveBeenCalled();
 		await userEvent.click(await screen.findByRole("button", { name: "Share: long.html" }));
-		expect(await screen.findByRole("button", { name: "Publishing… 0%" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publishing…" })).toBeDisabled();
 		finish({ status: "published", replaced: false, share });
 		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue("https://viewer.test/artifact/abc");
 	});
@@ -217,7 +227,4 @@ describe("ShareArtifactButton", () => {
 		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
 	});
 
-	it("formats sizes", () => {
-		expect([formatBytes(512), formatBytes(2048), formatBytes(64 << 20), formatBytes(5 * 1024 ** 3)]).toEqual(["512 B", "2.0 KB", "64 MB", "5.0 GB"]);
-	});
 });

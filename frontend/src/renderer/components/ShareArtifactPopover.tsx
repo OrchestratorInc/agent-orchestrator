@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Share } from "lucide-react";
+import { Check, Copy, Globe, Share } from "lucide-react";
 import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
@@ -40,19 +40,6 @@ const pendingShares = new Map<string, PendingShare>();
 
 function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
 	return JSON.stringify([baseUrl, file.sessionId, file.path]);
-}
-
-/** "2.0 KB", "64 MB": a byte count for the share popover. */
-export function formatBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	const units = ["KB", "MB", "GB", "TB"];
-	let value = bytes / 1024;
-	let unit = 0;
-	while (value >= 1024 && unit < units.length - 1) {
-		value /= 1024;
-		unit++;
-	}
-	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
 /** An error's message, without the wrapper Electron puts around one thrown across IPC. */
@@ -118,8 +105,8 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	const button = (
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
-			// Muted like the header's other actions, bright while hovered or open.
-			className={cn("text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", className)}
+			// Muted like the header's other actions, bright while hovered, and pressed while open.
+			className={cn("text-muted-foreground hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground dark:data-[state=open]:bg-muted/50", className)}
 			disabled={video}
 			size="sm"
 			type="button"
@@ -145,7 +132,7 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>{button}</PopoverTrigger>
-			<PopoverContent align="end" className="w-[min(22rem,90vw)] p-3" data-browser-native-overlay="true">
+			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
 		</Popover>
@@ -270,29 +257,44 @@ function SharePanel({
 		}
 	};
 
-	const title = <p className="truncate text-control font-medium text-foreground">{t("artifacts.share.title", { name })}</p>;
-	const note = (text: string) => <p className="mt-1 text-caption text-muted-foreground">{text}</p>;
-	const actions = (children: React.ReactNode) => <div className="mt-3 flex items-center justify-end gap-2">{children}</div>;
+	// Every state is a title, an optional status line, and one action row whose
+	// primary action sits at the right; its left holds the plan count, the
+	// progress or Unpublish.
+	const heading = (text: string) => <p className="truncate text-control font-medium text-foreground">{text}</p>;
+	const title = heading(t("artifacts.share.title", { name }));
+	const status = (text: string, role?: "alert" | "status") => (
+		<p role={role} className={cn("mt-1 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
+	);
+	// Buttons and inputs inherit their font (styles.css), so the row sets the
+	// buttons' size and meta() the smaller secondary text.
+	const footer = (left: React.ReactNode, right: React.ReactNode) => (
+		<div className="mt-3 flex min-h-control-md items-center justify-between gap-2 text-xs">
+			<div className="min-w-0 truncate">{left}</div>
+			<div className="flex shrink-0 items-center gap-1.5">{right}</div>
+		</div>
+	);
+	const meta = (text: string) => <span className="text-caption text-muted-foreground tabular-nums">{text}</span>;
 
 	switch (phase.kind) {
 		case "loading":
-			return <>{title}{note(t("artifacts.share.checking"))}</>;
+			return <>{title}{status(t("artifacts.share.checking"))}</>;
 		case "signin":
 			return (
 				<>
-					<p className="text-control font-medium text-foreground">{t("artifacts.share.signInTitle")}</p>
-					{note(t("artifacts.share.signInDescription"))}
-					{actions(<Button onClick={() => void aoBridge.cloud.signIn()} size="sm" type="button" variant="primary">{t("artifacts.share.signIn")}</Button>)}
+					{heading(t("artifacts.share.signInTitle"))}
+					{status(t("artifacts.share.signInDescription"))}
+					{footer(null, <Button onClick={() => void aoBridge.cloud.signIn()} size="sm" type="button" variant="primary">{t("artifacts.share.signIn")}</Button>)}
 				</>
 			);
 		case "unsupported":
-			return <>{title}{note(t("artifacts.share.videoSoon"))}</>;
+			return <>{title}{status(t("artifacts.share.videoSoon"))}</>;
 		case "limit":
 			return (
 				<>
-					<p className="text-control font-medium text-foreground">{t("artifacts.share.upgradeTitle")}</p>
-					{note(t("artifacts.share.limitReached", { limit: phase.limit }))}
-					{actions(
+					{heading(t("artifacts.share.upgradeTitle"))}
+					{status(t("artifacts.share.limitReached", { limit: phase.limit }))}
+					{footer(
+						null,
 						<Button onClick={() => { onClose(); openSettings("billing"); }} size="sm" type="button" variant="primary">
 							{t("artifacts.share.upgrade")}
 						</Button>,
@@ -304,18 +306,12 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					{note(t("artifacts.share.public"))}
-					<p className="mt-1 text-caption text-muted-foreground">
-						{formatBytes(inspection.size)}
-						{links.unlimited ? null : ` · ${t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })}`}
-					</p>
-					{phase.changed ? <p role="status" className="mt-2 text-caption text-foreground">{t("artifacts.share.changed")}</p> : null}
-					{inspection.secretFindings.length > 0 ? (
-						<p role="alert" className="mt-2 text-caption leading-4 text-error">
-							{t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") })}
-						</p>
-					) : null}
-					{actions(<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>)}
+					{phase.changed ? status(t("artifacts.share.changed"), "status") : null}
+					{inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") }), "alert") : null}
+					{footer(
+						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
+						<Button onClick={() => void publish(inspection, links)} size="sm" type="button" variant="primary">{t("artifacts.share.publish")}</Button>,
+					)}
 				</>
 			);
 		}
@@ -324,14 +320,14 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					{note(t("artifacts.share.public"))}
-					<div className="mt-2 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.publishing", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-						<div className="h-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
+					<div className="mt-2.5 h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label={t("artifacts.share.uploaded", { percent })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+						<div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
 					</div>
-					{actions(
+					{footer(
+						meta(t("artifacts.share.uploaded", { percent })),
 						<>
 							<Button onClick={() => void aoBridge.cloudShare.cancel()} size="sm" type="button" variant="ghost">{t("artifacts.share.cancel")}</Button>
-							<Button disabled size="sm" type="button" variant="primary">{t("artifacts.share.publishing", { percent })}</Button>
+							<Button disabled size="sm" type="button" variant="primary">{t("artifacts.share.publishing")}</Button>
 						</>,
 					)}
 				</>
@@ -344,9 +340,10 @@ function SharePanel({
 				const busy = phase.unpublishing === "busy";
 				return (
 					<>
-						<p className="text-control font-medium text-foreground">{t("artifacts.share.unpublishTitle")}</p>
-						{note(t("artifacts.share.unpublishDescription"))}
-						{actions(
+						{heading(t("artifacts.share.unpublishTitle"))}
+						{status(t("artifacts.share.unpublishDescription"))}
+						{footer(
+							null,
 							<>
 								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
@@ -362,36 +359,35 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					{note(t("artifacts.share.public"))}
-					<div className="mt-2 flex items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2">
+					<p className="mt-1 flex items-center gap-1.5 text-caption text-muted-foreground">
+						<Globe aria-hidden="true" className="size-3 shrink-0 text-success" />
+						{t("artifacts.share.publicStatus")}
+					</p>
+					<div className="mt-2.5 font-mono text-caption">
 						<input
 							aria-label={t("artifacts.share.linkLabel")}
-							className="min-w-0 flex-1 truncate bg-transparent font-mono text-caption text-foreground outline-none"
+							className="block h-control-md w-full truncate rounded-md bg-muted px-2 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 							onFocus={(event) => event.currentTarget.select()}
 							readOnly
 							value={link}
 						/>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									aria-label={t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
-									onClick={() => void aoBridge.clipboard.writeText(link).then(() => setCopied(true))}
-									size="icon-sm"
-									type="button"
-									variant="ghost"
-								>
-									{copied ? <Check aria-hidden="true" className="size-icon-sm" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}</TooltipContent>
-						</Tooltip>
 					</div>
-					{phase.error ? <p role="alert" className="mt-2 text-caption text-error">{phase.error}</p> : null}
-					<div className="mt-3 flex items-center justify-end">
-						<Button className="text-destructive hover:text-destructive" onClick={() => setPhase({ kind: "published", share, unpublishing: "confirm" })} size="sm" type="button" variant="ghost">
+					{phase.error ? status(phase.error, "alert") : null}
+					{footer(
+						<Button
+							className="-ml-2.5 text-error hover:text-error"
+							onClick={() => setPhase({ kind: "published", share, unpublishing: "confirm" })}
+							size="sm"
+							type="button"
+							variant="ghost"
+						>
 							{t("artifacts.share.unpublish")}
-						</Button>
-					</div>
+						</Button>,
+						<Button onClick={() => void aoBridge.clipboard.writeText(link).then(() => setCopied(true))} size="sm" type="button" variant="primary">
+							{copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
+							{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
+						</Button>,
+					)}
 				</>
 			);
 		}
@@ -399,8 +395,8 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					<p role="alert" className="mt-1 text-caption text-error">{t("artifacts.share.failed", { message: phase.message })}</p>
-					{actions(<Button onClick={() => load()} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
+					{status(t("artifacts.share.failed", { message: phase.message }), "alert")}
+					{footer(null, <Button onClick={() => load()} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
 				</>
 			);
 	}
