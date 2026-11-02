@@ -241,3 +241,145 @@ func TestQwenScanGroupsNativeIDAcrossProjects(t *testing.T) {
 		t.Fatalf("copies must share one native candidate: %#v", preview.Candidates)
 	}
 }
+
+func qwenLinkedRecord(id, parent, kind, text string) map[string]any {
+	provenance := kind
+	role := kind
+	if kind == "user" {
+		provenance = "real_user"
+	} else if kind == "assistant" {
+		provenance, role = "assistant_output", "model"
+	}
+	r := map[string]any{"uuid": id, "parentUuid": parent, "type": kind, "provenance": provenance, "timestamp": time.Now()}
+	if parent == "" {
+		r["parentUuid"] = nil
+	}
+	if kind == "user" || kind == "assistant" {
+		r["message"] = map[string]any{"role": role, "parts": []map[string]any{{"text": text}}}
+	}
+	return r
+}
+
+func TestQwenTranscriptFollowsActiveBranchAfterRewind(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(map[bool]string{false: "rewind only", true: "replacement turn"}[replacement], func(t *testing.T) {
+			root := t.TempDir()
+			records := []map[string]any{
+				qwenLinkedRecord("u1", "", "user", "opening question"),
+				qwenLinkedRecord("a1", "u1", "assistant", "opening answer"),
+				qwenLinkedRecord("u2", "a1", "user", "abandoned question"),
+				qwenLinkedRecord("a2", "u2", "assistant", "abandoned answer"),
+				qwenLinkedRecord("rewind", "a1", "system", ""),
+			}
+			records[4]["subtype"] = "rewind"
+			if replacement {
+				records = append(records,
+					qwenLinkedRecord("u3", "rewind", "user", "replacement question"),
+					qwenLinkedRecord("tool", "u3", "tool_result", ""),
+					qwenLinkedRecord("a3", "tool", "assistant", "replacement answer"),
+					qwenLinkedRecord("metadata", "a3", "system", ""))
+			}
+			path := writeQwenChat(t, root, "/work/repo", qwenID, records)
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"user: opening question", "assistant: opening answer"}
+			if replacement {
+				want = append(want, "user: replacement question", "assistant: replacement answer")
+			}
+			wantTexts(t, got.messages, want...)
+			if got.title != "opening question" || got.shortened {
+				t.Fatalf("active title/shortened = %q/%v", got.title, got.shortened)
+			}
+		})
+	}
+}
+
+func TestQwenRewindToStartRefusesDiscardedConversation(t *testing.T) {
+	root := t.TempDir()
+	path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
+		qwenLinkedRecord("u1", "", "user", "discarded prompt"),
+		qwenLinkedRecord("a1", "u1", "assistant", "discarded answer"),
+		qwenLinkedRecord("rewind", "", "system", ""),
+	})
+	if _, err := readTranscript(context.Background(), domain.HarnessQwen, root, path); err == nil {
+		t.Fatal("a discarded prompt must not make the empty active branch importable")
+	}
+}
+
+func TestQwenParentTraversalIsBounded(t *testing.T) {
+	for _, parent := range []string{"missing", "a1"} {
+		t.Run(parent, func(t *testing.T) {
+			root := t.TempDir()
+			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
+				qwenLinkedRecord("old", "", "user", "unreachable prompt"),
+				qwenLinkedRecord("u1", parent, "user", "reachable prompt"),
+				qwenLinkedRecord("a1", "u1", "assistant", "reachable answer"),
+			})
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: reachable prompt", "assistant: reachable answer")
+		})
+	}
+}
+
+func TestQwenUserDisplayProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		payload   map[string]any
+		modelText string
+		want      string
+	}{
+		{"display prompt", map[string]any{"displayText": "inspect @note.txt", "hookContext": "PRIVATE HOOK CONTEXT"}, "expanded resource contents\n<user_prompt_submit_context>PRIVATE HOOK CONTEXT</user_prompt_submit_context>", "inspect @note.txt"},
+		{"legacy fallback", nil, "older plain prompt", "older plain prompt"},
+		{"empty display refuses model context", map[string]any{"displayText": "", "hookContext": "PRIVATE HOOK CONTEXT"}, "PRIVATE MODEL INPUT", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			user := qwenLinkedRecord("u1", "", "user", tc.modelText)
+			if tc.payload != nil {
+				user["systemPayload"] = tc.payload
+			}
+			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{user, qwenLinkedRecord("a1", "u1", "assistant", "visible reply")})
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("an empty display projection must not expose model-only context")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: "+tc.want, "assistant: visible reply")
+			if got.title != tc.want {
+				t.Fatalf("title = %q, want display text %q", got.title, tc.want)
+			}
+		})
+	}
+}
+
+func TestQwenAbandonedTextDoesNotShortenActiveBranch(t *testing.T) {
+	oldLimit := maxClaudeHeld
+	maxClaudeHeld = 64
+	t.Cleanup(func() { maxClaudeHeld = oldLimit })
+	root := t.TempDir()
+	path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
+		qwenLinkedRecord("u1", "", "user", "opening"),
+		qwenLinkedRecord("abandoned", "u1", "user", strings.Repeat("x", 256)),
+		qwenLinkedRecord("rewind", "u1", "system", ""),
+		qwenLinkedRecord("u2", "rewind", "user", "replacement"),
+		qwenLinkedRecord("a2", "u2", "assistant", "reply"),
+	})
+	got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: opening", "user: replacement", "assistant: reply")
+	if got.shortened {
+		t.Fatal("discarded text outside the active branch must not mark its history shortened")
+	}
+}

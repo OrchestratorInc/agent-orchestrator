@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,10 +33,12 @@ func qwenIsTranscript(path, name string) bool {
 	return strings.HasSuffix(name, ".jsonl") && filepath.Base(filepath.Dir(path)) == "chats"
 }
 
-// qwenRecord is one JSONL line. Only the human's prompts (provenance real_user)
-// and the model's visible replies (provenance assistant_output) are display
-// messages; injected context, tool traffic and thinking parts are dropped.
+// qwenRecord is one JSONL line. Provenance selects human/model messages;
+// systemPayload.displayText separates a human prompt from model-bound context.
+// UUID links select the active branch before projecting visible text.
 type qwenRecord struct {
+	UUID       string    `json:"uuid"`
+	ParentUUID string    `json:"parentUuid"`
 	Type       string    `json:"type"`
 	Provenance string    `json:"provenance"`
 	SessionID  string    `json:"sessionId"`
@@ -52,6 +55,16 @@ type qwenRecord struct {
 			FunctionCall json.RawMessage `json:"functionCall"`
 		} `json:"parts"`
 	} `json:"message"`
+	SystemPayload struct {
+		DisplayText *string `json:"displayText"`
+	} `json:"systemPayload"`
+}
+
+// qwenNode retains links and display facts, not model-bound context or tools.
+type qwenNode struct {
+	id, parent, role, text string
+	at                     time.Time
+	omitted                bool
 }
 
 // qwenVisibleText joins a message's plain text parts. A part that also carries a
@@ -90,9 +103,15 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 	t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 
 	var (
-		items    []tagged
-		prompted bool
-		now      = time.Now()
+		items     []tagged
+		nodes     []qwenNode
+		index     = map[string]int{}
+		leaf      string
+		prompted  bool
+		held      int
+		drop      int
+		firstText = -1
+		now       = time.Now()
 	)
 	add := func(role, text string, at time.Time) {
 		if strings.Contains(text, omittedText) {
@@ -123,13 +142,50 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		if t.cwd == "" && r.CWD != "" {
 			t.cwd = r.CWD
 		}
+		node := qwenNode{id: r.UUID, parent: r.ParentUUID, at: r.Timestamp}
 		switch {
 		case r.Type == "user" && r.Provenance == "real_user":
-			t.shortened = t.shortened || r.Omitted // A dropped oversize record may have held the prompt.
-			add("user", qwenVisibleText(r), r.Timestamp)
+			node.role = "user"
+			if r.SystemPayload.DisplayText != nil {
+				// Presence matters: an empty projection must not expose model input.
+				node.text = *r.SystemPayload.DisplayText
+			} else {
+				node.text = qwenVisibleText(r) // Older records have no display projection.
+			}
 		case r.Type == "assistant" && r.Provenance == "assistant_output":
-			t.shortened = t.shortened || r.Omitted
-			add("assistant", qwenVisibleText(r), r.Timestamp)
+			node.role, node.text = "assistant", qwenVisibleText(r)
+		}
+		node.omitted = r.Omitted && node.role != ""
+		idx := len(nodes)
+		if node.id != "" {
+			leaf = node.id
+			if prior, found := index[node.id]; found {
+				idx = prior
+			} else {
+				index[node.id] = idx
+			}
+		}
+		if idx < len(nodes) {
+			held -= len(nodes[idx].text)
+			nodes[idx] = node
+		} else {
+			nodes = append(nodes, node)
+		}
+		if firstText < 0 && node.text != "" {
+			firstText = idx
+		}
+		if idx < drop && idx != firstText {
+			nodes[idx].omitted = nodes[idx].omitted || nodes[idx].text != ""
+			nodes[idx].text = ""
+		}
+		held += len(nodes[idx].text)
+		// Bound text held across branches while preserving links and the opening prompt.
+		for held > maxClaudeHeld && drop < len(nodes) {
+			if drop != firstText && nodes[drop].text != "" {
+				held -= len(nodes[drop].text)
+				nodes[drop].text, nodes[drop].omitted = "", true
+			}
+			drop++
 		}
 		return nil
 	}
@@ -140,6 +196,33 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		t.paths = append(t.paths, path)
 	}
 	t.path = t.paths[len(t.paths)-1]
+
+	chain := nodes // Legacy records without UUIDs retain their linear order.
+	if leaf != "" {
+		chain = nil
+		visited := map[string]bool{}
+		for leaf != "" {
+			if err := ctx.Err(); err != nil {
+				return t, err
+			}
+			idx, found := index[leaf]
+			if !found || visited[leaf] {
+				break // Keep only the reachable branch; missing links and cycles terminate.
+			}
+			visited[leaf] = true
+			node := nodes[idx]
+			chain = append(chain, node)
+			leaf = node.parent
+		}
+		slices.Reverse(chain)
+	}
+	for _, node := range chain {
+		if node.role == "" {
+			continue
+		}
+		t.shortened = t.shortened || node.omitted
+		add(node.role, node.text, node.at)
+	}
 
 	n := len(items)
 	items = trimVisible(items)
