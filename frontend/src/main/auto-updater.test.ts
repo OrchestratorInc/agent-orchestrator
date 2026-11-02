@@ -3586,6 +3586,44 @@ describe("quitAndInstallUpdate", () => {
     vi.resetModules();
   });
 
+  it("drops an in-process macOS stage whose native files disappeared and checks again", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      vi.useFakeTimers();
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
+
+      vi.advanceTimersByTime(2_001);
+      rmSync(shipIt, { recursive: true });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      autoUpdater.checkForUpdates.mockImplementation(async () => ({
+        isUpdateAvailable: true,
+        updateInfo: { version: "2.2.0" },
+        downloadPromise: autoUpdater.autoDownload ? Promise.resolve() : undefined,
+      }));
+
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.autoDownload).toBe(true);
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
   it("requires new confirmation before downloading a changed remembered target", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {

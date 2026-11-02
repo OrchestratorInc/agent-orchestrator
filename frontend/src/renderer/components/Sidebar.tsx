@@ -2999,7 +2999,7 @@ function sidebarUpdateAction(status: UpdateStatus, availableDismissed: boolean):
 	if (status.state === "available" && !availableDismissed && status.version !== staged?.version) {
 		return { kind: "download", version: status.version };
 	}
-	if (staged) return { kind: "install", version: staged.version, escalated: staged.escalated };
+	if (staged && staged.ready !== false) return { kind: "install", version: staged.version, escalated: staged.escalated };
 	// Ranked below a staged build on purpose: an update ready to install is more
 	// actionable than "checks are failing". Only when there is nothing better to
 	// show does the failure take the row — it used to render nothing at all,
