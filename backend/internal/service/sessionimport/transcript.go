@@ -90,6 +90,8 @@ type record struct {
 		Content contentText `json:"content"`
 	} `json:"message"`
 	Payload struct {
+		NumTurns uint64 `json:"num_turns"`
+
 		ID      string          `json:"id"`
 		CWD     string          `json:"cwd"`
 		Type    string          `json:"type"`
@@ -426,6 +428,16 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		visible += len(text)
 		items = append(items, msg)
 	}
+	reindex := func() {
+		visible = 0
+		clear(ids)
+		for i, item := range items {
+			visible += len(item.Text)
+			if item.id != "" {
+				ids[item.kind+"\x00"+item.id] = i
+			}
+		}
+	}
 	trim := func() {
 		if harness == domain.HarnessCodex {
 			// Budget each message once and keep the typed opening prompt.
@@ -523,6 +535,11 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			}
 		case "event_msg":
 			switch r.Payload.Type {
+			case "thread_rolled_back":
+				if r.Payload.NumTurns > 0 {
+					items = codexRollback(items, r.Payload.NumTurns)
+					reindex()
+				}
 			case "user_message":
 				add("event-user", "", "user", r.Payload.Message, r.Timestamp)
 			case "agent_message":
@@ -538,14 +555,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		}
 		if visible > 2*maxVisibleBytes {
 			trim()
-			visible = 0
-			clear(ids)
-			for i, item := range items {
-				visible += len(item.Text)
-				if item.id != "" {
-					ids[item.kind+"\x00"+item.id] = i
-				}
-			}
+			reindex()
 		}
 		return nil
 	}
@@ -692,6 +702,21 @@ func codexVisible(items []tagged) []tagged {
 		start = end
 	}
 	return out
+}
+
+// Codex rollbacks retract complete user turns, including each turn's replies.
+// Collapse duplicate event/response/item representations before counting users.
+func codexRollback(items []tagged, turns uint64) []tagged {
+	items = codexVisible(items)
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Role == domain.MessageRoleUser {
+			turns--
+			if turns == 0 {
+				return items[:i]
+			}
+		}
+	}
+	return nil
 }
 
 // trimVisible keeps the opening prompt and the newest messages within budget.
