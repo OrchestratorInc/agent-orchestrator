@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCloudCpClient } from "./client";
+import { createCloudCpClient, retryAfterMs } from "./client";
+import { CloudCpError } from "./errors";
 
 describe("Cloud control-plane interface transitions", () => {
 	it("preserves caller message ids for Cloud send retries and steering", async () => {
@@ -504,5 +505,26 @@ describe("cloud control-plane session lifecycle", () => {
 			`https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/${path}`,
 			expect.objectContaining({ method: "PATCH", body: JSON.stringify({ [field]: false }) }),
 		);
+	});
+});
+
+describe("Cloud control-plane rate limits", () => {
+	it("keeps how long a 429 asks the caller to wait", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ code: "rate_limited", message: "Too many searches. Try again in a minute." }), {
+			status: 429, headers: { "Content-Type": "application/json", "Retry-After": "60" },
+		}));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		const error = await client.searchChats("org", { query: "login" }).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(CloudCpError);
+		expect(error).toMatchObject({ status: 429, code: "rate_limited", retryAfterMs: 60_000, message: "Too many searches. Try again in a minute." });
+	});
+
+	it("reads Retry-After as seconds or as a date", () => {
+		const now = Date.parse("2026-11-01T00:00:00Z");
+		expect(retryAfterMs("60", now)).toBe(60_000);
+		expect(retryAfterMs("Sun, 01 Nov 2026 00:00:30 GMT", now)).toBe(30_000);
+		expect(retryAfterMs("Sat, 31 Oct 2026 00:00:00 GMT", now)).toBe(0);
+		expect(retryAfterMs(null, now)).toBeUndefined();
+		expect(retryAfterMs("soon", now)).toBeUndefined();
 	});
 });

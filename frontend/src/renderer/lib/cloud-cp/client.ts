@@ -605,6 +605,15 @@ export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
+/** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+	const header = value?.trim();
+	if (!header) return undefined;
+	if (/^\d+$/.test(header)) return Number(header) * 1_000;
+	const at = Date.parse(header);
+	return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+}
+
 async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
@@ -621,7 +630,7 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	} catch {
 		// Non-JSON or empty body: keep the status-derived message.
 	}
-	const options = { status: response.status, code, requestId };
+	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 
