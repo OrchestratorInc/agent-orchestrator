@@ -23,7 +23,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
-import { dragStyle as topbarDragStyle } from "./PageTopbar";
+import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -341,9 +341,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			{/* No topbar yet: the strip only holds the session header's place, so the
-			    chat does not move when the session takes over, and drags the window. */}
-			<div aria-hidden="true" className="h-inspector-tabs w-full shrink-0" style={topbarDragStyle} />
+			{/* No session yet: the shared session frame with no tabs holds the header's
+			    place and surface, so nothing moves or changes colour at handoff. */}
+			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+				<SessionTabsTopbar hideActions tabs={null} />
+			</div>
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above).

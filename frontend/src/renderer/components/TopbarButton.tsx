@@ -2,7 +2,8 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
-const topbarActionClass = "border-0 bg-transparent text-foreground";
+// Utility controls rest muted and brighten on hover or while their menu or toggle is on.
+const topbarActionClass = "border-0 bg-transparent text-muted-foreground hover:text-foreground aria-expanded:text-foreground aria-pressed:text-foreground";
 
 const topbarButtonVariants = cva(
 	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[transform,filter,background-color,color,border-color] duration-fast ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -12,7 +13,7 @@ const topbarButtonVariants = cva(
 				action:
 					`topbar-control--action h-control-lg gap-1.5 rounded-md px-3.5 text-sm font-semibold leading-none ${topbarActionClass}`,
 				secondary:
-					"topbar-control--secondary h-control-lg gap-1.5 rounded-md px-3.5 text-sm font-semibold leading-none text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+					"topbar-control--secondary h-control-lg gap-1.5 rounded-md bg-transparent px-3.5 text-sm font-semibold leading-none text-muted-foreground hover:text-foreground",
 				primary:
 					"topbar-control--primary h-control-lg gap-1.5 rounded-md bg-accent-strong px-3.5 text-sm leading-none text-accent-foreground hover:brightness-110 active:brightness-95",
 				accent:
@@ -36,7 +37,9 @@ export function TopbarButton({
 	/** Joined controls can let their surrounding group own the highlight. */
 	highlight?: boolean;
 }) {
-	const useHighlight = highlight && (variant === "action" || variant === "icon");
+	// Accent keeps its bordered raised surface; every other utility control
+	// shares the sidebar's hover highlight.
+	const useHighlight = highlight && (variant === "action" || variant === "icon" || variant === "secondary");
 	const active = props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
 		props["aria-expanded"] === true || props["aria-expanded"] === "true";
 	return (

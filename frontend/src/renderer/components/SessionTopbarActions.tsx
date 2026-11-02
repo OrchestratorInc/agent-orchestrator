@@ -27,16 +27,13 @@ import {
 import { OrchestratorIcon } from "./icons";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import { isMacPlatform } from "../lib/platform";
-import { PageTopbarActions } from "./PageTopbar";
+import { noDragStyle, PageTopbarActions } from "./PageTopbar";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
 import { SessionOwnerTag } from "./SessionOwnerTag";
-
-const noDragStyle = isMacPlatform() ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
 // The action cluster a session's tab strip hosts: open-in-editor, cues, archive,
 // and the orchestrator / board / new-task launchers. The page frame itself is
@@ -79,8 +76,9 @@ export function SessionTopbarActions({
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
 	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
-	// project in scope: open, resume, or spawn. Only one topbar is mounted at
-	// a time, so the shortcut fires once. No-op without a project (root board).
+	// project in scope: open, resume, or spawn. The board registers the same
+	// shortcut, but a session page and the board are never mounted together,
+	// so it fires once. No-op without a project (root board).
 	useSessionShortcut("open-orchestrator", () => {
 		if (!supportsProjectActions || startingOrchestrator) return;
 		openOrchestrator();

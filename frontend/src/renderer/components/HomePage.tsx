@@ -23,7 +23,7 @@ import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { PageTopbar } from "./PageTopbar";
+import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
 
 /**
@@ -144,8 +144,10 @@ function HomeActionCard({
 
 export function HomePage() {
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			<PageTopbar />
+		<div className="relative flex h-full min-h-0 flex-col">
+			{/* The welcome page has no header. On macOS an invisible strip keeps
+			    the top edge draggable without moving the content. */}
+			{dragStyle ? <div aria-hidden="true" className="absolute inset-x-0 top-0 z-chrome h-toolbar" style={dragStyle} /> : null}
 			<HomePageContent />
 		</div>
 	);

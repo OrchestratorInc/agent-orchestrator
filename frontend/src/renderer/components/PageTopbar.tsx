@@ -15,17 +15,20 @@ import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
  * - `SessionTabsTopbar` is the same frame around a session's tab strip.
  */
 
-const usesNativeDragRegion = isMacPlatform() || isLinuxPlatform();
+// Only macOS draws app content under a hidden titlebar. Windows has its own
+// titlebar above the panel and Linux keeps the native frame.
+const usesNativeDragRegion = isMacPlatform();
 export const dragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
-const noDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
+export const noDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
 const TopbarTrailingActionsContext = createContext<HTMLDivElement | null>(null);
 
 /** The panel is the single owner of notification placement and trailing width. */
 export function PageTopbarSurface({ children, notifications = false }: { children: ReactNode; notifications?: boolean }) {
-	// Global settings replaces the visible page while its routed session stays mounted.
+	// Global settings replaces the visible page while its routed session stays
+	// mounted: the bell stays, but session controls must not portal over it.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
-	const showControls = notifications && !settingsOpen;
+	const showControls = notifications;
 	const surfaceRef = useRef<HTMLDivElement>(null);
 	const [actionsHost, setActionsHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
@@ -43,15 +46,17 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 	}, [actionsHost]);
 
 	return (
-		<TopbarTrailingActionsContext.Provider value={showControls ? actionsHost : null}>
+		<TopbarTrailingActionsContext.Provider value={showControls && !settingsOpen ? actionsHost : null}>
 			<div className={cn("center-panel-surface relative", showControls && "has-topbar-controls")} ref={surfaceRef}>
-				{children}
+				{/* Positioned over the header, but first in DOM order so keyboard and
+				    screen-reader users reach the bell before the page body. */}
 				{showControls ? (
 					<PageTopbarActions className="panel-topbar-controls" data-testid="panel-topbar-controls">
 						<div className="contents" ref={setActionsHost} />
 						<NotificationCenter style={noDragStyle} />
 					</PageTopbarActions>
 				) : null}
+				{children}
 			</div>
 		</TopbarTrailingActionsContext.Provider>
 	);

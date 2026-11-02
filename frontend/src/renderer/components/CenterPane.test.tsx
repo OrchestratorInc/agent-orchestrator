@@ -531,7 +531,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");
-		expect(actionRegion).toHaveClass("gap-1");
+		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
@@ -542,9 +542,9 @@ describe("CenterPane toolbar session label", () => {
 	it("keeps the tab strip flush with the action controls", () => {
 		renderCenterPane({ session: worker });
 
+		// Inline spacing lives on .session-topbar-actions in styles.css.
 		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pl-2");
+		expect(screen.getByTestId("session-action-region")).toHaveClass("session-topbar-actions");
 		expect(screen.getByTestId("session-action-region")).not.toHaveClass("px-3");
 	});
 
@@ -558,7 +558,11 @@ describe("CenterPane toolbar session label", () => {
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: pane });
 		act(() => document.dispatchEvent(new Event("fullscreenchange")));
 
-		expect(screen.queryByTestId("session-action-region")).not.toBeInTheDocument();
+		// Fullscreen hides the panel-owned bell, so the region keeps only its own copy.
+		const actionRegion = screen.getByTestId("session-action-region");
+		expect(actionRegion).toHaveAttribute("data-fullscreen", "true");
+		expect(within(actionRegion).queryByRole("button", { name: "Session action" })).not.toBeInTheDocument();
+		expect(within(actionRegion).getByRole("button", { name: /notifications/i })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Exit fullscreen" })).toBeNull();
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
 	});
