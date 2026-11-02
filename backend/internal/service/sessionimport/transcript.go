@@ -357,6 +357,8 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	// Harnesses whose transcript format differs from the Claude/Codex JSONL
 	// handled below parse in their own file.
 	switch harness {
+	case domain.HarnessCopilot:
+		return readCopilotTranscript(ctx, root, paths...)
 	case domain.HarnessKimi:
 		return readKimiTranscript(ctx, root, paths...)
 	case domain.HarnessOpenCode:

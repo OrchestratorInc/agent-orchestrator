@@ -113,3 +113,18 @@ it("stops before importing when a folder cannot be added", async () => {
 	expect(await screen.findByRole("alert")).toHaveTextContent("Import failed");
 	await waitFor(() => expect(api.POST).toHaveBeenCalledTimes(1));
 });
+
+it("imports only selected Copilot chats through the existing import flow", async () => {
+	expect(IMPORTABLE_AGENTS.has("copilot")).toBe(true);
+	api.GET.mockResolvedValue({ data: { candidates: [
+		{ ...chat, id: "copilot-chat", title: "Copilot parser work", harness: "copilot", projectId: "project" },
+		{ ...chat, id: "other-chat", title: "Another agent", harness: "claude-code", projectId: "project" },
+	] } });
+	api.POST.mockResolvedValue({ data: { results: [{ id: "copilot-chat", status: "created", sessionId: "project-copilot-1" }] } });
+	renderPanel("copilot");
+	expect(await screen.findByRole("checkbox", { name: "Import Copilot parser work" })).toBeChecked();
+	expect(screen.queryByText("Another agent")).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
+	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
+	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["copilot-chat"] } });
+});
