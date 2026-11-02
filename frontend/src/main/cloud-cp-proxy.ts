@@ -8,11 +8,14 @@
 // response (or forwards SSE chunks over a per-stream channel). The bearer
 // token never crosses the context bridge in either direction — a renderer
 // supplied Authorization header is discarded, and only status/headers/body
-// travel back.
+// travel back. The token goes only to the configured control plane (see
+// cloud-control-plane-url.ts): a request whose baseUrl names any other server
+// is refused before the token is read.
 
 import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { getCloudAccessToken } from "./cloud-auth";
+import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-control-plane-url";
 
 export const CLOUD_CP_REQUEST_CHANNEL = "cloudCp:request";
 export const CLOUD_CP_REQUEST_BINARY_CHANNEL = "cloudCp:requestBinary";
@@ -96,6 +99,8 @@ export interface CloudCpProxy {
 }
 
 export interface CloudCpProxyOptions {
+	/** The configured control plane, the only server the token is sent to. */
+	controlPlaneUrl: ControlPlaneUrlResolver;
 	/** Transport override for tests; defaults to the main-process global fetch. */
 	fetchImpl?: typeof fetch;
 }
@@ -244,7 +249,24 @@ interface ActiveStream {
 	closed: boolean;
 }
 
-export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions = {}): CloudCpProxy {
+/**
+ * The request's URL on the configured control plane. A renderer names its
+ * baseUrl, but only the configured one is ever dialed: any other is refused.
+ */
+export async function pinnedTargetUrl(
+	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">,
+	controlPlaneUrl: ControlPlaneUrlResolver,
+): Promise<string> {
+	const configured = await controlPlaneUrl();
+	if (!configured) throw invalid("no AO Cloud control plane is configured.");
+	parseCloudBaseUrl(configured);
+	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
+		throw invalid("baseUrl is not the configured AO Cloud control plane.");
+	}
+	return resolveTargetUrl({ baseUrl: configured, path: init.path });
+}
+
+export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions): CloudCpProxy {
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium/Node throw "Illegal invocation" for a bare reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -309,7 +331,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 
 	async function request(init: unknown): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
-		const url = resolveTargetUrl(valid);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const token = await getCloudAccessToken(getDataDir());
 		// 401-shaped without touching the network, so the renderer client's
 		// standard auth-error path handles signed-out exactly like a server 401.
@@ -328,7 +350,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 
 	async function requestBinary(init: unknown): Promise<CloudCpProxyBinaryResponse> {
 		const valid = validateBinaryInit(init);
-		const url = resolveTargetUrl(valid);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
 			const unauthorized = unauthorizedResponse();
@@ -357,7 +379,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
 		const valid = validateInit(init);
-		const url = resolveTargetUrl(valid);
+		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
 		const ids = trackSender(sender);
 		if (ids.size >= MAX_STREAMS_PER_WEBCONTENTS) {
 			throw streamError(429, `This window already has ${MAX_STREAMS_PER_WEBCONTENTS} open cloud streams.`);
@@ -411,8 +433,8 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	return { request, requestBinary, openStream, closeStream };
 }
 
-export function installCloudCpProxy(getDataDir: () => string): void {
-	const proxy = createCloudCpProxy(getDataDir);
+export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
+	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
 	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (_event, init: unknown) => proxy.requestBinary(init));
 	ipcMain.handle(CLOUD_CP_OPEN_STREAM_CHANNEL, (event, init: unknown) => proxy.openStream(event.sender, init));

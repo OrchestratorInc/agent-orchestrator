@@ -154,6 +154,7 @@ import {
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
+import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
 import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
@@ -3486,8 +3487,15 @@ function cloudDataDir(): string {
 	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
+// The control plane the daemon is configured for, the only server the AO
+// Cloud token is sent to (the renderer reads the same value from the daemon).
+const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
+	daemonStatus.state === "ready" && daemonStatus.port
+		? { baseUrl: `http://127.0.0.1:${daemonStatus.port}`, key: `${daemonStatus.port}:${daemonStatus.pid ?? ""}` }
+		: null);
+
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
-const cloudAgentProxy = createCloudAgentProxy(cloudDataDir);
+const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
 	if (!account) {
@@ -3508,7 +3516,7 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir);
+installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
