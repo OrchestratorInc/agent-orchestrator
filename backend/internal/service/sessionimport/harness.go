@@ -17,12 +17,29 @@ type harnessImporter struct {
 	discover func(context.Context, string) ([]sourceFiles, error)
 	read     func(context.Context, string, ...string) (transcript, error)
 	nativeID func(sourceFiles) string
+	// discoverRegistered receives only explicitly registered project/repository
+	// paths. Repo-local providers leave root nil and return a root contained in
+	// one supplied path; they must not search parents or unrelated repositories.
+	discoverRegistered func(context.Context, []string) ([]sourceFiles, error)
+	// mode can force Terminal import when a provider's Chat driver cannot load
+	// the native format being imported. Empty preserves capability selection.
+	mode domain.SessionMode
+	// Global stores can also need registered paths to resolve older metadata.
+	discoverWithProjects func(context.Context, string, []string) ([]sourceFiles, error)
+	readWithProjects     func(context.Context, string, []string, ...string) (transcript, error)
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCommandCode: {root: commandCodeRoot, discover: discoverCommandCode, read: readCommandCodeTranscript},
-	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript},
+	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript, discoverWithProjects: discoverGeminiWithProjects, readWithProjects: readGeminiTranscriptWithProjects},
+}
+
+func readTranscriptForProjects(ctx context.Context, harness domain.AgentHarness, root string, projects []string, paths ...string) (transcript, error) {
+	if read := harnessImporters[harness].readWithProjects; read != nil {
+		return read(ctx, root, projects, paths...)
+	}
+	return readTranscript(ctx, harness, root, paths...)
 }
 
 // importTitle keeps list titles compact without cutting UTF-8 characters.

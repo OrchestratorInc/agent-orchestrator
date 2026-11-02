@@ -57,9 +57,8 @@ type State struct {
 	// ServeCleanupPending survives a failed Tailscale Serve teardown so a later
 	// tunnel-only setup cannot inherit an AO-owned tailnet route.
 	ServeCleanupPending bool `json:"serveCleanupPending,omitempty"`
-	// KeepAwake is the user's choice to keep this Mac from idle-sleeping while
-	// the bridge is on. Kept separate from Enabled so turning the bridge off and
-	// on again does not forget it.
+	// KeepAwake is an independent wake choice. Changing the mobile listener's
+	// Enabled state does not acquire or release wake ownership.
 	KeepAwake    bool `json:"keepAwake"`
 	KeepAwakeLid bool `json:"keepAwakeLid,omitempty"`
 	// BrowserRemoteAccess is an explicit, additional opt-in for streaming and

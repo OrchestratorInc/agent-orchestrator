@@ -981,7 +981,8 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	return f.reconcileErr
 }
 
-func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error        { return nil }
+func (*fakeSessionLifecycle) ReconcileWorkspaceCleanup(context.Context) error { return nil }
 func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
 	return nil
 }

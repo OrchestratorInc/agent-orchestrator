@@ -6,6 +6,8 @@ import { groupScriptRuns } from "../lib/cloud-script-runs";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const workspaceUrl = "https://coder.acme.example.com/@dev/dev-3f2a9c1e7b4d";
 
 function mount(props: Parameters<typeof CloudSessionStartupLoader>[0]) {
@@ -52,5 +54,24 @@ describe("CloudSessionStartupLoader", () => {
 		view.unmount();
 		mount({ activeIndex: 1, coderWorkspaceUrl: "javascript:alert(1)" });
 		expect(screen.queryByTestId("coder-workspace-link")).toBeNull();
+	});
+
+	it("shows the person's queued first message above the steps, labelled as waiting for the workspace", () => {
+		const view = mount({ activeIndex: 0, queuedMessage: "Fix the flaky login test\nand add a regression test" });
+		const message = screen.getByRole("figure", { name: "Your message, sent when the workspace is ready" });
+		expect(message).toHaveTextContent("Fix the flaky login test and add a regression test");
+		// It reads as the chat's queued message: the agent has not seen it yet.
+		expect(within(message).getByText(/Fix the flaky login test/)).toHaveAttribute("data-queued");
+		// The steps still show, after it.
+		const steps = screen.getByRole("status", { name: "Session setup activity" });
+		expect(message.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		view.rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={3} completed queuedMessage="Fix it" /></TooltipProvider>);
+		expect(screen.getByRole("figure", { name: "Your message, sent when the workspace is ready" })).toBeInTheDocument();
+	});
+
+	it("shows no message without one", () => {
+		mount({ activeIndex: 1 });
+		expect(screen.queryByRole("figure")).toBeNull();
+		expect(screen.queryByText("Your message, sent when the workspace is ready")).toBeNull();
 	});
 });
