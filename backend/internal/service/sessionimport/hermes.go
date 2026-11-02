@@ -3,6 +3,7 @@ package sessionimport
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -107,13 +108,13 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 		if at.After(t.last) {
 			t.last = at
 		}
-		if size.Int64 > int64(maxVisibleBytes) {
+		if size.Int64 > int64(maxVisibleBytes) || len(raw.String) > maxVisibleBytes {
 			t.shortened = true
 			continue
 		}
 		text := strings.TrimSpace(raw.String)
 		// Hermes stores plain text or serialized multimodal content blocks.
-		if strings.HasPrefix(text, "[") {
+		if strings.HasPrefix(text, "[") && json.Valid([]byte(text)) {
 			text = visibleText([]byte(text))
 		}
 		if len(text) == 0 || strings.HasPrefix(text, "[Context from previous conversation]") {

@@ -19,7 +19,7 @@ func TestHermesLocalTranscript(t *testing.T) {
 		`CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,timestamp REAL,_compressed_summary INTEGER)`,
 		`INSERT INTO sessions VALUES('20261102_120000_test','cli','/work/repo',NULL,1790000000,0),('gateway','telegram','/work',NULL,1790000000,0)`,
 		`INSERT INTO messages VALUES(1,'20261102_120000_test','system','injected context',1790000000,0)`,
-		`INSERT INTO messages VALUES(2,'20261102_120000_test','user','Fix the widget',1790000001,0)`,
+		`INSERT INTO messages VALUES(2,'20261102_120000_test','user','[fix] the widget',1790000001,0)`,
 		`INSERT INTO messages VALUES(3,'20261102_120000_test','tool','tool output',1790000002,0)`,
 		`INSERT INTO messages VALUES(4,'20261102_120000_test','assistant','Done',1790000003,0)`,
 		`INSERT INTO messages VALUES(5,'20261102_120000_test','user','summary noise',1790000004,1)`,
@@ -36,7 +36,7 @@ func TestHermesLocalTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.title != "Fix the widget" || got.cwd != "/work/repo" || len(got.messages) != 2 || got.messages[1].Text != "Done" {
+	if got.title != "[fix] the widget" || got.cwd != "/work/repo" || len(got.messages) != 2 || got.messages[1].Text != "Done" {
 		t.Fatalf("transcript=%+v", got)
 	}
 }
