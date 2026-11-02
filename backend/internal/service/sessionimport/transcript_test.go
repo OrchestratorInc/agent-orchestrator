@@ -138,7 +138,7 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	segment := writeFile(t, filepath.Join(day, "08", "rollout-2026-10-08T04-09-28-"+codexThread+"_01a11885-8f9f-76d1-a6d0-3b60c45dc3a5.jsonl"), `{"type":"session_meta","payload":{"id":"`+codexThread+`","cwd":"/work/repo","source":"vscode"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"second prompt"}}
 `)
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	files, err := svc.discover(context.Background(), domain.HarnessCodex, canonical(root))
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 {
 		t.Fatalf("files = %#v, %v", files, err)
@@ -427,7 +427,7 @@ func TestScanDestinations(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "widgets", Path: repo}}}, data)
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "widgets", Path: repo}}}, data, chatSupported)
 	svc.home = canonical(home)
 	dests, err := svc.destinations(context.Background())
 	if err != nil {
@@ -475,7 +475,7 @@ func TestScanListsOlderConversations(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {

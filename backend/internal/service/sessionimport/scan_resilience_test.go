@@ -18,7 +18,7 @@ func TestScanSkipsAProviderWhoseStoreCannotBeRead(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(openCodeRoot, openCodeDBFile), []byte("not a database"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(&importStore{}, "")
+	svc := New(&importStore{}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claudeRoot, domain.HarnessOpenCode: openCodeRoot}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {
@@ -38,7 +38,7 @@ func TestScanOffersAChatWhoseImportWasTerminated(t *testing.T) {
 	dead := domain.SessionRecord{ID: "imported-1", Harness: domain.HarnessClaudeCode, IsTerminated: true}
 	dead.Metadata.ProviderConversationID = id
 	dead.Metadata.ImportSource = &domain.SessionImportSource{NativeID: id, ConfigDir: canonical(root)}
-	svc := New(&importStore{sessions: []domain.SessionRecord{dead}}, "")
+	svc := New(&importStore{sessions: []domain.SessionRecord{dead}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {

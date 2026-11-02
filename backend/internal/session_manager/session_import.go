@@ -87,6 +87,10 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 		return
 	}
 	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
+	hooks := importedHarnesses[rec.Harness]
+	if hooks.configEnvKey != "" {
+		key = hooks.configEnvKey
+	}
 	if key == "" {
 		return
 	}
@@ -113,6 +117,9 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
 		// not the state dir itself, so point it at the parent of the config dir.
 		value = filepath.Dir(source.ConfigDir)
+	}
+	if hooks.configValue != nil {
+		value = hooks.configValue(source.ConfigDir)
 	}
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
@@ -203,6 +210,12 @@ func sameDirectory(a, b string) bool {
 // to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
+	if source == nil {
+		return false
+	}
+	if hooks := importedHarnesses[rec.Harness]; hooks.ownedElsewhere != nil {
+		return hooks.ownedElsewhere(ctx, rec)
+	}
 	switch rec.Harness {
 	case domain.HarnessCodex:
 		if providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", source.NativeID+".lock")) {
@@ -234,6 +247,9 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil {
 		return false
+	}
+	if hooks := importedHarnesses[rec.Harness]; hooks.adoptedOwnedElsewhere != nil {
+		return hooks.adoptedOwnedElsewhere(ctx, rec)
 	}
 	nativeID := cmp.Or(rec.Metadata.ProviderConversationID, source.NativeID)
 	switch rec.Harness {
@@ -318,8 +334,12 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid")) {
-			return true
+		if line == "aw" || line == "au" {
+			for _, name := range importedProcessNames {
+				if strings.Contains(command, name) {
+					return true
+				}
+			}
 		}
 	}
 	return false

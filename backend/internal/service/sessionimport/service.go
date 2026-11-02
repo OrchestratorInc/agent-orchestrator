@@ -86,18 +86,19 @@ type parsed struct {
 
 // Service owns the current opaque handles. Re-reading selected sources prevents stale preview writes.
 type Service struct {
-	store      Store
-	roots      map[domain.AgentHarness]string
-	home       string
-	excluded   []string
-	mu         sync.Mutex
-	selections map[string]selection
-	cache      map[string]parsed
+	store        Store
+	supportsChat func(domain.AgentHarness) bool
+	roots        map[domain.AgentHarness]string
+	home         string
+	excluded     []string
+	mu           sync.Mutex
+	selections   map[string]selection
+	cache        map[string]parsed
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
 // data directory holds its managed worktrees, which are never import sources.
-func New(store Store, dataDir string) *Service {
+func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) bool) *Service {
 	home, _ := os.UserHomeDir()
 	claude, codex := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CODEX_HOME")
 	if claude == "" {
@@ -119,7 +120,12 @@ func New(store Store, dataDir string) *Service {
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
-	s := &Service{store: store, home: canonical(home), roots: roots}
+	for harness, importer := range harnessImporters {
+		if root := importer.root(home); root != "" {
+			roots[harness] = root
+		}
+	}
+	s := &Service{store: store, supportsChat: supportsChat, home: canonical(home), roots: roots}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -387,6 +393,9 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
+	if importer, ok := harnessImporters[harness]; ok {
+		return importer.discover(ctx, root)
+	}
 	// Per-harness layouts that do not fit the projects/sessions directory model
 	// discover their own conversations.
 	switch harness {
@@ -514,6 +523,9 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
+	if importer, ok := harnessImporters[f.harness]; ok && importer.nativeID != nil {
+		return importer.nativeID(f)
+	}
 	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid) && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
@@ -566,6 +578,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
 	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
+	for harness := range harnessImporters {
+		harnesses = append(harnesses, harness)
+	}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
@@ -708,7 +723,11 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		return result
 	}
 	now := time.Now().UTC()
-	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
+	mode := domain.SessionModeTUI
+	if s.supportsChat != nil && s.supportsChat(source.harness) {
+		mode = domain.SessionModeChat
+	}
+	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
 	// Claude and Pi resume on AO's or the user's default model unless told
 	// otherwise, which may be a provider the chat never used; keep the chat's own.

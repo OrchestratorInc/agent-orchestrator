@@ -14,6 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+func chatSupported(domain.AgentHarness) bool { return true }
+
 type importStore struct {
 	projects []domain.ProjectRecord
 	sessions []domain.SessionRecord
@@ -52,12 +54,46 @@ func writeClaude(t *testing.T, root, id, cwd, text string, at time.Time) string 
 	}
 	return path
 }
+
+func TestImportModeUsesInjectedChatCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		supports func(domain.AgentHarness) bool
+		want     domain.SessionMode
+	}{
+		{name: "registered chat driver", supports: chatSupported, want: domain.SessionModeChat},
+		{name: "terminal only", supports: func(domain.AgentHarness) bool { return false }, want: domain.SessionModeTUI},
+		{name: "no registry", want: domain.SessionModeTUI},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			st := &importStore{}
+			svc := New(st, "", tc.supports)
+			svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
+			id := "11111111-1111-4111-8111-111111111111"
+			writeClaude(t, root, id, "", "synthetic prompt", time.Now())
+			preview, err := svc.Scan(context.Background())
+			if err != nil || len(preview.Candidates) != 1 {
+				t.Fatalf("scan = %#v, %v", preview, err)
+			}
+			results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+			if err != nil || len(results) != 1 || results[0].Status != "created" {
+				t.Fatalf("import = %#v, %v", results, err)
+			}
+			rec := st.sessions[0]
+			if rec.Mode != tc.want || rec.Metadata.AgentSessionID != id || rec.Metadata.WorkspacePath != "" || !rec.NeedsImportResume() || len(st.messages) != 1 {
+				t.Fatalf("record = %#v, messages = %#v", rec, st.messages)
+			}
+		})
+	}
+}
+
 func TestPreviewAndSelectedImport(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	project := t.TempDir()
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	current := "11111111-1111-4111-8111-111111111111"
 	old := "22222222-2222-4222-8222-222222222222"
@@ -228,7 +264,7 @@ func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	st := &importStore{}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	id := "66666666-6666-4666-8666-666666666666"
 	path := writeClaude(t, root, id, "", "first", time.Now().Add(-time.Hour))
 	later, err := json.Marshal(map[string]any{"type": "user", "sessionId": id, "cwd": "", "timestamp": time.Now(), "message": map[string]any{"role": "user", "content": "added later"}})
@@ -263,7 +299,7 @@ func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
 func TestImportOutOfTimeReportsEveryRow(t *testing.T) {
 	root := t.TempDir()
 	st := &importStore{}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	writeClaude(t, root, "11111111-1111-4111-8111-111111111111", "", "first", time.Now())
 	writeClaude(t, root, "22222222-2222-4222-8222-222222222222", "", "second", time.Now())
@@ -291,7 +327,7 @@ func TestScanSkipsHistoriesAOStarted(t *testing.T) {
 	adopted := domain.SessionRecord{ID: "standalone-2", Harness: domain.HarnessClaudeCode}
 	adopted.Metadata.ProviderConversationID = imported
 	adopted.Metadata.ImportSource = &domain.SessionImportSource{NativeID: imported, ConfigDir: canonical(root)}
-	svc := New(&importStore{sessions: []domain.SessionRecord{native, adopted}}, "")
+	svc := New(&importStore{sessions: []domain.SessionRecord{native, adopted}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {
@@ -313,7 +349,7 @@ func TestScanOffersFolderNoProjectHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := &importStore{}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: root}
 	preview, err := svc.Scan(ctx)
 	if err != nil || len(preview.Candidates) != 1 {

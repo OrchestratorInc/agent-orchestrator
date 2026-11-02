@@ -43,7 +43,7 @@ func TestPiImportPersistsModelAndEffort(t *testing.T) {
 ` + piMsg("u1", "t1", "user", "keep my model") + "\n" + piMsg("a1", "u1", "assistant", "ready") + "\n"
 	writeFile(t, piPath(root, piSession), strings.Replace(raw, "CWD", string(cwd), 1))
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
-	svc := New(st, "")
+	svc := New(st, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessPi: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
