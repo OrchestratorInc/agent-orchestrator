@@ -3909,6 +3909,7 @@
 	"settings.harness.loginUi.groupKeys": "API-Schlüssel",
 	"settings.harness.loginUi.methods.provider_key": "Anbieter-API-Schlüssel",
 	"settings.harness.loginUi.catalogHint": "Wähle aus {{total}} Anbietern im Katalog von {{agent}}. Der Schlüssel wird in den Einstellungen von {{agent}} gespeichert.",
+	"settings.harness.loginUi.catalogHintPending": "Wähle einen Anbieter aus dem Katalog von {{agent}}. Der Schlüssel wird in den Einstellungen von {{agent}} gespeichert.",
 	"settings.harness.loginUi.catalogLoading": "Anbieter von {{agent}} werden geladen…",
 	"settings.harness.loginUi.catalogUnavailable": "Dieser Harness hat auf diesem Gerät keinen Anbieterkatalog.",
 	"settings.harness.loginUi.catalogProvider": "Anbieter",

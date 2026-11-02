@@ -87,6 +87,12 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
 		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
 	});
+	it("says the catalog is loading once, in the form, while the method keeps a plain description", () => {
+		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));
+		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription("Choose a provider from OpenCode's catalog. The key is saved in OpenCode's own settings.");
+		expect(screen.getAllByText("Loading OpenCode's providers…")).toHaveLength(1);
+	});
 	it("picks a catalog provider from the inline list and saves its key", async () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([

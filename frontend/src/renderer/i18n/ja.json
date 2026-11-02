@@ -3909,6 +3909,7 @@
 	"settings.harness.loginUi.groupKeys": "API キー",
 	"settings.harness.loginUi.methods.provider_key": "プロバイダーの API キー",
 	"settings.harness.loginUi.catalogHint": "{{agent}} のカタログにある {{total}} 件のプロバイダーから選択します。キーは {{agent}} 自身の設定に保存されます。",
+	"settings.harness.loginUi.catalogHintPending": "{{agent}} のカタログからプロバイダーを選択します。キーは {{agent}} 自身の設定に保存されます。",
 	"settings.harness.loginUi.catalogLoading": "{{agent}} のプロバイダーを読み込み中…",
 	"settings.harness.loginUi.catalogUnavailable": "このハーネスにはこのデバイス上のプロバイダーカタログがありません。",
 	"settings.harness.loginUi.catalogProvider": "プロバイダー",

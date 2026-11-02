@@ -3823,6 +3823,7 @@
 	"settings.harness.loginUi.groupKeys": "API keys",
 	"settings.harness.loginUi.methods.provider_key": "Provider API key",
 	"settings.harness.loginUi.catalogHint": "Choose from {{total}} providers in {{agent}}'s catalog. The key is saved in {{agent}}'s own settings.",
+	"settings.harness.loginUi.catalogHintPending": "Choose a provider from {{agent}}'s catalog. The key is saved in {{agent}}'s own settings.",
 	"settings.harness.loginUi.catalogLoading": "Loading {{agent}}'s providers…",
 	"settings.harness.loginUi.catalogUnavailable": "This harness has no provider catalog on this device.",
 	"settings.harness.loginUi.catalogProvider": "Provider",

@@ -3909,6 +3909,7 @@
 	"settings.harness.loginUi.groupKeys": "API 키",
 	"settings.harness.loginUi.methods.provider_key": "제공업체 API 키",
 	"settings.harness.loginUi.catalogHint": "{{agent}} 카탈로그의 제공업체 {{total}}개 중에서 선택하세요. 키는 {{agent}} 자체 설정에 저장됩니다.",
+	"settings.harness.loginUi.catalogHintPending": "{{agent}} 카탈로그에서 제공업체를 선택하세요. 키는 {{agent}} 자체 설정에 저장됩니다.",
 	"settings.harness.loginUi.catalogLoading": "{{agent}} 제공업체를 불러오는 중…",
 	"settings.harness.loginUi.catalogUnavailable": "이 하네스에는 이 기기에 제공업체 카탈로그가 없습니다.",
 	"settings.harness.loginUi.catalogProvider": "제공업체",

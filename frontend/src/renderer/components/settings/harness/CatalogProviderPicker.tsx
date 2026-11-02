@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { CatalogProvider } from "../../../hooks/useAgentAuth";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
+import { Skeleton } from "../../ui/skeleton";
 
 /**
  * A harness's provider catalog as a search box over a short scrollable list,
@@ -98,6 +99,24 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 				</div>;
 			})}
 			{visible.length === 0 ? <p className="px-3 py-1.5 text-xs text-settings-muted">{t("settings.harness.loginUi.catalogEmpty")}</p> : null}
+		</div>
+	</div>;
+}
+
+/**
+ * Stands in for the picker while the catalog loads: the same search box and
+ * list footprint, so nothing moves when the providers arrive. The loading
+ * message is for screen readers only; the placeholder rows show it visually.
+ */
+export function CatalogProviderPickerSkeleton({ label }: { label: string }) {
+	return <div className="space-y-1.5" aria-busy="true">
+		<span role="status" className="sr-only">{label}</span>
+		<Skeleton className="h-control-form w-full bg-input/50" />
+		<div className="space-y-1 rounded-lg border border-border p-2" aria-hidden="true">
+			{["w-2/5", "w-1/3", "w-1/2", "w-1/4", "w-2/5"].map((width, index) => <div key={index} className="flex h-6 items-center justify-between gap-3 px-1">
+				<Skeleton className={`h-3 ${width}`} />
+				<Skeleton className="h-3 w-14" />
+			</div>)}
 		</div>
 	</div>;
 }

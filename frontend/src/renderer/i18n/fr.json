@@ -3978,6 +3978,7 @@
 	"settings.harness.loginUi.groupKeys": "Clés d'API",
 	"settings.harness.loginUi.methods.provider_key": "Clé d'API du fournisseur",
 	"settings.harness.loginUi.catalogHint": "Choisissez parmi {{total}} fournisseurs du catalogue de {{agent}}. La clé est enregistrée dans les réglages de {{agent}}.",
+	"settings.harness.loginUi.catalogHintPending": "Choisissez un fournisseur du catalogue de {{agent}}. La clé est enregistrée dans les réglages de {{agent}}.",
 	"settings.harness.loginUi.catalogLoading": "Chargement des fournisseurs de {{agent}}…",
 	"settings.harness.loginUi.catalogUnavailable": "Ce harness n'a pas de catalogue de fournisseurs sur cet appareil.",
 	"settings.harness.loginUi.catalogProvider": "Fournisseur",

@@ -12,7 +12,7 @@ import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
-import { CatalogProviderPicker } from "./CatalogProviderPicker";
+import { CatalogProviderPicker, CatalogProviderPickerSkeleton } from "./CatalogProviderPicker";
 import { DeviceEnvToggle, KeyWarning, providerKeyNeedsModel, savedKeySummary } from "../providerKeyUi";
 
 const CATALOG_METHOD = "provider_key";
@@ -340,7 +340,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	// AO-managed key whether one is saved.
 	const methodHint = (item: components["schemas"]["AgentLoginMethod"], key: string) => {
 		if (item.id === "native") return t("settings.harness.loginUi.nativeHint");
-		if (item.id === CATALOG_METHOD) return catalogError || (catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) }));
+		// Loading and load errors show once, in the form, not here as well.
+		if (item.id === CATALOG_METHOD) return catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogHintPending", { agent: agentLabel(agentId) });
 		if (item.id.startsWith("env_")) return savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet");
 		return t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? t("settings.harness.loginUi.browserHint") : item.label });
 	};
@@ -376,7 +377,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-0.5">
 							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
-							<span id={titleId + "-" + item.id} className={`block text-xs leading-4 ${item.id === CATALOG_METHOD && catalogError ? "text-error" : "text-settings-muted"}`}>{methodHint(item, key)}</span>
+							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{methodHint(item, key)}</span>
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
@@ -388,7 +389,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 							<span id={titleId + "-provider"} className={fieldLabelClass}>{t("settings.harness.loginUi.catalogProvider")}</span>
 							{catalog
 								? <CatalogProviderPicker providers={catalog} value={catalogProvider} onChange={setCatalogProvider} disabled={locked} labelledBy={titleId + "-provider"} />
-								: <p className="text-xs leading-4 text-settings-muted">{catalogError || t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) })}</p>}
+								: catalogError ? <p role="alert" className="text-xs leading-4 text-error">{catalogError}</p>
+								: <CatalogProviderPickerSkeleton label={t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) })} />}
 						</div>}
 						<div className="space-y-1.5">
 							<div className="flex items-baseline justify-between gap-2">

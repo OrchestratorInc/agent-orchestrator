@@ -4049,6 +4049,7 @@
 	"settings.harness.loginUi.groupKeys": "API-ключи",
 	"settings.harness.loginUi.methods.provider_key": "API-ключ провайдера",
 	"settings.harness.loginUi.catalogHint": "Выберите провайдера из каталога {{agent}} (всего: {{total}}). Ключ сохранится в настройках {{agent}}.",
+	"settings.harness.loginUi.catalogHintPending": "Выберите провайдера из каталога {{agent}}. Ключ сохранится в настройках {{agent}}.",
 	"settings.harness.loginUi.catalogLoading": "Загрузка провайдеров {{agent}}…",
 	"settings.harness.loginUi.catalogUnavailable": "На этом устройстве нет каталога провайдеров для этого агента.",
 	"settings.harness.loginUi.catalogProvider": "Провайдер",
