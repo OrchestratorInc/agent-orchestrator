@@ -52,62 +52,60 @@ func TestGeneratedFractionalRatesLoadInRuntime(t *testing.T) {
 	}
 }
 
-// TestGeneratedCatalogLoadsThroughRuntimeFetcherAndCache exercises the second
-// boundary of the catalog supply chain end to end:
+// TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache checks the daemon's
+// catalog path end to end: LiteLLM table -> Fetcher -> last-known-good cache.
+// The table builds to the same provider versions as the repository catalog
+// Sync writes from it, so released builds that still download that catalog
+// price exactly what the daemon prices. A 304 stands in for the table only
+// when a cached catalog exists to serve.
 //
-//	reviewed GitHub catalog -> runtime fetcher -> local last-known-good cache
-//
-// The generator's own validation cannot see this boundary, so a blob the
-// generator happily writes can still be unreachable or unloadable at runtime —
-// a wrong manifest path, an origin the fetcher refuses, a provider version the
-// cache round-trips incorrectly. Serving the exact generated directory over
-// httptest and installing the fetched result closes that gap without any
-// production endpoint or external network request.
-//
-// Set AO_PRICING_CATALOG_ROOT to run the same contract against a catalog
-// generated from a real pinned LiteLLM revision in CI; unset, the test
-// generates its own deterministic fixture.
-func TestGeneratedCatalogLoadsThroughRuntimeFetcherAndCache(t *testing.T) {
-	root := os.Getenv("AO_PRICING_CATALOG_ROOT")
-	if root == "" {
-		root = t.TempDir()
-		upstream := []byte(`{
+// Set AO_PRICING_SOURCE to a LiteLLM table to run the same contract against
+// it, as CI does with the live one; unset, the test uses a small fixture.
+func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
+	upstream := []byte(`{
 "anthropic/claude-sonnet-4":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000003,"output_cost_per_token":0.000015,"cache_read_input_token_cost":0.0000003,"cache_creation_input_token_cost":0.00000375},
-"openai/gpt-5":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.00000125,"output_cost_per_token":0.00001},
+"openai/gpt-5":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.00000125,"output_cost_per_token":0.00001,"input_cost_per_token_priority":0.0000025,"output_cost_per_token_priority":0.00002},
 "zai/glm-4.6":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":0.0000006,"output_cost_per_token":0.0000022}
 }`)
-		if _, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-			Repository: "BerriAI/litellm",
-			Revision:   "0123456789abcdef0123456789abcdef01234567",
-			Path:       "model_prices_and_context_window.json",
-		}); err != nil {
-			t.Fatalf("generate catalog: %v", err)
+	if path := os.Getenv("AO_PRICING_SOURCE"); path != "" {
+		var err error
+		if upstream, err = os.ReadFile(path); err != nil { //nolint:gosec // CI-supplied path
+			t.Fatalf("read AO_PRICING_SOURCE: %v", err)
 		}
 	}
-
-	catalogDir := filepath.Join(root, "pricing", "catalog", "v1")
+	root := t.TempDir()
+	if _, err := catalogsync.Sync(root, upstream, catalogsync.Source{
+		Repository: "BerriAI/litellm",
+		Revision:   "0123456789abcdef0123456789abcdef01234567",
+		Path:       "model_prices_and_context_window.json",
+	}); err != nil {
+		t.Fatalf("generate catalog: %v", err)
+	}
 	generated, err := pricing.NewCache(root).Load(t.Context())
 	if err != nil {
 		t.Fatalf("load generated catalog from disk: %v", err)
 	}
-	providerIDs := manifestProviderIDs(t, filepath.Join(catalogDir, "manifest.json"))
+	providerIDs := manifestProviderIDs(t, filepath.Join(root, "pricing", "catalog", "v1", "manifest.json"))
 	if len(providerIDs) == 0 {
 		t.Fatal("generated manifest lists no providers")
 	}
 
-	server := httptest.NewServer(http.FileServer(http.Dir(catalogDir)))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"v1"`)
+		_, _ = w.Write(upstream)
+	}))
 	t.Cleanup(server.Close)
-
-	fetcher, err := pricing.NewFetcher(server.Client(), server.URL+"/manifest.json")
-	if err != nil {
-		t.Fatalf("build runtime fetcher: %v", err)
-	}
+	fetcher := catalogsync.NewFetcher(server.Client(), server.URL)
 	result, err := fetcher.Fetch(t.Context(), "", false)
 	if err != nil {
-		t.Fatalf("fetch generated catalog: %v", err)
+		t.Fatalf("fetch live catalog: %v", err)
 	}
-	if result.NotModified || result.Catalog == nil {
-		t.Fatalf("fetch result = %+v, want a complete catalog", result)
+	if result.NotModified || result.Catalog == nil || result.ETag != `"v1"` {
+		t.Fatalf("fetch result = %+v, want a complete catalog with its ETag", result)
 	}
 
 	cache := pricing.NewCache(t.TempDir())
@@ -118,7 +116,6 @@ func TestGeneratedCatalogLoadsThroughRuntimeFetcherAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload installed catalog: %v", err)
 	}
-
 	for _, providerID := range providerIDs {
 		want := generated.Snapshot().ProviderVersion(providerID)
 		if want == "" {
@@ -130,6 +127,13 @@ func TestGeneratedCatalogLoadsThroughRuntimeFetcherAndCache(t *testing.T) {
 		if got := reloaded.Snapshot().ProviderVersion(providerID); got != want {
 			t.Errorf("reloaded %s version = %q, want %q", providerID, got, want)
 		}
+	}
+
+	if cached, err := fetcher.Fetch(t.Context(), `"v1"`, true); err != nil || !cached.NotModified {
+		t.Fatalf("conditional fetch with a cache = %+v, %v; want 304", cached, err)
+	}
+	if cold, err := fetcher.Fetch(t.Context(), `"v1"`, false); err != nil || cold.Catalog == nil {
+		t.Fatalf("fetch without a cache = %+v, %v; want the full table", cold, err)
 	}
 }
 

@@ -228,6 +228,11 @@ type RuntimeConfig struct {
 	// opened to look at: agents and scripted command terminals must start
 	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
 	StartOnAttach bool
+	// InitialCols and InitialRows, when both are set, start Argv immediately at
+	// that grid. They take precedence over StartOnAttach: a client that already
+	// knows the grid it will show need not wait for its own attach. Runtimes
+	// that cannot size at spawn ignore them.
+	InitialCols, InitialRows uint16
 	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
 	// GetStyledOutput is first called for this terminal. Rendering every byte
 	// costs CPU on heavy output; terminals nothing probes for styled output
@@ -460,6 +465,7 @@ var (
 	// ErrWorkspaceBranchCheckedOutElsewhere reports the requested branch is
 	// already checked out in another worktree of the same repo.
 	ErrWorkspaceBranchCheckedOutElsewhere = errors.New("workspace: branch is already checked out in another worktree")
+	ErrWorkspaceBranchAlreadyExists       = errors.New("workspace: branch name already exists")
 	// ErrWorkspaceBranchNotFetched reports the requested branch exists nowhere
 	// reachable (no local head, no remote-tracking branch, no tag).
 	ErrWorkspaceBranchNotFetched = errors.New("workspace: branch is not fetched")
@@ -486,11 +492,12 @@ var (
 	// this state after path-safety checks, while real preserve failures remain
 	// fatal.
 	ErrWorkspaceStale = errors.New("workspace: stale managed worktree")
-	// ErrWorkspaceLocked reports a registered git worktree whose directory is
-	// missing but whose registration is locked (`git worktree lock`). `git
-	// worktree prune` deliberately leaves a locked registration in place even
-	// when its directory is gone, and `git worktree add`/`remove` at the same
-	// path then fail with an opaque git error. Callers must not treat this as
+	// ErrWorkspaceLocked reports a registered git worktree whose registration
+	// is locked (`git worktree lock`): one whose directory is missing on
+	// restore, or one that Destroy cannot remove. `git worktree prune`
+	// deliberately leaves a locked registration in place even when its
+	// directory is gone, and `git worktree add`/`remove` at the same path then
+	// fail with an opaque git error. Callers must not treat this as
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
@@ -500,6 +507,10 @@ var (
 	// leftover of one. The adapter never moves or deletes such a path; the
 	// user has to clear it before the workspace can be created.
 	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
+	// ErrWorkspaceUnsafePath reports a workspace path that is not a clean
+	// absolute path inside the adapter's managed root. Adapters never create,
+	// move or remove such a path, so teardown leaves it for the user.
+	ErrWorkspaceUnsafePath = errors.New("workspace: unsafe workspace path")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session
@@ -558,7 +569,8 @@ type WorkspaceConfig struct {
 	Branch        string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
-	FreshBranch bool
+	FreshBranch      bool
+	RequireNewBranch bool
 	// BaseBranch is the explicitly configured branch new session branches are
 	// created from. Empty asks the workspace adapter to resolve an authoritative
 	// repository default; it must never infer from the checked-out branch.
@@ -593,13 +605,14 @@ type WorkspaceInfo struct {
 // WorkspaceProjectConfig describes a multi-repo workspace session. RootRepoPath
 // and child RepoPath values are absolute paths to the canonical repositories.
 type WorkspaceProjectConfig struct {
-	ProjectID     domain.ProjectID
-	SessionID     domain.SessionID
-	Kind          domain.SessionKind
-	SessionPrefix string
-	Branch        string
-	FreshBranch   bool
-	RootRepoPath  string
+	ProjectID        domain.ProjectID
+	SessionID        domain.SessionID
+	Kind             domain.SessionKind
+	SessionPrefix    string
+	Branch           string
+	FreshBranch      bool
+	RequireNewBranch bool
+	RootRepoPath     string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string

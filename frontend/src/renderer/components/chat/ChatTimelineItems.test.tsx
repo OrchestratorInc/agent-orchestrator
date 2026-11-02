@@ -92,6 +92,25 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
 	});
 
+	it("shows missing-key recovery while keeping retry and technical details", () => {
+		const onRetry = vi.fn();
+		const onConfigure = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="provider_key_missing" error="ACP internal detail" retry={{ onRetry }} onConfigure={onConfigure} />);
+		expect(screen.getByText("DeepSeek needs an API key for this model route")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Set up DeepSeek" }));
+		expect(onConfigure).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.getByText("ACP internal detail").closest("details")).toBeInTheDocument();
+	});
+
+	it("leaves generic ACP failures without configuration guidance", () => {
+		render(<TurnOutcome state="failed" error="ACP internal detail" />);
+		expect(screen.getByText("ACP internal detail")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Set up DeepSeek" })).not.toBeInTheDocument();
+	});
+
 	it("presents a non-retryable usage limit as a historical notice without controls", () => {
 		render(
 			<TurnOutcome
@@ -343,9 +362,9 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("spreads a large received burst over several frames instead of dumping it", () => {
+	it("smooths received bursts up to 4,000 characters", () => {
 		const view = render(<AssistantMessage message={message()} />);
-		const text = "a".padEnd(10_000, "x");
+		const text = "a".padEnd(4000, "x");
 		view.rerender(<AssistantMessage message={message({ text })} />);
 
 		runFrame(0);
@@ -356,6 +375,74 @@ describe("AssistantMessage streaming", () => {
 
 		drain(48);
 		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
+	it("coalesces long snapshots without extra segmentation after flushing pending smoothing", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+		const view = render(<AssistantMessage message={message()} />);
+		const prefix = "a".padEnd(4000, "x");
+		view.rerender(<AssistantMessage message={message({ text: prefix })} />);
+		runFrame(0);
+		expect(frames.size).toBeGreaterThan(0);
+
+		const text = prefix + "👨‍👩‍👧‍👦e\u0301";
+		view.rerender(<AssistantMessage message={message({ text })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+		// Markdown still segments emoji for typography; smoothing must not add
+		// another pass over the entire long snapshot.
+		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
+
+		const latest = text + " latest";
+		view.rerender(<AssistantMessage message={message({ text: latest })} />);
+		view.rerender(<AssistantMessage message={message({ text: latest + " snapshot" })} />);
+		act(() => vi.advanceTimersByTime(99));
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		act(() => vi.advanceTimersByTime(1));
+		expect(document.querySelector("p")?.textContent).toBe(latest + " snapshot");
+		expect(frames.size).toBe(0);
+		expect(segment.mock.calls.filter(([input]) => input === latest + " snapshot").length).toBeLessThanOrEqual(1);
+
+		const final = latest + " snapshot completed";
+		view.rerender(<AssistantMessage message={message({ text: final })} />);
+		expect(document.querySelector("p")?.textContent).not.toBe(final);
+		view.rerender(<AssistantMessage message={message({ text: final, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(final);
+		act(() => vi.advanceTimersByTime(200));
+		expect(document.querySelector("p")?.textContent).toBe(final);
+	});
+
+	it("cancels a queued long snapshot when the message is replaced", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const text = "x".repeat(4001);
+		const view = render(<AssistantMessage message={message({ text })} />);
+		view.rerender(<AssistantMessage message={message({ text: text + " pending" })} />);
+		view.rerender(<AssistantMessage message={message({ id: "assistant-2", text: "New message" })} />);
+		act(() => vi.advanceTimersByTime(200));
+		expect(document.querySelector("p")?.textContent).toBe("New message");
+	});
+
+	it("cancels a queued long snapshot on unmount", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const text = "x".repeat(4001);
+		const view = render(<AssistantMessage message={message({ text })} />);
+		view.rerender(<AssistantMessage message={message({ text: text + " pending" })} />);
+		expect(vi.getTimerCount()).toBeGreaterThan(0);
+		view.unmount();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("resumes smoothing after a long message is corrected to a short snapshot", () => {
+		const view = render(<AssistantMessage message={message({ text: "x".repeat(4001) })} />);
+		view.rerender(<AssistantMessage message={message({ text: "Corrected" })} />);
+		expect(document.querySelector("p")?.textContent).toBe("Corrected");
+
+		view.rerender(<AssistantMessage message={message({ text: "Corrected text" })} />);
+		expect(frames.size).toBeGreaterThan(0);
+		drain();
+		expect(document.querySelector("p")?.textContent).toBe("Corrected text");
 		expect(frames.size).toBe(0);
 	});
 

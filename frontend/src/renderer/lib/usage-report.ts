@@ -73,7 +73,7 @@ export function partsTotal(parts: UsageParts): number {
 	return parts.input + parts.cacheRead + parts.cacheWrite + parts.output;
 }
 
-export type HarnessUsage = { harness: string; sessions: number; costNanos: number; tokens: number };
+export type HarnessUsage = { harness: string; sessions: number; costNanos: number; tokens: number; pricedEvents: number };
 
 /** One line per agent, the largest first in the unit being read. */
 export function usageByHarness(report: Pick<UsageReport, "rows" | "sessions">, unit: UsageUnit): HarnessUsage[] {
@@ -81,7 +81,7 @@ export function usageByHarness(report: Pick<UsageReport, "rows" | "sessions">, u
 	const entry = (harness: string) => {
 		let found = byHarness.get(harness);
 		if (!found) {
-			found = { harness, sessions: 0, costNanos: 0, tokens: 0 };
+			found = { harness, sessions: 0, costNanos: 0, tokens: 0, pricedEvents: 0 };
 			byHarness.set(harness, found);
 		}
 		return found;
@@ -90,6 +90,7 @@ export function usageByHarness(report: Pick<UsageReport, "rows" | "sessions">, u
 		const found = entry(row.harness);
 		found.costNanos += row.costNanos;
 		found.tokens += rowTokens(row);
+		found.pricedEvents += row.pricedEvents;
 	}
 	for (const session of report.sessions) entry(session.harness).sessions += 1;
 	return [...byHarness.values()].sort((a, b) => {

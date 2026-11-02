@@ -5,6 +5,7 @@ import { RestartToUpdateDialog } from "./RestartToUpdateDialog";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 import type { UpdateStatus } from "../../main/update-settings";
+import { appI18n } from "../i18n";
 
 const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
 	updInstall: vi.fn(),
@@ -364,17 +365,73 @@ it.each(["resolve", "reject"] as const)("ignores an install %s after unmount", a
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
 });
 
-it("renders bounded recovery details as plain text", async () => {
-	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(1500);
+it("renders recovery details as plain text", async () => {
+	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(900);
 	updInstall.mockRejectedValue(new Error(message));
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "1.2.3" });
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	const alert = await screen.findByRole("alert");
-	expect(alert).toHaveTextContent(message.slice(0, 1000));
+	expect(alert).toHaveTextContent(message);
 	expect(alert.querySelector("strong")).toBeNull();
-	expect(alert.lastElementChild?.textContent).toHaveLength(1000);
+	expect(alert.lastElementChild?.textContent).toBe(message);
+});
+
+// Settings treats text past 1000 characters as a dump; the dialog must not
+// truncate it first and show the first 1000 characters instead (#5755).
+it("keeps only the heading for overlong recovery details (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error("Fix folder permissions " + "x".repeat(1500)));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/Fix folder permissions/);
+	expect(alert.children).toHaveLength(1);
+});
+
+it("keeps only the heading when the install rejects with an updater dump (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error(
+		"Error invoking remote method 'updates:install': Error: HttpError: 504 Gateway Time-out\nHeaders: {\"set-cookie\": \"_gh_sess=abc123\"}",
+	));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/HttpError|set-cookie/);
+	expect(alert.children).toHaveLength(1);
+});
+
+it("shows the install failure in the person's language when the status describes it (#5755)", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	const message = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+	updInstall.mockImplementation(async () => {
+		act(() => emit({ state: "error", message, errorInfo: { kind: "timeout", phase: "install" } }));
+		throw new Error(`Error invoking remote method 'updates:install': Error: ${message}`);
+	});
+	await appI18n.changeLanguage("ja");
+	try {
+		useUiStore.setState({ updateInstallPromptOpen: true });
+		renderDialog({ state: "downloaded", version: "1.2.3" });
+		const confirm = await screen.findByRole("button", { name: appI18n.t("update.restart.confirm") });
+		await userEvent.click(confirm);
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(
+			"アップデートをインストールできませんでした — アップデートサーバーの応答がタイムアウトしました。数分後にもう一度お試しください。",
+		);
+		expect(alert).not.toHaveTextContent("Couldn't install");
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it("shows the replacement build and requires another explicit confirmation", async () => {
