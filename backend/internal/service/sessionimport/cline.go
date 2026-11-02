@@ -225,10 +225,14 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 		return t, err
 	}
 	var header struct {
-		ID string `json:"sessionId"`
+		ID      string    `json:"sessionId"`
+		Updated time.Time `json:"updated_at"`
 	}
 	if len(body) > 0 && (json.Unmarshal(body, &header) != nil || header.ID != t.nativeID) {
 		return t, errors.New("cline messages identity mismatch")
+	}
+	if header.Updated.After(t.last) && header.Updated.Before(now) {
+		t.last = header.Updated
 	}
 	if len(t.title) == 0 {
 		return t, errors.New("no readable cline prompt")
