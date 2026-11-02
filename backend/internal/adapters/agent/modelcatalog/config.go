@@ -25,7 +25,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes", "zcode":
 		return true
 	default:
 		return false
@@ -87,6 +87,8 @@ func configModelParser(agentID string) configParser {
 		return parseAutoHandModels
 	case "hermes":
 		return parseHermesModels
+	case "zcode":
+		return parseZcodeModels
 	default:
 		return nil
 	}
@@ -146,8 +148,62 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 		if home != "" {
 			paths = append(paths, filepath.Join(home, ".autohand", "config.json"))
 		}
+	case "zcode":
+		// ZCode's own model surface: the provider runtime catalog its desktop
+		// distribution downloads under the data root (builtinModelIds per
+		// provider rule), plus the personal provider configuration where a
+		// user's extra models are declared. Neither is a documented stable
+		// schema, so the parser sniffs both shapes and AO never invents IDs.
+		if file := strings.TrimSpace(env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]); file != "" {
+			paths = append(paths, file)
+		}
+		base := strings.TrimSpace(env["ZCODE_DATA_BASE_DIR"])
+		if base == "" && home != "" {
+			base = filepath.Join(home, ".zcode")
+		}
+		if base != "" {
+			paths = append(paths, zcodeBuiltinCatalogFiles(filepath.Join(base, "v2", "runtime", "provider"))...)
+			paths = append(paths, filepath.Join(base, "v2", "provider_config.json"))
+		}
 	}
 	return paths
+}
+
+// zcodeBuiltinCatalogFiles lists downloaded provider catalogs under the ZCode
+// runtime root, newest first, capped so a long-lived install cannot slow
+// discovery down. Missing root yields nothing; discovery treats that as "not
+// configured here" and falls back to the manual catalog.
+func zcodeBuiltinCatalogFiles(runtimeRoot string) []string {
+	var found []string
+	err := filepath.WalkDir(runtimeRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err // unreachable roots are simply no catalog
+		}
+		if entry.IsDir() || entry.Name() != "zcode-builtin.json" {
+			return nil
+		}
+		found = append(found, path)
+		return nil
+	})
+	if err != nil || len(found) == 0 {
+		return nil
+	}
+	sort.Slice(found, func(i, j int) bool {
+		iInfo, iErr := os.Stat(found[i])
+		jInfo, jErr := os.Stat(found[j])
+		switch {
+		case iErr != nil:
+			return false
+		case jErr != nil:
+			return true
+		default:
+			return iInfo.ModTime().After(jInfo.ModTime())
+		}
+	})
+	if len(found) > 4 {
+		found = found[:4]
+	}
+	return found
 }
 
 // hermesConfigHome resolves HERMES_HOME exactly as the adapter and Hermes do.
@@ -588,4 +644,46 @@ func configuredModelIDs(value any) []string {
 	walk(value)
 	sort.Strings(ids)
 	return ids
+}
+
+// parseZcodeModels reads ZCode's own model surfaces: the provider runtime
+// catalog its desktop distribution downloads (`zcode-builtin.json`, where each
+// provider rule carries `builtinModelIds`) and the personal provider
+// configuration (`provider_config.json`, where a user's `personalModelIds`
+// extend a provider). Both schemas are the CLI author's and versioned by
+// `schemaVersion`, so the parser sniffs the shape and never invents IDs: rules
+// without model IDs contribute nothing, and the union is de-duplicated in
+// stable order.
+func parseZcodeModels(raw []byte) ([]ports.AgentModelInfo, error) {
+	var doc struct {
+		Config struct {
+			ProviderConfigRules struct {
+				ProviderRules []struct {
+					ProviderID string `json:"providerId"`
+					Config     struct {
+						BuiltinModelIDs  []string `json:"builtinModelIds"`
+						PersonalModelIDs []string `json:"personalModelIds"`
+					} `json:"config"`
+				} `json:"providerRules"`
+			} `json:"providerConfigRules"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var models []ports.AgentModelInfo
+	for _, rule := range doc.Config.ProviderConfigRules.ProviderRules {
+		for _, group := range [][]string{rule.Config.BuiltinModelIDs, rule.Config.PersonalModelIDs} {
+			for _, id := range group {
+				id = strings.TrimSpace(id)
+				if id == "" || seen[id] {
+					continue
+				}
+				seen[id] = true
+				models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+			}
+		}
+	}
+	return normalize(models), nil
 }

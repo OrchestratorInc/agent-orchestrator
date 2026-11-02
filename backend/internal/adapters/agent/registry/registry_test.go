@@ -26,6 +26,24 @@ func TestGeminiAdapterIsSelectable(t *testing.T) {
 	}
 }
 
+func TestZCodeIsDeferredUntilStandingInstructionsAreSupported(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("zcode"); ok {
+		t.Fatal("ZCode must not ship before private standing-instruction delivery is supported")
+	}
+	if domain.HarnessZCode.IsKnown() {
+		t.Fatal("deferred ZCode must not be selectable")
+	}
+	for _, ha := range Harnessed() {
+		if ha.Harness == domain.HarnessZCode {
+			t.Fatal("deferred ZCode must not be returned as a shipped harness")
+		}
+	}
+}
+
 func TestDeepSeekHarnessAdapterIsSelectable(t *testing.T) {
 	reg, err := Build()
 	if err != nil {

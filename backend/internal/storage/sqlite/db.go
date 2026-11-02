@@ -2161,7 +2161,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsZCode := !strings.Contains(schema, "'zcode'")
+	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsZCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2175,6 +2176,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsZCode {
+		// ZCode sits directly before the retained 'fake' fixture harness, which
+		// is the anchor the exact historical repairs below match on. Strip it for
+		// the same reason as Hermes, then append it again after the repairs.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''zcode'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize ZCode constraint: %w", err)
+		}
+		needsZCode = true
 	}
 	type replacement struct {
 		old string
@@ -2291,6 +2301,13 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsZCode {
+		// ZCode's migration anchors on the retained 'fake' fixture harness for
+		// the same reason as DeepSeek and OpenHands above: a database that
+		// skipped an earlier harness migration matches none of the exact
+		// historical variants, and goose has already run.
+		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2348,6 +2365,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'zcode'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing ZCode")
 	}
 	return nil
 }

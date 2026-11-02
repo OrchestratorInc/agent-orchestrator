@@ -1895,6 +1895,35 @@ func TestModelsNormalizesCustomEntryPolicyInOldCache(t *testing.T) {
 	}
 }
 
+func TestZcodeModelCatalogSuppressesCachedChoices(t *testing.T) {
+	data, err := json.Marshal(ports.AgentModelCatalog{
+		AgentID:          "zcode",
+		SelectionMode:    ports.ModelSelectionCatalog,
+		Models:           []ports.AgentModelInfo{{ID: "GLM-5.3", Label: "GLM-5.3"}},
+		CustomModelEntry: ports.CustomModelEntryConfigured,
+		Source:           "config",
+		FetchedAt:        time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"zcode\x00": {AgentID: "zcode", CatalogJSON: string(data)},
+	}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("zcode", "ZCode", nil)}, cache, modelcatalog.Discoverer{})
+	for _, refresh := range []bool{false, true} {
+		for _, read := range []func(context.Context, string, string, bool) (ports.AgentModelCatalog, error){svc.Models, svc.ModelCatalog} {
+			got, err := read(t.Context(), "zcode", "", refresh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AgentID != "zcode" || len(got.Models) != 0 || got.AllowCustom || got.CustomModelEntry != ports.CustomModelEntryNone || got.SelectionMode == ports.ModelSelectionText {
+				t.Fatalf("refresh=%v: catalog = %#v; want native-default-only behavior", refresh, got)
+			}
+		}
+	}
+}
+
 func TestModelsSerializeBinaryResolutionPerAdapter(t *testing.T) {
 	agent := &concurrentResolverAgent{}
 	svc := newService([]agentregistry.HarnessAgent{{
