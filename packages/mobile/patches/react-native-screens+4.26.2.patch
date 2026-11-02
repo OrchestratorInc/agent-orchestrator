@@ -1,0 +1,27 @@
+diff --git a/node_modules/react-native-screens/ios/tabs/host/RNSTabBarController.mm b/node_modules/react-native-screens/ios/tabs/host/RNSTabBarController.mm
+index 481a9e6..f355270 100644
+--- a/node_modules/react-native-screens/ios/tabs/host/RNSTabBarController.mm
++++ b/node_modules/react-native-screens/ios/tabs/host/RNSTabBarController.mm
+@@ -447,6 +447,22 @@ static void rns_pushViewController(__unsafe_unretained id self,
+   return YES;
+ }
+ 
++#if !TARGET_OS_TV
++// iOS 18 bridges view-controller tabs to `UITab` and asks this method first.
++// A tab iOS 26 sets apart (the search role's item) was selected despite
++// `preventNativeSelection`, then sent back by JS, so the view-controller check
++// is routed through here too; with this implemented UIKit skips that one.
++- (BOOL)tabBarController:(UITabBarController *)tabBarController shouldSelectTab:(UITab *)tab API_AVAILABLE(ios(18.0))
++{
++  UIViewController *viewController = tab.viewController;
++  if (![viewController isKindOfClass:RNSTabsScreenViewController.class] &&
++      ![viewController isKindOfClass:UINavigationController.class]) {
++    return YES;
++  }
++  return [self tabBarController:tabBarController shouldSelectViewController:viewController];
++}
++#endif // !TARGET_OS_TV
++
+ - (void)tabBarController:(UITabBarController *)tabBarController
+     didSelectViewController:(UIViewController *)viewController
+ {
