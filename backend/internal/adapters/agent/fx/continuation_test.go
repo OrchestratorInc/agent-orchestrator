@@ -52,3 +52,23 @@ func TestFXNativeProbeUnknownAndCancellation(t *testing.T) {
 		t.Fatal("ignored cancellation")
 	}
 }
+
+func TestFXNativeConfigDirHonorsHomeOverride(t *testing.T) {
+	home, override := t.TempDir(), t.TempDir()
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "FX_HOME set", env: map[string]string{"HOME": home, "FX_HOME": " " + override + " "}, want: override},
+		{name: "FX_HOME unset", env: map[string]string{"HOME": home}, want: filepath.Join(home, ".fx")},
+		{name: "FX_HOME blank", env: map[string]string{"HOME": home, "FX_HOME": " "}, want: filepath.Join(home, ".fx")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := New().NativeSessionConfigDir(context.Background(), tc.env)
+			if err != nil || got != tc.want {
+				t.Fatalf("config dir = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
