@@ -454,7 +454,9 @@ export function BrowserPanelView({
 		annotationAction = async () => undefined,
 	} = browserView;
 	const [urlInput, setUrlInput] = useState(navState.url);
-	useDocumentFlag("data-browser-native-live", Boolean(navState.url));
+	// A popped-out panel is portaled outside #root; the popout flag covers that
+	// case, so this one marks only a live page docked inside the shell.
+	useDocumentFlag("data-browser-native-live", Boolean(navState.url) && !poppedOut);
 	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
 	const historyMenuId = useId();
