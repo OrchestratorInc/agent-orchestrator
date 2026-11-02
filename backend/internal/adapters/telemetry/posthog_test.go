@@ -74,8 +74,11 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["project_id_hash"] == sha256String(string(projectID)) {
 			t.Fatal("project hash is guessable without the installation salt")
 		}
-		if props["lifetime_sessions"] != float64(2) || props["is_signed_in"] != false || props["days_since_install"] != float64(0) {
+		if props["lifetime_sessions"] != float64(2) || props["days_since_install"] != float64(0) {
 			t.Fatalf("shared metadata missing or incorrect: %#v", props)
+		}
+		if _, ok := props["is_signed_in"]; ok {
+			t.Fatal("unknown Cloud sign-in state was exported")
 		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])

@@ -7771,6 +7771,7 @@ export interface components {
             distinctId: string;
             githubLogin?: string;
             installId?: string;
+            isSignedIn?: null | boolean;
             lifetimeSessions?: null | number;
             optedOut: boolean;
         };

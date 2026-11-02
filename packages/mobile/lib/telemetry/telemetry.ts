@@ -28,6 +28,7 @@ export type DesktopTelemetryIdentity = {
 	distinctId?: string;
 	installId?: string;
 	cloudUserId?: string;
+	isSignedIn?: boolean;
 	githubLogin?: string;
 	optedOut: boolean;
 	lifetimeSessions?: number;
@@ -181,7 +182,7 @@ export function createMobileTelemetry(
 		}
 		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
 		lifetimeSessions = typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
-		signInKnown = true;
+		signInKnown = typeof identity.isSignedIn === "boolean" || Boolean(identity.cloudUserId);
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		adoptedKey = key;

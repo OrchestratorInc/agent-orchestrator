@@ -602,6 +602,11 @@ function hadEarlierActiveDay(storage: DailyActiveStorage | undefined, now = new 
 	}
 }
 
+function isNextInstallUtcDay(now: Date): boolean {
+	if (installTimestampMs === undefined) return false;
+	return Math.floor(now.getTime() / DAY_MS) - Math.floor(installTimestampMs / DAY_MS) === 1;
+}
+
 export function startDailyActiveHeartbeat({
 	storage,
 	now = () => new Date(),
@@ -1276,8 +1281,8 @@ export async function initTelemetry(): Promise<boolean> {
 			storage,
 			window,
 			document,
-			onNewDay: () => {
-				if (!isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
+			onNewDay: (now) => {
+				if (isNextInstallUtcDay(now) && !isDeniedEvent("ao.app.next_day_returned") && claimOnboardingMilestone(storage, "next_day_return")) {
 					posthog.capture("ao.app.next_day_returned", withTelemetryContext({}));
 				}
 			},

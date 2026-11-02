@@ -35,6 +35,10 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		resp.DistinctID = snap.DistinctID()
 		resp.InstallID = snap.InstallID
 		resp.CloudUserID, resp.GitHubLogin = snap.CloudUserID, snap.GitHubLogin
+		if snap.CloudUserKnown {
+			signedIn := snap.CloudUserID != ""
+			resp.IsSignedIn = &signedIn
+		}
 		if c.LifetimeSessions != nil {
 			if count, err := c.LifetimeSessions(r.Context()); err == nil {
 				resp.LifetimeSessions = &count

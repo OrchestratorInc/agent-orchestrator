@@ -48,11 +48,12 @@ type Identity struct {
 	writeFile  func(path string, data []byte) error
 	removeFile func(path string) error
 
-	mu          sync.RWMutex
-	installID   string
-	anonymousID string
-	onRetired   func()
-	cloudUserID string
+	mu             sync.RWMutex
+	installID      string
+	anonymousID    string
+	onRetired      func()
+	cloudUserID    string
+	cloudUserKnown bool
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
 	githubLogin   string
@@ -217,6 +218,7 @@ func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.cloudUserID = id
+	i.cloudUserKnown = true
 	err := i.bindLocked(id)
 	i.persistFailed = err != nil
 	return err
@@ -299,6 +301,7 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
+		snap.CloudUserKnown = i.cloudUserKnown
 	}
 	return snap
 }

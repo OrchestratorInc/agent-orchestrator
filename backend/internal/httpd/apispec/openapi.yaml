@@ -21813,6 +21813,10 @@ components:
           type: string
         installId:
           type: string
+        isSignedIn:
+          type:
+          - "null"
+          - boolean
         lifetimeSessions:
           type:
           - "null"

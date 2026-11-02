@@ -2607,6 +2607,7 @@ type TelemetryIdentityResponse struct {
 	DistinctID       string `json:"distinctId"`
 	InstallID        string `json:"installId,omitempty"`
 	CloudUserID      string `json:"cloudUserId,omitempty"`
+	IsSignedIn       *bool  `json:"isSignedIn,omitempty"`
 	GitHubLogin      string `json:"githubLogin,omitempty"`
 	OptedOut         bool   `json:"optedOut"`
 	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`

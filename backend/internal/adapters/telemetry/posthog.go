@@ -691,7 +691,9 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
 			props["days_since_install"] = age
 		}
-		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
+		if snap := s.ident.Snapshot(); snap.CloudUserKnown {
+			props["is_signed_in"] = snap.CloudUserID != ""
+		}
 	}
 	return props
 }
