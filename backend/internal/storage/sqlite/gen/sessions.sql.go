@@ -191,6 +191,27 @@ func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBin
 	return items, nil
 }
 
+const fillSessionCardSummary = `-- name: FillSessionCardSummary :execrows
+UPDATE sessions
+SET card_summary = ?1
+WHERE id = ?2 AND is_terminated = 0 AND card_summary = ''
+`
+
+type FillSessionCardSummaryParams struct {
+	Summary string
+	ID      domain.SessionID
+}
+
+// Sets the card summary only while it is empty, so a fallback never replaces
+// one the agent set itself. The check and the write are one statement.
+func (q *Queries) FillSessionCardSummary(ctx context.Context, arg FillSessionCardSummaryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, fillSessionCardSummary, arg.Summary, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `

@@ -724,7 +724,7 @@ func Run(buildVersion string) error {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, CardSummaries: store, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}
