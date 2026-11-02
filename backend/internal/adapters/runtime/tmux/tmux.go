@@ -1288,6 +1288,9 @@ func (r *Runtime) runWithRetainedClient(ctx context.Context, socketName string, 
 		case serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)):
 			r.clearRetainedAssociation(ctx, candidate)
 			return out, err
+		case serverExitedUnexpectedlyOutput(string(out)) && !readOnlyCommand(args[2:]):
+			// This client may have applied the command. Only probe further clients.
+			return r.probeAfterAmbiguousExit(ctx, socketName, args[2:], candidate.path, out, err)
 		default:
 			protocolMismatch = protocolMismatch || protocolVersionMismatchOutput(string(out))
 			unexpectedExit = unexpectedExit || serverExitedUnexpectedlyOutput(string(out))

@@ -1083,6 +1083,53 @@ func TestMutatingCommandIsNotReplayedAfterUnexpectedServerExit(t *testing.T) {
 	}
 }
 
+func TestRetainedMutatingCommandIsNotReplayedAfterUnexpectedServerExit(t *testing.T) {
+	for _, command := range []string{"send-keys", "paste-buffer", "kill-session", "respawn-pane"} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			previous := writeTestTmuxClient(t, "tmux-previous", "previous-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			store := &fakeCompatibleClientStore{path: previous, managed: true, found: true}
+			r := New(Options{
+				Binary: current, RetainedBinary: retained, SocketName: "ao",
+				CompatibleClientStore: store, Timeout: time.Second,
+			})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+				{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+				{},
+			}}
+			r.runner = fr
+
+			out, err := r.runOnSocket(context.Background(), "ao", command, "-t", "=sess-1")
+			for _, call := range fr.calls[2:] {
+				if slices.Contains(call.args, command) {
+					t.Fatalf("%s replayed after retained client exited ambiguously: %#v", command, fr.calls)
+				}
+			}
+			if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) ||
+				errors.Is(err, ports.ErrRuntimeProtocolMismatch) || confirmedAbsentOutput(err, string(out)) {
+				t.Fatalf("runOnSocket = (%q, %v), want original ambiguous output and inconclusive result", out, err)
+			}
+			if string(out) != "server exited unexpectedly" || len(fr.calls) != 4 {
+				t.Fatalf("output = %q, calls = %#v, want two commands then two read-only probes", out, fr.calls)
+			}
+			for i, binary := range []string{current, previous, current, retained} {
+				if fr.calls[i].name != binary {
+					t.Fatalf("call %d = %#v, want client %q", i, fr.calls[i], binary)
+				}
+				if i >= 2 && !slices.Contains(fr.calls[i].args, "list-sessions") {
+					t.Fatalf("call %d = %#v, want read-only compatibility probe", i, fr.calls[i])
+				}
+			}
+			if !store.found || store.path != retained {
+				t.Fatalf("compatible-client association = %+v, want retained client", store)
+			}
+		})
+	}
+}
+
 func TestSendMessageDoesNotRepeatChunkAfterUnexpectedServerExit(t *testing.T) {
 	current := writeTestTmuxClient(t, "tmux-current", "current-client")
 	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
