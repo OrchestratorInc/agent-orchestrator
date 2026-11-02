@@ -89,7 +89,10 @@ func geminiPrompt(text string) string {
 	return text
 }
 
-func geminiCWD(root *os.Root, path, hash string) string {
+func geminiCWD(ctx context.Context, root *os.Root, path, hash string) string {
+	if ctx.Err() != nil {
+		return ""
+	}
 	projectDir := filepath.Dir(filepath.Dir(path))
 	if body, err := root.ReadFile(filepath.Join(projectDir, ".project_root")); err == nil {
 		return strings.TrimSpace(string(body))
@@ -262,7 +265,7 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, errors.New("invalid gemini conversation")
 	}
 	t.nativeID = metadata.SessionID
-	t.cwd = geminiCWD(provider, rel, metadata.ProjectHash)
+	t.cwd = geminiCWD(ctx, provider, rel, metadata.ProjectHash)
 	if t.cwd == "" {
 		return t, errors.New("gemini source folder is unknown")
 	}
