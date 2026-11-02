@@ -19,6 +19,7 @@ import (
 
 var importSessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+// NativeSessionConfigDir resolves the provider state root used by a launch.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -29,11 +30,11 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 		}
 		return os.Getenv(key)
 	}
-	if root := strings.TrimSpace(lookup("GROK_HOME")); len(root) > 0 {
+	if root := strings.TrimSpace(lookup("GROK_HOME")); root != "" {
 		return root, nil
 	}
 	home := lookup("HOME")
-	if len(home) == 0 {
+	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -43,6 +44,7 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return filepath.Join(home, ".grok"), nil
 }
 
+// LocateTranscript finds a confined native update log for the conversation.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if !importSessionID.MatchString(ref.NativeSessionID) {
 		return "", false, nil
@@ -71,9 +73,10 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	if errors.Is(err, os.ErrNotExist) {
 		err = nil
 	}
-	return path, len(path) > 0, err
+	return path, path != "", err
 }
 
+// ProbeNativeSession reports local backing state without modifying it.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	_, ok, err := p.LocateTranscript(ctx, ref)
 	if err != nil {
@@ -91,6 +94,7 @@ func grokImportBucket(cwd string) string {
 	return strings.ReplaceAll(url.QueryEscape(cwd), "+", "%20")
 }
 
+// RelocateImportedSession prepares a private copy for the first native resume.
 func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSessionRelocation) error {
 	if !importSessionID.MatchString(cfg.NativeSessionID) || !filepath.IsAbs(cfg.LaunchCWD) {
 		return errors.New("invalid grok import identity or launch directory")

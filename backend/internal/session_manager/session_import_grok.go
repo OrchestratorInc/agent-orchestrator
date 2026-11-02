@@ -33,7 +33,7 @@ func grokImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) boo
 		return false
 	}
 	id := source.NativeID
-	if len(rec.Metadata.ProviderConversationID) > 0 {
+	if rec.Metadata.ProviderConversationID != "" {
 		id = rec.Metadata.ProviderConversationID
 	}
 	for _, entry := range entries {

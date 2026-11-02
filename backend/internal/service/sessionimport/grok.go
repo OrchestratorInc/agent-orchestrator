@@ -15,7 +15,7 @@ import (
 )
 
 func grokRoot(home string) string {
-	if root := strings.TrimSpace(os.Getenv("GROK_HOME")); len(root) > 0 {
+	if root := strings.TrimSpace(os.Getenv("GROK_HOME")); root != "" {
 		return root
 	}
 	return filepath.Join(home, ".grok")
@@ -103,7 +103,7 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	var role, text string
 	var at time.Time
 	flush := func() {
-		if len(strings.TrimSpace(text)) > 0 {
+		if strings.TrimSpace(text) != "" {
 			items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 		}
 		role, text = "", ""
@@ -140,7 +140,7 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		case "agent_message_chunk":
 			next = "assistant"
 		}
-		if len(next) == 0 || u.Content.Type != "text" {
+		if next == "" || u.Content.Type != "text" {
 			return nil
 		}
 		if next != role {
@@ -173,7 +173,7 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	if !hasUser {
 		return t, errors.New("no readable native conversation")
 	}
-	if len(summary.Title) > 0 {
+	if summary.Title != "" {
 		t.title = summary.Title
 	}
 	t.title = strings.Join(strings.Fields(t.title), " ")
