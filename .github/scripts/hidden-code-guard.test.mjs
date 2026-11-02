@@ -305,12 +305,31 @@ test("groups 50 bad lock entries into one finding with 20 capped and sanitized e
 	assert.doesNotMatch(output, /[\u0000\u202e]/u);
 });
 
-test("flags sensitive npm and yarn settings while allowing ordinary settings", () => {
-	for (const file of [".npmrc", "packages/mobile/.npmrc", ".yarnrc", ".yarnrc.yml"]) {
+test("flags sensitive npm settings while allowing ordinary settings", () => {
+	for (const file of [".npmrc", "packages/mobile/.npmrc"]) {
 		for (const text of ["registry=https://registry.npmjs.org", " @scope:registry = https://evil.example", "script-shell=/tmp/x", "onload-script=x", "ignore-scripts = false", "node-options=--require=x"]) {
 			assert.deepEqual(rules(check(file, text)), ["R7"]);
 		}
 		for (const text of ["legacy-peer-deps=true", "ignore-scripts=true"]) assert.deepEqual(check(file, text), []);
+	}
+});
+
+test("checks npm settings after carriage returns, including after comments", () => {
+	for (const prefix of ["# comment", "; comment", "[section]", "legacy-peer-deps=true"]) {
+		for (const setting of ["registry=https://evil.example", "node-options=--require=./payload.cjs", "ignore-scripts=false"]) {
+			assert.deepEqual(rules(check(".npmrc", `${prefix}\r${setting}`)), ["R7"]);
+		}
+	}
+	assert.deepEqual(check(".npmrc", "# comment\rlegacy-peer-deps=true\rignore-scripts=true"), []);
+});
+
+test("checks execution and registry settings in modern and classic Yarn syntax", () => {
+	for (const [file, settings, safe] of [
+		[".yarnrc.yml", ["yarnPath: ./scripts/payload.cjs", '"yarnPath": ./scripts/payload.cjs', "npmRegistryServer: https://evil.example", "  npmRegistryServer: https://evil.example", "plugins:", "enableScripts: true"], ["nodeLinker: node-modules", "enableScripts: false", "# yarnPath: ./scripts/payload.cjs"]],
+		[".yarnrc", ['yarn-path "./scripts/payload.cjs"', '"yarn-path" "./scripts/payload.cjs"', 'registry "https://evil.example"', '"@scope:registry" "https://evil.example"', 'script-shell "/tmp/payload"', "ignore-scripts false"], ["child-concurrency 2", "ignore-scripts true", '# yarn-path "./scripts/payload.cjs"']],
+	]) {
+		for (const text of settings) assert.deepEqual(rules(check(file, text)), ["R7"], `${file}: ${text}`);
+		for (const text of safe) assert.deepEqual(check(file, text), [], `${file}: ${text}`);
 	}
 });
 

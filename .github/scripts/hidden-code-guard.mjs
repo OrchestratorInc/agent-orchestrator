@@ -70,6 +70,15 @@ function riskyNpmConfig(text) {
 		|| (key === "ignore-scripts" && iniValue(setting[2] ?? "true") === "false");
 }
 
+function riskyYarnConfig(text) {
+	const setting = text.match(/^\s*("(?:\\.|[^"\\])*"|'[^']*'|(?:@[^:\s]+:)?[\w-]+)(?:\s*[:=]\s*|\s+)(.*)$/);
+	if (!setting) return false;
+	const key = String(iniValue(setting[1])).replace(/^--(?:install\.)?/, "");
+	return /^(?:@[^:]+:)?registry$|^(?:yarnPath|yarn-path|npmRegistryServer|plugins|script-shell|onload-script|node-options)$/.test(key)
+		|| (key === "ignore-scripts" && iniValue(setting[2]) === "false")
+		|| (key === "enableScripts" && iniValue(setting[2]) === "true");
+}
+
 export function scan(lines) {
 	const findings = [];
 	for (const { file, line, text } of lines) {
@@ -87,9 +96,8 @@ export function scan(lines) {
 		if (/(^|\/)go\.(mod|work)$/.test(file) && text.includes("=>")) {
 			add("R6", "go-replace: module replace added or changed");
 		}
-		if ((/(^|\/)\.npmrc$/.test(file) && riskyNpmConfig(text))
-			|| (/(^|\/)\.yarnrc(?:\.yml)?$/.test(file)
-				&& /^\s*(@[^:]+:)?registry\s*=|script-shell|onload-script|ignore-scripts\s*=\s*false|node-options/.test(text))) {
+		if ((/(^|\/)\.npmrc$/.test(file) && text.split("\r").some(riskyNpmConfig))
+			|| (/(^|\/)\.yarnrc(?:\.yml)?$/.test(file) && text.split("\r").some(riskyYarnConfig))) {
 			add("R7", "install-config: package registry or script execution setting added or changed");
 		}
 	}
