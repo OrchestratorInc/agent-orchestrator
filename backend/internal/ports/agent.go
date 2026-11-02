@@ -850,6 +850,10 @@ type SessionRef struct {
 	// DataDir is AO's isolated state root. Native lifecycle commands must use it
 	// as their stable working/configuration root, never the session worktree.
 	DataDir string
+	// ImportSource distinguishes imported native history from ordinary recovery.
+	// Adapters must still verify the requested identity and AO worktree routing;
+	// its presence never authorizes a fresh conversation or transcript fallback.
+	ImportSource *domain.SessionImportSource
 }
 
 // SessionInfo contains agent-owned session metadata.
