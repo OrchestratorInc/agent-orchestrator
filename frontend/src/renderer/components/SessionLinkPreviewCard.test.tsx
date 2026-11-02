@@ -25,8 +25,8 @@ vi.mock("../lib/use-session-link-navigation", () => ({
 }));
 
 vi.mock("./ui/hover-card", () => ({
-	HoverCardContent: ({ children, className }: { children: React.ReactNode; className?: string }) => (
-		<div className={className}>{children}</div>
+	HoverCardContent: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+		<div {...props}>{children}</div>
 	),
 }));
 
@@ -159,9 +159,47 @@ describe("SessionLinkPreviewCard", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
 	});
 
+	it("opens the session when a live card is clicked", async () => {
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session())] }));
+		const onOpen = vi.fn();
+
+		const { container } = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
+		const card = container.firstElementChild as HTMLElement;
+		expect(card).toHaveClass("cursor-pointer");
+
+		await userEvent.click(card);
+		expect(onOpen).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the card inert without a handler and keeps a terminated card's Resume button separate", async () => {
+		const worker = session();
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		const view = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
+
+		const onOpen = vi.fn();
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ isTerminated: true, status: "terminated" }))] }));
+		view.rerender(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
+		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
+		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
+		expect(onOpen).not.toHaveBeenCalled();
+	});
+
 	it("localizes the PR count instead of adding an English suffix", () => {
 		expect(appI18n.t("pr.count", { count: 1, lng: "es" })).toBe("1 PR");
 		expect(appI18n.t("pr.count", { count: 2, lng: "es" })).toBe("2 PR");
+	});
+
+	it("formats the updated-at time in the app language, not the OS locale", async () => {
+		const worker = session({ updatedAt: new Date(Date.now() - 42 * 60_000).toISOString() });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		await appI18n.changeLanguage("zh-CN");
+		try {
+			render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+			expect(screen.getByText("更新于 42 分钟前")).toBeInTheDocument();
+		} finally {
+			await appI18n.changeLanguage("en");
+		}
 	});
 });
 

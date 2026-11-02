@@ -147,9 +147,10 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	}
 	driver.startErr = errProviderSwitchTarget
 
-	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
-		TargetHarness: domain.HarnessClaudeCode, Model: "claude-foreign-model", Effort: "max",
-	})
+	request := domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "claude-foreign-model", Effort: "max", IdempotencyKey: "failed-switch",
+	}
+	err = h.svc.SwitchProvider(ctx, testSession, request)
 	if err == nil || !strings.Contains(err.Error(), "start target provider") {
 		t.Fatalf("SwitchProvider error = %v, want target-start failure", err)
 	}
@@ -173,6 +174,30 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	}
 	if controller, err := h.svc.Controller(testSession); err != nil || controller.Settings().ApprovalMode != domain.PermissionModeAcceptEdits {
 		t.Fatalf("restored controller settings = %+v, %v; want accept-edits", controller.Settings(), err)
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, request); err == nil || !strings.Contains(err.Error(), "start target provider") {
+		t.Fatalf("replayed failed switch = %v, want target-start failure", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switchActivities := func() []domain.ConversationActivity {
+		t.Helper()
+		snapshot, err := h.st.LoadConversationSnapshot(ctx, conversation.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var activities []domain.ConversationActivity
+		for _, activity := range snapshot.Activities {
+			if activity.RequestID == request.IdempotencyKey {
+				activities = append(activities, activity)
+			}
+		}
+		return activities
+	}
+	if activities := switchActivities(); len(activities) != 0 {
+		t.Fatalf("failed switch replay recorded activities = %+v, want none", activities)
 	}
 }
 

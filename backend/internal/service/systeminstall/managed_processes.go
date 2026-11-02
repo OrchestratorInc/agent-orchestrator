@@ -111,7 +111,9 @@ func (s *Service) managedReleaseHasProcess(snapshot managedProcessSnapshot, targ
 		cli = "opencode-v2"
 	}
 	for _, name := range snapshot.opaque {
-		if name == strings.ToLower(record.CLI)+".exe" || managedRuntimeExecutable(name) {
+		// A loader's native child, such as copilot-win32-x64.exe, counts too.
+		if name == strings.ToLower(record.CLI)+".exe" || managedRuntimeExecutable(name) ||
+			(strings.HasPrefix(name, strings.ToLower(record.CLI)+"-") && strings.HasSuffix(name, ".exe")) {
 			// An unreadable script command line cannot rule out an old module.
 			return true
 		}

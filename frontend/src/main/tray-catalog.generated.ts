@@ -2,6 +2,8 @@
 import type { AppLocale } from "../shared/ui-locale";
 
 export const TRAY_MESSAGE_KEYS = [
+	"tray.awakeActive",
+	"tray.awakeUnknown",
 	"tray.untitledSession",
 	"tray.attentionTooltip_one",
 	"tray.attentionTooltip_other",
@@ -15,93 +17,127 @@ export const TRAY_MESSAGE_KEYS = [
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
 
-export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
+export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Partial<Record<string, string>>> = {
 	"en": {
+		"tray.awakeActive": "Stay Awake: keeping this Mac awake",
+		"tray.awakeUnknown": "Stay Awake: status unavailable",
 		"tray.untitledSession": "Untitled session",
 		"tray.attentionTooltip_one": "{{count}} session needs attention",
 		"tray.attentionTooltip_other": "{{count}} sessions need attention",
 		"tray.empty": "No sessions need attention",
 		"tray.more": "More",
-		"tray.show": "Show Agent Orchestrator",
+		"tray.show": "Show Orchestrator",
 		"tray.quit": "Quit AO Completely",
 		"zone.merge": "Ready to merge",
 		"zone.action": "Needs you"
 	},
 	"zh-CN": {
+		"tray.awakeActive": "保持唤醒：正在使此 Mac 保持唤醒",
+		"tray.awakeUnknown": "保持唤醒：状态不可用",
 		"tray.untitledSession": "未命名会话",
 		"tray.attentionTooltip_one": "{{count}} 个会话需要关注",
 		"tray.attentionTooltip_other": "{{count}} 个会话需要关注",
 		"tray.empty": "没有会话需要关注",
 		"tray.more": "更多",
-		"tray.show": "显示 Agent Orchestrator",
+		"tray.show": "显示 Orchestrator",
 		"tray.quit": "完全退出 AO",
 		"zone.merge": "可合并",
 		"zone.action": "需要你处理"
 	},
 	"ja": {
+		"tray.awakeActive": "スリープ防止：この Mac を起動状態に維持しています",
+		"tray.awakeUnknown": "スリープ防止：状態を取得できません",
 		"tray.untitledSession": "無題のセッション",
 		"tray.attentionTooltip_one": "{{count}} 件のセッションに対応が必要です",
 		"tray.attentionTooltip_other": "{{count}} 件のセッションに対応が必要です",
 		"tray.empty": "対応が必要なセッションはありません",
 		"tray.more": "その他",
-		"tray.show": "Agent Orchestrator を表示",
+		"tray.show": "Orchestrator を表示",
 		"tray.quit": "AO を完全に終了",
 		"zone.merge": "マージ準備完了",
 		"zone.action": "対応が必要"
 	},
 	"ko": {
+		"tray.awakeActive": "잠자기 방지: 이 Mac을 깨어 있게 유지하는 중",
+		"tray.awakeUnknown": "잠자기 방지: 상태를 확인할 수 없음",
 		"tray.untitledSession": "제목 없는 세션",
 		"tray.attentionTooltip_one": "{{count}}개 세션에 확인이 필요합니다",
 		"tray.attentionTooltip_other": "{{count}}개 세션에 확인이 필요합니다",
 		"tray.empty": "확인이 필요한 세션이 없습니다",
 		"tray.more": "더 보기",
-		"tray.show": "Agent Orchestrator 표시",
+		"tray.show": "Orchestrator 표시",
 		"tray.quit": "AO 완전히 종료",
 		"zone.merge": "병합 준비 완료",
 		"zone.action": "조치 필요"
 	},
 	"es": {
+		"tray.awakeActive": "Mantener despierto: este Mac se mantiene activo",
+		"tray.awakeUnknown": "Mantener despierto: estado no disponible",
 		"tray.untitledSession": "Sesión sin título",
 		"tray.attentionTooltip_one": "{{count}} sesión requiere atención",
 		"tray.attentionTooltip_other": "{{count}} sesiones requieren atención",
 		"tray.empty": "No hay sesiones que requieran atención",
 		"tray.more": "Más",
-		"tray.show": "Mostrar Agent Orchestrator",
+		"tray.show": "Mostrar Orchestrator",
 		"tray.quit": "Salir completamente de AO",
 		"zone.merge": "Listo para fusionar",
-		"zone.action": "Te necesita"
+		"zone.action": "Te necesita",
+		"tray.attentionTooltip_many": "{{count}} sesiones requieren atención"
 	},
 	"fr": {
+		"tray.awakeActive": "Maintien en éveil : ce Mac reste éveillé",
+		"tray.awakeUnknown": "Maintien en éveil : état indisponible",
 		"tray.untitledSession": "Session sans titre",
 		"tray.attentionTooltip_one": "{{count}} session nécessite votre attention",
 		"tray.attentionTooltip_other": "{{count}} sessions nécessitent votre attention",
 		"tray.empty": "Aucune session ne nécessite votre attention",
 		"tray.more": "Plus",
-		"tray.show": "Afficher Agent Orchestrator",
+		"tray.show": "Afficher Orchestrator",
 		"tray.quit": "Quitter complètement AO",
 		"zone.merge": "Prêt à fusionner",
-		"zone.action": "Action requise"
+		"zone.action": "Action requise",
+		"tray.attentionTooltip_many": "{{count}} sessions nécessitent votre attention"
 	},
 	"de": {
+		"tray.awakeActive": "Wach bleiben: Dieser Mac wird wach gehalten",
+		"tray.awakeUnknown": "Wach bleiben: Status nicht verfügbar",
 		"tray.untitledSession": "Unbenannte Sitzung",
 		"tray.attentionTooltip_one": "{{count}} Sitzung benötigt Aufmerksamkeit",
 		"tray.attentionTooltip_other": "{{count}} Sitzungen benötigen Aufmerksamkeit",
 		"tray.empty": "Keine Sitzungen benötigen Aufmerksamkeit",
 		"tray.more": "Mehr",
-		"tray.show": "Agent Orchestrator anzeigen",
+		"tray.show": "Orchestrator anzeigen",
 		"tray.quit": "AO vollständig beenden",
 		"zone.merge": "Bereit zum Mergen",
 		"zone.action": "Ihre Aktion nötig"
 	},
 	"pt-BR": {
+		"tray.awakeActive": "Manter acordado: este Mac está sendo mantido acordado",
+		"tray.awakeUnknown": "Manter acordado: status indisponível",
 		"tray.untitledSession": "Sessão sem título",
 		"tray.attentionTooltip_one": "{{count}} sessão precisa de atenção",
 		"tray.attentionTooltip_other": "{{count}} sessões precisam de atenção",
 		"tray.empty": "Nenhuma sessão precisa de atenção",
 		"tray.more": "Mais",
-		"tray.show": "Mostrar Agent Orchestrator",
+		"tray.show": "Mostrar Orchestrator",
 		"tray.quit": "Sair completamente do AO",
 		"zone.merge": "Pronto para merge",
-		"zone.action": "Precisa de você"
+		"zone.action": "Precisa de você",
+		"tray.attentionTooltip_many": "{{count}} sessões precisam de atenção"
+	},
+	"ru": {
+		"tray.awakeActive": "Предотвращение сна: Mac остаётся включённым",
+		"tray.awakeUnknown": "Предотвращение сна: состояние недоступно",
+		"tray.untitledSession": "Сессия без названия",
+		"tray.attentionTooltip_one": "{{count}} сессия требует внимания",
+		"tray.attentionTooltip_other": "{{count}} сессии требуют внимания",
+		"tray.empty": "Нет сессий, требующих внимания",
+		"tray.more": "Ещё",
+		"tray.show": "Показать Orchestrator",
+		"tray.quit": "Полностью выйти из AO",
+		"zone.merge": "Готово к слиянию",
+		"zone.action": "Требуется ваше действие",
+		"tray.attentionTooltip_few": "{{count}} сессии требуют внимания",
+		"tray.attentionTooltip_many": "{{count}} сессий требуют внимания"
 	}
 };

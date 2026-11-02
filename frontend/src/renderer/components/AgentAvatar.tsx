@@ -40,6 +40,8 @@ import gooseDarkLogo from "../assets/agents/goose-dark.svg";
 import gooseLightLogo from "../assets/agents/goose-light.svg";
 import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
+// NousResearch/hermes-agent: apps/desktop/assets/icon.png.
+import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
 import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
 import kimiDarkLogo from "../assets/agents/kimi-dark.svg";
@@ -80,6 +82,7 @@ const LOGOS: AgentLogoSources = {
 	copilot: { light: copilotLightLogo, dark: copilotDarkLogo },
 	aider: aiderLogo,
 	grok: { light: grokLightLogo, dark: grokDarkLogo },
+	hermes: hermesLogo,
 	gemini: geminiLogo,
 	droid: { light: droidLightLogo, dark: droidDarkLogo },
 	fx: { light: fxLightLogo, dark: fxDarkLogo },

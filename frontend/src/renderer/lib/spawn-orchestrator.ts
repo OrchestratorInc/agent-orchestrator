@@ -65,7 +65,6 @@ export async function spawnOrchestrator(
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
 ): Promise<string> {
-	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
@@ -87,7 +86,10 @@ export async function spawnOrchestrator(
 		void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", { project_id: projectId, source });
 		return data.orchestrator.id;
 	} catch (err) {
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", { project_id: projectId, source });
+		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			project_id: projectId, source,
+			...(err instanceof OrchestratorSpawnError ? { error_code: err.code, http_status: err.status } : {}),
+		});
 		throw err;
 	}
 }

@@ -128,17 +128,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, rec domain.NotificationRecord
 	}
 	messages := make([]Message, 0, len(devices))
 	for _, dev := range devices {
-		// Muted devices stay registered and listed on the desktop but receive
-		// nothing. Filtering here (rather than after Send) keeps tickets 1:1 with
-		// messages by index, which the pruning loop below depends on.
-		if dev.Muted {
-			continue
-		}
 		// A row is a paired phone, not a push registration: it may have no token
 		// (permission not granted yet, or a build that can't mint one). Skip it
-		// here, before Send, for the same reason muted devices are skipped above —
-		// keeping this filter ahead of Send preserves the 1:1 ticket-to-message
-		// index correspondence the pruning loop below depends on.
+		// here, before Send, rather than after: keeping this filter ahead of Send
+		// preserves the 1:1 ticket-to-message index correspondence the pruning
+		// loop below depends on.
 		if dev.Token == "" {
 			continue
 		}

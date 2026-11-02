@@ -48,6 +48,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
+		domain.HarnessHermes, // TUI-only until a chat driver is qualified
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

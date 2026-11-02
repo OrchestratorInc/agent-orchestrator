@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>AO Browser Bridge</title>
+	<link rel="stylesheet" href="pages.css">
+	<style>body { width: 340px; padding: 14px; }</style>
+</head>
+<body>
+	<div class="status"><span class="dot" id="dot"></span><strong id="state">Checking…</strong></div>
+	<p class="muted" id="detail"></p>
+	<h2>Agent sessions</h2>
+	<div class="panel" id="sessions"><span class="muted">None yet.</span></div>
+	<div class="actions">
+		<button type="button" id="options">Site settings</button>
+		<button type="button" id="reconnect">Reconnect</button>
+		<button type="button" class="danger" id="stop">Stop all agents</button>
+	</div>
+	<script src="popup.js"></script>
+</body>
+</html>

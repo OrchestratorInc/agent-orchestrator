@@ -154,6 +154,10 @@ func (f *fakeProjectManager) PrepareClone(_ context.Context, in projectsvc.Clone
 	return projectsvc.ClonePreparationResult{Path: "/tmp/" + in.RemoteURL, RemoteURL: in.RemoteURL}, nil
 }
 
+func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in projectsvc.CloneInput) (projectsvc.CloneDestination, error) {
+	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
+}
+
 func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.ClonePreparationCleanupInput) error {
 	return nil
 }

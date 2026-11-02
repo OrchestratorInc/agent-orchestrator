@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -240,6 +241,21 @@ func TestLegacyPRWriteResolvesStoredURLAlias(t *testing.T) {
 	prs, err := s.ListPRsBySession(ctx, session.ID)
 	if err != nil || len(prs) != 1 || prs[0].URL != currentURL || prs[0].CI != domain.CIFailing {
 		t.Fatalf("PRs after legacy alias write = %+v, err=%v; want one updated canonical row", prs, err)
+	}
+}
+
+func TestRepositoryRenameKeepsLatestName(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, name := range []string{"middle-owner/example", "new-owner/example"} {
+		if err := s.RecordRepositoryRename(ctx, domain.RepositoryRename{Host: "github.com", OldName: "old-owner/example", Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListRepositoryRenames(ctx)
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "old-owner/example", Name: "new-owner/example"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("renames = %#v, err=%v; want %#v", got, err, want)
 	}
 }
 

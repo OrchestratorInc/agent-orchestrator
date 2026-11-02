@@ -14,6 +14,8 @@ import type {
   CurrentAccount,
   DeleteProjectResponse,
   DeleteSessionResponse,
+  SessionPinResponse,
+  UpdateSessionInput,
   ErrorEnvelope,
   EventReplayOptions,
   GitHubInstallation,
@@ -26,10 +28,18 @@ import type {
   Project,
   ProjectPage,
   ProjectSettingsInput,
+  ProjectEnvironment,
+  PutProjectEnvironmentInput,
+  ProjectIntakeStatus,
+  Cue,
+  CueDefinitionInput,
+  InvokeCueResult,
   PutAgentProviderConnectionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
+  SessionArtifactAccess,
+  SessionArtifactList,
   SessionInterfaceTransition,
   SessionInterfaceTransitionStatus,
   StartSessionInterfaceTransitionInput,
@@ -67,6 +77,11 @@ import type {
   WorkspaceEntryPage,
   WorkspaceFile,
   WorkspaceFileWriteInput,
+  ChatSearchResults,
+  SaveSessionArtifactInput,
+  SessionArtifactResult,
+  SessionArtifactVersion,
+  SessionArtifactVersionList,
 } from "./types.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -173,6 +188,48 @@ export class CloudClient {
   updateProjectSettings(orgId: string, projectId: string, input: ProjectSettingsInput, options: RequestOptions = {}): Promise<{ project: Project }> {
     return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/settings`), {
       method: "PATCH", body: input, signal: options.signal,
+    });
+  }
+
+  getProjectEnvironment(orgId: string, projectId: string, options: RequestOptions = {}): Promise<ProjectEnvironment> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/environment`), options);
+  }
+
+  putProjectEnvironment(orgId: string, projectId: string, input: PutProjectEnvironmentInput, options: RequestOptions = {}): Promise<ProjectEnvironment> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/environment`), {
+      method: "PUT", body: input, signal: options.signal,
+    });
+  }
+
+  getProjectIntakeStatus(orgId: string, projectId: string, options: RequestOptions = {}): Promise<ProjectIntakeStatus> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/intake`), options);
+  }
+
+  listProjectCues(orgId: string, projectId: string, options: RequestOptions = {}): Promise<{ cues: Cue[] }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/cues`), options);
+  }
+
+  createProjectCue(orgId: string, projectId: string, input: CueDefinitionInput, options: RequestOptions = {}): Promise<{ cue: Cue }> {
+    return this.request(this.orgPath(orgId, `/projects/${encodeURIComponent(projectId)}/cues`), {
+      method: "POST", body: input, signal: options.signal,
+    });
+  }
+
+  updateProjectCue(orgId: string, cueId: string, input: CueDefinitionInput, options: RequestOptions = {}): Promise<{ cue: Cue }> {
+    return this.request(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}`), {
+      method: "PATCH", body: input, signal: options.signal,
+    });
+  }
+
+  async deleteProjectCue(orgId: string, cueId: string, options: RequestOptions = {}): Promise<void> {
+    await this.request<unknown>(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}`), {
+      method: "DELETE", signal: options.signal,
+    });
+  }
+
+  invokeProjectCue(orgId: string, cueId: string, sessionId: string, options: RequestOptions & { idempotencyKey?: string } = {}): Promise<InvokeCueResult> {
+    return this.request(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}/invoke`), {
+      method: "POST", body: { sessionId }, idempotencyKey: options.idempotencyKey, signal: options.signal,
     });
   }
 
@@ -340,6 +397,114 @@ export class CloudClient {
     );
   }
 
+  /** Lists a session's committed artifact files without waking its sandbox. */
+  listArtifacts(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactList> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts`),
+      options,
+    );
+  }
+
+  /**
+   * Returns a short-lived path prefix that serves the session's artifact files
+   * without a bearer header. Append a file's URL-escaped path to filesPrefix.
+   */
+  getArtifactAccess(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactAccess> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/access`),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  /** Saves an edit of one artifact file; 409 artifact_changed when the file changed since it was read. */
+  saveArtifact(
+    orgId: string,
+    sessionId: string,
+    input: SaveSessionArtifactInput,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactResult> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/content`),
+      { method: "PUT", body: input, signal: options.signal },
+    );
+  }
+
+  /** Lists the kept versions of one artifact file, newest (the committed file) first. */
+  listArtifactVersions(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactVersionList> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions`), { path }),
+      options,
+    );
+  }
+
+  /** Returns one kept version of an artifact file with the start of its text. */
+  getArtifactVersion(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    version: number,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactVersion> {
+    return this.request(
+      this.withQuery(
+        this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions/${encodeURIComponent(String(version))}`),
+        { path },
+      ),
+      options,
+    );
+  }
+
+  /** Makes a kept version the committed file again, as its newest version. */
+  restoreArtifactVersion(
+    orgId: string,
+    sessionId: string,
+    path: string,
+    version: number,
+    options: RequestOptions = {},
+  ): Promise<SessionArtifactResult> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/artifacts/versions/restore`),
+      { method: "POST", body: { path, version }, signal: options.signal },
+    );
+  }
+
+  /** Starts a live session's exited terminal agent again in its worker. */
+  restartSessionAgent(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<{ requested: boolean }> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/agent/restart`),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
+  /** Searches the chat messages of the organization's sessions, newest first. */
+  searchChats(
+    orgId: string,
+    query: string,
+    options: RequestOptions & { limit?: number } = {},
+  ): Promise<ChatSearchResults> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, "/chat-search"), { q: query, limit: options.limit }),
+      { signal: options.signal },
+    );
+  }
+
   /** Retries a session whose worker never started (see Session.startupError). */
   retrySessionStartup(
     orgId: string,
@@ -434,6 +599,32 @@ export class CloudClient {
     return this.request(
       this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
       { method: "DELETE", signal: options.signal },
+    );
+  }
+
+  /** Renames a session for everyone who sees it. */
+  updateSession(
+    orgId: string,
+    sessionId: string,
+    input: UpdateSessionInput,
+    options: RequestOptions = {},
+  ): Promise<{ session: Session }> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}`),
+      { method: "PATCH", body: input, signal: options.signal },
+    );
+  }
+
+  /** Pins or unpins a session in the caller's own sidebar. */
+  setSessionPinned(
+    orgId: string,
+    sessionId: string,
+    pinned: boolean,
+    options: RequestOptions = {},
+  ): Promise<SessionPinResponse> {
+    return this.request(
+      this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/pin`),
+      { method: pinned ? "POST" : "DELETE", signal: options.signal },
     );
   }
 
@@ -777,6 +968,17 @@ export class CloudClient {
       providerConnections: RedactedProviderConnection[];
     }>(this.orgPath(orgId, "/provider-connections"), options);
     return response.providerConnections;
+  }
+
+  listUserAgentModels(
+    orgId: string,
+    provider: "claude-code" | "codex" | "cursor" | "opencode",
+    options: RequestOptions = {},
+  ): Promise<ChatModelsResponse> {
+    return this.request(
+      this.orgPath(orgId, `/providers/${encodeURIComponent(provider)}/models`),
+      options,
+    );
   }
 
   putAgentProviderConnection(

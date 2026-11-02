@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import type { AgentReadinessSnapshot } from "./useAgentReadinessQuery";
 import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
@@ -19,6 +20,12 @@ export function agentAccountProviderFor(harness: string | undefined): AgentAccou
 	if (harness === "claude-code") return "claude";
 	if (harness === "codex") return "codex";
 	return null;
+}
+
+/** New sessions start on a saved account, so readiness is that account's
+ * sign-in; the CLI's own login is read from its row in the accounts list. */
+export function followsSavedAccount(agent: AgentReadinessSnapshot | undefined): boolean {
+	return Boolean(agent?.authentication.diagnostics?.some((step) => step.code === "saved_default_account"));
 }
 
 function unwrap<T>({ data, error }: { data?: T; error?: unknown }): T {

@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base";
 import type { ForgePlatform } from "@electron-forge/shared-types";
+import { macDmgLayout } from "../scripts/build-mac-dmg.mjs";
 
 const run = promisify(execFile);
 
@@ -94,6 +95,11 @@ export default class MakerDMG extends MakerBase<MakerDMGConfig> {
 						identity: null,
 					},
 					dmg: {
+						// The install window: compact branded background, large icons,
+						// app left and Applications right, volume icon. Shared with
+						// scripts/build-mac-dmg.mjs, which the release conductor uses
+						// for the published dmg, so both paths look the same.
+						...macDmgLayout(),
 						// Left unsigned on purpose. electron-builder's own docs: "Signing
 						// is not required and will lead to unwanted errors in combination
 						// with notarization requirements." The dmg container is sealed

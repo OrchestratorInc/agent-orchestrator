@@ -50,7 +50,7 @@ describe("buildLinuxAppMenuTemplate", () => {
 
 	it("uses a guarded click handler for DevTools when provided", () => {
 		const onToggleDevTools = vi.fn();
-		const template = buildLinuxAppMenuTemplate(onToggleDevTools);
+		const template = buildLinuxAppMenuTemplate(onToggleDevTools, { allowShellDebugging: true });
 		const devtoolsItem = viewSubmenu(template).find(
 			(item) => item.label === "Toggle DevTools",
 		);
@@ -66,8 +66,10 @@ describe("buildLinuxAppMenuTemplate", () => {
 
 
 describe("buildMacAppMenuTemplate", () => {
+	const quit = { appName: "Agent Orchestrator", onQuit: () => undefined };
+
 	function macViewSubmenu(onToggleDevTools = () => undefined): readonly SubmenuItem[] {
-		const viewMenu = buildMacAppMenuTemplate(onToggleDevTools).find(
+		const viewMenu = buildMacAppMenuTemplate(onToggleDevTools, quit, { allowShellDebugging: true }).find(
 			(item) => item.label === "View",
 		);
 		if (!viewMenu || !Array.isArray(viewMenu.submenu)) {
@@ -94,7 +96,7 @@ describe("buildMacAppMenuTemplate", () => {
 	});
 
 	it("preserves Electron's complete standard macOS menus", () => {
-		const template = buildMacAppMenuTemplate(() => undefined);
+		const template = buildMacAppMenuTemplate(() => undefined, quit);
 
 		expect(template.map((item) => item.role)).toEqual(
 			expect.arrayContaining(["appMenu", "fileMenu", "editMenu", "windowMenu"]),
@@ -103,7 +105,7 @@ describe("buildMacAppMenuTemplate", () => {
 	});
 
 	it("binds Close Window to Shift+Command+W so Cmd+W cannot kill the application window", () => {
-		const template = buildMacAppMenuTemplate(() => undefined);
+		const template = buildMacAppMenuTemplate(() => undefined, quit);
 		const fileMenu = template.find((item) => item.role === "fileMenu");
 		expect(fileMenu).toBeDefined();
 		const submenu = fileMenu?.submenu;
@@ -116,4 +118,52 @@ describe("buildMacAppMenuTemplate", () => {
 		);
 	});
 
+	it("routes Command+Q through a plain Quit item that reports whether the shortcut fired it", () => {
+		const onQuit = vi.fn();
+		const appMenu = buildMacAppMenuTemplate(() => undefined, { appName: "Agent Orchestrator", onQuit }).find(
+			(item) => item.role === "appMenu",
+		);
+		const submenu = Array.isArray(appMenu?.submenu) ? appMenu.submenu : [];
+		const quitItem = submenu.find((item) => item.accelerator === "Command+Q");
+
+		expect(submenu.some((item) => item.role === "quit")).toBe(false);
+		expect(submenu).toEqual(expect.arrayContaining([
+			expect.objectContaining({ role: "about" }),
+			expect.objectContaining({ role: "hide" }),
+		]));
+		expect(quitItem).toMatchObject({ label: "Quit Agent Orchestrator" });
+
+		quitItem?.click?.(undefined as never, undefined as never, { triggeredByAccelerator: true } as never);
+		quitItem?.click?.(undefined as never, undefined as never, {} as never);
+		expect(onQuit.mock.calls).toEqual([[true], [false]]);
+	});
+});
+
+
+describe("packaged application menus", () => {
+	it.each(["darwin", "win32", "linux"])("never registers shell reload or built-in DevTools roles on %s", (platform) => {
+		const toggle = vi.fn();
+		const template = platform === "darwin"
+			? buildMacAppMenuTemplate(toggle, { appName: "AO", onQuit: vi.fn() })
+			: platform === "win32" ? buildWindowsAppMenuTemplate(toggle) : buildLinuxAppMenuTemplate(toggle);
+		const submenu = viewSubmenu(template);
+		expect(submenu.filter((item) => ["reload", "forceReload", "toggleDevTools"].includes(item.role ?? ""))).toEqual([]);
+		expect(submenu.find((item) => item.label === "Toggle Browser Developer Tools")).toBeDefined();
+	});
+
+	it.each(["darwin", "win32", "linux"])("routes browser reload menu actions through guarded callbacks on %s", (platform) => {
+		const onReload = vi.fn();
+		const options = { onReload };
+		const toggle = vi.fn();
+		const template = platform === "darwin"
+			? buildMacAppMenuTemplate(toggle, { appName: "AO", onQuit: vi.fn() }, options)
+			: platform === "win32" ? buildWindowsAppMenuTemplate(toggle, options) : buildLinuxAppMenuTemplate(toggle, options);
+		const submenu = viewSubmenu(template);
+		for (const label of ["Reload Browser", "Force Reload Browser"]) {
+			const item = submenu.find((item) => item.label === label);
+			expect(item?.role).toBeUndefined();
+			item?.click?.(undefined as never, undefined as never, undefined as never);
+		}
+		expect(onReload.mock.calls).toEqual([[false], [true]]);
+	});
 });

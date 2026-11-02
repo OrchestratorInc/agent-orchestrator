@@ -89,9 +89,87 @@ class FakeSocket {
 	}
 }
 
+function decodeInputMessages(messages: string[]): Uint8Array {
+	const binary = messages.map((message) => atob(JSON.parse(message).data)).join("");
+	return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
 describe("createTerminalMux client", () => {
 	afterEach(() => {
 		FakeSocket.instances = [];
+	});
+
+	it("sends an 800 KiB bracketed paste below the daemon message limit and preserves following input", () => {
+		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+		const socket = FakeSocket.instances.at(-1)!;
+		const encoder = new TextEncoder();
+		const paste = `\x1b[200~${"x".repeat(800 * 1024)}\x1b[201~`;
+		socket.emitOpen();
+		try {
+			mux.sendInput("s", paste);
+			mux.sendInput("s", "\r");
+			for (const message of socket.sent) {
+				expect(encoder.encode(message).byteLength).toBeLessThan(1024 * 1024);
+				expect(JSON.parse(message)).toMatchObject({ ch: "terminal", type: "data", id: "s" });
+			}
+			expect(decodeInputMessages(socket.sent)).toEqual(Uint8Array.from(encoder.encode(`${paste}\r`)));
+		} finally {
+			mux.dispose();
+		}
+	});
+
+	it.each(["é", "漢", "😀"])("preserves %s when its UTF-8 bytes cross a message boundary", (character) => {
+		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+		const socket = FakeSocket.instances.at(-1)!;
+		const input = `${"x".repeat(32 * 1024 - 1)}${character}\r`;
+		socket.emitOpen();
+		try {
+			mux.sendInput("s", input);
+			expect(decodeInputMessages(socket.sent)).toEqual(Uint8Array.from(new TextEncoder().encode(input)));
+		} finally {
+			mux.dispose();
+		}
+	});
+
+	it("preserves queued paste and following input between open and resize", () => {
+		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+		const socket = FakeSocket.instances.at(-1)!;
+		const paste = `\x1b[200~${"queued\r".repeat(10_000)}\x1b[201~`;
+		try {
+			mux.open("s", 80, 24);
+			mux.sendInput("s", paste);
+			mux.sendInput("s", "\r");
+			mux.resize("s", 120, 40);
+			expect(socket.sent).toEqual([]);
+			socket.emitOpen();
+			expect(JSON.parse(socket.sent[0])).toEqual({ ch: "terminal", type: "open", id: "s", cols: 80, rows: 24 });
+			expect(decodeInputMessages(socket.sent.slice(1, -1))).toEqual(
+				Uint8Array.from(new TextEncoder().encode(`${paste}\r`)),
+			);
+			expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+				ch: "terminal",
+				type: "resize",
+				id: "s",
+				cols: 120,
+				rows: 40,
+			});
+		} finally {
+			mux.dispose();
+		}
+	});
+
+	it("preserves small and empty input frames and ignores input after disposal", () => {
+		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+		const socket = FakeSocket.instances.at(-1)!;
+		socket.emitOpen();
+		mux.sendInput("s", "ls\r");
+		mux.sendInput("s", "");
+		mux.dispose();
+		mux.sendInput("s", "x".repeat(800 * 1024));
+		expect(socket.sent.map((message) => JSON.parse(message))).toEqual([
+			{ ch: "terminal", type: "data", id: "s", data: "bHMN" },
+			{ ch: "terminal", type: "data", id: "s", data: "" },
+		]);
 	});
 
 	it("queues frames until open, then flushes them in order", () => {

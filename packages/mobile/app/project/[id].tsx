@@ -13,6 +13,7 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
+import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { backOr } from "../../lib/backNavigation";
 import { hostedRowKey } from "../../lib/hostedRows";
 import { SpawnFab } from "../../lib/spawn-fab";
@@ -36,7 +37,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -50,7 +51,13 @@ function ProjectScreenContent() {
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
 	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
-	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
+	// The archive is counted, not listed, by a machine that pages it.
+	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
+	const stats = useMemo(() => projectPageStats(projectSessions, row?.link, pagedArchived), [projectSessions, row?.link, pagedArchived]);
+	const archiveSources = useMemo<ArchiveSource[]>(
+		() => hostMatches && id && archive && currentHostId ? [{ hostId: currentHostId, projectId: id, summary: archive }] : [],
+		[hostMatches, id, archive, currentHostId],
+	);
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -108,13 +115,20 @@ function ProjectScreenContent() {
 						<ActivityIndicator color={t.accent} />
 					</View>
 				) : connection !== "open" ? (
-					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+					linkHealth === "phone-offline" ? (
+						<EmptyState icon="wifi-off" title="You're offline" message="This project loads once this phone is back online." />
+					) : linkHealth === "reconnecting" ? (
+						<EmptyState icon="refresh-cw" title="Reconnecting…" message="This project loads once the app reconnects." />
+					) : (
+						<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+					)
 				) : (
 					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList
 					sessions={projectSessions}
+					archiveSources={archiveSources}
 					showProject={false}
 					contentBottomInset={workerListBottomInset(fabBottom)}
 					refreshing={refreshing}

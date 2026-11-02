@@ -42,6 +42,7 @@ import { useShellTerminals } from "../hooks/useShellTerminals";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
+import { takeCloudShellInput } from "../lib/cloud-shell-input";
 import { LazyChunkBoundary } from "./LazyChunkBoundary";
 
 // xterm and its WebGL addon (~700 KB) load on first terminal render instead of
@@ -55,6 +56,7 @@ export function preloadXtermTerminal(): void {
 	void loadXtermTerminal().catch(() => undefined);
 }
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type TerminalPaneProps = {
@@ -400,12 +402,18 @@ export function TerminalCacheProvider({
 			// terminal settles instead of flickering. A different pane gets a
 			// different factory and therefore its own cursor starting at 0.
 			const cursor = { value: 0 };
-			const factory = () =>
-				createCloudTerminalMux({
+			const shellHandle = terminalTarget?.kind === "shell" ? terminalTarget.handleId : undefined;
+			const factory = () => {
+				// A shell a command cue opened types the cue's command once it is
+				// up. It is taken when the connection is made, not when this
+				// factory is, so a command queued after the tab rendered still goes.
+				const input = shellHandle ? takeCloudShellInput(shellHandle) : undefined;
+				return createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
 					terminalId: reviewerTerminalID,
 					cursor,
+					initialInput: input,
 					// Both kinds open their socket directly; the CP's find-or-create
 					// OpenTerminal + starting/ready messages drive readiness. There is
 					// no agent-ready SSE wait (#4960 flashed the workspace shell only
@@ -420,6 +428,7 @@ export function TerminalCacheProvider({
 						return response.ticket;
 					},
 				});
+			};
 			cloudMuxFactoriesRef.current.set(factoryKey, factory);
 			return factory;
 		},
@@ -1141,7 +1150,9 @@ function AttachedTerminal({
 		exitNotice:
 			terminalTarget?.kind === "reviewer"
 				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
-				: undefined,
+				: terminalTarget?.kind === "shell"
+					? undefined
+					: "",
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1390,13 +1401,19 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting && !coverLabel;
+	// A Cloud session's terminated row is explained by the session view's own
+	// Cloud notice, and its socket also closes for a pause, a handoff or a
+	// reviewer whose verdict is still landing, so the strip shows there only
+	// for the exit the control plane recorded: the agent process gone in a
+	// live session.
+	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
+	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
 			{showEndedState && (
 				<TerminalEndedStrip
-					canRestore={canRestoreSession}
+					canRestore={canRestoreSession && !session?.cloud}
 					error={restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}
@@ -1428,6 +1445,9 @@ function AttachedTerminal({
 					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
+					// Only session panes, where new shell tabs open. Settings login and
+					// onboarding terminals have other sizes and must not set the hint.
+					onGridChange={session ? rememberPaneTerminalGrid : undefined}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
@@ -1440,7 +1460,7 @@ function AttachedTerminal({
 							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
-								<div className="text-terminal">{"Agent Orchestrator"}</div>
+								<div className="text-terminal">{"Orchestrator"}</div>
 								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
 							</div>
 						)}
@@ -1531,6 +1551,18 @@ type TerminalEndedStripProps = {
 function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const terminated = variant === "session" && session && !sessionIsActive(session);
+	const agentExited = variant === "session" && sessionAgentExited(session);
+	const startupFailed = variant === "session" && session?.provisionState === "failed";
+	const heading = reviewDelivered
+		? t("terminal.reviewCompleted")
+		: startupFailed
+			? t("terminal.startupFailed")
+			: terminated
+				? t("terminal.sessionTerminated")
+				: agentExited
+					? t("terminal.agentExited")
+					: t("terminal.ended");
 	const message = reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: canRestore
@@ -1543,12 +1575,19 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 
 	return (
 		<div className="shrink-0 border-b border-border bg-surface/80 px-4 py-2">
-			<div className="flex min-h-control-board items-center gap-3">
-				<div className="min-w-0 flex-1">
-					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
+			<div className="flex min-h-control-board flex-wrap items-center gap-3">
+				<div className="min-w-0">
+					<div
+						className={cn(
+							"font-mono text-caption font-medium uppercase tracking-wide-md",
+							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+						)}
+					>
+						{heading}
 					</div>
-					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
+					<div className="mt-0.5 text-xs text-muted-foreground">
+						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
@@ -1559,11 +1598,12 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 								<button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex size-control-form shrink-0 items-center justify-center rounded-md border border-border bg-raised text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
+									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
+									{t("terminal.restoreSession")}
 								</button>
 							</span>
 						</TooltipTrigger>

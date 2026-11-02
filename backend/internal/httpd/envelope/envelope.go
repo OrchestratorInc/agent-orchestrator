@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // errCapture is a request-scoped slot WriteError records the raw service error
@@ -26,6 +27,7 @@ type CapturedError struct {
 	Err            error
 	ReportingOwner ownership.Owner
 	Fields         map[string]any
+	FailureSite    telemetrymeta.FailureSite
 }
 
 type errCaptureKey struct{}
@@ -48,6 +50,7 @@ func WithErrorCapture(r *http.Request) (*http.Request, func() CapturedError) {
 func captureError(r *http.Request, err error) {
 	if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
 		c.captured.Err = err
+		c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
 		c.captured.ReportingOwner = ownership.OwnerOf(err)
 	}
 }
@@ -94,6 +97,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WriteAPIError emits the locked envelope for any non-2xx response.
 func WriteAPIError(w http.ResponseWriter, r *http.Request, status int, kind, code, message string, details map[string]any) {
+	if status >= http.StatusInternalServerError {
+		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok && c.captured.FailureSite.String() == "" {
+			c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
+		}
+	}
 	writeAPIError(w, r, status, kind, code, message, details, "")
 }
 

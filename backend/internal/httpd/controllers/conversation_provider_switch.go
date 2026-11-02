@@ -30,7 +30,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	var message ports.ChatUserMessage
 	if req.Message != nil {
 		var invalid *attachmentError
-		if message, invalid = chatUserMessage(*req.Message); invalid != nil {
+		if message, invalid = chatUserMessage(*req.Message, chi.URLParam(r, "sessionId")); invalid != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
 			return
 		}

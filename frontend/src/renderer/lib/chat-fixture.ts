@@ -713,9 +713,8 @@ export const chatFixtureRerouted: ConversationSnapshot = {
 /**
  * The provider wants credentials the daemon does not hold.
  *
- * Nothing the user does inside AO will help, and every turn they send until they fix
- * it will fail — which is why this is the loudest thing the surface can say, and why
- * it names the command instead of telling them to re-authenticate.
+ * Every turn they send until they log in again will fail, so the chat says so above
+ * the conversation and links to the Harness page that runs the login.
  */
 export const chatFixtureReauth: ConversationSnapshot = {
 	...chatFixtureSettled,
