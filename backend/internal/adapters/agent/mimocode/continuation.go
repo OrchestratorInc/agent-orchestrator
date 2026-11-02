@@ -46,9 +46,6 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		return strings.TrimSpace(os.Getenv(key))
 	}
 	if path := lookup("MIMOCODE_DB"); len(path) > 0 && path != "mimocode.db" {
-		if filepath.IsAbs(path) && filepath.Base(path) == "mimocode.db" {
-			return filepath.Dir(path), nil
-		}
 		return "", errors.New("mimo-code custom database binding requires explicit import override")
 	}
 	if dir := lookup("MIMOCODE_HOME"); len(dir) > 0 {
