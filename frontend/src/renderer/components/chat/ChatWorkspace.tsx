@@ -4052,15 +4052,21 @@ export function Timeline({
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
-		const top = node.getBoundingClientRect().top;
+		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const index = rows.findIndex((row) => row.getBoundingClientRect().bottom > top);
+		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
+		// their view; above it, the first row starts past the view's bottom edge.
 		if (index < 0) return undefined;
-		return { turn, rows, index, offset: rows[index]!.getBoundingClientRect().top - top };
+		const rowTop = rows[index]!.getBoundingClientRect().top;
+		if (rowTop >= bottom) return undefined;
+		return { turn, rows, index, offset: rowTop - top };
 	}, [groups]);
 	// ...and put it back right after, before paint. A row still in the turn (the prompt,
 	// a steer, the reply) holds its place. A step that folded away hands its place to
-	// "Worked for", which lands at the top of the view with the reply under it.
+	// "Worked for", which lands at the top of the view with the reply under it. A turn
+	// that began lower in the view keeps its top where it was instead: the reader is
+	// still on what came before it.
 	const restoreSettle = useCallback(({ turn, rows, index, offset }: SettleAnchor) => {
 		const node = scroller.current;
 		if (!node) return;
@@ -4073,7 +4079,7 @@ export function Timeline({
 			: Array.from(turn.children).find((child) => child.hasAttribute("data-turn-worked"))
 				?? rows.slice(index + 1).find((row) => row.isConnected);
 		if (!target) return;
-		const landing = kept ? offset : 0;
+		const landing = kept || (index === 0 && offset > 0) ? offset : 0;
 		const place = () => {
 			const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
 			if (Math.abs(delta) < 0.5) return;
