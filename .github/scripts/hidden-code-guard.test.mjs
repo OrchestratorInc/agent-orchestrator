@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import { formatFindings, parseAddedLines, scan, scanDiff } from "./hidden-code-guard.mjs";
 
@@ -37,14 +38,50 @@ test("flags all three rules on a synthetic padded mobile babel config line", () 
 		["R1", "R2", "R3"].map((rule) => ({ rule, file, line: 12 })));
 });
 
+test("flags leading padding even when config lines stay below the long-line limit", () => {
+	for (const text of [
+		" ".repeat(400) + "global.x=require('child_process');",
+		" ".repeat(400) + "x.execSync('id');",
+		"\t".repeat(150) + "x.execSync('id');",
+	]) {
+		assert.ok(text.length < 500);
+		assert.deepEqual(check("packages/mobile/babel.config.js", text).map(({ rule }) => rule), ["R1"]);
+	}
+	assert.deepEqual(check("source.ts", " ".repeat(149) + "code();"), []);
+	assert.deepEqual(check("source.ts", " ".repeat(400)), []);
+});
+
+test("flags hidden expressions in MDX compiled by the docs build", () => {
+	const text = "Some text." + " ".repeat(709) + "{require('child_process').execSync('id')}";
+	assert.deepEqual(check("frontend/src/docs/content/guide.mdx", text).map(({ rule }) => rule), ["R1"]);
+	assert.deepEqual(check("docs/guide.md", text), []);
+});
+
+test("limits the skip label to its application event, so later pushes scan again", () => {
+	const workflow = readFileSync(new URL("../workflows/hidden-code-guard.yml", import.meta.url), "utf8");
+	const condition = workflow.match(/^\s+if:\s*\$\{\{ (.+) \}\}$/m)?.[1];
+	assert.ok(condition, "scan job must have an explicit condition");
+	// These Actions operators also work in JS; translate the label projection and contains function.
+	const expression = condition.replaceAll(".labels.*.name", ".labels.map(label => label.name)");
+	const skip = "skip-hidden-code-guard";
+	const shouldScan = (action, labels = [], label) => runInNewContext(expression, {
+		github: { event: { action, label: { name: label }, pull_request: { labels: labels.map(name => ({ name })) } } },
+		contains: (values, value) => values.includes(value),
+	});
+	assert.equal(shouldScan("labeled", [skip], skip), false);
+	for (const action of ["synchronize", "opened", "reopened", "unlabeled"]) {
+		assert.equal(shouldScan(action), true, action);
+		assert.equal(shouldScan(action, [skip]), true, `${action} with retained skip label`);
+	}
+	assert.equal(shouldScan("labeled", [skip, "bug"], "bug"), true);
+});
+
 test("allows terminal fixture lines with 115 inner spaces", () => {
 	assert.deepEqual(check("backend/terminal_test.go", "visible" + " ".repeat(115) + "screen"), []);
 });
 
 test("allows markdown tables with 250 inner spaces", () => {
-	for (const file of ["README.md", "docs/guide.mdx"]) {
-		assert.deepEqual(check(file, "| left" + " ".repeat(250) + "| right |"), []);
-	}
+	assert.deepEqual(check("README.md", "| left" + " ".repeat(250) + "| right |"), []);
 });
 
 test("allows long prose and ordinary source lines", () => {

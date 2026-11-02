@@ -74,8 +74,8 @@ export function scan(lines) {
 	const findings = [];
 	for (const { file, line, text } of lines) {
 		const add = (rule, message) => findings.push({ file, line, text, rule, message });
-		const padding = text.match(/\S([ \t]{150,})\S/);
-		if (padding && !/\.mdx?$/.test(file)) {
+		const padding = text.match(/([ \t]{150,})\S/);
+		if (padding && !/\.md$/.test(file)) {
 			add("R1", `padding: ${padding[1].length} ${whitespaceKind(padding[1])} inside a line (limit 150)`);
 		}
 		if (text.length > 500 && /(^|\/)package\.json$|\.config\.(js|mjs|cjs|ts)$|^\.github\/(?!.*\.json$)/.test(file)) {

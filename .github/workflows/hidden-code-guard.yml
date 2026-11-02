@@ -14,7 +14,8 @@ concurrency:
 jobs:
   scan:
     name: Hidden code guard
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-hidden-code-guard') }}
+    # Only applying the override skips a run. Later pushes and other events scan again.
+    if: ${{ github.event.action != 'labeled' || github.event.label.name != 'skip-hidden-code-guard' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted base code
