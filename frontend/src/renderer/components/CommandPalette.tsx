@@ -32,6 +32,7 @@ import {
 import {
 	type CommandPaletteFileSearchResponse,
 	commandPaletteChatSearchQueryOptions,
+	commandPaletteCloudChatSearchQueryOptions,
 	commandPaletteContentSearchQueryOptions,
 	commandPaletteFileSearchAvailable,
 	commandPaletteFileSearchQueryOptions,
@@ -206,9 +207,10 @@ export function CommandPalette() {
 	// File contents (this session's daemon) and chats (this machine) are searched
 	// beside file names; Cloud sessions have no daemon to search their contents.
 	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
-	const contentTarget = activeFileTarget && !activeFileTarget.cloudOrgId ? activeFileTarget : undefined;
+	// A Cloud session's contents are searched by its worker, once Cloud is signed in.
+	const contentTarget = activeFileTarget && (!activeFileTarget.cloudOrgId || cloudReady) ? activeFileTarget : undefined;
 	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
-	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"));
+	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"), cloud);
 	const contentSearchQuery = useQuery({
 		...contentSearchOptions,
 		enabled: contentSearchEnabled,
@@ -219,6 +221,16 @@ export function CommandPalette() {
 	const chatSearchQuery = useQuery({
 		...commandPaletteChatSearchQueryOptions(normalizedFileQuery, t("command.searchChatsError")),
 		enabled: chatSearchEnabled,
+		placeholderData: keepPreviousData,
+	});
+	// Cloud chats are searched in the control plane, one organization at a time.
+	const cloudChatOrgIds = useMemo(
+		() => [...new Set(workspaces.flatMap((workspace) => workspace.kind === "cloud" && workspace.cloudOrgId ? [workspace.cloudOrgId] : []))],
+		[workspaces],
+	);
+	const cloudChatSearchQuery = useQuery({
+		...commandPaletteCloudChatSearchQueryOptions(cloud, cloudChatOrgIds, normalizedFileQuery),
+		enabled: chatSearchEnabled && cloudReady && cloudChatOrgIds.length > 0,
 		placeholderData: keepPreviousData,
 	});
 
@@ -333,21 +345,32 @@ export function CommandPalette() {
 			&& workspace.sessions.some((session) => session.id === sessionId && !session.hostId && !session.cloud)),
 		[workspaces],
 	);
+	const findCloudChatWorkspace = useCallback(
+		(sessionId: string | undefined) => workspaces.find((workspace) =>
+			workspace.kind === "cloud" && workspace.sessions.some((session) => session.id === sessionId && session.cloud)),
+		[workspaces],
+	);
+	// A chat this machine or Cloud holds; Cloud's hits are kept only for sessions listed here.
+	const findChatWorkspace = useCallback(
+		(sessionId: string | undefined) => findLocalChatWorkspace(sessionId) ?? findCloudChatWorkspace(sessionId),
+		[findCloudChatWorkspace, findLocalChatWorkspace],
+	);
 	const chatItems = useMemo(
-		() => chatSearchEnabled && chatSearchQuery.data
-			? buildChatSearchCommands(
-				chatSearchQuery.data.results.filter((hit) => findLocalChatWorkspace(hit.sessionId)),
-				t,
-				(hit) => {
-					const workspace = findLocalChatWorkspace(hit.sessionId);
-					return {
-						title: workspace?.sessions.find((session) => session.id === hit.sessionId)?.title,
-						place: workspace?.name,
-					};
-				},
-			)
-			: [],
-		[chatSearchEnabled, chatSearchQuery.data, findLocalChatWorkspace, t],
+		() => {
+			if (!chatSearchEnabled) return [];
+			const hits = [
+				...(chatSearchQuery.data?.results ?? []).filter((hit) => findLocalChatWorkspace(hit.sessionId)),
+				...(cloudReady ? cloudChatSearchQuery.data?.results ?? [] : []).filter((hit) => findCloudChatWorkspace(hit.sessionId)),
+			];
+			return buildChatSearchCommands(hits, t, (hit) => {
+				const workspace = findChatWorkspace(hit.sessionId);
+				return {
+					title: workspace?.sessions.find((session) => session.id === hit.sessionId)?.title,
+					place: workspace?.name,
+				};
+			});
+		},
+		[chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
 	);
 
 	const groups = useMemo(() => {
@@ -369,7 +392,8 @@ export function CommandPalette() {
 	const searchStale = normalizedFileQuery !== query.trim()
 		|| fileSearchQuery.isPlaceholderData
 		|| contentSearchQuery.isPlaceholderData
-		|| chatSearchQuery.isPlaceholderData;
+		|| chatSearchQuery.isPlaceholderData
+		|| cloudChatSearchQuery.isPlaceholderData;
 	const autoSelectable = (item: CommandItemModel) => !item.disabled && !(searchStale && isSearchGroup(item.group));
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
@@ -691,7 +715,7 @@ export function CommandPalette() {
 					break;
 				}
 				case "open-chat-message": {
-					const workspace = findLocalChatWorkspace(action.sessionId);
+					const workspace = findChatWorkspace(action.sessionId);
 					if (!workspace || !action.sessionId) {
 						setError(t("command.chatSessionUnavailable"));
 						break;
@@ -747,7 +771,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(

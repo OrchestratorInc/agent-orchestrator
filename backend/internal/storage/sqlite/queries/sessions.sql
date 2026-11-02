@@ -275,6 +275,9 @@ SET session_mode = sqlc.arg(target_mode),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND session_mode = sqlc.arg(source_mode) AND is_terminated = 0;
 
+-- name: GetSessionNumFloor :one
+SELECT max_num FROM session_num_floors WHERE id_prefix = sqlc.arg(id_prefix);
+
 -- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
@@ -371,6 +374,31 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
     AND trim(provider_conversation_id) <> ''
 ORDER BY id;
+
+-- name: ListReleasedArchivedSessions :many
+-- Archived sessions retention may delete: the worktree is released for the
+-- current generation, or there never was one. A row archived before
+-- terminated_at existed counts from its last update. Sessions in another
+-- session's conversation history are left out, as DeleteTerminatedSession
+-- refuses them, so retention does not retry them on every pass.
+SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
+WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
+    AND (s.workspace_path = '' OR EXISTS (
+        SELECT 1 FROM session_cleanup_facts f
+        WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
+            AND f.workspace_disposition IN ('removed', 'not_applicable')
+    ))
+    AND s.id NOT IN (
+        SELECT t.handled_by_session_id FROM conversation_turns t
+        JOIN conversations c ON c.id = t.conversation_id
+        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+    )
+    AND s.id NOT IN (
+        SELECT c.current_session_id FROM conversations c
+        WHERE c.current_session_id IS NOT NULL
+            AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+    )
+ORDER BY s.id;
 
 -- name: ListTurnFailureCandidates :many
 -- Terminal sessions of one harness that are in a turn and have a native
