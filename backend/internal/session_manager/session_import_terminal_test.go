@@ -73,3 +73,39 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalImportAdmissionPreservesIdleSessionGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		imported bool
+		adopted  bool
+		handle   string
+		launch   string
+	}{
+		{name: "ordinary idle terminal without runtime"},
+		{name: "adopted import without runtime", imported: true, adopted: true},
+		{name: "pending import with runtime", imported: true, handle: "tmux-mer-1", launch: "launch-old"},
+		{name: "pending import with handle only", imported: true, handle: "tmux-mer-1"},
+		{name: "pending import with launch only", imported: true, launch: "launch-old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &terminalImportAgent{native: true}
+			rt := &fakeRuntime{}
+			m, st, _ := newExitedResumeManager(t, rt, a)
+			rec := st.sessions["mer-1"]
+			rec.Mode, rec.Harness, rec.Activity.State = domain.SessionModeTUI, domain.HarnessGemini, domain.ActivityIdle
+			rec.Metadata.WorkspacePath = t.TempDir()
+			rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = tc.handle, tc.launch
+			if tc.imported {
+				rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: rec.Metadata.AgentSessionID, Adopted: tc.adopted}
+			}
+			st.sessions[rec.ID] = rec
+			if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); !errors.Is(err, ErrAgentNotExited) {
+				t.Fatalf("idle resume error = %v, want ErrAgentNotExited", err)
+			}
+			if rt.created != 0 || rt.destroyed != 0 || len(a.restores) != 0 || len(a.relocations) != 0 {
+				t.Fatalf("refused resume changed runtime or provider: created=%d destroyed=%d restores=%d relocations=%d", rt.created, rt.destroyed, len(a.restores), len(a.relocations))
+			}
+		})
+	}
+}
