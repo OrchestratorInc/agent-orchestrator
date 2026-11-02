@@ -5,7 +5,14 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
 	detent: vi.fn(),
 	reduceMotion: false,
+	// When set, a glide leaves the blob where it was for the JS thread, as a
+	// glide still under way on the UI thread does.
+	midGlide: false,
+	glides: [] as number[],
+	setOptions: vi.fn(),
 }));
+
+vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent } }));
@@ -22,9 +29,18 @@ vi.mock("react-native-reanimated", async () => {
 		Easing: { out: (value: unknown) => value, cubic: null },
 		FadeIn: { duration: () => "fade-in" },
 		FadeOut: { duration: () => "fade-out" },
-		useSharedValue: (value: unknown) => React.useRef({ value }).current,
+		useSharedValue: (initial: unknown) => React.useRef((() => {
+			let value = initial;
+			return {
+				get value() { return value; },
+				set value(next: unknown) { if (typeof next !== "object" || next === null) value = next; },
+			};
+		})()).current,
 		useAnimatedStyle: (style: () => unknown) => style,
-		withTiming: (value: number) => value,
+		withTiming: (value: number) => {
+			fixtures.glides.push(value);
+			return fixtures.midGlide ? { glidingTo: value } : value;
+		},
 	};
 });
 
@@ -34,7 +50,7 @@ import { markTouchInside } from "./touchOutside";
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
 let renderer: ReactTestRenderer | undefined;
-beforeEach(() => { fixtures.detent.mockClear(); });
+beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
@@ -55,7 +71,8 @@ async function render(selected?: string) {
 	};
 	return {
 		track,
-		touch: (x: number) => ({ nativeEvent: { locationX: x } }),
+		// The track sits 100 in from the page's edge.
+		touch: (x: number) => ({ nativeEvent: { locationX: x, pageX: 100 + x } }),
 		label: () => root.findAll((node) => hostType(node) === "Text")[0].props.children,
 		dots: () => root.findAll((node) => hostType(node) === "View" && node.props.pointerEvents === "none"),
 		animated,
@@ -105,12 +122,37 @@ describe("effort slider", () => {
 		expect(onRelease).toHaveBeenCalledOnce();
 	});
 
+	it("lands a quick tap on the tapped level, not back where the blob was mid-glide", async () => {
+		const { track, touch, onChoose } = await render("low");
+		fixtures.midGlide = true;
+		await act(async () => track().props.onResponderGrant(touch(220)));
+		await act(async () => track().props.onResponderRelease());
+		expect(onChoose.mock.calls.map(([value]) => value)).toEqual(["max"]);
+		expect(fixtures.glides.at(-1)).toBe(220);
+	});
+
+	it("follows the finger by its page position, whatever view iOS measures it against", async () => {
+		const { track, touch, label } = await render("low");
+		await act(async () => track().props.onResponderGrant(touch(20)));
+		// Over another view, iOS's locationX can read near zero.
+		await act(async () => track().props.onResponderMove({ nativeEvent: { locationX: 4, pageX: 100 + 170 } }));
+		expect(label()).toBe("Xhigh");
+	});
+
 	it("floats as a card whose touches are its own, never a tap outside it", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("high")} onChoose={() => {}} bottom="100%" />); });
 		const card = renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
 		expect(card.props.style[0]).toMatchObject({ position: "absolute", backgroundColor: "#bgElevated" });
 		expect(card.props.style[1]).toEqual({ bottom: "100%" });
 		expect(card.props.onTouchStart).toBe(markTouchInside);
+	});
+
+	it("holds the screen's back swipe while it is up, so a drag to the right stays on the slider", async () => {
+		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
+		expect(fixtures.setOptions.mock.calls).toEqual([[{ gestureEnabled: false }]]);
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(fixtures.setOptions.mock.calls.at(-1)).toEqual([{ gestureEnabled: true }]);
 	});
 
 	it("steps a level at a time for a screen reader, and stops at the ends", async () => {

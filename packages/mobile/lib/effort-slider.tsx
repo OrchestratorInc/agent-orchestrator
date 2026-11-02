@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useNavigation } from "expo-router";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View, type DimensionValue, type GestureResponderEvent, type LayoutChangeEvent } from "react-native";
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { haptics } from "./haptics";
@@ -32,9 +33,21 @@ const BLOB_SHADOW = "#000000";
  * The slider floating over the screen as a card, a small gap above `bottom`
  * in its container: nothing under it moves when it opens. Android hands it a
  * touch outside its container only while no ancestor clips.
+ *
+ * While it is up the screen's back swipe is off: on iOS a left-to-right swipe
+ * anywhere on the page is the back gesture, and it took a drag toward the
+ * higher levels from the slider and pulled the page back instead. The header's
+ * back button still leaves, and a tap outside closes the slider.
  */
 export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { bottom: DimensionValue }) {
 	const styles = useThemedStyles(makeStyles);
+	const navigation = useNavigation();
+	// A layout effect, so its hand-back runs before any the screen makes in
+	// the same commit (the chat's request card turns the swipe off as well).
+	useLayoutEffect(() => {
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
+	}, [navigation]);
 	return (
 		<Animated.View entering={FadeIn.duration(duration.base)} exiting={FadeOut.duration(duration.fast)} onTouchStart={markTouchInside} style={[styles.overlay, { bottom }]}>
 			<EffortSlider {...props} />
@@ -55,6 +68,11 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	// The blob's centre along the track.
 	const blobX = useSharedValue(0);
 	const dragging = useRef(false);
+	// The stop the finger last picked, and the track's left edge on screen.
+	// The blob's own position is not read back: mid-glide the JS thread sees a
+	// stale value, and a quick tap would land the blob back on the old level.
+	const held = useRef(0);
+	const trackLeft = useRef(0);
 	const glide = (x: number) => {
 		blobX.value = reduceMotion ? x : withTiming(x, { duration: duration.base, easing: Easing.out(Easing.cubic) });
 	};
@@ -63,9 +81,12 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	const blobStyle = useAnimatedStyle(() => ({ transform: [{ translateX: blobX.value - BLOB / 2 }] }));
 	const fillStyle = useAnimatedStyle(() => ({ width: blobX.value + BLOB / 2 + INSET }));
 
+	// iOS reports `locationX` against whichever view is under the finger, so
+	// the drag is measured in page coordinates from the edge found at grant.
 	const follow = (event: GestureResponderEvent, animate: boolean) => {
-		const x = Math.min(width - END, Math.max(END, event.nativeEvent.locationX));
+		const x = Math.min(width - END, Math.max(END, event.nativeEvent.pageX - trackLeft.current));
 		const stop = nearestStop(x, END, step, count);
+		held.current = stop;
 		pick(stop);
 		const pulled = stopX(stop) + magneticOffset(x - stopX(stop), step);
 		if (animate) glide(pulled);
@@ -74,7 +95,7 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 
 	const release = () => {
 		dragging.current = false;
-		glide(stopX(nearestStop(blobX.value, END, step, count)));
+		glide(stopX(held.current));
 		onRelease?.();
 	};
 
@@ -87,7 +108,11 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 				onStartShouldSetResponder={() => true}
 				onMoveShouldSetResponder={() => true}
 				onResponderTerminationRequest={() => false}
-				onResponderGrant={(event) => { dragging.current = true; follow(event, true); }}
+				onResponderGrant={(event) => {
+					dragging.current = true;
+					trackLeft.current = event.nativeEvent.pageX - event.nativeEvent.locationX;
+					follow(event, true);
+				}}
 				onResponderMove={(event) => follow(event, false)}
 				onResponderRelease={release}
 				onResponderTerminate={release}
@@ -116,7 +141,9 @@ const makeStyles = (t: Theme) =>
 			left: 0,
 			right: 0,
 			zIndex: 1,
-			marginBottom: space.xs,
+			// The gap above the composer. A margin does not move an absolutely
+			// placed view off its `bottom`, and the card sat on the composer's edge.
+			transform: [{ translateY: -space.sm }],
 			padding: space.xs,
 			paddingLeft: space.md,
 			borderRadius: radius.pill,
