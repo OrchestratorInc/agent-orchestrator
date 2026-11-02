@@ -3655,17 +3655,18 @@ describe("quitAndInstallUpdate", () => {
     vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
     const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
     const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
-    mkdirSync(extracted, { recursive: true });
-    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
-    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
     try {
       const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
       await module.startAutoUpdates(stateDir);
       vi.useFakeTimers();
       updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      expect(module.getUpdateStatus().staged?.ready).toBe(false);
+      mkdirSync(extracted, { recursive: true });
+      writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+      writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
       expect(module.getUpdateStatus().staged?.ready).toBeUndefined();
 
-      vi.advanceTimersByTime(2_001);
+      vi.advanceTimersByTime(10_001);
       rmSync(shipIt, { recursive: true });
       expect(module.getUpdateStatus().staged?.ready).toBe(false);
       autoUpdater.checkForUpdates.mockImplementation(async () => ({

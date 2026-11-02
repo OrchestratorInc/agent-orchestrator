@@ -220,7 +220,6 @@ let nativePreparationError: Error | undefined;
 // give up only after a stretch of no progress; fall back to a fixed cap when the
 // growth signal can't be read.
 const STAGE_POLL_INTERVAL_MS = 10_000;
-const NATIVE_STAGE_FILE_GRACE_MS = 2_000;
 // Power events can be missed (including during DarkWake). A delayed JS timer
 // is a fallback sleep signal, not evidence that staging worked for that gap.
 const STAGE_TIMER_GAP_MS = 3 * STAGE_POLL_INTERVAL_MS;
@@ -524,7 +523,9 @@ function isNativeInstallReady(): boolean {
 
 function nativeStagingWasLost(): boolean {
   return process.platform === "darwin" && isNativeInstallReady() &&
-    nativeReadyAtMs !== undefined && Date.now() - nativeReadyAtMs >= NATIVE_STAGE_FILE_GRACE_MS &&
+    // The native event may precede the plist write. Allow one existing ShipIt
+    // watchdog interval for that handoff before declaring the files lost.
+    nativeReadyAtMs !== undefined && Date.now() - nativeReadyAtMs >= STAGE_POLL_INTERVAL_MS &&
     !nativeStagingFilesPresent();
 }
 
@@ -1067,7 +1068,7 @@ function stagedStamp(): Pick<UpdateStatus, "staged"> {
       ...(stagedVersion === undefined ? {} : { version: stagedVersion }),
       stagedAt: stagedAtMs,
       escalated: stagedEscalated,
-      ...(isNativeInstallReady() && !nativeStagingWasLost() ? {} : { ready: false }),
+      ...(isNativeInstallReady() && nativeStagingFilesPresent() ? {} : { ready: false }),
       ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
     },
   };
@@ -3056,10 +3057,10 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     return;
   }
   if (macRestartPreparation) return macRestartPreparation;
-  // The native ready event can precede ShipIt's final plist write. Give that
-  // short handoff window time to finish before treating missing files as loss.
+  // The native ready event can precede ShipIt's final plist write. Wait at
+  // most one watchdog interval before treating missing files as loss.
   if (isNativeInstallReady() && !nativeStagingFilesPresent()) {
-    const remaining = NATIVE_STAGE_FILE_GRACE_MS - (Date.now() - (nativeReadyAtMs ?? 0));
+    const remaining = STAGE_POLL_INTERVAL_MS - (Date.now() - (nativeReadyAtMs ?? 0));
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
   }
   if (discardLostNativeStaging()) {
