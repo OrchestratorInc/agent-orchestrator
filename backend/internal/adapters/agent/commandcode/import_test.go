@@ -76,3 +76,35 @@ func TestCommandCodeBucketMatchesProviderASCII(t *testing.T) {
 		t.Fatal("guessed unsupported transliteration")
 	}
 }
+
+func TestCommandCodeRefusesUnreadableNativeBundle(t *testing.T) {
+	root := t.TempDir()
+	id := "11111111-2222-4333-8444-555555555555"
+	dir := filepath.Join(root, "projects", "source")
+	path := filepath.Join(dir, id+".jsonl")
+	cwd := t.TempDir()
+	r := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: path, LaunchCWD: cwd}
+	for _, body := range []string{
+		`{"type":"session","version":3,"id":"other"}` + "\n",
+		`{"type":"session","version":3,"id":"` + id + `"}` + "\n",
+		`{"type":"session","version":3,"id":"` + id + `"}` + "\n" + `{"type":"message","message":{"role":"user"}}` + "\n" + `{"torn":`,
+	} {
+		writeHomeFile(t, path, []byte(body))
+		if err := New().RelocateImportedSession(context.Background(), r); err == nil {
+			t.Fatalf("accepted unreadable native history: %s", body)
+		}
+	}
+	writeHomeFile(t, path, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	bucket, err := commandProjectBucket(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(root, "projects", bucket, "foreign.jsonl")
+	writeHomeFile(t, foreign, []byte("other native conversation"))
+	if err := New().RelocateImportedSession(context.Background(), r); err == nil {
+		t.Fatal("replaced an existing destination project")
+	}
+	if string(readHomeFile(t, foreign)) != "other native conversation" {
+		t.Fatal("destination changed after refusal")
+	}
+}

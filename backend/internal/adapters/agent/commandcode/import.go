@@ -267,12 +267,24 @@ func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot
 			_ = f.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, io.LimitReader(f, info.Size()))
+		copied, copyErr := io.Copy(out, io.LimitReader(f, info.Size()))
 		closeErr := out.Close()
 		_ = f.Close()
 		if err := errors.Join(copyErr, closeErr); err != nil {
 			return fmt.Errorf("copy command-code native history: %w", err)
 		}
+		if copied != info.Size() {
+			return errors.New("command-code native history changed during copy")
+		}
+	}
+	prepared, err := os.OpenRoot(stage)
+	if err != nil {
+		return err
+	}
+	readErr := commandReadable(prepared, id+".jsonl", id)
+	_ = prepared.Close()
+	if readErr != nil {
+		return readErr
 	}
 	if err := os.WriteFile(filepath.Join(stage, id+".ao-import"), []byte(id), 0o600); err != nil {
 		return err
