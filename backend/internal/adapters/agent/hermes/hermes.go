@@ -1495,6 +1495,9 @@ func nativeHome(data, id string) (string, error) {
 
 // GetRestoreCommand implements the scoped native adapter contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	if cmd, ok, err := p.importedRestoreCommand(ctx, cfg); ok || err != nil {
+		return cmd, ok, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
