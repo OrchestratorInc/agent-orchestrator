@@ -98,6 +98,7 @@ export function FolderList({ config, sessionId, dir, header, bottomInset, onOpen
 			keyExtractor={(item) => item.path}
 			keyboardShouldPersistTaps="handled"
 			ListHeaderComponent={header}
+			contentInsetAdjustmentBehavior="automatic"
 			contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 			refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void reload(true)} {...refreshControlColors(t)} />}
 			ItemSeparatorComponent={FileRowDivider}
@@ -132,6 +133,7 @@ export function SearchResults({ query, results, searching, header, bottomInset, 
 			keyboardShouldPersistTaps="handled"
 			keyboardDismissMode="on-drag"
 			ListHeaderComponent={header}
+			contentInsetAdjustmentBehavior="automatic"
 			contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 			ItemSeparatorComponent={FileRowDivider}
 			renderItem={({ item }) => <PathRow path={item.path} status={item.status} onPress={onOpenFile} onAction={onAction} />}

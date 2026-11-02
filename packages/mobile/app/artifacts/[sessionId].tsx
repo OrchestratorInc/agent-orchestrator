@@ -93,6 +93,7 @@ function SessionArtifactsContent() {
 			<FlatList
 				key={columns}
 				style={styles.screen}
+				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={[styles.content, artifacts.length === 0 && styles.emptyContent]}
 				data={artifacts}
 				numColumns={columns}

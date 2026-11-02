@@ -18,6 +18,7 @@ import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { hostedRowKey } from "../../lib/hostedRows";
 import { useFabExpanded } from "../../lib/useFabExpanded";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { AddFab, addFabClearance } from "../../lib/AddFab";
 import { space } from "../../lib/tokens";
 
@@ -39,6 +40,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
+	const glassInset = useGlassBarInset();
 	const fab = useFabExpanded();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
@@ -115,7 +117,7 @@ function ProjectScreenContent() {
 	return (
 		<View style={styles.screen}>
 			{headerItems}
-			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostMatches ? <View pointerEvents="box-none" style={glassInset ? [styles.floatingBanner, { top: glassInset }] : undefined}><StaleBanner error={!!error} onRetry={onRefresh} /></View> : null}
 
 			{!hostMatches ? (
 				loading && !config ? (
@@ -151,6 +153,7 @@ function ProjectScreenContent() {
 			) : (
 				<WorkerBoardList
 					onScroll={fab.onScroll}
+					contentInsetAdjustmentBehavior="automatic"
 					sessions={projectSessions}
 					archiveSources={archiveSources}
 					showProject={false}
@@ -187,4 +190,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		floatingBanner: { position: "absolute", start: 0, end: 0, zIndex: 1 },
 	});

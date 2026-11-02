@@ -1,6 +1,6 @@
 import { Stack } from "expo-router";
 import { Platform } from "react-native";
-import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../../lib/stackScreenOptions";
+import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
 // A link straight to a Settings page opens it over the Settings list, so its
@@ -18,7 +18,7 @@ export default function SettingsLayout() {
 	const t = useTheme();
 
 	return (
-		<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>
+		<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>
 			<Stack.Screen name="index" options={{ title: "Settings" }} />
 			<Stack.Screen name="theme" options={{ title: "Theme" }} />
 			{/* A machine's page renames itself to the machine once it loads. */}

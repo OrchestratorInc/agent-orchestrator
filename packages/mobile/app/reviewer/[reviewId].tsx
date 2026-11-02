@@ -11,6 +11,8 @@ import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useThemedStyles } from "../../lib/ThemeProvider";
+import { SYSTEM_GLASS_HEADER } from "../../lib/stackScreenOptions";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 
@@ -33,7 +35,8 @@ function ReviewerConversationContent() {
 	const conversation = useMobileConversation(hostMatches ? config : null, workerSessionId, { reviewId, eventSessionId: workerSessionId });
 	// The session chat's keyboard handling, so the reviewer composer sits above
 	// the keyboard the same way on both platforms.
-	const chatKeyboard = useChatKeyboard();
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const glassInset = useGlassBarInset();
 
 	useLayoutEffect(() => navigation.setOptions({ title: title ? `Review · ${title}` : "Reviewer chat" }), [navigation, title]);
 
@@ -41,7 +44,7 @@ function ReviewerConversationContent() {
 	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading reviewer chat" /></View>;
 	if (!conversation.snapshot) return <EmptyState icon="chat" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh" onPress={() => void conversation.refresh()} />} />;
 
-	return <KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
+	return <KeyboardAvoidingView style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}
 		{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <View key={pendingSend.id} style={styles.pending}><Text accessibilityRole="alert" style={styles.error}>{pendingSend.error || "Message delivery uncertain"}</Text><Button title={pendingSend.restored && pendingSend.hasAttachments ? "Refresh history" : "Retry"} onPress={() => void (pendingSend.restored && pendingSend.hasAttachments ? conversation.refresh() : conversation.retrySend(pendingSend.id)).catch(() => {})} /><Button title="Discard" variant="ghost" onPress={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /></View> : null)}
 		<ChatTimeline snapshot={conversation.snapshot} loadingOlder={conversation.loadingOlder} onLoadOlder={() => void conversation.loadOlder()} approvalPending={conversation.pendingActions.includes("approval")} inputPending={conversation.pendingActions.includes("input")} onDecide={conversation.resolveApproval} onResolveInput={conversation.resolveInput} />

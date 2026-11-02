@@ -12,6 +12,16 @@ import { font } from "./tokens";
 export const SYSTEM_GLASS_HEADER = Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
 
 /**
+ * A page that scrolls up under the clear glass bar on iOS 26 and later. The
+ * blur under it is the soft scroll-edge effect on every scroll view (see
+ * `plugins/withIosSoftScrollEdge`); the page insets its own content (see
+ * `useGlassBarInset`).
+ */
+export const GLASS_HEADER_OPTIONS: NativeStackNavigationOptions | null = SYSTEM_GLASS_HEADER
+	? { headerTransparent: true, headerStyle: undefined }
+	: null;
+
+/**
  * The native-stack defaults every stack in the app shares: the root stack and
  * any stack nested in it (a tab's, Settings'). Spread them first and add what a
  * stack needs on top, so each one pushes, tints and titles its pages the same

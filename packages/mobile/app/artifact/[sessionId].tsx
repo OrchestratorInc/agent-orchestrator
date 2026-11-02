@@ -25,6 +25,7 @@ import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { toolbarIcon } from "../../lib/toolbarIcon";
 import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
@@ -52,6 +53,7 @@ export default function ArtifactViewerScreen() {
 }
 
 function ArtifactViewerContent() {
+	const glassInset = useGlassBarInset();
 	// `ask` opens a comment on the whole file, from the gallery's Ask the agent.
 	const { sessionId: rawId, path: rawPath, hostId: routeHostId, ask: askParam } = useLocalSearchParams<{ sessionId: string; path?: string; hostId?: string; ask?: string }>();
 	const sessionId = String(rawId ?? "");
@@ -153,7 +155,7 @@ function ArtifactViewerContent() {
 		<View style={styles.screen}>
 			{headerItems}
 			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
-			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
+			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
 					key={ask.key}
@@ -225,6 +227,8 @@ function ArtifactWeb({ config, url, version, page }: {
 				// cookie, and it cannot reach the daemon.
 				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
 				style={styles.web}
+				// Under the clear glass bar, the page scrolls on beneath it.
+				contentInsetAdjustmentBehavior="automatic"
 				startInLoadingState
 				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
 				onLoadStart={() => setError(undefined)}
@@ -259,7 +263,7 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 	}, [source.uri]);
 	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
+		<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
 			<Image
 				source={imageSourceForPlatform(source)}
 				accessibilityLabel={name}
@@ -275,6 +279,7 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 type TextState = { key: string; text?: string; error?: string };
 
 function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
+	const glassInset = useGlassBarInset();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Re-read whenever the poll reports a newer version of the file.
@@ -300,12 +305,12 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 	if (looksBinary(text)) return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
 	// A long file shows its start: a text view is laid out whole, on Android on the UI thread.
 	const shown = shownText(text);
-	const cut = shown.truncated ? <View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
+	const cut = shown.truncated ? <View style={[styles.truncated, { marginTop: glassInset }]}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
 	if (markdown) {
 		return (
 			<View style={styles.screen}>
 				{cut}
-				<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
+				<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.document}>
 					{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
 					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
 				</ScrollView>
@@ -315,7 +320,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 	return (
 		<View style={styles.screen}>
 			{cut}
-			<ScrollView style={styles.screen} contentContainerStyle={styles.code}>
+			<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.code}>
 				<HighlightedCodeText
 					code={shown.text}
 					language={artifactLanguage(artifact.path)}

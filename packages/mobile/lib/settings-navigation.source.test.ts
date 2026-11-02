@@ -36,7 +36,7 @@ describe("Settings environment navigation", () => {
 	it("gives every Settings page the native header", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
-		expect(settingsLayout).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>");
+		expect(settingsLayout).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>");
 		expect(settingsLayout).toContain('<Stack.Screen name="index" options={{ title: "Settings" }} />');
 		expect(settingsLayout).toContain('<Stack.Screen name="theme" options={{ title: "Theme" }} />');
 		expect(settingsLayout).not.toContain("headerShown");

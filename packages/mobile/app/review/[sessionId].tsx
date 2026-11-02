@@ -274,7 +274,7 @@ function ReviewDetailContent() {
 	return (
 		<View style={styles.screen}>
 		{headerItems}
-		<ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} {...refreshControlColors(t)} />}>
+		<ScrollView style={styles.scroll} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} {...refreshControlColors(t)} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
 			<View style={styles.row}>

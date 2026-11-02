@@ -18,7 +18,7 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
-import { stackScreenOptions } from "../lib/stackScreenOptions";
+import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -211,13 +211,15 @@ function Shell() {
 				    unsaved changes, and a save or forget in flight holds it too. */}
 				<Stack.Screen name="settings" options={{ headerShown: false, title: "Settings", contentStyle: { backgroundColor: t.bgBase } }} />
 				<Stack.Screen name="session/[id]" options={{ title: "Session" }} />
-				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request" }} />
-				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer" }} />
-				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
-				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
-				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts" }} />
-				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
-				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version" }} />
+				{/* The pages pushed over the board lay out under the clear glass bar on
+				    iOS 26 and later, each insetting its own content (see `useGlassBarInset`). */}
+				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", ...GLASS_HEADER_OPTIONS }} />
 				{/* The conversation's "⋯", a bottom sheet over the chat at three
 				    quarters height, pinned to one detent so any decisive swipe down
 				    closes it on Android (see SHEET_ROUTES). iOS titles it with the
@@ -238,18 +240,18 @@ function Shell() {
 				/>
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
-				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />
-				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
-				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />
-				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />
+				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", ...GLASS_HEADER_OPTIONS }} />
 				{/* A page pushed over the tabs, laid out as a conversation that has
 				    not begun: its settings sit above the composer at the bottom, and
 				    starting the task replaces it with that conversation. */}
-				<Stack.Screen name="spawn" options={{ title: "New task" }} />
+				<Stack.Screen name="spawn" options={{ title: "New task", ...GLASS_HEADER_OPTIONS }} />
 				{/* A page pushed over the board, like Settings. */}
 				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications", contentStyle: { backgroundColor: t.bgBase } }} />
 				{/* The page renames itself to the project once it loads. */}
-				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
+				<Stack.Screen name="project/[id]" options={{ title: "Project", ...GLASS_HEADER_OPTIONS }} />
 				{/* Pull Requests opens from the board's header on iOS (a tab on
 				    Android), a page pushed over the board like Settings. */}
 				<Stack.Screen name="prs" options={{ headerShown: false, title: "Pull Requests", contentStyle: { backgroundColor: t.bgBase } }} />

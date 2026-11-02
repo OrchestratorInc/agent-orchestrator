@@ -15,7 +15,7 @@ describe("render viewer", () => {
 	const frame = source("./RenderFrame.tsx");
 
 	it("is a modal route under the native header", () => {
-		expect(layout).toContain('<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />');
+		expect(layout).toContain('<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS }} />');
 		expect(route).toContain("<Stack.Screen options={{ title: pageTitle }} />");
 		expect(frame).not.toContain("<Modal");
 		expect(frame).not.toContain("useSafeAreaInsets");

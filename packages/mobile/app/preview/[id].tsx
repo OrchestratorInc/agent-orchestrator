@@ -16,6 +16,7 @@ import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles, useThemeState } from "../../lib/ThemeProvider";
 import { toolbarIcon } from "../../lib/toolbarIcon";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { font, gutter, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 
@@ -36,6 +37,7 @@ function SessionPreviewContent() {
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
+	const glassInset = useGlassBarInset();
 	const web = useRef<WebView>(null);
 	// An explicit choice wins over the initial disabled-sharing fallback.
 	const [active, setActive] = useState<"browser" | "app" | null>(null);
@@ -149,7 +151,7 @@ function SessionPreviewContent() {
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
 	if (!config) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
-	return <View style={styles.screen}>
+	return <View style={[styles.screen, { paddingTop: glassInset }]}>
 		{headerItems}
 		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : <View style={styles.appPane}>
 			<WebView

@@ -1,5 +1,5 @@
 import { Stack } from "expo-router";
-import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../../lib/stackScreenOptions";
+import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
 /**
@@ -13,7 +13,7 @@ import { useTheme } from "../../lib/ThemeProvider";
 export default function NotificationsLayout() {
 	const t = useTheme();
 	return (
-		<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>
+		<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>
 			<Stack.Screen name="index" options={{ title: "Notifications" }} />
 		</Stack>
 	);

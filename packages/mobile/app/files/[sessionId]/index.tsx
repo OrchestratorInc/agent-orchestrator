@@ -109,6 +109,7 @@ function SessionFilesContent() {
 				sections={groups.map((group) => ({ key: group.key, title: group.title, data: group.files }))}
 				keyExtractor={(file) => file.path}
 				ListHeaderComponent={header}
+				contentInsetAdjustmentBehavior="automatic"
 				stickySectionHeadersEnabled={false}
 				contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} {...refreshControlColors(t)} />}

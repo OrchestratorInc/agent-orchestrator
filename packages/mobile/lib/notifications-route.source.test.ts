@@ -20,7 +20,7 @@ describe("notifications header", () => {
 
 	// A large title in the sheet left the page blank beneath it.
 	it("takes an inline title from its own stack instead of drawing a header row", () => {
-		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>');
+		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>');
 		expect(source("../app/notifications/_layout.tsx")).not.toContain("largeTitleScreenOptions");
 		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack.Screen name="index" options={{ title: "Notifications" }} />');
 		expect(page).not.toContain("ScreenHeader");

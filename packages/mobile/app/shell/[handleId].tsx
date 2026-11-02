@@ -6,6 +6,7 @@ import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
 import { useTheme } from "../../lib/ThemeProvider";
 import { Button, EmptyState } from "../../lib/ui";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 
 /**
  * A Chat session's terminal escape hatch attaches the shell handle through the
@@ -22,6 +23,7 @@ function ShellRouteContent() {
 	const { config, currentHostId, connection, loading } = useApp();
 	const router = useRouter();
 	const t = useTheme();
+	const glassInset = useGlassBarInset();
 	if (!hostRouteMatches(routeHostId, currentHostId)) {
 		return (
 			<View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}>
@@ -40,7 +42,7 @@ function ShellRouteContent() {
 	if (!config && connection === "closed") {
 		return <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}><EmptyState icon="wifi-off" title="Machine offline" message="This shell opens once the app reconnects." /></View>;
 	}
-	return <TerminalSessionScreen />;
+	return <View style={{ flex: 1, paddingTop: glassInset, backgroundColor: t.bgBase }}><TerminalSessionScreen /></View>;
 }
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

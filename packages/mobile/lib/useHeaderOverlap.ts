@@ -1,5 +1,6 @@
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { Platform } from "react-native";
+import { SYSTEM_GLASS_HEADER } from "./stackScreenOptions";
 
 /**
  * How much of a board tab's page its header covers.
@@ -15,4 +16,16 @@ import { Platform } from "react-native";
 export function useHeaderOverlap(): number {
 	const headerHeight = useHeaderHeight();
 	return Platform.OS === "ios" ? headerHeight : 0;
+}
+
+/**
+ * How much of a pushed page the clear glass bar covers: the header's height on
+ * iOS 26 and later, where the page is laid out under the bar (see
+ * `GLASS_HEADER_OPTIONS`), and nothing where the bar sits above the page.
+ * A page's scroll view insets itself with `contentInsetAdjustmentBehavior`;
+ * anything fixed at the page's top starts this far down.
+ */
+export function useGlassBarInset(): number {
+	const headerHeight = useHeaderHeight();
+	return SYSTEM_GLASS_HEADER ? headerHeight : 0;
 }

@@ -13,6 +13,7 @@ import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches } from "../../../lib/hostRoute";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
+import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
 import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
@@ -108,6 +109,7 @@ function SessionFileContent() {
 	// `show` is stable where the controller is not, so callbacks keep their identity.
 	const showToast = toast.show;
 	const insets = useSafeAreaInsets();
+	const glassInset = useGlassBarInset();
 	const { openReview } = useFileActions({ sessionId: id, hostId: params.hostId, toast });
 	const list = useRef<FlatList<DisplayRow>>(null);
 	const request = useRef(0);
@@ -461,7 +463,7 @@ function SessionFileContent() {
 	}
 
 	return (
-		<View style={styles.screen}>
+		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			{headerItems}
 			{meta}
 			<View style={styles.body}>{body}</View>

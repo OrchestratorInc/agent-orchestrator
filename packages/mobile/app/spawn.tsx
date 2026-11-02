@@ -30,6 +30,8 @@ import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
+import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
+import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
@@ -105,7 +107,8 @@ export default function SpawnScreen() {
 	// The composer docks to the bottom as the chat's does, on the same keyboard
 	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
 	// The page sits below the stack's opaque bar, so the avoider counts it.
-	const chatKeyboard = useChatKeyboard();
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const glassInset = useGlassBarInset();
 	const keyboard = useReanimatedKeyboardAnimation();
 	const { restingInset, dockRiseOverride } = chatKeyboard;
 	const dockRise = useAnimatedStyle(() => ({
@@ -505,7 +508,7 @@ export default function SpawnScreen() {
 
 	return (
 		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
+			style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]}
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>

@@ -8,6 +8,7 @@ import { HostScope } from "../lib/store";
 import type { Theme } from "../lib/theme";
 import { useThemedStyles } from "../lib/ThemeProvider";
 import { toolbarIcon } from "../lib/toolbarIcon";
+import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { EmptyState } from "../lib/ui";
 
 /**
@@ -23,6 +24,7 @@ export default function RenderViewerRoute() {
 function RenderViewerPage() {
 	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
+	const glassInset = useGlassBarInset();
 	const { path, title } = useLocalSearchParams<{ path?: string; title?: string }>();
 	const pageTitle = title || "Page";
 	const headerItems = useMemo(() => Platform.OS === "ios" ? (
@@ -36,7 +38,7 @@ function RenderViewerPage() {
 			{headerItems}
 			{/* A link can name any path; only a session's rendered page loads here. */}
 			{path && isRenderPath(path) ? (
-				<RenderViewer path={path} title={pageTitle} />
+				<View style={[styles.page, { paddingTop: glassInset }]}><RenderViewer path={path} title={pageTitle} /></View>
 			) : (
 				<View style={styles.center}>
 					<EmptyState icon="warning" title="This page can't be shown" message="Open it again from its conversation." />
@@ -48,6 +50,7 @@ function RenderViewerPage() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	center: { flex: 1, backgroundColor: t.bgBase },
+	page: { flex: 1 },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

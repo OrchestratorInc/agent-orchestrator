@@ -16,7 +16,7 @@ describe("the Files list", () => {
 		expect(actions).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } })');
 		const folder = source("../../app/files/[sessionId]/folder.tsx");
 		expect(folder).toContain("navigation.setOptions({ title: name })");
-		expect(source("../../app/_layout.tsx")).toContain('<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />');
+		expect(source("../../app/_layout.tsx")).toContain('<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder", ...GLASS_HEADER_OPTIONS }} />');
 		expect(index).not.toContain("setDir");
 		expect(index).not.toContain("crumb");
 	});

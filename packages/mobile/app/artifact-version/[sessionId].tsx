@@ -18,6 +18,7 @@ import { hostRouteMatches } from "../../lib/hostRoute";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { artifactAssetLoader } from "../../lib/useInlinedArtifactPage";
@@ -37,6 +38,7 @@ export default function ArtifactVersionScreen() {
 }
 
 function ArtifactVersionContent() {
+	const glassInset = useGlassBarInset();
 	const { sessionId: rawId, path: rawPath, version: rawVersion, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; path?: string; version?: string; hostId?: string }>();
 	const sessionId = String(rawId ?? "");
 	const path = String(rawPath ?? "");
@@ -99,7 +101,7 @@ function ArtifactVersionContent() {
 	// Only the path is known here; the daemon calls .html and .htm files pages.
 	const page = /\.html?$/i.test(path) && !loaded.truncated;
 	return (
-		<View style={styles.screen}>
+		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			<View style={styles.banner}>
 				<Text style={styles.bannerText}>Viewing the version from {formatVersionTime(loaded.createdAt, now) || `version ${loaded.version}`}</Text>
 			</View>

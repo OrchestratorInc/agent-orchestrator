@@ -70,6 +70,7 @@ vi.mock("./ui", async () => {
 	const React = await import("react");
 	return { Button: (props: object) => React.createElement("Button", props), EmptyState: (props: object) => React.createElement("EmptyState", props) };
 });
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 vi.mock("./preview/BrowserLivePane", async () => {
 	const React = await import("react");
 	return { BrowserLivePane: (props: object) => React.createElement("BrowserLivePane", props) };

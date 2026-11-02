@@ -14,14 +14,14 @@ const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.m
 describe("spawn page", () => {
 	it("is a plain pushed page titled New task", () => {
 		const options = layout.slice(layout.indexOf('name="spawn"'), layout.indexOf("/>", layout.indexOf('name="spawn"')));
-		expect(options).toContain('options={{ title: "New task" }}');
+		expect(options).toContain('options={{ title: "New task", ...GLASS_HEADER_OPTIONS }}');
 		expect(options).not.toContain("presentation");
 		expect(spawn).not.toContain("@expo/ui/community/bottom-sheet");
 		expect(spawn).toContain('export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";');
 	});
 
 	it("docks the composer at the bottom on the chat's keyboard avoidance", () => {
-		expect(spawn).toContain("const chatKeyboard = useChatKeyboard();");
+		expect(spawn).toContain("const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });");
 		expect(spawn).toContain("<KeyboardAvoidingView");
 		expect(spawn).toContain("transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],");
 		expect(spawn).toContain("<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>");

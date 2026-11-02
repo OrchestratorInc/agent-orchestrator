@@ -38,7 +38,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(source("./spawn-composer.tsx")).toContain("<TextInput");
 		// A page on both platforms, so nothing needs a sheet of its own.
 		expect(spawn).not.toContain("@expo/ui/community/bottom-sheet");
-		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="spawn" options={{ title: "New task" }} />');
+		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="spawn" options={{ title: "New task", ...GLASS_HEADER_OPTIONS }} />');
 	});
 
 	// Spawn's choices open on its own page. They used to be a second sheet over
