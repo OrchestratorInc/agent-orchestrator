@@ -86,6 +86,10 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
+	if rec.Harness == domain.HarnessGoose {
+		m.applyImportedGooseConfigEnv(ctx, rec, env)
+		return
+	}
 	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
 	hooks := importedHarnesses[rec.Harness]
 	if hooks.configEnvKey != "" {
@@ -372,7 +376,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return rec, ports.ErrChatUnsupported
+		return rec, fmt.Errorf("no agent adapter for harness %q", rec.Harness)
 	}
 	source := rec.Metadata.ImportSource
 	if prober, ok := agent.(ports.AgentNativeSessionProber); ok {

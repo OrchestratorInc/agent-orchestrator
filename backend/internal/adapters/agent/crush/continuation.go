@@ -17,12 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var (
-	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
-	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
-	_ ports.AgentImportedSessionRelocator   = (*Plugin)(nil)
-)
+var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
+var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
+var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
+var _ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
 
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
