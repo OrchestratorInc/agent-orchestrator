@@ -256,10 +256,18 @@ function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: Se
 	);
 }
 
-/** A column header that orders the sessions by its own figure; a second click flips the direction. */
-function SortHeader({ active, ascending, className, label, onSort }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void }) {
-	// Always visible, so the header reads as sortable before any click: faint
-	// on an idle column, full strength showing the direction on the active one.
+/**
+ * A column header that orders the sessions by its own figure; a second click
+ * flips the direction. Sorting moves session rows only, so with fewer than two
+ * there is nothing to reorder and the header is plain text.
+ */
+function SortHeader({ active, ascending, className, label, onSort, sortable }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void; sortable: boolean }) {
+	if (!sortable) {
+		return <th className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
+	}
+	// Visible whenever it works, so the header reads as sortable before any
+	// click: faint on an idle column, full strength showing the direction on
+	// the active one.
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
 		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
@@ -363,9 +371,9 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
-					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} />
+					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} sortable={live.length > 1} />
 					{/* Memory next to Share: the bar is the memory figure drawn. */}
-					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} />
+					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} sortable={live.length > 1} />
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>

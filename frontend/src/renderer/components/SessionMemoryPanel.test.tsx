@@ -383,6 +383,20 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(10);
 	});
 
+	it("shows CPU and Memory as plain headers while there is only one session to order", async () => {
+		memoryQueryMock.mockReturnValue({
+			isError: false,
+			data: new Map([["s-big", reading("s-big", 2_254_857_830, 2, [], 10)]]),
+		});
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		const table = await screen.findByTestId("session-memory-table");
+		// Sorting only moves session rows: with one, an arrow would do nothing.
+		expect(within(table).getAllByTestId("session-memory-row")).toHaveLength(1);
+		expect(within(table).queryAllByTestId("session-memory-sort")).toHaveLength(0);
+		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "CPU", "Memory", "Share"]);
+	});
+
 	it("sorts sessions by memory or CPU, either way round, from the column headers", async () => {
 		memoryQueryMock.mockReturnValue({
 			isError: false,
