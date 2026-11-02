@@ -19,6 +19,10 @@ it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
 });
+
+it("does not offer OpenCode imports while resumed tools use the saved directory", () => {
+	expect(IMPORTABLE_AGENTS.has("opencode")).toBe(false);
+});
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

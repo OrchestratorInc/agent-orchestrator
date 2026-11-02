@@ -21,8 +21,13 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		{ id: "cloud-1", kind: CLOUD_PROJECT_KIND, sessions: [] },
 	] }),
 	useRemoteWorkspaces: () => ({ data: [] }),
+	useCloudProjectsQuery: () => ({ data: [
+		{ id: "cloud-1", config: { sandboxProvider: "freestyle" } },
+		{ id: "coder-1", config: { sandboxProvider: "coder" } },
+	] }),
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "freestyle", loaded: true }) }));
 vi.mock("./NewTaskDialog", () => ({
 	NewTaskDialog: (props: { open: boolean; projectId?: string }) => {
 		dialog.props = props;
@@ -66,11 +71,18 @@ describe("NewTaskNavigator", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined }, replace: true });
 	});
 
-	it("keeps the New Task dialog for cloud projects", () => {
+	it("opens the new chat page for cloud projects too", () => {
 		renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("cloud-1"));
+		expect(navigateMock).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: { project: "cloud-1", host: undefined } }));
+		expect(dialog.props).toMatchObject({ open: false });
+	});
+
+	it("keeps the New Task dialog for a Coder project", () => {
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("coder-1"));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(dialog.props).toMatchObject({ open: true, projectId: "cloud-1" });
+		expect(dialog.props).toMatchObject({ open: true, projectId: "coder-1" });
 	});
 
 	it("does not replay a request raised before it mounted", () => {
