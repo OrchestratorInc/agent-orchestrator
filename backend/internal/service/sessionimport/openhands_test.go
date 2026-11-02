@@ -66,6 +66,41 @@ func TestOpenHandsRoot(t *testing.T) {
 	}
 }
 
+func TestOpenHandsImportRecoversMissingEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		leaf     string
+		parent   string
+		artifact bool
+	}{
+		{name: "missing parent", leaf: "reply", parent: "lost-tool"},
+		{name: "missing leaf", leaf: "lost-leaf", parent: "user"},
+		{name: "missing leaf with trailing artifact", leaf: "lost-leaf", parent: "lost-tool", artifact: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "12345678123412341234123456789012")
+			writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"leaf_event_id":"`+tc.leaf+`"}`)
+			writeFile(t, filepath.Join(dir, "events", "event-00000-old.json"), `{"id":"old","source":"user","llm_message":{"role":"user","content":[{"type":"text","text":"Earlier branch"}]}}`)
+			writeFile(t, filepath.Join(dir, "events", "event-00001-user.json"), `{"id":"user","parent_id":"__root__","source":"user","llm_message":{"role":"user","content":[{"type":"text","text":"Surviving prompt"}]}}`)
+			// event-00002 was lost; the native SDK bridges the actual file gap.
+			writeFile(t, filepath.Join(dir, "events", "event-00003-reply.json"), `{"id":"reply","parent_id":"`+tc.parent+`","source":"agent","llm_message":{"role":"assistant","content":[{"type":"text","text":"Surviving reply"}]}}`)
+			if tc.artifact {
+				writeFile(t, filepath.Join(dir, "events", "event-00004-state.json"), `{"id":"state","kind":"ConversationStateUpdateEvent","parent_id":"__root__"}`)
+			}
+			files, err := discoverOpenHands(context.Background(), root)
+			if err != nil || len(files) != 1 {
+				t.Fatalf("discover = %v, %v", files, err)
+			}
+			got, err := readOpenHandsTranscript(context.Background(), root, files[0].paths...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: Surviving prompt", "assistant: Surviving reply")
+		})
+	}
+}
+
 func TestOpenHandsImportOrdersWideEventIndices(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "12345678123412341234123456789012")

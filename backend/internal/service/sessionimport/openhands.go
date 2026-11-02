@@ -159,12 +159,14 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	}
 	t.nativeID, t.cwd, t.path, t.paths = id.String(), state.Workspace.CWD, paths[0], paths
 	type node struct {
-		parent string
-		item   tagged
+		parent   string
+		previous string
+		item     tagged
 	}
 	nodes := map[string]node{}
 	var order []string
 	previous, first, held, drop := "", "", 0, 0
+	fallbackLeaf := ""
 	for _, path := range paths[1:] {
 		if filepath.Dir(filepath.Dir(path)) != filepath.Dir(paths[0]) {
 			return t, errors.New("event outside openhands conversation")
@@ -176,6 +178,7 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			var event struct {
 				ID      string `json:"id"`
 				Parent  string `json:"parent_id"`
+				Kind    string `json:"kind"`
 				Source  string `json:"source"`
 				At      string `json:"timestamp"`
 				Message struct {
@@ -185,9 +188,6 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			}
 			if json.Unmarshal(line, &event) != nil || event.ID == "" {
 				return nil //nolint:nilerr // Skip torn or identity-less events without discarding readable history.
-			}
-			if event.Parent == "" {
-				event.Parent = previous // legacy linear logs have no parent_id
 			}
 			at, _ := time.Parse(time.RFC3339Nano, event.At)
 			if at.IsZero() {
@@ -214,7 +214,7 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			} else {
 				order = append(order, event.ID)
 			}
-			nodes[event.ID] = node{parent: event.Parent, item: tagged{Message: Message{Role: domain.MessageRole(event.Message.Role), Text: text, At: at}, kind: "openhands"}}
+			nodes[event.ID] = node{parent: event.Parent, previous: previous, item: tagged{Message: Message{Role: domain.MessageRole(event.Message.Role), Text: text, At: at}, kind: "openhands"}}
 			held += len(text)
 			for held > maxClaudeHeld && drop < len(order) {
 				key := order[drop]
@@ -228,15 +228,28 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 				nodes[key], t.shortened = n, true
 			}
 			previous = event.ID
+			if event.Kind != "ConversationStateUpdateEvent" && event.Kind != "ConversationErrorEvent" {
+				fallbackLeaf = event.ID
+			}
 			return nil
 		})
 		if err != nil {
 			return t, err
 		}
 	}
+	// Match EventLog._effective_parent_id: bridge absent parents through the
+	// preceding surviving event, while preserving an explicit tree root.
+	for id, n := range nodes {
+		if n.parent == "__root__" {
+			n.parent = ""
+		} else if _, ok := nodes[n.parent]; !ok {
+			n.parent = n.previous
+		}
+		nodes[id] = n
+	}
 	leaf := state.Leaf
-	if leaf == "" {
-		leaf = previous
+	if _, ok := nodes[leaf]; !ok {
+		leaf = fallbackLeaf // ConversationState._repair_missing_leaf
 	}
 	var items []tagged
 	seen := map[string]bool{}
