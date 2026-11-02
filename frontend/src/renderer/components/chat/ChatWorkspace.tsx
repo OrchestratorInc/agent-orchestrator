@@ -88,7 +88,8 @@ import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { sameContent, useStableList } from "../../lib/stable-list";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { useSidebarChromeClearanceRef } from "../../hooks/useSidebarChromeGeometry";
-import { apiErrorCode, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { apiErrorCode, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import type { components } from "../../../api/schema";
 import { aoBridge } from "../../lib/bridge";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../../lib/terminal-font-size";
@@ -513,10 +514,13 @@ export interface ChatWorkspaceProps {
 	/** Why compaction is not available right now, from the daemon's typed refusal. */
 	compactUnavailable?: string;
 	/**
-	 * Discard a turn and everything after it. Absent means the agent cannot undo,
-	 * and the affordance is not drawn at all rather than shown and then refused.
+	 * Discard a turn and everything after it, restoring the worktree too when the
+	 * confirmation listed its files. Absent means the agent cannot undo, and the
+	 * affordance is not drawn at all rather than shown and then refused.
 	 */
-	onRollback?: (turnId: string) => void | Promise<unknown>;
+	onRollback?: (turnId: string, restoreFiles: boolean) => void | Promise<unknown>;
+	/** Lists the files a rollback would restore. Absent means only the conversation is rolled back. */
+	onPreviewRollback?: (turnId: string) => Promise<RollbackPreview>;
 	rollbackPending?: boolean;
 	rollbackError?: string;
 	/** Opens the session Files inspector from a turn's changed-files Review control. */
@@ -773,6 +777,7 @@ function ChatWorkspaceContent({
 	compacting,
 	compactUnavailable,
 	onRollback,
+	onPreviewRollback,
 	rollbackPending,
 	rollbackError,
 	onOpenFiles,
@@ -1262,6 +1267,7 @@ function ChatWorkspaceContent({
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
+	const previewRollback = useStableCallback(onPreviewRollback);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
@@ -2104,41 +2110,139 @@ function ChatWorkspaceContent({
 				</div>
 			</div>
 
-			{/* The copy has to be honest about the cost: this is not "hide these
-			    messages", it is "the agent forgets them". Nothing in the worktree is
-			    reverted either, and a user who assumed otherwise would be badly
-			    surprised, so it is said out loud. */}
-			<ConfirmDialog
+			<RollbackConfirmation
 				open={Boolean(confirming) && !reviewerActive && !shellActive}
-				onOpenChange={(open) => {
-					if (!open) setConfirming(undefined);
-				}}
-				title="Roll back to this point?"
-				description={
-					<>
-						<p className="text-xs font-medium text-foreground">
-							The agent will forget this exchange and everything after it.
-						</p>
-						<p className="mt-1 text-xs text-muted-foreground">
-							Its memory of the conversation is discarded up to this point, so it will not know
-							about anything you or it said later. Files it already changed in the worktree are left
-							exactly as they are; only the conversation is rolled back. This cannot be undone.
-						</p>
-					</>
-				}
-				confirmLabel="Roll back"
-				destructive
+				turnId={confirming}
 				busy={rollbackPending}
-				error={rollbackError ?? null}
-				onConfirm={() => {
-					const turnId = confirming;
-					if (!turnId) return;
+				error={rollbackError}
+				onPreview={onPreviewRollback ? previewRollback : undefined}
+				onConfirm={(turnId, restoreFiles) => {
 					setConfirming(undefined);
-					void Promise.resolve(onRollback?.(turnId)).catch(() => {});
+					void Promise.resolve(onRollback?.(turnId, restoreFiles)).catch(() => {});
 				}}
+				onClose={() => setConfirming(undefined)}
 			/>
 		</section>
  </FileAnnotationContext.Provider>
+	);
+}
+
+type RollbackPreview = components["schemas"]["RollbackPreviewResponse"];
+
+const rollbackChangeLabels: Record<RollbackPreview["files"][number]["change"], string> = {
+	restored: "Restored",
+	reverted: "Reverted",
+	removed: "Deleted",
+};
+
+/**
+ * The confirmation for "Roll back to here". The copy has to be honest about the
+ * cost: this is not "hide these messages", it is "the agent forgets them". When
+ * the daemon can put the worktree back too, the files that will change are
+ * listed before the button is offered; when it cannot, the dialog says the files
+ * stay as they are, because a user who assumed otherwise would be badly surprised.
+ */
+function RollbackConfirmation({
+	open,
+	turnId,
+	busy,
+	error,
+	onPreview,
+	onConfirm,
+	onClose,
+}: {
+	open: boolean;
+	turnId?: string;
+	busy?: boolean;
+	error?: string;
+	onPreview?: (turnId: string) => Promise<RollbackPreview> | undefined;
+	onConfirm: (turnId: string, restoreFiles: boolean) => void;
+	onClose: () => void;
+}) {
+	const [preview, setPreview] = useState<{ turnId: string; result?: RollbackPreview; error?: string }>();
+	useEffect(() => {
+		const request = turnId ? onPreview?.(turnId) : undefined;
+		if (!turnId || !request) return;
+		let current = true;
+		setPreview({ turnId });
+		request.then(
+			(result) => {
+				if (current) setPreview({ turnId, result });
+			},
+			(cause: unknown) => {
+				if (current) setPreview({ turnId, error: apiErrorMessage(cause) });
+			},
+		);
+		return () => {
+			current = false;
+		};
+	}, [turnId, onPreview]);
+
+	const loaded = preview?.turnId === turnId ? preview : undefined;
+	const checking = Boolean(onPreview) && !loaded?.result && !loaded?.error;
+	const restore = loaded?.result?.filesRestorable ? loaded.result : undefined;
+	const unavailable = loaded?.result?.reason ?? loaded?.error;
+	const hiddenFiles = restore ? restore.totalFiles - restore.files.length : 0;
+
+	let detail: string;
+	if (checking) {
+		detail = "Checking which files this would restore…";
+	} else if (restore) {
+		const files = restore.totalFiles === 0
+			? "No files have changed since then."
+			: `${restore.totalFiles} ${restore.totalFiles === 1 ? "file" : "files"} will change.`;
+		const commits = restore.commitsSince === 1
+			? " 1 commit made since then stays on the branch, so its changes come back as uncommitted edits."
+			: restore.commitsSince > 1
+				? ` ${restore.commitsSince} commits made since then stay on the branch, so their changes come back as uncommitted edits.`
+				: "";
+		detail = `${files}${commits} Ignored files are left alone. This cannot be undone.`;
+	} else {
+		detail = `${unavailable ? `Files can't be restored: ${unavailable}. ` : ""}Its memory of the conversation is discarded up to this point, so it will not know about anything you or it said later. Files it already changed in the worktree are left exactly as they are; only the conversation is rolled back. This cannot be undone.`;
+	}
+
+	return (
+		<ConfirmDialog
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) onClose();
+			}}
+			title="Roll back to this point?"
+			description={
+				<>
+					<p className="text-xs font-medium text-foreground">
+						{restore
+							? "The agent will forget this exchange and everything after it, and the worktree goes back to how it was before it."
+							: "The agent will forget this exchange and everything after it."}
+					</p>
+					<p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+				</>
+			}
+			confirmLabel="Roll back"
+			destructive
+			busy={busy}
+			confirmDisabled={checking}
+			error={error ?? null}
+			onConfirm={() => {
+				if (turnId) onConfirm(turnId, Boolean(restore));
+			}}
+		>
+			{restore && restore.files.length > 0 ? (
+				<>
+					<ul aria-label="Files that will change" className="max-h-40 overflow-y-auto rounded-md bg-surface py-1">
+						{restore.files.map((file) => (
+							<li key={file.path} className="flex items-center gap-2 px-2.5 py-1 text-xs">
+								<span className="min-w-0 flex-1 truncate font-mono text-foreground/80" title={file.path}>
+									{file.path}
+								</span>
+								<span className="shrink-0 text-muted-foreground">{rollbackChangeLabels[file.change]}</span>
+							</li>
+						))}
+					</ul>
+					{hiddenFiles > 0 ? <p className="mt-1 text-xs text-muted-foreground">and {hiddenFiles} more</p> : null}
+				</>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 

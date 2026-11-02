@@ -3193,6 +3193,17 @@ func newHarnessWithConversationAndStoreForHarness(
 	agentHarness domain.AgentHarness,
 ) *harness {
 	t.Helper()
+	return newHarnessInWorkspace(t, conv, wrapStore, agentHarness, t.TempDir())
+}
+
+func newHarnessInWorkspace(
+	t *testing.T,
+	conv ports.ChatConversation,
+	wrapStore func(*sqlite.Store) chatsvc.Store,
+	agentHarness domain.AgentHarness,
+	workspace string,
+) *harness {
+	t.Helper()
 	st := openStore(t)
 	if agentHarness != domain.HarnessCodex {
 		record, found, err := st.GetSession(context.Background(), testSession)
@@ -3260,7 +3271,7 @@ func newHarnessWithConversationAndStoreForHarness(
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

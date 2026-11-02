@@ -873,6 +873,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				compacting={commands.compacting}
 				compactUnavailable={commands.compactUnavailable}
 				onRollback={commands.rollback}
+				onPreviewRollback={commands.previewRollback}
 				rollbackPending={commands.rollbackPending}
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}

@@ -94,7 +94,7 @@ func TestPromptSuggestionRejectsUnavailableOrStaleContext(t *testing.T) {
 					}
 				}
 			case "rolled-back":
-				if _, err := h.svc.Rollback(context.Background(), testSession, turnID); err != nil {
+				if _, err := h.svc.Rollback(context.Background(), testSession, turnID, false); err != nil {
 					t.Fatal(err)
 				}
 			case "failed":
@@ -122,7 +122,7 @@ func TestPromptSuggestionDiscardsResultWhenConversationChanges(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "rollback":
-					if _, err := h.svc.Rollback(ctx, testSession, turnID); err != nil {
+					if _, err := h.svc.Rollback(ctx, testSession, turnID, false); err != nil {
 						t.Fatal(err)
 					}
 				case "termination":

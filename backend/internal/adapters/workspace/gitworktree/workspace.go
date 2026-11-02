@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -832,7 +833,7 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 // Destroy removes the session's worktree and prunes it from the repo, refusing
 // (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
-	_, err := w.destroy(ctx, info)
+	_, err := w.DestroyReclaim(ctx, info)
 	return err
 }
 
@@ -843,7 +844,27 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 // success without any disk having been released. Callers that count reclaimed
 // workspaces need that told apart from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
-	return w.destroy(ctx, info)
+	reclaim, err := w.destroy(ctx, info)
+	if err == nil {
+		w.deleteFileSnapshots(ctx, info)
+	}
+	return reclaim, err
+}
+
+// deleteFileSnapshots drops the Chat rollback snapshots of a session whose
+// worktree is gone, since nothing can restore them any more. A failure only
+// leaves unreachable refs behind, so it is logged rather than failing teardown.
+func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.WorkspaceInfo) {
+	if info.SessionID == "" {
+		return
+	}
+	repo, err := w.repoPathForInfo(info)
+	if err == nil {
+		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(info.SessionID))
+	}
+	if err != nil {
+		w.logf("gitworktree: delete file snapshots for session %s: %v", info.SessionID, err)
+	}
 }
 
 // DeletePreparedBranch is called only after a speculative worktree is gone.
