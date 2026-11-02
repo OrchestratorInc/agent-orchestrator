@@ -1,0 +1,48 @@
+Codex readiness at turn start, PR #7544. before = 422ff9d434, after = aba9489f8d.
+Real daemon, isolated AO data, real Codex chat on this machine's Codex login. Sampled every 250 ms:
+GET /api/v1/agents/readiness (codex authentication freshness) and the chat's account_json.
+'demand' = the lab records a refused-login demand in account_json before sending the message.
+
+== before, demand, 30 s shell loop: stale samples 175/176, account events with stale auth 5/6
+   -0.04s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=required
+   +0.26s  turn=running   codex readiness=stale  chat account=required
+   +5.26s  turn=running   codex readiness=stale  chat account=authenticated
+  +41.76s  turn=completed codex readiness=stale  chat account=authenticated
+  +41.76s  turn finished
+
+== after, demand, 30 s shell loop: stale samples 0/200, account events with stale auth 0/3
+   -0.03s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=required
+   +4.71s  turn=running   codex readiness=fresh  chat account=authenticated
+  +48.02s  turn=completed codex readiness=fresh  chat account=authenticated
+  +48.02s  turn finished
+
+== before, demand, short reply: stale samples 34/35, account events with stale auth 4/5
+   -0.03s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=required
+   +0.26s  turn=running   codex readiness=stale  chat account=required
+   +4.75s  turn=completed codex readiness=stale  chat account=authenticated
+   +4.75s  turn finished
+
+== after, demand, short reply: stale samples 0/26, account events with stale auth 0/2
+   -0.02s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=required
+   +2.35s  turn=completed codex readiness=fresh  chat account=authenticated
+   +2.35s  turn finished
+
+== before, no demand: stale samples 0/31, account events with stale auth 0/2
+   -0.11s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=unknown
+   +3.94s  turn=completed codex readiness=fresh  chat account=authenticated
+   +3.94s  turn finished
+
+== after, no demand: stale samples 0/28, account events with stale auth 0/2
+   -0.05s  message sent
+   +0.00s  turn=running   codex readiness=fresh  chat account=unknown
+   +2.89s  turn=completed codex readiness=fresh  chat account=authenticated
+   +2.89s  turn finished
+
+Cost of the stale state (before build, right after the demand turn):
+  POST /api/v1/agents/readiness/ensure {agentIds:[codex], purpose:launch}: 2.62 s (re-probes Codex auth)
+  same call again, now fresh: 0.01 s

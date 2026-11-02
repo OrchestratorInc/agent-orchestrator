@@ -1,0 +1,360 @@
+{
+ "result": {
+  "build": "after",
+  "phase": "control",
+  "turnSeconds": 2.9,
+  "readinessStaleSamples": 0,
+  "samples": 28,
+  "firstStaleAfterTurnStart": null,
+  "newCodexAuthProbes": 0,
+  "probeTimes": [],
+  "accountCheckTimes": [
+   "2026-11-02T08:38:44.230399Z"
+  ],
+  "accountEvents": 2,
+  "accountEventsWithStaleAuth": 0,
+  "bannerFinal": "authenticated",
+  "bannerClearedAfterTurnStart": null
+ },
+ "t0": 1793608728.2665222,
+ "started": 1793608728.312122,
+ "done": 1793608731.2046669,
+ "samples": [
+  {
+   "t": 1793608728.312122,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608728.5763578,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608728.836082,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608729.0984929,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608729.359515,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608729.6256242,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608729.900026,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608730.158834,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608730.420352,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608730.682295,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608730.9412532,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "unknown",
+   "turn": "running"
+  },
+  {
+   "t": 1793608731.2046669,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608731.466183,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608731.725481,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608731.98695,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608732.249333,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608732.511561,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608732.774179,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608733.03444,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608733.293183,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608733.551129,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608733.8125901,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608734.074038,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608734.33326,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608734.593048,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608734.852349,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608735.1101382,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  },
+  {
+   "t": 1793608735.367572,
+   "readiness": {
+    "state": "authorized",
+    "freshness": "fresh",
+    "checkedAt": "2026-11-02T08:38:44.230399Z",
+    "attemptedAt": "2026-11-02T08:38:44.230399Z"
+   },
+   "banner": "authenticated",
+   "turn": "completed"
+  }
+ ],
+ "events": [
+  {
+   "t": 1793608727.248063,
+   "event": "codex_account",
+   "accounts": [
+    {
+     "id": "2dacaf88-efa2-4953-87a2-41f0894377d1",
+     "active": true,
+     "freshness": "fresh",
+     "status": null,
+     "checkedAt": "2026-11-02T08:38:44.230399Z"
+    }
+   ]
+  },
+  {
+   "t": 1793608730.947946,
+   "event": "codex_account",
+   "accounts": [
+    {
+     "id": "2dacaf88-efa2-4953-87a2-41f0894377d1",
+     "active": true,
+     "freshness": "fresh",
+     "status": null,
+     "checkedAt": "2026-11-02T08:38:44.230399Z"
+    }
+   ]
+  }
+ ]
+}
