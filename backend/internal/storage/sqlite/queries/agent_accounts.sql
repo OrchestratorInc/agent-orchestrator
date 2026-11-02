@@ -62,9 +62,7 @@ WHERE handled_by_session_id = sqlc.arg(session_id) AND usage_limit_auto_resume =
 
 -- Each usage event counts for the account its session used when the event
 -- happened; an event older than the session's first binding counts for that
--- first account. Days are UTC calendar days. A non-empty session_id limits the
--- sum to that session's events (folded into deleted_session_account_usage
--- before the session is deleted).
+-- first account. Days are UTC calendar days.
 -- name: AgentAccountUsageSince :many
 SELECT
     CAST(COALESCE(
@@ -89,7 +87,39 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= sqlc.arg(since)
   AND b.harness IN ('claude-code', 'codex')
-  AND (CAST(sqlc.arg(session_id) AS TEXT) = '' OR b.session_id = CAST(sqlc.arg(session_id) AS TEXT))
+GROUP BY 1, 2, 3
+ORDER BY 2, 1, 3;
+
+-- AgentAccountUsageSince limited to one session's events, which the session
+-- delete folds into deleted_session_account_usage before they cascade away.
+-- Keep the two in step. The plain session_id equality lets the delete, which
+-- holds the writer, reach the events through the usage_bindings session index
+-- instead of reading every usage event.
+-- name: SessionAgentAccountUsageSince :many
+SELECT
+    CAST(COALESCE(
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+           AND a.bound_at <= e.created_at
+         ORDER BY a.bound_at DESC LIMIT 1),
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+         ORDER BY a.bound_at ASC LIMIT 1),
+        'device-' || CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+    ) AS TEXT) AS account_id,
+    CAST(substr(e.created_at, 1, 10) AS TEXT) AS day,
+    e.model_id,
+    CAST(COALESCE(SUM(e.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COALESCE(SUM(e.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COALESCE(SUM(e.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COALESCE(SUM(e.estimated_cost_nanos), 0) AS INTEGER) AS estimated_cost_nanos
+FROM model_usage_events e
+JOIN usage_bindings b ON b.id = e.binding_id
+WHERE b.session_id = sqlc.arg(session_id)
+  AND e.created_at >= sqlc.arg(since)
+  AND b.harness IN ('claude-code', 'codex')
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3;
 

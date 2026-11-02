@@ -74,15 +74,9 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= ?1
   AND b.harness IN ('claude-code', 'codex')
-  AND (CAST(?2 AS TEXT) = '' OR b.session_id = CAST(?2 AS TEXT))
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3
 `
-
-type AgentAccountUsageSinceParams struct {
-	Since     sql.NullTime
-	SessionID string
-}
 
 type AgentAccountUsageSinceRow struct {
 	AccountID          string
@@ -96,11 +90,9 @@ type AgentAccountUsageSinceRow struct {
 
 // Each usage event counts for the account its session used when the event
 // happened; an event older than the session's first binding counts for that
-// first account. Days are UTC calendar days. A non-empty session_id limits the
-// sum to that session's events (folded into deleted_session_account_usage
-// before the session is deleted).
-func (q *Queries) AgentAccountUsageSince(ctx context.Context, arg AgentAccountUsageSinceParams) ([]AgentAccountUsageSinceRow, error) {
-	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, arg.Since, arg.SessionID)
+// first account. Days are UTC calendar days.
+func (q *Queries) AgentAccountUsageSince(ctx context.Context, since sql.NullTime) ([]AgentAccountUsageSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, since)
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +344,86 @@ func (q *Queries) SessionAgentAccountChangedSince(ctx context.Context, arg Sessi
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const sessionAgentAccountUsageSince = `-- name: SessionAgentAccountUsageSince :many
+SELECT
+    CAST(COALESCE(
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+           AND a.bound_at <= e.created_at
+         ORDER BY a.bound_at DESC LIMIT 1),
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+         ORDER BY a.bound_at ASC LIMIT 1),
+        'device-' || CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+    ) AS TEXT) AS account_id,
+    CAST(substr(e.created_at, 1, 10) AS TEXT) AS day,
+    e.model_id,
+    CAST(COALESCE(SUM(e.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COALESCE(SUM(e.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COALESCE(SUM(e.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COALESCE(SUM(e.estimated_cost_nanos), 0) AS INTEGER) AS estimated_cost_nanos
+FROM model_usage_events e
+JOIN usage_bindings b ON b.id = e.binding_id
+WHERE b.session_id = ?1
+  AND e.created_at >= ?2
+  AND b.harness IN ('claude-code', 'codex')
+GROUP BY 1, 2, 3
+ORDER BY 2, 1, 3
+`
+
+type SessionAgentAccountUsageSinceParams struct {
+	SessionID domain.SessionID
+	Since     sql.NullTime
+}
+
+type SessionAgentAccountUsageSinceRow struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
+// AgentAccountUsageSince limited to one session's events, which the session
+// delete folds into deleted_session_account_usage before they cascade away.
+// Keep the two in step. The plain session_id equality lets the delete, which
+// holds the writer, reach the events through the usage_bindings session index
+// instead of reading every usage event.
+func (q *Queries) SessionAgentAccountUsageSince(ctx context.Context, arg SessionAgentAccountUsageSinceParams) ([]SessionAgentAccountUsageSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, sessionAgentAccountUsageSince, arg.SessionID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionAgentAccountUsageSinceRow{}
+	for rows.Next() {
+		var i SessionAgentAccountUsageSinceRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.Day,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setAgentAccountDefault = `-- name: SetAgentAccountDefault :exec
