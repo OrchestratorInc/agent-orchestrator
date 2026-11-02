@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -149,39 +150,14 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil || id != r.NativeSessionID {
 		return errors.New("gemini source no longer holds the imported conversation")
 	}
-	project := hash
-	if data, err := root.ReadFile("projects.json"); err == nil {
-		var registry struct {
-			Projects map[string]string `json:"projects"`
-		}
-		if json.Unmarshal(data, &registry) == nil {
-			if slug := registry.Projects[cwd]; slug != "" && filepath.Base(slug) == slug && slug != "." && slug != ".." {
-				project = slug
-			}
-		}
-	}
-	// A marker can predate a registry entry (the provider heals these itself).
-	if project == hash {
-		if entries, err := fs.ReadDir(root.FS(), "tmp"); err == nil {
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				marker, err := root.ReadFile(filepath.Join("tmp", entry.Name(), ".project_root"))
-				if err == nil && strings.TrimSpace(string(marker)) == cwd {
-					project = entry.Name()
-					break
-				}
-			}
-		}
-	}
+	project := geminiProjectDirectory(root, cwd, hash, runtime.GOOS == "windows")
 	dir := filepath.Join("tmp", project)
 	if err := root.MkdirAll(filepath.Join(dir, "chats"), 0o700); err != nil {
 		return err
 	}
 	marker := filepath.Join(dir, ".project_root")
 	if body, err := root.ReadFile(marker); err == nil {
-		if strings.TrimSpace(string(body)) != cwd {
+		if geminiRegistryPath(strings.TrimSpace(string(body)), runtime.GOOS == "windows") != geminiRegistryPath(cwd, runtime.GOOS == "windows") {
 			return errors.New("gemini destination belongs to another folder")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
@@ -259,6 +235,40 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		copied.Write(encoded)
 	}
 	return writeGeminiImport(ctx, root, destination, copied.Bytes())
+}
+
+func geminiRegistryPath(path string, windows bool) string {
+	path = filepath.Clean(path)
+	if windows {
+		return strings.ToLower(path)
+	}
+	return path
+}
+
+func geminiProjectDirectory(root *os.Root, cwd, hash string, windows bool) string {
+	if data, err := root.ReadFile("projects.json"); err == nil {
+		var registry struct {
+			Projects map[string]string `json:"projects"`
+		}
+		if json.Unmarshal(data, &registry) == nil {
+			if slug := registry.Projects[geminiRegistryPath(cwd, windows)]; slug != "" && filepath.Base(slug) == slug && slug != "." && slug != ".." {
+				return slug
+			}
+		}
+	}
+	// A marker can predate a registry entry (the provider heals these itself).
+	if entries, err := fs.ReadDir(root.FS(), "tmp"); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			marker, err := root.ReadFile(filepath.Join("tmp", entry.Name(), ".project_root"))
+			if err == nil && geminiRegistryPath(strings.TrimSpace(string(marker)), windows) == geminiRegistryPath(cwd, windows) {
+				return entry.Name()
+			}
+		}
+	}
+	return hash
 }
 
 func writeGeminiImport(ctx context.Context, root *os.Root, path string, body []byte) error {
