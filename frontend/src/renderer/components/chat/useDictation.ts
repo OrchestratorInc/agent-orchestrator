@@ -1,26 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../../lib/bridge";
 
-const LEVEL_COUNT = 28;
-const silence = () => Array<number>(LEVEL_COUNT).fill(0);
-
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
-/** Native macOS dictation for one composer; the recognized text goes to `onText` when it ends. */
-export function useDictation(onText: (text: string) => void) {
+type DictationTarget = {
+	/** Shows the transcript so far in place of the previous one. */
+	onText(text: string): void;
+	/** Ends the dictated run: kept as typed text, or removed. */
+	onEnd(keep: boolean): void;
+};
+
+/**
+ * Native macOS dictation for one composer. The transcript streams into the
+ * composer while the user speaks; microphone levels go straight to the meter
+ * (see DictationMeter) so they never re-render the composer.
+ */
+export function useDictation(target: DictationTarget) {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
-	const [transcript, setTranscript] = useState("");
-	const [levels, setLevels] = useState(silence);
 	const [error, setError] = useState<string>();
 	const active = useRef(false);
-	const deliver = useRef(onText);
-	deliver.current = onText;
+	const targetRef = useRef(target);
+	targetRef.current = target;
 
-	const reset = useCallback(() => {
+	const end = useCallback((keep: boolean) => {
 		active.current = false;
 		setPhase("idle");
-		setTranscript("");
-		setLevels(silence());
+		targetRef.current.onEnd(keep);
 	}, []);
 
 	useEffect(() => aoBridge.dictation.onEvent((event) => {
@@ -30,26 +35,23 @@ export function useDictation(onText: (text: string) => void) {
 			case "listening":
 				setPhase("listening");
 				break;
-			case "level":
-				setLevels((previous) => [...previous.slice(1), event.value]);
-				break;
 			case "text":
-				setTranscript(event.text);
+				targetRef.current.onText(event.text);
 				break;
 			case "end":
-				if (event.text.trim()) deliver.current(event.text.trim());
-				reset();
+				targetRef.current.onText(event.text);
+				end(true);
 				break;
 			case "error":
 				setError(event.message);
-				reset();
+				end(true);
 				break;
 			case "exit":
 				setError("Dictation stopped unexpectedly.");
-				reset();
+				end(true);
 				break;
 		}
-	}), [reset]);
+	}), [end]);
 
 	useEffect(() => {
 		if (!error) return;
@@ -57,20 +59,12 @@ export function useDictation(onText: (text: string) => void) {
 		return () => window.clearTimeout(timer);
 	}, [error]);
 
-	const cancel = useCallback(() => {
+	/** Stops listening at once, keeping or dropping the dictated text. */
+	const halt = useCallback((keep: boolean) => {
 		if (!active.current) return;
-		reset();
+		end(keep);
 		void aoBridge.dictation.cancel();
-	}, [reset]);
-
-	useEffect(() => {
-		if (phase === "idle") return;
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") cancel();
-		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [cancel, phase]);
+	}, [end]);
 
 	useEffect(() => () => {
 		if (active.current) void aoBridge.dictation.cancel();
@@ -79,17 +73,39 @@ export function useDictation(onText: (text: string) => void) {
 	const start = useCallback(() => {
 		active.current = true;
 		setError(undefined);
-		setTranscript("");
-		setLevels(silence());
 		setPhase("starting");
 		void aoBridge.dictation.start();
 	}, []);
 
+	/** Ends the audio and waits for the recognizer's final wording. */
 	const stop = useCallback(() => {
 		if (!active.current) return;
 		setPhase("finishing");
 		void aoBridge.dictation.stop();
 	}, []);
 
-	return { phase, transcript, levels, error, start, stop, cancel };
+	useEffect(() => {
+		if (phase === "idle") return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "Escape") return;
+			// Escape belongs to dictation while it runs, not to menus or the page behind.
+			event.preventDefault();
+			event.stopPropagation();
+			stop();
+		};
+		window.addEventListener("keydown", onKeyDown, true);
+		return () => window.removeEventListener("keydown", onKeyDown, true);
+	}, [phase, stop]);
+
+	const toggle = useCallback(() => {
+		if (!active.current) start();
+		else if (phase !== "finishing") stop();
+	}, [phase, start, stop]);
+
+	return {
+		phase,
+		error,
+		toggle,
+		detach: useCallback(() => halt(true), [halt]),
+	};
 }

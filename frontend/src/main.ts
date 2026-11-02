@@ -2767,9 +2767,10 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
 registerDictationIpc(
-	app.isPackaged
-		? path.join(process.resourcesPath, "dictation-helper", "ao-dictate")
-		: path.join(app.getAppPath(), "dictation-helper", "ao-dictate"),
+	path.join(
+		app.isPackaged ? process.resourcesPath : app.getAppPath(),
+		"dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator",
+	),
 	getShellWebContents,
 );
 ipcMain.handle("app:openExternal", async (_event, url: string) => {

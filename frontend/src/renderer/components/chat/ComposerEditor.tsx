@@ -19,16 +19,19 @@ import {
 	COMMAND_PRIORITY_HIGH,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
+	HISTORY_MERGE_TAG,
 	HISTORY_PUSH_TAG,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
 	type LexicalNode,
 	type NodeKey,
 	type RangeSelection,
 	type SerializedLexicalNode,
+	type SerializedTextNode,
 	type Spread,
 } from "lexical";
 import {
@@ -80,8 +83,13 @@ export type ComposerEditorHandle = {
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
-	/** Inserts plain text at the caret (or the end), spaced from the word before it. */
-	insertText(text: string): void;
+	/**
+	 * Shows a dictation transcript at the caret (or the end), replacing the one
+	 * shown before it, so the words appear as they are recognized.
+	 */
+	dictate(text: string): void;
+	/** Ends the dictated run: kept as ordinary text, or removed. */
+	endDictation(keep: boolean): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
 	/**
@@ -160,6 +168,50 @@ type SerializedComposerTokenNode = Spread<
 	},
 	SerializedLexicalNode
 >;
+
+/** How long a dictated letter takes to fade in (the `stream-char` animation in styles.css). */
+const DICTATION_FADE_MS = 300;
+/** Letters that arrive together fade in this far apart, left to right. */
+const DICTATION_LETTER_STAGGER_MS = 14;
+
+/**
+ * One letter of a dictation in progress. A letter fades in once, when it first
+ * appears (the streamed-prose `stream-char` fade), after a delay that staggers
+ * the letters of a word. Revisions change the letter in place, and copies
+ * Lexical makes later (clone, split) never fade, so nothing flashes. The run
+ * becomes plain text once the last fade has finished.
+ */
+class DictationLetterNode extends TextNode {
+	__fadeDelay: number | undefined;
+
+	static getType(): string {
+		return "dictation-letter";
+	}
+
+	static clone(node: DictationLetterNode): DictationLetterNode {
+		return new DictationLetterNode(node.__text, node.__key);
+	}
+
+	static importJSON(serialized: SerializedTextNode): DictationLetterNode {
+		return new DictationLetterNode(serialized.text).updateFromJSON(serialized);
+	}
+
+	constructor(text: string, key?: NodeKey, fadeDelay?: number) {
+		super(text, key);
+		this.__fadeDelay = fadeDelay;
+	}
+
+	createDOM(config: EditorConfig, editor?: LexicalEditor): HTMLElement {
+		const dom = super.createDOM(config, editor);
+		if (this.__fadeDelay !== undefined) {
+			dom.classList.add("stream-char");
+			// Hidden until its turn, then fades in like the rest.
+			dom.style.animationDelay = `${this.__fadeDelay}ms`;
+			dom.style.animationFillMode = "backwards";
+		}
+		return dom;
+	}
+}
 
 class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	__kind: TokenKind;
@@ -495,6 +547,8 @@ const EditorBridge = forwardRef<
 	}
 >(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
+	/** The dictated letters, after an empty anchor node, and when the last fade ends. */
+	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
@@ -525,18 +579,69 @@ const EditorBridge = forwardRef<
 					$insertComposerToken(trigger, value);
 				}, { discrete: true });
 			},
-			insertText: (text) => {
+			dictate: (text) => {
+				const continuing = dictation.current !== null;
 				editor.update(() => {
-					let selection = $getSelection();
-					if (!$isRangeSelection(selection)) {
-						$getRoot().selectEnd();
-						selection = $getSelection();
+					let run = dictation.current;
+					if (!run) {
+						if (!text) return;
+						let selection = $getSelection();
+						if (!$isRangeSelection(selection)) {
+							$getRoot().selectEnd();
+							selection = $getSelection();
+						}
+						if (!$isRangeSelection(selection)) return;
+						const { anchor } = selection;
+						const before = anchor.type === "text" ? anchor.getNode().getTextContent().slice(0, anchor.offset) : "";
+						// Holds the run's place; it stays empty.
+						const anchorNode = new DictationLetterNode("");
+						selection.insertNodes([anchorNode]);
+						run = { anchor: anchorNode.getKey(), keys: [], prefix: before && !/\s$/.test(before) ? " " : "", settled: 0 };
+						dictation.current = run;
 					}
-					if (!$isRangeSelection(selection)) return;
-					const { anchor } = selection;
-					const before = anchor.type === "text" ? anchor.getNode().getTextContent().slice(0, anchor.offset) : "";
-					selection.insertText(before && !/\s$/.test(before) ? ` ${text}` : text);
-				}, { discrete: true });
+					const letters = Array.from(run.prefix + text);
+					const nodes = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					let last: TextNode | null = $getNodeByKey<TextNode>(run.anchor);
+					if (!last) return;
+					const keys: NodeKey[] = [];
+					let arriving = 0;
+					letters.forEach((letter, index) => {
+						let node = nodes[index];
+						if (node) {
+							// A revised letter changes in place, so it does not flash.
+							if (node.getTextContent() !== letter) node.setTextContent(letter);
+						} else {
+							const delay = arriving++ * DICTATION_LETTER_STAGGER_MS;
+							node = new DictationLetterNode(letter, undefined, delay);
+							last!.insertAfter(node);
+							run!.settled = Math.max(run!.settled, performance.now() + delay + DICTATION_FADE_MS);
+						}
+						last = node;
+						keys.push(node.getKey());
+					});
+					for (const extra of nodes.slice(letters.length)) extra.remove();
+					run.keys = keys;
+					last.selectEnd();
+				}, continuing ? { discrete: true, tag: HISTORY_MERGE_TAG } : { discrete: true });
+			},
+			endDictation: (keep) => {
+				const run = dictation.current;
+				dictation.current = null;
+				if (!run) return;
+				const finish = () => editor.update(() => {
+					const letters = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
+					const anchor = $getNodeByKey(run.anchor);
+					const text = letters.map((letter) => letter.getTextContent()).join("");
+					if (keep && text && anchor) {
+						const plain = $createTextNode(text);
+						anchor.insertAfter(plain);
+						plain.selectEnd();
+					}
+					for (const node of [anchor, ...letters]) node?.remove();
+				}, { discrete: true, tag: HISTORY_MERGE_TAG });
+				// Kept letters become plain text after their fades, so none is cut short.
+				if (keep) window.setTimeout(finish, Math.max(run.settled - performance.now(), 0));
+				else finish();
 			},
 			insertReference: (path, display, wire) => {
 				editor.update(() => {
@@ -684,6 +789,8 @@ export const ComposerEditor = forwardRef<
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
+		/** While dictating, the words arrive on their own: no caret, placeholder or suggestion. */
+		dictating?: boolean;
 		label: string;
 		placeholder: string;
 		promptSuggestion?: ComposerPromptSuggestion;
@@ -703,6 +810,7 @@ export const ComposerEditor = forwardRef<
 		disabled,
 		enterSends,
 		concealed,
+		dictating,
 		label,
 		placeholder,
 		promptSuggestion,
@@ -723,7 +831,7 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -734,7 +842,7 @@ export const ComposerEditor = forwardRef<
 	}, [promptSuggestion]);
 	const initialConfig = {
 		namespace: "AOChatComposer",
-		nodes: [ComposerTokenNode],
+		nodes: [ComposerTokenNode, DictationLetterNode],
 		editable: !disabled,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
@@ -749,7 +857,7 @@ export const ComposerEditor = forwardRef<
 	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
 
 	const placeholderNode = useCallback(
-		() => (
+		() => dictating ? null : (
 			<div className={cn(
 				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
 				suggestion
@@ -759,7 +867,7 @@ export const ComposerEditor = forwardRef<
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
 			</div>
 		),
-		[placeholder, suggestion],
+		[dictating, placeholder, suggestion],
 	);
 
 	return (
@@ -793,6 +901,7 @@ export const ComposerEditor = forwardRef<
 							className={cn(
 								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
+								dictating && "caret-transparent",
 								concealed ? "invisible" : disabled && "opacity-50",
 							)}
 						/>

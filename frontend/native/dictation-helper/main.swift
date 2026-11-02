@@ -25,13 +25,12 @@ func fail(_ message: String) -> Never {
 	finish(["type": "error", "message": message], code: 1)
 }
 
-// RMS of the first channel mapped from -50...0 dBFS onto 0...1.
-func level(_ buffer: AVAudioPCMBuffer) -> Double {
-	guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+// Loudness of one render cycle of the first channel, mapped from -60...-10 dBFS onto 0...1.
+func level(_ samples: UnsafePointer<Float>, count: Int) -> Double {
 	var sum: Float = 0
-	for index in 0..<Int(buffer.frameLength) { sum += samples[index] * samples[index] }
-	let decibels = 20 * log10(max(sqrt(sum / Float(buffer.frameLength)), 1e-6))
-	return Double(min(max((decibels + 50) / 50, 0), 1))
+	for index in 0..<count { sum += samples[index] * samples[index] }
+	let decibels = 20 * log10(max(sqrt(sum / Float(count)), 1e-6))
+	return (Double(min(max((decibels + 60) / 50, 0), 1)) * 1000).rounded() / 1000
 }
 
 final class Dictation {
@@ -39,6 +38,8 @@ final class Dictation {
 	private let request = SFSpeechAudioBufferRecognitionRequest()
 	private var task: SFSpeechRecognitionTask?
 	private var text = ""
+	/** What was heard, one utterance per pause. `end` is the audio time an ended utterance ran to. */
+	private var utterances: [(text: String, end: TimeInterval?)] = []
 	private var stopping = false
 
 	func start() {
@@ -53,20 +54,24 @@ final class Dictation {
 		let format = input.outputFormat(forBus: 0)
 		guard format.sampleRate > 0, format.channelCount > 0 else { fail("No microphone found.") }
 		let request = self.request
-		var lastLevel = Date.distantPast
-		input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+		input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
 			request.append(buffer)
-			let now = Date()
-			if now.timeIntervalSince(lastLevel) >= 0.05 {
-				lastLevel = now
-				emit(["type": "level", "value": level(buffer)])
-			}
 		}
+		// The tap hands over about 100 ms at a time, too late for the meter. A sink
+		// node runs every render cycle, so levels leave within a few milliseconds.
+		let sink = AVAudioSinkNode { _, frameCount, audio in
+			let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: audio))
+			guard frameCount > 0, let samples = buffers.first?.mData?.assumingMemoryBound(to: Float.self) else { return noErr }
+			emit(["type": "levels", "values": [level(samples, count: Int(frameCount))]])
+			return noErr
+		}
+		engine.attach(sink)
+		engine.connect(input, to: sink, format: format)
 
 		task = recognizer.recognitionTask(with: request) { [weak self] result, error in
 			guard let self else { return }
 			if let result {
-				self.text = result.bestTranscription.formattedString
+				self.hear(result)
 				if result.isFinal { finish(["type": "end", "text": self.text], code: 0) }
 				emit(["type": "text", "text": self.text])
 			} else if error != nil {
@@ -79,6 +84,36 @@ final class Dictation {
 		engine.prepare()
 		do { try engine.start() } catch { fail("Could not start the microphone.") }
 		emit(["type": "listening"])
+	}
+
+	// The recognizer reports one utterance at a time: partial results while it
+	// hears words (their timestamps are all zero), then, at a pause, the ended
+	// utterance with real audio timestamps. The next partial starts a new
+	// utterance. An ended utterance can come back revised (the final result on
+	// stop often does); its words start inside that utterance's audio, so it
+	// replaces the utterance instead of adding a copy.
+	private func hear(_ result: SFSpeechRecognitionResult) {
+		let heard = result.bestTranscription.formattedString
+		let segments = result.bestTranscription.segments
+		let ended = result.speechRecognitionMetadata != nil || result.isFinal
+		let end = segments.last.map { $0.timestamp + $0.duration }
+		let index: Int?
+		if ended, let start = segments.first?.timestamp {
+			// The ended utterance whose audio this result starts in, else the open one.
+			index = utterances.lastIndex { $0.end.map { start < $0 - 0.05 } ?? true }
+		} else {
+			index = utterances.isEmpty || utterances[utterances.count - 1].end != nil ? nil : utterances.count - 1
+		}
+		if heard.isEmpty {
+			if let index, utterances[index].end == nil { utterances.remove(at: index) }
+		} else if let index {
+			utterances[index] = (heard, ended ? end : nil)
+			// Anything heard after a revised utterance was part of it.
+			utterances.removeSubrange((index + 1)...)
+		} else {
+			utterances.append((heard, ended ? end : nil))
+		}
+		text = utterances.map(\.text).joined(separator: " ")
 	}
 
 	func stop() {

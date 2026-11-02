@@ -50,10 +50,10 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, Check, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
-import { DictationLevels } from "./DictationLevels";
+import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -454,9 +454,9 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
-	const dictation = useDictation((text) => {
-		editor.current?.insertText(text);
-		editor.current?.focus();
+	const dictation = useDictation({
+		onText: (text) => editor.current?.dictate(text),
+		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
 	const filePicker = useRef<HTMLInputElement>(null);
@@ -1275,6 +1275,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending keeps what was dictated so far and stops listening.
+		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
@@ -2016,6 +2018,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
@@ -2073,14 +2076,6 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 
 				<div className="flex h-7 items-center gap-1.5">
-					{dictating ? (
-						<div role="status" aria-label="Dictation" className="flex min-w-0 flex-1 items-center gap-2.5 pl-2">
-							<DictationLevels levels={dictation.levels} muted={dictation.phase !== "listening"} />
-							<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground [direction:rtl] text-left">
-								<bdi>{dictation.transcript || (dictation.phase === "finishing" ? "Finishing…" : "Listening…")}</bdi>
-							</span>
-						</div>
-					) : (
 					<div role="group" aria-label="Message tools" className="flex min-w-0 flex-1 items-center gap-0.5">
 						{canAttach ? (
 							<>
@@ -2162,7 +2157,6 @@ export const ChatComposer = memo(function ChatComposer({
 						) : null}
 						{settings}
 					</div>
-					)}
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
@@ -2170,67 +2164,41 @@ export const ChatComposer = memo(function ChatComposer({
 								Steer
 							</Button>
 						) : null}
-						{isMacPlatform() && dictating ? (
-							<>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											onMouseDown={(event) => event.preventDefault()}
-											onClick={dictation.cancel}
-											aria-label="Cancel dictation"
-											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
-										>
-											<X aria-hidden="true" className="size-3.5" />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">Cancel</TooltipContent>
-								</Tooltip>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											disabled={dictation.phase === "finishing"}
-											onMouseDown={(event) => event.preventDefault()}
-											onClick={dictation.stop}
-											data-shortcut-target="dictate"
-											aria-label="Finish dictation"
-											className="mr-1 size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
-										>
-											{dictation.phase === "finishing" ? (
-												<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-											) : (
-												<Check aria-hidden="true" className="size-3.5" />
-											)}
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">Insert dictation</TooltipContent>
-								</Tooltip>
-							</>
-						) : isMacPlatform() ? (
+						{isMacPlatform() ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className="inline-flex">
 										<Button
 											type="button"
 											variant="ghost"
-											size="icon-sm"
-											disabled={controlsDisabled}
+											size="none"
+											disabled={!dictating && controlsDisabled}
+											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
-											onClick={dictation.start}
+											onClick={() => {
+												editor.current?.focus();
+												dictation.toggle();
+											}}
 											data-shortcut-target="dictate"
-											aria-label="Dictate"
-											className="mr-1 size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-pressed={dictating}
+											className={cn(
+												// Important: the chat surface's button rule (styles.css) would otherwise drop width from the transition.
+												"mr-1 h-7 overflow-hidden rounded-full p-0 transition-[width,background-color,color]! duration-200! ease-[cubic-bezier(0.23,1,0.32,1)]! active:translate-y-0! active:transform-none! active:scale-100! motion-reduce:transition-none!",
+												dictating
+													? "w-[76px] bg-foreground text-on-foreground hover:bg-foreground/90! hover:text-on-foreground dark:hover:bg-foreground/90!"
+													: "w-7 text-muted-foreground hover:bg-interactive-active! hover:text-foreground",
+											)}
 										>
-											<Mic aria-hidden="true" className="size-3.5" />
+											{dictating ? (
+												<DictationMeter listening={dictation.phase === "listening"} />
+											) : (
+												<Mic aria-hidden="true" className="size-3.5" />
+											)}
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">Dictate</TooltipContent>
+								<TooltipContent side="bottom">{dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
 							</Tooltip>
 						) : null}
 						<Tooltip>
