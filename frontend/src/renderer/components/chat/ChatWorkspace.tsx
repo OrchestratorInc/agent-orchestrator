@@ -345,6 +345,8 @@ export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
+	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -694,6 +696,7 @@ function ChatWorkspaceContent({
 	onAddToSideChat,
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
+	onAnnotationNavigationHandled,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -1286,7 +1289,13 @@ function ChatWorkspaceContent({
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
-	useEffect(() => { if (annotationNavigationRequest) navigateToAnnotation(annotationNavigationRequest); }, [annotationNavigationRequest, navigateToAnnotation]);
+	// This content remounts per session (it is keyed by the draft scope), so a
+	// request still held after it applied would apply again to the next chat.
+	useEffect(() => {
+		if (!annotationNavigationRequest) return;
+		navigateToAnnotation(annotationNavigationRequest);
+		onAnnotationNavigationHandled?.(annotationNavigationRequest.id);
+	}, [annotationNavigationRequest, navigateToAnnotation, onAnnotationNavigationHandled]);
 	// Storage failures can be transient, so try again when the user comes back. Only while
 	// the composer is empty: recovering remounts it, which would drop unsaved text.
 	useEffect(() => {

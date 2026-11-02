@@ -6,6 +6,8 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
+import { sessionUiKey } from "../../lib/hosts";
+import { useUiStore } from "../../stores/ui-store";
 import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -1838,3 +1840,44 @@ describe("CloudSessionChatSurface opening brief", () => {
 	});
 });
 
+
+describe("CloudSessionChatSurface palette jump", () => {
+	const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+	const sessionA = { ...session, id: "session-a", cloud: { orgId: "org-1" } } satisfies WorkspaceSession;
+	const sessionB = { ...session, id: "session-b", cloud: { orgId: "org-1" } } satisfies WorkspaceSession;
+	beforeEach(() => {
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		cloudMocks.chatProps.mockReset();
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockImplementation(async (_orgId: string, sessionId: string) => ({ events: [
+			{ sessionId, sequence: 1, type: "chat.user_message", payload: { text: `hello from ${sessionId}`, turnId: "turn-1" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 1 }));
+	});
+	function jumpToB() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionB} /></QueryClientProvider>);
+		act(() => useUiStore.getState().requestChatMessageFocus(sessionUiKey(sessionB.id), "cloud-user-turn-1", "hello"));
+		return { ...view, queryClient };
+	}
+
+	it("never hands one session's palette target to the next session the surface shows", async () => {
+		const { rerender, queryClient } = jumpToB();
+		await waitFor(() => expect(props().annotationNavigationRequest).toMatchObject({ messageId: "cloud-user-turn-1", text: "hello" }));
+		// The surface stays mounted from session to session; A must not get B's target.
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionA} /></QueryClientProvider>);
+		expect(props().annotationNavigationRequest).toBeUndefined();
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionA} /></QueryClientProvider>);
+		expect(props().annotationNavigationRequest).toBeUndefined();
+	});
+
+	it("drops a palette target once the chat applied it, so a later mount never replays it", async () => {
+		const { rerender, queryClient } = jumpToB();
+		await waitFor(() => expect(props().annotationNavigationRequest).toBeDefined());
+		const { id } = props().annotationNavigationRequest;
+		act(() => props().onAnnotationNavigationHandled?.(id));
+		expect(props().annotationNavigationRequest).toBeUndefined();
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionA} /></QueryClientProvider>);
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionB} /></QueryClientProvider>);
+		expect(props().annotationNavigationRequest).toBeUndefined();
+	});
+});

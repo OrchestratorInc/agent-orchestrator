@@ -4,7 +4,7 @@ import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -1548,6 +1548,34 @@ describe("ChatWorkspace timeline", () => {
 		} finally {
 			geometry.mockRestore();
 		}
+	});
+
+	it("applies a navigation request once, so another session's chat never replays it", () => {
+		type Request = { id: string; text: string; messageId?: string };
+		// A surface that stays mounted across sessions, as the Cloud one does,
+		// and drops a request once its chat reports it applied.
+		function Host({ snapshot, initial }: { snapshot: ConversationSnapshot; initial: Request }) {
+			const [request, setRequest] = useState<Request | undefined>(initial);
+			return (
+				<ChatWorkspace
+					snapshot={snapshot}
+					annotationNavigationRequest={request}
+					onAnnotationNavigationHandled={(id) => setRequest((current) => current?.id === id ? undefined : current)}
+				/>
+			);
+		}
+		const other = {
+			...chatFixtureSettled,
+			sessionId: "other-session",
+			items: chatFixtureSettled.items.map((item) => ({ ...item, id: `other-${item.id}` })),
+		} as ConversationSnapshot;
+		const messageId = chatFixtureSettled.items.find((item) => item.kind === "message")!.id;
+		const request = { id: "palette:1", text: "line", messageId };
+		const { rerender } = render(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		rerender(<Host snapshot={chatFixtureSettled} initial={request} />);
+		rerender(<Host snapshot={other} initial={request} />);
+		expect(screen.queryByText("The referenced message is no longer available in this chat.")).not.toBeInTheDocument();
 	});
 
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {

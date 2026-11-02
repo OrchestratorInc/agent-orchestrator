@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import { useChatMessageFocus, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
+import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
@@ -1402,13 +1402,16 @@ export function CloudSessionChatSurface({
 	// the reply by its first event, which is the reply's own sequence.
 	const snapshotRef = useRef(snapshot);
 	snapshotRef.current = snapshot;
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string }>();
+	// This surface stays mounted from session to session, so the target is kept
+	// for the session it names and dropped once the chat applied it.
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; messageId?: string }>(session.id);
+	const navigateToMessage = annotationNavigation.navigate;
 	const focusMessage = useCallback((target: ChatMessageFocusTarget) => {
 		const replySequence = /^cloud-search-.+-(\d+)$/.exec(target.messageId)?.[1];
 		const reply = replySequence === undefined ? undefined
 			: snapshotRef.current.items.find((item) => item.kind === "message" && item.role === "assistant" && item.sequence === Number(replySequence));
-		setAnnotationNavigationRequest({ id: target.id, text: target.text, messageId: reply?.id ?? target.messageId });
-	}, []);
+		navigateToMessage({ id: target.id, text: target.text, messageId: reply?.id ?? target.messageId });
+	}, [navigateToMessage]);
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
@@ -1666,7 +1669,8 @@ export function CloudSessionChatSurface({
 			onOpenReviewerChat={onOpenReviewerChat}
 			reviewerChatSelected={reviewerChatSelected}
 			promptSuggestion={promptSuggestion}
-			annotationNavigationRequest={annotationNavigationRequest}
+			annotationNavigationRequest={annotationNavigation.request}
+			onAnnotationNavigationHandled={annotationNavigation.handled}
 			reviewerTarget={reviewerTarget}
 			onSelectChat={onSelectChat}
 			shellTerminals={shellTerminals}
