@@ -5651,6 +5651,7 @@ function isNoticeRun(run: TimelineRun): boolean {
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
+	if (item.activityKind === "mcp_tool" && item.detail?.mcpApp) return true;
 	if (item.activityKind === "error") return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";

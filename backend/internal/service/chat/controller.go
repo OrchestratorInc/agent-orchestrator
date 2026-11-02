@@ -262,7 +262,8 @@ type Controller struct {
 	// A compact request can be accepted before its provider turn starts.
 	compactionPending bool
 	// Provider calls keep automatic hibernation out without blocking explicit Kill.
-	operations int
+	operations  int
+	mcpCaptures int
 	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
 	// pendingTurnID by the round trip between turn/start returning and the
 	// turn-started notification arriving. Interrupt needs the distinction: a
@@ -1892,6 +1893,7 @@ func (c *Controller) dispatch(
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
 	msg = excerptDeliveryMessage(msg)
+	msg = c.mcpAppContext(ctx, msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
 		if len(followers) > 0 {
@@ -3074,6 +3076,7 @@ func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project
 		"account":                event.Account,
 		"threadState":            event.ThreadState,
 		"mcpServers":             event.MCPServers,
+		"mcpApp":                 event.MCPApp,
 	}
 	if c.harness == domain.HarnessCodex {
 		// Codex account identity and subscription capacity are daemon-memory
@@ -3305,6 +3308,13 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		return nil
 
 	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+		if event.MCPApp != nil {
+			var detail map[string]json.RawMessage
+			if json.Unmarshal(event.Detail, &detail) == nil && detail != nil {
+				detail["mcpApp"], _ = json.Marshal(map[string]string{"resourceUri": event.MCPApp.ResourceURI, "conversationId": c.conversation.ID})
+				event.Detail, _ = json.Marshal(detail)
+			}
+		}
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:             c.newID(),
@@ -3315,6 +3325,13 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
+		}
+		if store, ok := c.store.(mcpAppStore); ok && event.MCPApp != nil {
+			data := *event.MCPApp
+			data.RootThreadID = c.conv.ProviderConversationID()
+			if err := store.PutMCPApp(ctx, c.conversation.ID, event.ProviderItemID, data); err != nil {
+				return err
+			}
 		}
 		// After the upsert, so the row exists to settle. Only when the provider
 		// actually settled something: an empty settle would erase an accumulation the
@@ -3566,6 +3583,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 // draining may call the provider, so either one inside the store transaction
 // would hold the single writer connection across another subsystem.
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
+	if event.Kind == ports.ChatEventActivityCompleted && event.MCPApp != nil {
+		c.captureMCPApp(ctx, event.ProviderItemID, *event.MCPApp)
+	}
 	now := c.now()
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:

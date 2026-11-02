@@ -1073,6 +1073,8 @@ func (f *chatProviderFailure) Unwrap() error { return f.cause }
 // annotations to links before emitting events or returning history.
 type ChatEvent struct {
 	Kind ChatEventKind
+	// MCPApp retains the full app input/result outside the truncated activity detail.
+	MCPApp *domain.MCPAppData
 	// NativeUserMessageID is an adapter-proven native user record identity.
 	// Unlike ProviderItemID, it is never synthesized or namespaced by AO.
 	NativeUserMessageID string

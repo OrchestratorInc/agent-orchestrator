@@ -2784,6 +2784,144 @@ paths:
         background service, and macOS permissions
       tags:
       - computer-use
+  /api/v1/conversations/{conversationId}/mcp-apps/{activityId}:
+    get:
+      operationId: getMCPApp
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: activityId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPAppSnapshotResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Load an interactive tool app and its durable input and result
+      tags:
+      - conversations
+  /api/v1/conversations/{conversationId}/mcp-apps/{activityId}/actions:
+    post:
+      operationId: mcpAppAction
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: activityId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MCPAppActionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPAppActionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run an action scoped to an app's originating tool server
+      tags:
+      - conversations
+  /api/v1/conversations/{conversationId}/mcp-apps/{activityId}/document:
+    get:
+      operationId: getMCPAppDocument
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: activityId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Serve a saved MCP app in an opaque-origin sandbox
+      tags:
+      - conversations
   /api/v1/conversations/search:
     get:
       operationId: searchConversations
@@ -18263,6 +18401,57 @@ components:
       - path
       - entries
       - truncated
+      type: object
+    MCPAppActionRequest:
+      properties:
+        approvalToken:
+          type: string
+        method:
+          type: string
+        params: {}
+      required:
+      - method
+      - params
+      type: object
+    MCPAppActionResponse:
+      properties:
+        approvalTitle:
+          type: string
+        approvalToken:
+          type: string
+        result: {}
+      type: object
+    MCPAppSnapshotResponse:
+      properties:
+        arguments: {}
+        csp:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        error:
+          type: string
+        live:
+          type: boolean
+        permissions:
+          additionalProperties: {}
+          type: object
+        policy:
+          type: string
+        ready:
+          type: boolean
+        result: {}
+        server:
+          type: string
+        tool:
+          type: string
+      required:
+      - server
+      - tool
+      - arguments
+      - live
+      - ready
       type: object
     MarkAllNotificationsReadRequest:
       properties:

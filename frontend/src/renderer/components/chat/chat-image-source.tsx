@@ -39,6 +39,13 @@ export function useChatRemoteHost(): boolean {
 	return useContext(ChatImageSourceContext)?.remoteHost ?? false;
 }
 
+/** The owning daemon, including the authenticated remote-host proxy. */
+export function useChatApiBaseUrl(): string | undefined {
+	const source = useContext(ChatImageSourceContext);
+	const local = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	return source?.remoteHost ? source.baseUrl : source?.baseUrl ?? local;
+}
+
 /**
  * What the session lists for one of its artifact files, by path: the Browser
  * panel URL, and the URL that frames the page inline from its own origin.

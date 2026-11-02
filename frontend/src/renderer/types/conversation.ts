@@ -381,6 +381,7 @@ export interface FileChangeDetail {
  * rather than print as the tool's actual answer.
  */
 export interface McpToolDetail {
+	mcpApp?: { resourceUri: string; conversationId?: string };
 	server?: string;
 	toolName?: string;
 	/** The provider's grouping when the tool is namespaced rather than server-scoped. */

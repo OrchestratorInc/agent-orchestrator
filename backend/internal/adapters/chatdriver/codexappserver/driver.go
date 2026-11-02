@@ -663,8 +663,9 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	if err := connection.request(initCtx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": clientName, "title": clientTitle, "version": clientVersion},
-		"capabilities": map[string]any{"experimentalApi": true, "optOutNotificationMethods": nil},
+		"clientInfo": map[string]any{"name": clientName, "title": clientTitle, "version": clientVersion},
+		"capabilities": map[string]any{"experimentalApi": true, "optOutNotificationMethods": nil,
+			"extensions": map[string]any{"io.modelcontextprotocol/ui": map[string]any{"mimeTypes": []string{"text/html;profile=mcp-app"}}}},
 	}, nil); err != nil {
 		return fmt.Errorf("%w: initialize: %w", ports.ErrChatDriverIncompatible, err)
 	}
