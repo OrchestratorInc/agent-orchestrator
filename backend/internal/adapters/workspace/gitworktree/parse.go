@@ -12,7 +12,9 @@ type worktreeRecord struct {
 	Bare     bool
 	Detached bool
 	Locked   bool
-	Prunable bool
+	// LockReason is the text after "locked", empty when none was given.
+	LockReason string
+	Prunable   bool
 }
 
 func parseWorktreePorcelain(out string) ([]worktreeRecord, error) {
@@ -60,6 +62,7 @@ func parseWorktreePorcelain(out string) ([]worktreeRecord, error) {
 		case "locked":
 			if cur != nil {
 				cur.Locked = true
+				cur.LockReason = val
 			}
 		case "prunable":
 			if cur != nil {
