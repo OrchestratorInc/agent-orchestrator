@@ -567,7 +567,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi, domain.HarnessCopilot}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi, domain.HarnessKimi, domain.HarnessCopilot}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
