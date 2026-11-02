@@ -41,7 +41,8 @@ var approvedRoutes sync.Map
 
 var captureGate = struct {
 	sync.Mutex
-	policyEnabled bool
+	policyCheck   func(context.Context) bool
+	policyVersion uint64
 	active        int
 	waiters       []chan struct{}
 }{}
@@ -199,22 +200,28 @@ func Init(cfg Config) error {
 // Enabled reports whether Sentry is active (a DSN was configured).
 func Enabled() bool { return enabled.Load() }
 
-// SetPolicyEnabled mirrors the crash-durable telemetry authority. Capture
-// paths consult it synchronously so a watcher-observed opt-out closes intake
-// even when the SDK itself was initialized earlier in the process.
-func SetPolicyEnabled(value bool) {
+// SetPolicyCheck installs the durable authority consulted before each capture.
+// A nil check closes intake.
+func SetPolicyCheck(check func(context.Context) bool) {
 	captureGate.Lock()
-	captureGate.policyEnabled = value
+	captureGate.policyCheck = check
+	captureGate.policyVersion++
 	captureGate.Unlock()
 }
 
-func enterCapture() bool {
-	if !enabled.Load() {
+func enterCapture(ctx context.Context) bool {
+	if !enabled.Load() || ctx.Err() != nil {
+		return false
+	}
+	captureGate.Lock()
+	check, version := captureGate.policyCheck, captureGate.policyVersion
+	captureGate.Unlock()
+	if check == nil || !check(ctx) {
 		return false
 	}
 	captureGate.Lock()
 	defer captureGate.Unlock()
-	if !captureGate.policyEnabled {
+	if version != captureGate.policyVersion || !enabled.Load() || ctx.Err() != nil {
 		return false
 	}
 	captureGate.active++
@@ -386,7 +393,7 @@ func ShouldCaptureStatus(status int) bool {
 // CaptureError captures a reportable daemon error with safe tags and the
 // caller's stable fingerprint. No-op when disabled or canceled.
 func CaptureError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
-	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture() {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()
@@ -395,7 +402,7 @@ func CaptureError(ctx context.Context, err error, tags map[string]string, finger
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.
 func CapturePanic(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
-	if ctx.Err() != nil || !enterCapture() {
+	if ctx.Err() != nil || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()

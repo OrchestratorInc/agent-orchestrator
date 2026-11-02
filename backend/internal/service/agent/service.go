@@ -97,7 +97,14 @@ type Service struct {
 	// updates wait for it; reads of the saved catalog never do.
 	readinessWarm     chan struct{}
 	readinessWarmOnce sync.Once
+	// modelGate adjusts every catalog read; see ModelGate.
+	modelGate ModelGate
 }
+
+// ModelGate adjusts a catalog for facts that change independently of model
+// discovery, such as which models the installed agent CLI is too old to use.
+// It runs on every read so the durable cache stays the raw discovered list.
+type ModelGate func(ctx context.Context, agentID string, catalog ports.AgentModelCatalog) ports.AgentModelCatalog
 
 // Deps contains optional durable dependencies for the agent catalog service.
 type Deps struct {
@@ -117,6 +124,8 @@ type Deps struct {
 	CodexOperationGate     ports.CodexOperationGate
 	// Clock overrides time.Now for deterministic account-bootstrap retry tests.
 	Clock func() time.Time
+	// ModelGate is applied to every catalog Models and ModelCatalog return. Optional.
+	ModelGate ModelGate
 }
 
 // SessionUsageLookup provides durable session facts used to rank agent choices.
@@ -141,6 +150,7 @@ func NewWithDeps(deps Deps) *Service {
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
 	}
+	svc.modelGate = deps.ModelGate
 	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
 		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
 		if deps.Clock != nil {
@@ -327,7 +337,7 @@ func (s *Service) Models(ctx context.Context, agentID, scope string, refresh boo
 	if err != nil {
 		return catalog, err
 	}
-	return s.withModelUsage(ctx, agentID, catalog), nil
+	return s.gateModels(ctx, agentID, s.withModelUsage(ctx, agentID, catalog)), nil
 }
 
 // ModelCatalog returns the persisted catalog without session-history enrichment.
@@ -336,7 +346,18 @@ func (s *Service) Models(ctx context.Context, agentID, scope string, refresh boo
 // checks, which run in the background. A scope with no persisted catalog still
 // needs its first discovery.
 func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	return s.modelCatalog(ctx, agentID, projectID, refresh)
+	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+	if err != nil {
+		return catalog, err
+	}
+	return s.gateModels(ctx, agentID, catalog), nil
+}
+
+func (s *Service) gateModels(ctx context.Context, agentID string, catalog ports.AgentModelCatalog) ports.AgentModelCatalog {
+	if s.modelGate == nil {
+		return catalog
+	}
+	return s.modelGate(ctx, agentID, catalog)
 }
 
 func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refresh bool) (ports.AgentModelCatalog, error) {
@@ -618,7 +639,9 @@ func (s *Service) RevalidateModels(ctx context.Context, agentID, scope string) (
 	if err != nil {
 		return catalog, err
 	}
-	return s.withModelUsage(ctx, agentID, catalog), nil
+	// Pickers replace their catalog with this response, so it is gated like a
+	// read; the durable cache stays the raw discovered list.
+	return s.gateModels(ctx, agentID, s.withModelUsage(ctx, agentID, catalog)), nil
 }
 
 // revalidateModels is the unstamped variant for background callers that discard

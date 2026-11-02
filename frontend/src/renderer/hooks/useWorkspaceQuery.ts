@@ -124,6 +124,7 @@ export function toWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -230,6 +231,7 @@ function toLocalWorkspaceSession(
 		staleBinary: session.staleBinary ? { version: session.staleBinary.version, since: session.staleBinary.since, switchFailedAt: session.staleBinary.switchFailedAt ?? undefined } : undefined,
 		isTerminated: session.isTerminated,
 		workspaceCleanup: session.workspaceCleanup,
+		workspaceCleanupReportOnly: session.workspaceCleanupReportOnly,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
@@ -414,6 +416,20 @@ export function useWorkspacePolling(enabled = true) {
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
 export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
+
+/**
+ * Refreshes the cloud sessions list, the sessions shared from other
+ * organizations and the direct session lookups. A view that learns a session's
+ * worker connected calls it, so the session reads as connected at once instead
+ * of after its list's next poll.
+ */
+export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<void> {
+	return Promise.all([
+		queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
+		queryClient.invalidateQueries({ queryKey: sharedCloudWorkspacesQueryKey }),
+		queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
+	]).then(() => undefined);
+}
 
 /**
  * Adds a session the desktop just created to the sessions list, when it runs
