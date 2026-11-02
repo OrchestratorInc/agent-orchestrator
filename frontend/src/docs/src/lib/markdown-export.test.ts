@@ -85,6 +85,11 @@ describe("Markdown export", () => {
     expect(markdown).toBe("## Title\n\n`ao` is frozen.\n\nBody.\n");
   });
 
+  it("keeps inline content next to blocks in one paragraph", async () => {
+    const markdown = await exported("<div>\nSee <code>ao</code> here.\n\n- item\n</div>\n");
+    expect(markdown).toBe("See `ao` here.\n\n* item\n");
+  });
+
   it("writes the downloads as a table", async () => {
     const markdown = await exported("<InstallDownloads />\n");
     expect(markdown).toContain("| Platform");

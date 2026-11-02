@@ -1,4 +1,4 @@
-import type { BlockContent, DefinitionContent, ListItem, Nodes, Parents, PhrasingContent, RootContent } from "mdast";
+import type { BlockContent, DefinitionContent, ListItem, Nodes, Paragraph, Parents, PhrasingContent, RootContent } from "mdast";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute, MdxJsxFlowElement, MdxJsxTextElement } from "mdast-util-mdx";
 import type { Info, State } from "mdast-util-to-markdown";
 import { toString } from "mdast-util-to-string";
@@ -64,13 +64,22 @@ const PHRASING = new Set<string>([
   "mdxTextExpression",
 ]);
 
-/** The element's children as blocks, wrapping inline content in a paragraph. */
+/** The element's children as blocks, wrapping each run of inline content in a paragraph. */
 function blocks(node: JsxElement): Block[] {
-  const children = node.children as RootContent[];
-  if (children.length && children.every((child) => PHRASING.has(child.type))) {
-    return [{ type: "paragraph", children: children as PhrasingContent[] }];
+  const result: Block[] = [];
+  let run: Paragraph | undefined;
+  for (const child of node.children as RootContent[]) {
+    if (!PHRASING.has(child.type)) {
+      result.push(child as Block);
+      run = undefined;
+    } else if (run) {
+      run.children.push(child as PhrasingContent);
+    } else {
+      run = { type: "paragraph", children: [child as PhrasingContent] };
+      result.push(run);
+    }
   }
-  return children as Block[];
+  return result;
 }
 
 function listItem(children: Block[]): ListItem {
