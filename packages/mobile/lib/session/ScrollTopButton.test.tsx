@@ -31,6 +31,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	accessibilityAddTraits: (traits: string[]) => ({ traits }),
+	accessibilityElement: (children: string) => ({ element: children }),
 	accessibilityLabel: (label: string) => ({ label }),
 	frame: (size: object) => ({ frame: size }),
 	onTapGesture: (handler: () => void) => ({ onTap: handler }),
@@ -73,6 +74,11 @@ describe("the iOS scroll-to-top button", () => {
 		await act(async () => { renderer = create(<ScrollTopButton onPress={onPress} />); });
 		const group = renderer!.root.findByType("Group" as never);
 		expect(group.props.modifiers).toEqual(expect.arrayContaining([{ frame: { width: 44, height: 44 } }, { glass: "circle" }, { traits: ["isButton"] }, { label: "Scroll to top" }]));
+		// The framed circle is VoiceOver's element, not the glyph inside it, and
+		// the frame comes first so the element is the 44pt one.
+		const order = group.props.modifiers.map((modifier: object) => Object.keys(modifier)[0]);
+		expect(order.indexOf("element")).toBeGreaterThan(order.indexOf("frame"));
+		expect(group.props.modifiers).toContainEqual({ element: "ignore" });
 		expect(renderer!.root.findByType("Image" as never).props.systemName).toBe("arrow.up.to.line");
 		const tap = group.props.modifiers.find((modifier: { onTap?: () => void }) => modifier.onTap);
 		act(() => tap.onTap());

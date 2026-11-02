@@ -103,7 +103,9 @@ describe("NativeHeaderButton on iOS", () => {
 		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
 
 		const group = root.findByType("Group" as never);
-		expect(modifierNames(group.props.modifiers)).toEqual(["frame", "glassCircle", "onTapGesture", "accessibilityAddTraits", "accessibilityLabel", "accessibilityIdentifier"]);
+		// The framed circle is VoiceOver's element, not the glyph a Group would
+		// otherwise hand its modifiers to: 44pt, not the symbol's own size.
+		expect(modifierNames(group.props.modifiers)).toEqual(["frame", "glassCircle", "onTapGesture", "accessibilityElement", "accessibilityAddTraits", "accessibilityLabel", "accessibilityIdentifier"]);
 		// The whole circle takes the tap, so it is the touch target.
 		expect(GLASS_CIRCLE_SIZE).toBe(touchTarget);
 		expect((group.props.modifiers as Modifier[])[0].args).toEqual([{ width: touchTarget, height: touchTarget }]);

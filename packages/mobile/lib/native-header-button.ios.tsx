@@ -48,9 +48,10 @@ export function NativeHeaderButton({ icon, label, onPress, badge = 0 }: NativeHe
 					frame({ width: GLASS_CIRCLE_SIZE, height: GLASS_CIRCLE_SIZE }),
 					glassCircle(),
 					onTapGesture(() => onPress()),
-					// With a badge the glyph and dot are two views; one element keeps
-					// VoiceOver on a single button.
-					...(badge > 0 ? [accessibilityElement("ignore")] : []),
+					// One element for the whole circle: a Group passes its modifiers on
+					// to its child, so otherwise VoiceOver's element is the bare glyph,
+					// well under 44pt, and with a badge the glyph and dot are two.
+					accessibilityElement("ignore"),
 					// The gesture is on the group rather than a Button, so nothing adds the
 					// button trait by itself: VoiceOver read these as plain text and never
 					// said "button". The trait is what a real Button would have contributed.

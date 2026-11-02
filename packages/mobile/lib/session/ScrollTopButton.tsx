@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { Group, Image } from "@expo/ui/swift-ui";
-import { accessibilityAddTraits, accessibilityLabel, frame, onTapGesture } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityAddTraits, accessibilityElement, accessibilityLabel, frame, onTapGesture } from "@expo/ui/swift-ui/modifiers";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -40,6 +40,10 @@ export function ScrollTopButton({ onPress }: ScrollTopButtonProps) {
 							frame({ width: touchTarget, height: touchTarget }),
 							glassCircle(),
 							onTapGesture(() => onPress()),
+							// A Group passes its modifiers on to its child, so without this
+							// VoiceOver's element is the bare glyph, about 15×20pt. Ignoring
+							// the children makes the framed circle the element: 44pt.
+							accessibilityElement("ignore"),
 							accessibilityAddTraits(["isButton"]),
 							accessibilityLabel(SCROLL_TOP_LABEL),
 						]}
