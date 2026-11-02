@@ -179,7 +179,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 			return errors.New("gemini destination belongs to another folder")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeGeminiImport(root, marker, []byte(cwd)); err != nil {
+		if err := writeGeminiImport(ctx, root, marker, []byte(cwd)); err != nil {
 			return err
 		}
 	} else {
@@ -252,10 +252,13 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		}
 		copied.Write(encoded)
 	}
-	return writeGeminiImport(root, destination, copied.Bytes())
+	return writeGeminiImport(ctx, root, destination, copied.Bytes())
 }
 
-func writeGeminiImport(root *os.Root, path string, body []byte) error {
+func writeGeminiImport(ctx context.Context, root *os.Root, path string, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// First-open runs under the session input lease; the temporary name is
 	// private and never follows a pre-existing symlink or overwrites a source.
 	tmp := path + ".ao-import-tmp"
@@ -268,6 +271,9 @@ func writeGeminiImport(root *os.Root, path string, body []byte) error {
 	err = errors.Join(writeErr, f.Close())
 	if err != nil {
 		return fmt.Errorf("write gemini copy: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return root.Rename(tmp, path)
 }
