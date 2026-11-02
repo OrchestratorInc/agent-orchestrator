@@ -10,6 +10,8 @@ export interface CloudCpErrorOptions {
 	code?: string;
 	/** Correlation id from the control plane's error envelope. */
 	requestId?: string;
+	/** How long the control plane asked the caller to wait (its Retry-After), in milliseconds. */
+	retryAfterMs?: number;
 	cause?: unknown;
 }
 
@@ -17,6 +19,7 @@ export class CloudCpError extends Error {
 	readonly status: number;
 	readonly code?: string;
 	readonly requestId?: string;
+	readonly retryAfterMs?: number;
 
 	constructor(message: string, options: CloudCpErrorOptions) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
@@ -24,6 +27,7 @@ export class CloudCpError extends Error {
 		this.status = options.status;
 		this.code = options.code;
 		this.requestId = options.requestId;
+		this.retryAfterMs = options.retryAfterMs;
 	}
 }
 
