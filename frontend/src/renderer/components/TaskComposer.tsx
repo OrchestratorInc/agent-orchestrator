@@ -774,8 +774,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// An inherited or stale choice cannot invent an ACP mode. Use the agent's
 	// normal approval behavior when it has no alternatives, never implicitly bypass.
 	// Keep the chosen policy intact so switching back restores it.
-	const effectiveApproval = usesChatPermissions && chatPermissionModes?.length === 1 && chatPermissionModes[0] === "default"
-		? "default" : wantedApproval;
+	const usesNativePermissions = usesChatPermissions && chatPermissionModes?.length === 1 && chatPermissionModes[0] === "default";
+	const effectiveApproval = usesNativePermissions ? "default" : wantedApproval;
+	// Preserve omission so the daemon can apply project and harness defaults.
+	// Only a default-only catalog needs a correction in the launch payload.
+	const launchApproval = usesNativePermissions ? "default" : approvalMode;
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -958,7 +961,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// The local daemon applies the default session mode itself; the control
 					// plane has none, so a cloud task carries it.
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
-					approvalMode: requestedApproval ?? (usesChatPermissions ? effectiveApproval : approvalMode),
+					approvalMode: requestedApproval ?? launchApproval,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1145,7 +1148,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const turnSettings: TurnSettings = {
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
-		// Match the permission mode sent at launch.
+		// Display the inherited policy even when the daemon applies it at launch.
 		approvalMode: effectiveApproval,
 	};
 	const chooseTurnSettings = (next: TurnSettings) => {
@@ -1175,7 +1178,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			agent: selectedAgent || undefined,
 			model: requestedModel,
 			effort: requestedEffort,
-			approvalMode: usesChatPermissions ? effectiveApproval : approvalMode,
+			approvalMode: launchApproval,
 			mode: submitMode,
 		}),
 		// The interface a plain send starts in, including the Settings default.

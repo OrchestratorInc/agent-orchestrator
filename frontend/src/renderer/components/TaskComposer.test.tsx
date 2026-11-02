@@ -3605,6 +3605,34 @@ describe("useTaskLaunch on the new chat page", () => {
 });
 
 describe("Chat launch permission capability boundary", () => {
+	it.each(["proj-1", "__standalone__"])("preserves Unreal's omitted harness policy for direct and replay launches in %s", async (projectId) => {
+		h.realPermissionDiscovery = true;
+		h.agentCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["unreal-agent"], agent: "unreal-agent" } };
+			if (path === "/api/v1/agents/chat/permission-modes") return { data: { agents: [{ agent: "unreal-agent", modes: ["bypass-permissions"] }] } };
+			if (path.includes("/models")) return { data: { models: [], allowCustom: true, selectionMode: "text" } };
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "unreal-agent" } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		await waitFor(() => expect(task.approvalModes).toEqual(["bypass-permissions"]));
+		const replay = task.launchSnapshot();
+		expect(replay.approvalMode).toBeUndefined();
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+		await act(async () => { await task.launch("use harness default"); });
+		await act(async () => { await task.launch("replay harness default", { replay }); });
+		const launches = h.post.mock.calls.filter(([route]) => route === path);
+		expect(launches).toHaveLength(2);
+		for (const [, options] of launches) expect(options.body).not.toHaveProperty("approvalMode");
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "bypass-permissions" }));
+		expect(task.launchSnapshot().approvalMode).toBe("bypass-permissions");
+		await act(async () => { await task.launch("explicit policy"); });
+		expect(h.post).toHaveBeenLastCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "bypass-permissions" }) }));
+	});
 	it.each(["proj-1", "__standalone__"])("uses Kimi native permissions and preserves the chosen policy when switching back in %s", async (projectId) => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex", "kimi"], agent: "codex" } };
