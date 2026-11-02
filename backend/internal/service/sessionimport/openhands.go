@@ -96,6 +96,19 @@ func discoverOpenHands(ctx context.Context, root string) ([]sourceFiles, error) 
 
 func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessOpenHands, root: root}
+	// RefreshArchive persists just base_state.json. Rediscover the current event
+	// set so turns added after the scan are included before the first open.
+	if len(paths) == 1 {
+		files, err := discoverOpenHands(ctx, root)
+		if err != nil {
+			return t, err
+		}
+		for _, file := range files {
+			if filepath.Clean(file.paths[0]) == filepath.Clean(paths[0]) {
+				return readOpenHandsTranscript(ctx, root, file.paths...)
+			}
+		}
+	}
 	if len(paths) < 2 {
 		return t, errors.New("no openhands conversation events")
 	}

@@ -37,6 +37,13 @@ func TestOpenHandsImportActiveBranch(t *testing.T) {
 	if got.nativeID != id || got.cwd != "/work/source" || got.title != "Synthetic prompt" || got.last.IsZero() {
 		t.Fatalf("metadata = %+v", got)
 	}
+	writeFile(t, filepath.Join(dir, "events", "event-00005-new.json"), `{"id":"new","parent_id":"reply","source":"user","timestamp":"2026-11-02T10:01:00","llm_message":{"role":"user","content":[{"type":"text","text":"New after scan"}]}}`)
+	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"`+id+`","workspace":{"working_dir":"/work/source"},"leaf_event_id":"new"}`)
+	fresh, err := readOpenHandsTranscript(context.Background(), root, got.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, fresh.messages, "user: Synthetic prompt", "assistant: Synthetic answer", "user: New after scan")
 	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"87654321-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"}}`)
 	if _, err := readOpenHandsTranscript(context.Background(), root, files[0].paths...); err == nil {
 		t.Fatal("accepted mismatched native id")
