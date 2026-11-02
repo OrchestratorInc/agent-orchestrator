@@ -3235,6 +3235,7 @@
 	"chat.draftDiscard.stay": "Bleiben",
 	"chat.draftDiscard.leaveAnyway": "Trotzdem verlassen",
 	"chat.promptSuggestion.description": "Vorschlag für die nächste Nachricht: {{prompt}}. Mit Tab übernehmen oder mit Escape verwerfen.",
+	"chat.dictation.placeholder": "Sprich jetzt",
 	"chat.edit.abandonRecovery": "Bearbeitungswiederherstellung aufgeben",
 	"chat.welcome.heading": "Woran möchten Sie arbeiten?",
 	"chat.welcome.artifactHeading": "What do you want to create?",

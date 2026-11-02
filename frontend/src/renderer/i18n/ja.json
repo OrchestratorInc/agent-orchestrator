@@ -3235,6 +3235,7 @@
 	"chat.draftDiscard.stay": "留まる",
 	"chat.draftDiscard.leaveAnyway": "離れる",
 	"chat.promptSuggestion.description": "次のメッセージの提案: {{prompt}}。Tab キーで使用、Escape キーで閉じます。",
+	"chat.dictation.placeholder": "話してください",
 	"chat.edit.abandonRecovery": "編集の復旧を中止",
 	"chat.welcome.heading": "何に取り組みますか？",
 	"chat.welcome.artifactHeading": "What do you want to create?",

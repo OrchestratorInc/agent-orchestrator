@@ -3235,6 +3235,7 @@
 	"chat.draftDiscard.stay": "머무르기",
 	"chat.draftDiscard.leaveAnyway": "그래도 나가기",
 	"chat.promptSuggestion.description": "다음 메시지 제안: {{prompt}}. Tab 키로 사용하거나 Escape 키로 닫으세요.",
+	"chat.dictation.placeholder": "말씀하세요",
 	"chat.edit.abandonRecovery": "편집 복구 포기",
 	"chat.welcome.heading": "무엇을 작업하고 싶으신가요?",
 	"chat.welcome.artifactHeading": "What do you want to create?",

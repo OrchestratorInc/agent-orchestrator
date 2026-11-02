@@ -857,17 +857,17 @@ export const ComposerEditor = forwardRef<
 	const attachedImages = useCallback(() => imagesRef.current.map((image) => image.path), []);
 
 	const placeholderNode = useCallback(
-		() => dictating ? null : (
+		() => (
 			<div className={cn(
 				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
 					: "pointer-events-none absolute inset-x-0 top-0",
 			)}>
-				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={placeholder} />}
+				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : <FadingPlaceholder text={dictating ? t("chat.dictation.placeholder") : placeholder} />}
 			</div>
 		),
-		[dictating, placeholder, suggestion],
+		[dictating, placeholder, suggestion, t],
 	);
 
 	return (
