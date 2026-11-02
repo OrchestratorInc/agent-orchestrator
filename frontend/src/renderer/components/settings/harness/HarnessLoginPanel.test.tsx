@@ -91,7 +91,8 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));
 		const { unmount } = render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "native", label: "Other native sign-in", secret: false }, { id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		const order = () => Array.from(document.querySelectorAll("[data-login-method]")).map((button) => button.getAttribute("aria-label"));
-		expect(order()).toEqual(["Provider API key", "Other native sign-in"]);
+		// The panel shows its own translated label for the native method.
+		expect(order()).toEqual(["Provider API key", "Native sign-in"]);
 		unmount();
 		render(<HarnessLoginPanel agentId="codex" methods={methods} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(order()[0]).toBe("ChatGPT in browser");
