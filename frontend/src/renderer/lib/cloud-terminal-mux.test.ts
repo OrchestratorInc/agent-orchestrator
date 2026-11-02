@@ -393,3 +393,25 @@ describe("createCloudTerminalMux ticket refusals", () => {
 		mux.dispose();
 	});
 });
+
+describe("createCloudTerminalMux initial input", () => {
+	it("types its initial input once, after the shell first reports ready", async () => {
+		FakeWebSocket.instances = [];
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "workspace",
+			mintTicket: async () => "ticket-1",
+			initialInput: "npm test\r",
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		ws.emit("open", {});
+		ws.deliver({ type: "starting" });
+		expect(sentJSON(ws).filter((frame) => frame.type === "input")).toEqual([]);
+		ws.deliver({ type: "ready", sequence: 0 });
+		ws.deliver({ type: "ready", sequence: 0 });
+		expect(sentJSON(ws).filter((frame) => frame.type === "input")).toEqual([{ type: "input", data: "npm test\r" }]);
+		mux.dispose();
+	});
+});

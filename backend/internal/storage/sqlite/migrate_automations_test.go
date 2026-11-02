@@ -212,7 +212,7 @@ INSERT INTO sessions (
 
 func TestAutomationMetadataMigrationPreservesExistingDefinitions(t *testing.T) {
 	dataDir := t.TempDir()
-	db := openMigratedDatabaseCopyAt(t, dataDir, 20261101145613011, pragmas)
+	db := openMigratedDatabaseCopyAt(t, dataDir, 20261102100313400, pragmas)
 	now := time.Now().UTC()
 	mustExec(t, db, `
 INSERT INTO projects (id, path, display_name, registered_at) VALUES ('scheduled', '/tmp/scheduled', 'Scheduled', ?);
