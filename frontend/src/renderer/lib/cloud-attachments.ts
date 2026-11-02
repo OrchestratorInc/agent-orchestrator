@@ -4,6 +4,7 @@
 // bytes, so they go through the main process's binary channel, which attaches
 // the AO Cloud token like every other control-plane call.
 
+import { formatCapturedFileReferences, type ChatFileReference } from "../../shared/chat-file-reference";
 import { aoBridge } from "./bridge";
 import { CLOUD_ATTACHMENT_REFERENCE_PREFIX } from "./cloud-attachment-reference";
 
@@ -118,4 +119,26 @@ export function splitCloudAttachmentReferences(message: string): { text: string;
 		attachmentIds.push(match[1]);
 	}
 	return { text: message.slice(0, headingIndex).replace(/\s+$/, ""), attachmentIds };
+}
+
+/**
+ * A cloud message with its staged files taken out as attachment ids. The
+ * composer lists them under "Attached files" at the end of the message it
+ * was asked to send, and with text delivery appends the code captures after
+ * that and hands the message over as `displayText`. So the references come
+ * off the message before its captures: `text` keeps the captures for the
+ * agent, `displayText` is the message as the transcript shows it, and
+ * neither holds a reference. A caller that hands the captures over
+ * separately gets them inlined here.
+ */
+export function cloudMessageAttachments(
+	text: string,
+	displayText: string | undefined,
+	fileReferences?: readonly ChatFileReference[],
+): { text: string; displayText: string; attachmentIds: string[] } {
+	const { text: body, attachmentIds } = splitCloudAttachmentReferences(displayText ?? text);
+	const captures = displayText !== undefined && text.startsWith(displayText)
+		? text.slice(displayText.length)
+		: formatCapturedFileReferences("", fileReferences);
+	return { text: body + captures, displayText: body, attachmentIds };
 }

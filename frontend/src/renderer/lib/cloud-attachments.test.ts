@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { requestBinary } = vi.hoisted(() => ({ requestBinary: vi.fn() }));
 vi.mock("./bridge", () => ({ aoBridge: { cloudCp: { requestBinary } } }));
 
-import { cloudAttachmentReference, placeCloudAttachment, splitCloudAttachmentReferences, uploadCloudAttachment } from "./cloud-attachments";
+import { captureFileReference, formatCapturedFileReferences } from "../../shared/chat-file-reference";
+import { cloudAttachmentReference, cloudMessageAttachments, placeCloudAttachment, splitCloudAttachmentReferences, uploadCloudAttachment } from "./cloud-attachments";
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
@@ -24,6 +25,32 @@ describe("cloud attachment references", () => {
 	it("keeps a message of only files", () => {
 		const message = `Attached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: "id-3", fileName: "a.txt" })}`;
 		expect(splitCloudAttachmentReferences(message)).toEqual({ text: "", attachmentIds: ["id-3"] });
+	});
+});
+
+describe("cloud message attachments", () => {
+	const capture = captureFileReference({ path: "cache.ts", side: "file", line: 3, endLine: 3, lines: [{ kind: "context", oldNo: 3, newNo: 3, text: "const ttl = 60;" }] }, "session-1");
+	const requestText = `Is this right?\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: "id-1", fileName: "notes.txt" })}`;
+
+	it("takes the files off a message whose code captures follow them", () => {
+		// The composer appends the captures after its "Attached files" list.
+		const message = cloudMessageAttachments(formatCapturedFileReferences(requestText, [capture]), requestText, [capture]);
+		expect(message.attachmentIds).toEqual(["id-1"]);
+		expect(message.displayText).toBe("Is this right?");
+		expect(message.text).toBe(formatCapturedFileReferences("Is this right?", [capture]));
+		expect(message.text).not.toContain("ao-cloud-attachment:");
+		expect(message.text).not.toContain("Attached files");
+	});
+
+	it("inlines captures a caller hands over separately after the files come off", () => {
+		const message = cloudMessageAttachments(requestText, undefined, [capture]);
+		expect(message).toEqual({ text: formatCapturedFileReferences("Is this right?", [capture]), displayText: "Is this right?", attachmentIds: ["id-1"] });
+	});
+
+	it("leaves a message without cloud files as the composer sent it", () => {
+		const text = formatCapturedFileReferences("Check", [capture]);
+		expect(cloudMessageAttachments(text, "Check", [capture])).toEqual({ text, displayText: "Check", attachmentIds: [] });
+		expect(cloudMessageAttachments("plain", undefined)).toEqual({ text: "plain", displayText: "plain", attachmentIds: [] });
 	});
 });
 

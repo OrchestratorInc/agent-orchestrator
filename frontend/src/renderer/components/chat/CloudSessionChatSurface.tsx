@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
+import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -32,7 +32,7 @@ import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
-import { cloudAttachmentReference, splitCloudAttachmentReferences, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
+import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
 
@@ -1685,18 +1685,18 @@ export function CloudSessionChatSurface({
 			fileReferenceDelivery="text"
 			onStageAttachments={stageAttachments}
 			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {
-				// Staged cloud files are listed as references; they travel as the
-				// message's attachment ids, and the worker writes the real paths.
-				const { text: body, attachmentIds } = splitCloudAttachmentReferences(text);
-				// With text delivery the composer has inlined its file captures; a
-				// caller that hands them over separately gets them inlined here.
-				const withCaptures = displayText === undefined ? formatCapturedFileReferences(body, fileReferences) : body;
+				// Staged cloud files travel as the message's attachment ids, and the
+				// worker writes the real paths: no reference reaches the agent or the
+				// transcript. The captures stay inlined, and the quotes follow them.
+				const message = cloudMessageAttachments(text, displayText, fileReferences);
 				const content = cloudAnnotationContent(excerpts, fileReferences);
+				const agentText = excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				return send.mutateAsync({
-					text: excerpts?.length ? withCaptures + cloudExcerptText(excerpts, snapshot) : withCaptures,
-					attachmentIds,
+					// A message of only files and captures or quotes starts with them.
+					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
+					attachmentIds: message.attachmentIds,
 					clientMessageId,
-					...(content.length ? { display: { text: displayText ?? body, content } } : {}),
+					...(content.length ? { display: { text: message.displayText, content } } : {}),
 				});
 			}}
 			session={chatSession}
