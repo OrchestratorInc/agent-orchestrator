@@ -17,9 +17,10 @@ import (
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
-	vibeNativeID                           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
+
+var vibeNativeID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 // NativeSessionConfigDir names the home containing the global session log.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
