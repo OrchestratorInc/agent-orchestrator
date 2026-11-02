@@ -9,6 +9,8 @@ import TriangleAlert from "lucide-react-native/icons/triangle-alert";
 import Archive from "lucide-react-native/icons/archive";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
+import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
+import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Bell from "lucide-react-native/icons/bell";
 import Bookmark from "lucide-react-native/icons/bookmark";
 import CameraOff from "lucide-react-native/icons/camera-off";
@@ -41,12 +43,25 @@ import ExternalLink from "lucide-react-native/icons/external-link";
 import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
 import FileText from "lucide-react-native/icons/file-text";
+import FileDiff from "lucide-react-native/icons/file-diff";
+import FileMinus from "lucide-react-native/icons/file-minus";
+import FilePen from "lucide-react-native/icons/file-pen";
+import FilePlus from "lucide-react-native/icons/file-plus";
+import FileSymlink from "lucide-react-native/icons/file-symlink";
+import ListTree from "lucide-react-native/icons/list-tree";
+import MessageSquareText from "lucide-react-native/icons/message-square-text";
+import Sparkles from "lucide-react-native/icons/sparkles";
+import UnfoldVertical from "lucide-react-native/icons/unfold-vertical";
+import WrapText from "lucide-react-native/icons/text-wrap";
 import Folder from "lucide-react-native/icons/folder";
 import FolderOpen from "lucide-react-native/icons/folder-open";
 import Flag from "lucide-react-native/icons/flag";
 import GitBranch from "lucide-react-native/icons/git-branch";
 import GitMerge from "lucide-react-native/icons/git-merge";
+import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import GitPullRequest from "lucide-react-native/icons/git-pull-request";
+import GitPullRequestDraft from "lucide-react-native/icons/git-pull-request-draft";
+import MousePointer2 from "lucide-react-native/icons/mouse-pointer-2";
 import Globe from "lucide-react-native/icons/globe";
 import Grid2x2 from "lucide-react-native/icons/grid-2x2";
 import CircleQuestionMark from "lucide-react-native/icons/circle-question-mark";
@@ -55,9 +70,11 @@ import Inbox from "lucide-react-native/icons/inbox";
 import Info from "lucide-react-native/icons/info";
 import Italic from "lucide-react-native/icons/italic";
 import KeyRound from "lucide-react-native/icons/key-round";
+import Laptop from "lucide-react-native/icons/laptop";
 import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
+import ListChecks from "lucide-react-native/icons/list-checks";
 import LoaderCircle from "lucide-react-native/icons/loader-circle";
 import LogOut from "lucide-react-native/icons/log-out";
 import Map from "lucide-react-native/icons/map";
@@ -79,6 +96,7 @@ import Timer from "lucide-react-native/icons/timer";
 import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
 import Ellipsis from "lucide-react-native/icons/ellipsis";
+import Palette from "lucide-react-native/icons/palette";
 import Paperclip from "lucide-react-native/icons/paperclip";
 import Pin from "lucide-react-native/icons/pin";
 import PinOff from "lucide-react-native/icons/pin-off";
@@ -132,6 +150,8 @@ export const glyphs = {
 	"archive": Archive,
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
+	"arrow-up-from-line": ArrowUpFromLine,
+	"clipboard-check": ClipboardCheck,
 	"bell": Bell,
 	"bookmark": Bookmark,
 	"camera-off": CameraOff,
@@ -164,12 +184,20 @@ export const glyphs = {
 	"feather": FeatherGlyph,
 	"file": File,
 	"file-text": FileText,
+	"file-diff": FileDiff,
+	"file-minus": FileMinus,
+	"file-pen": FilePen,
+	"file-plus": FilePlus,
+	"file-symlink": FileSymlink,
 	"folder": Folder,
 	"folder-open": FolderOpen,
 	"flag": Flag,
 	"git-branch": GitBranch,
 	"git-merge": GitMerge,
+	"git-commit": GitCommitHorizontal,
 	"git-pull-request": GitPullRequest,
+	"git-pull-request-draft": GitPullRequestDraft,
+	"mouse-pointer": MousePointer2,
 	"globe": Globe,
 	"grid": Grid2x2,
 	"help-circle": CircleQuestionMark,
@@ -178,9 +206,12 @@ export const glyphs = {
 	"info": Info,
 	"italic": Italic,
 	"key": KeyRound,
+	"laptop": Laptop,
 	"layers": Layers,
 	"link": Link,
 	"list": List,
+	"list-checks": ListChecks,
+	"list-tree": ListTree,
 	"loader": LoaderCircle,
 	"log-out": LogOut,
 	"map": Map,
@@ -189,6 +220,7 @@ export const glyphs = {
 	"message-circle": MessageCircle,
 	"message-square": MessageSquare,
 	"message-square-plus": MessageSquarePlus,
+	"message-square-text": MessageSquareText,
 	"mic": Mic,
 	"mic-off": MicOff,
 	"minus": Minus,
@@ -199,6 +231,7 @@ export const glyphs = {
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
 	"more-horizontal": Ellipsis,
+	"palette": Palette,
 	"paperclip": Paperclip,
 	"pin": Pin,
 	"pin-off": PinOff,
@@ -221,6 +254,7 @@ export const glyphs = {
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,
 	"sliders": SlidersHorizontal,
+	"sparkles": Sparkles,
 	"smartphone": Smartphone,
 	"square": Square,
 	"star": Star,
@@ -233,9 +267,11 @@ export const glyphs = {
 	"trash-2": Trash,
 	"type": Type,
 	"underline": Underline,
+	"unfold-vertical": UnfoldVertical,
 	"unplug": Unplug,
 	"user": User,
 	"wifi-off": WifiOff,
+	"wrap-text": WrapText,
 	"x": X,
 	"x-circle": CircleX,
 	"x-octagon": OctagonX,

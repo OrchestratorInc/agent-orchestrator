@@ -100,6 +100,9 @@ func sessionCommandServer(t *testing.T) (*httptest.Server, *sessionRequestLog) {
 				return
 			}
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","displayName":`+jsonQuote(req.DisplayName)+`}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-2":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"bad_request","code":"ORCHESTRATOR_RENAME_UNSUPPORTED","message":"The project orchestrator cannot be renamed"}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -717,7 +720,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 				sessionJSON("demo-old", "demo", "worker", "terminated", true)+`,`+
 				sessionJSON("demo-orch", "demo", "orchestrator", "terminated", true)+`]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/cleanup":
-			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","reason":"workspace has uncommitted changes"}]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","code":"dirty","reason":"workspace has uncommitted changes"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -733,7 +736,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Cleaned: demo-old",
-		"Skipped: demo-orch (workspace has uncommitted changes)",
+		"Skipped: demo-orch (workspace has uncommitted changes) [dirty]\n",
 		"Cleanup complete. 1 session cleaned, 1 skipped.",
 	} {
 		if !strings.Contains(out, want) {
@@ -783,6 +786,22 @@ func TestSessionRename_SuccessWithProjectScope(t *testing.T) {
 	want := []string{"GET /api/v1/sessions/demo-1", "PATCH /api/v1/sessions/demo-1"}
 	if got := log.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionRename_OrchestratorRefusalIsRuntimeError(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "rename", "demo-2", "New Name")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "ORCHESTRATOR_RENAME_UNSUPPORTED") {
+		t.Fatalf("err=%v exit=%d, want orchestrator rename refusal runtime error", err, ExitCode(err))
+	}
+	if strings.Contains(out, "renamed") {
+		t.Fatalf("refused rename reported success:\n%s", out)
 	}
 }
 
@@ -1085,5 +1104,61 @@ func TestSessionClaimPR_GHFallbackWhenProjectRepoMissing(t *testing.T) {
 	}
 	if ghDir != "/repo/demo" || !strings.Contains(out, "claimed PR #142") {
 		t.Fatalf("ghDir=%q out=%s", ghDir, out)
+	}
+}
+
+// A spawn and a restore run the project's Setup, which the daemon bounds by
+// the Setup steps' own limits; a client timeout would cut a long Setup short.
+func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call string
+		args []string
+	}{
+		{"spawn", "POST /api/v1/sessions", []string{"spawn", "--project", "demo", "--agent", "codex", "--name", "worker"}},
+		{"restore", "POST /api/v1/sessions/demo-1/restore", []string{"session", "restore", "demo-1", "-p", "demo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+					_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","defaultBranch":"main"}}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+					_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+					_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
+					_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "terminated", true)+`}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/restore":
+					_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","session":`+sessionJSON("demo-1", "demo", "worker", "idle", false)+`}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			var seen bool
+			var deadline time.Time
+			var hasDeadline bool
+			client := &http.Client{Timeout: 2 * time.Second, Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method+" "+req.URL.Path == tc.call {
+					seen = true
+					deadline, hasDeadline = req.Context().Deadline()
+				}
+				return http.DefaultTransport.RoundTrip(req)
+			})}
+			_, errOut, err := executeCLI(t, Deps{HTTPClient: client, ProcessAlive: func(int) bool { return true }}, tc.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\nstderr=%s", tc.name, err, errOut)
+			}
+			if !seen {
+				t.Fatalf("%s never called %s", tc.name, tc.call)
+			}
+			if hasDeadline {
+				t.Fatalf("%s request deadline in %s, want no client timeout", tc.call, time.Until(deadline).Round(time.Minute))
+			}
+		})
 	}
 }

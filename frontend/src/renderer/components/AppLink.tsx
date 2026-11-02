@@ -1,5 +1,6 @@
+import { BrowserIcon } from "./icons";
 import { createContext, useContext, useState, type ComponentProps, type ReactNode } from "react";
-import { Copy, ExternalLink, FileText, Globe } from "lucide-react";
+import { Copy, ExternalLink, FileText, } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
@@ -59,7 +60,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 			<ContextMenuContent className="min-w-52">
 				{browserLink && (
 					<ContextMenuItem disabled={!openBrowser} onSelect={() => openBrowser?.(href)}>
-						<Globe aria-hidden="true" />
+						<BrowserIcon aria-hidden="true" />
 						{t("link.openInAOBrowser")}
 					</ContextMenuItem>
 				)}
@@ -90,7 +91,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 			{previewOpen && webLink && !previewQuery.isError && (
 				<HoverCardContent collisionPadding={8}>
 					{previewQuery.data ? (
-						<LinkPreviewCard url={href} preview={previewQuery.data} />
+						<LinkPreviewCard url={href} preview={previewQuery.data} onBrowserOpen={openBrowser} />
 					) : (
 						<LinkPreviewCardLoading />
 					)}

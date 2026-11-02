@@ -1,10 +1,11 @@
-// Standalone shell terminals: shells the user opens by hand from the topbar or
-// ⌘T / Ctrl+T, with no agent session behind them. They are deliberately kept out of
+// Shell terminals: shells the user opens by hand from a session's tab strip or
+// ⌘T / Ctrl+T, beside that session's agent pane. They are deliberately kept out of
 // the workspaces query — they are not sessions, never appear on the board, and
 // must not invalidate session state when they come and go.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
+import { paneTerminalGridHint } from "../lib/terminal-grid-hint";
 import type { components } from "../../api/schema";
 import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -166,7 +167,11 @@ function nextCloudShellTitle(terminals: ShellTerminal[], sessionId: string): str
 	return `Terminal ${count + 1}`;
 }
 
-type OpenShellTerminalMutationInput = OpenShellTerminalInput & { optimisticShell?: ShellTerminal };
+type OpenShellTerminalMutationInput = OpenShellTerminalInput & {
+	optimisticShell?: ShellTerminal;
+	/** The create request open() already started; the mutation adopts it. */
+	request?: Promise<ShellTerminal>;
+};
 
 /** Destroys a shell this renderer owns: daemon, cloud, or preview. */
 async function destroyShellTerminal(handleId: string, hostId?: HostId): Promise<void> {
@@ -218,7 +223,7 @@ function addOptimisticShell(queryClient: ReturnType<typeof useQueryClient>, quer
 /**
  * Opens a shell in the given project's root (or the daemon data dir when
  * omitted). When sessionId is set the shell is scoped to that session and only
- * appears in its tab strip; otherwise it is a standalone shell on /terminals.
+ * appears in its tab strip.
  */
 export function useOpenShellTerminal(hostId?: HostId) {
 	const queryClient = useQueryClient();
@@ -263,10 +268,18 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			cloudShellTerminals = [...cloudShellTerminals, shell];
 			return shell;
 		}
-		// This renderer attaches every shell it opens with its measured grid, so
-		// the daemon starts the shell then: its first prompt is laid out for the
-		// width this tab shows instead of a guessed default.
+		// The new tab opens in the pane the user is looking at, so send that
+		// pane's grid: the daemon starts the shell now, while this tab mounts
+		// xterm, at the width the tab will show. Without a known grid (or on a
+		// daemon that predates cols/rows) the shell waits for this renderer to
+		// attach with its measured grid, so the first prompt is still laid out
+		// for the right width.
 		const body: components["schemas"]["OpenShellTerminalRequest"] = { startOnAttach: true };
+		const grid = paneTerminalGridHint();
+		if (grid) {
+			body.cols = grid.cols;
+			body.rows = grid.rows;
+		}
 		// The tab already shows this name; the daemon numbering it again could
 		// disagree while tabs the user just closed are still being destroyed.
 		if (optimisticShell) body.title = optimisticShell.title;
@@ -286,7 +299,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 
 	const mutation = useMutation({
 		mutationFn: async (input: OpenShellTerminalMutationInput = {}): Promise<ShellTerminal | null> => {
-			const shell = await createShell(input);
+			const shell = await (input.request ?? createShell(input));
 			// The user closed the tab while it was being created: the shell must not
 			// appear later, so destroy it rather than adopting it.
 			if (input.optimisticShell && cancelledPendingShells.has(input.optimisticShell.handleId)) {
@@ -328,7 +341,8 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				if (index < 0) return [...(current ?? []), shell];
 				return current?.map((candidate, candidateIndex) => (candidateIndex === index ? shell : candidate)) ?? [shell];
 			});
-			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
+			// onSettled refetches the list; a second invalidation here only
+			// cancelled and restarted that same request.
 		},
 		onError: (error, _input, context) => {
 			if (context?.optimisticHandleId) settlePendingShell(context.optimisticHandleId);
@@ -355,9 +369,15 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			queryClient.getQueryData<ShellTerminal[]>(queryKey) ?? [],
 			hostId,
 		);
+		// Send the create request before anything renders. The click's state
+		// updates render synchronously in a microtask, ahead of the mutation's own
+		// async steps, so a request started by mutationFn waited for a full
+		// session render. The mutation adopts this request and handles its result.
+		const request = createShell({ ...input, optimisticShell });
+		request.catch(() => undefined);
 		trackPendingShell(optimisticShell);
 		addOptimisticShell(queryClient, queryKey, optimisticShell);
-		mutation.mutate({ ...input, optimisticShell });
+		mutation.mutate({ ...input, optimisticShell, request });
 		return optimisticShell;
 	};
 

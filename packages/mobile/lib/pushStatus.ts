@@ -73,7 +73,7 @@ export function describePushToggle(status: PushStatus | null, server: ServerTarg
 		return {
 			value: false,
 			disabled: false,
-			footer: "Notifications are turned off for AO in system settings.",
+			footer: "Notifications are turned off for Orchestrator in system settings.",
 			blocked: true,
 		};
 	}
@@ -152,7 +152,7 @@ export function describeRegisterFailure(
 				title: "Couldn't reach your machine",
 				message:
 					"Notifications are set up on this phone, but we couldn't reach your machine to register it. " +
-					"Check that AO is running and this phone is on the same network, then try again.",
+					"Check that Orchestrator is running and this phone is on the same network, then try again.",
 			};
 		case "server-auth":
 			return {
@@ -171,7 +171,7 @@ export function describeRegisterFailure(
 				title: "Your machine couldn't register this phone",
 				message:
 					`We reached your machine, but it returned an error${status ? ` (HTTP ${status})` : ""}. ` +
-					"Check the AO logs on that machine, then try again.",
+					"Check the Orchestrator logs on that machine, then try again.",
 			};
 		case "not-configured":
 			return {
@@ -185,13 +185,13 @@ export function describeRegisterFailure(
 				title: "This build can't receive push notifications",
 				message:
 					platform === "ios"
-						? "This build can't receive notifications. Install Agent Orchestrator from the App Store to turn them on."
+						? "This build can't receive notifications. Install Orchestrator from the App Store to turn them on."
 						: "The device couldn't provide a push token for this build.",
 			};
 		case "denied":
 			return {
 				title: "Notifications are turned off",
-				message: "Allow notifications for AO in your system settings, then try again.",
+				message: "Allow notifications for Orchestrator in your system settings, then try again.",
 			};
 		case "no-project-id":
 			return {

@@ -46,6 +46,13 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	for i := len(recent) - 1; i >= 0; i-- {
 		line := strings.ToLower(recent[i])
 		if continueIdleComposerAt(recent[i]) {
+			// Continue 1.5 keeps its empty composer on screen while it works,
+			// with the "esc to interrupt" status just above the box.
+			for _, above := range recent[max(0, i-3):i] {
+				if continuePlaceholderComposer(recent[i]) && strings.Contains(strings.ToLower(above), "esc to interrupt") {
+					return domain.ActivityActive, true
+				}
+			}
 			return domain.ActivityIdle, true
 		}
 		if continueQuestionPickerAt(recent, i) {
@@ -83,7 +90,12 @@ func continueQuestionPickerAt(lines []string, idx int) bool {
 }
 
 func continueIdleComposerAt(line string) bool {
-	return strings.Trim(line, "│ ") == "❯"
+	return strings.Trim(line, "│ ") == "❯" || continuePlaceholderComposer(line)
+}
+
+// continuePlaceholderComposer is Continue 1.5's empty composer, "● ▋Ask anything, …".
+func continuePlaceholderComposer(line string) bool {
+	return strings.HasPrefix(strings.Trim(line, "│ "), "● ▋Ask anything")
 }
 
 func continueTerminalLines(output string) []string {

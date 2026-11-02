@@ -100,9 +100,11 @@ function ReviewActionsContent() {
 		const request = ++modelRequest.current;
 		setModels(undefined);
 		if (!hostMatches || !config || !effectiveReviewer) return;
-		void getAgentModels(config, effectiveReviewer)
+		const polling = new AbortController();
+		void getAgentModels(config, effectiveReviewer, undefined, polling.signal)
 			.then((result) => { if (request === modelRequest.current) setModels(result); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
+		return () => polling.abort();
 	}, [config, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
@@ -227,7 +229,7 @@ function ReviewActionsContent() {
 		setBusy({ kind: "send", id });
 		setError("");
 		try {
-			await sendMessage(config, sessionId, message);
+			await sendMessage(config, sessionId, message, { userAuthored: true });
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {
@@ -268,7 +270,7 @@ function ReviewActionsContent() {
 				onChange={(value) => void updatePolicy("autoInjectCI", value)}
 			/>
 		</Section>
-		<Section title="AO REVIEWER" subtitle="Choose who runs the next AO review and which model it uses.">
+		<Section title="ORCHESTRATOR REVIEWER" subtitle="Choose who runs the next Orchestrator review and which model it uses.">
 			{availableReviewers.length || reviewerOverride ? <ReviewerPicker
 				reviewers={availableReviewers}
 				selectedReviewer={reviewerOverride}
@@ -302,7 +304,7 @@ function ReviewActionsContent() {
 		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle="Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.">
 			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
 		</Section> : null}
-		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed AO and GitHub feedback.">
+		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed Orchestrator and GitHub feedback.">
 			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
 		</Section> : null}
 		{!pr && !error && !prMissing ? <Text style={styles.empty}>No GitHub feedback is available for this pull request yet.</Text> : null}
@@ -353,7 +355,7 @@ function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, o
 	];
 	const working = (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url);
 	return <View style={styles.feedbackCard}>
-		<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{reviewerId}</Text><Text style={styles.feedbackVerdict}>{aoOwned ? "AO review" : "GitHub"} · {resolved ? "resolved" : "open"}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`} actions={actions} disabled={disabled} loading={working} /></View>
+		<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{reviewerId}</Text><Text style={styles.feedbackVerdict}>{aoOwned ? "Orchestrator review" : "GitHub"} · {resolved ? "resolved" : "open"}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`} actions={actions} disabled={disabled} loading={working} /></View>
 		{comment.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}
 		<Text style={styles.feedbackLocation}>{comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment"}</Text>
 		<Text style={styles.feedbackBody}>{comment.body || "No comment text."}</Text>

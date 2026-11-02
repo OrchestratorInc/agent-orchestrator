@@ -63,6 +63,57 @@ describe("Cloud control-plane interface transitions", () => {
 	});
 });
 
+describe("cloud control-plane Coder template parameters", () => {
+	it("reads one template's parameters from the encoded coder-templates route", async () => {
+		const parameters = [{ name: "region", type: "string", mutable: true, required: false, defaultValue: "eu" }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ parameters }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.getCoderTemplateParameters("org/a", "tpl 1")).resolves.toEqual({ parameters });
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+
+	it("evaluates a template's parameters with draft values", async () => {
+		const parameters = [{ name: "other_github_repo", type: "string", mutable: false, required: false, defaultValue: "" }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ parameters }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.evaluateCoderTemplateParameters("org/a", "tpl 1", { github_repos: "[\"Other\"]" })).resolves.toEqual({ parameters });
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters/evaluate");
+		expect(init).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(init.body))).toEqual({ values: { github_repos: "[\"Other\"]" } });
+	});
+});
+
+describe("cloud control-plane new-task model catalogs", () => {
+	it("loads the agent's catalog from the encoded organization route", async () => {
+		const catalog = { models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }], source: "release", cliVersion: "2.1.287" };
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+
+		await expect(client.listUserAgentModels("org/a", "claude-code")).resolves.toEqual(catalog);
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/providers/claude-code/models",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+
+	// The composer tells an older control plane (no route, no envelope) from a
+	// handler's own 404 and from an agent with no Cloud catalog by these fields.
+	it.each([
+		{ status: 409, body: JSON.stringify({ error: "Conflict", code: "MODEL_CATALOG_UNAVAILABLE", message: "No catalog" }), code: "MODEL_CATALOG_UNAVAILABLE" },
+		{ status: 404, body: JSON.stringify({ error: "Not Found", code: "not_found", message: "Organization not found" }), code: "not_found" },
+		{ status: 404, body: "404 page not found", code: undefined },
+	])("reports a $status catalog failure with code $code", async ({ status, body, code }) => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(body, { status }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+
+		await expect(client.listUserAgentModels("org", "opencode")).rejects.toMatchObject({ name: "CloudCpError", status, code });
+	});
+});
+
 describe("cloud control-plane session lifecycle", () => {
 	it("uses the cloud review endpoints for an encoded session", async () => {
 		const fetchMock = vi.fn(
@@ -146,6 +197,11 @@ describe("cloud control-plane session lifecycle", () => {
 			expect.objectContaining({ method: "GET" }),
 		);
 		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
+		await client.listChatEvents("org/1", "session/1", { after: 0, limit: 500, types: ["workspace.script.step", "agent.ready"] });
+		expect(fetchMock).toHaveBeenLastCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=0&limit=500&types=workspace.script.step%2Cagent.ready",
+			expect.objectContaining({ method: "GET" }),
+		);
 	});
 
 	it("reads a Cloud project and patches only supplied settings", async () => {

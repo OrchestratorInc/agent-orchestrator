@@ -36,6 +36,9 @@ export const AGENT_OPTIONS = [
 	"mimo-code",
 	"deepseek-harness",
 	"openhands",
+	"command-code",
+	"memcode",
+	"hermes",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -59,7 +62,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	crush: "Crush",
 	cursor: "Cursor",
 	qwen: "Qwen",
- gemini: "Gemini CLI",
+	gemini: "Gemini CLI",
 	copilot: "GitHub Copilot",
 	goose: "Goose",
 	auggie: "Auggie",
@@ -82,6 +85,9 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"mimo-code": "MiMo Code",
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
+	"command-code": "Command Code",
+	memcode: "memcode",
+	"hermes": "Hermes Agent",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

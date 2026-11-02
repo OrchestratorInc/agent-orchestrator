@@ -120,7 +120,11 @@ describe("reviewer control integration", () => {
 	// A native menu nested in the row's Pressable lost its tap to the row, which
 	// opened the reviewer instead of the menu.
 	it("lays the reviewer's pill and menu over its row instead of nesting them", () => {
-		const row = detail.slice(detail.indexOf("onPress={openReviewer} style="), detail.indexOf('<ListSectionHeader label="AO review" />'));
+		const start = detail.indexOf("onPress={openReviewer} style=");
+		const end = detail.indexOf('<ListSectionHeader label="Orchestrator review" />');
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		const row = detail.slice(start, end);
 		expect(row.indexOf("</Pressable>")).toBeLessThan(row.indexOf("<ItemActionsMenu"));
 		expect(detail).toContain('<View style={styles.overlaySlot} pointerEvents="box-none">');
 	});
@@ -128,7 +132,7 @@ describe("reviewer control integration", () => {
 	// A page pushed while a sheet is presented opens inside that sheet, so every
 	// way into review detail and the reviewer goes through useOpenPage.
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
-		expect(source("./PRCard.tsx")).toContain("openPage({\n\t\t\t\t\tpathname: \"/review/[sessionId]\"");
+		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, hostId))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
 		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');

@@ -1,19 +1,22 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getAccountAccessToken, loadAccount, type Account } from "./account";
+import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
+import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import { isTailscaleHost } from "./connectionError";
+import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
-import { loadHosts, removeHost, saveHost, type Host } from "./hosts";
+import { loadHosts, saveHost, type Host } from "./hosts";
+import { isQuickTunnelHost } from "./staleTunnel";
+
+export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
-const ignoredKey = (accountId: string) => `ao.accountHosts.ignored.${accountId}`;
 
-async function ignoredHosts(accountId: string): Promise<Set<string>> {
-	const raw = await AsyncStorage.getItem(ignoredKey(accountId));
-	if (!raw) return new Set();
-	try {
-		const ids: unknown = JSON.parse(raw);
-		return new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : []);
-	} catch { return new Set(); }
+// Tunnels are a quick tunnel's name or AO Cloud's fixed address,
+// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
+// kept beside the pairing's tunnel rather than in its place.
+function isTunnelAddress(url: URL): boolean {
+	const name = url.hostname.toLowerCase();
+	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
 }
 
 function endpoint(raw: string): Endpoint | null {
@@ -21,7 +24,7 @@ function endpoint(raw: string): Endpoint | null {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".trycloudflare.com") ? "tunnel" : url.hostname.endsWith(".ts.net") ? "tailscale" : "lan",
+			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",
@@ -29,106 +32,154 @@ function endpoint(raw: string): Endpoint | null {
 	} catch { return null; }
 }
 
-// A sign-out waits for the current sync before clearing its local credentials.
-let pendingSync: Promise<void> = Promise.resolve();
+let syncGeneration = 0;
+let pendingSync: { accountId: string; controller: AbortController; promise: Promise<void> } | undefined;
 
-function enqueue<T>(operation: () => Promise<T>): Promise<T> {
-	const next = pendingSync.catch(() => {}).then(operation);
-	pendingSync = next.then(() => undefined, () => undefined);
-	return next;
-}
-
-/** Forgetting on this phone must not re-import the host on the next account sync. */
-export function ignoreAccountHost(accountId: string, hostId: string): Promise<void> {
-	return enqueue(async () => {
-		const ids = await ignoredHosts(accountId);
-		ids.add(hostId);
-		await AsyncStorage.setItem(ignoredKey(accountId), JSON.stringify([...ids]));
-	});
-}
-
-/** An explicit re-pair restores a previously hidden machine on this phone. */
-export function unignoreAccountHost(accountId: string, hostId: string): Promise<void> {
-	return enqueue(async () => {
-		const ids = await ignoredHosts(accountId);
-		if (!ids.delete(hostId)) return;
-		await AsyncStorage.setItem(ignoredKey(accountId), JSON.stringify([...ids]));
-	});
+export function cancelAccountHostSync(): void {
+	syncGeneration++;
+	pendingSync?.controller.abort();
+	pendingSync = undefined;
 }
 
 /** Import only account-owned machines; never replace a manual pairing token. */
 export function syncAccountHosts(account: Account): Promise<void> {
-	return enqueue(async () => {
-		if ((await loadAccount())?.id !== account.id) return;
-		await performSync(account);
+	if (pendingSync?.accountId === account.id) return pendingSync.promise;
+	cancelAccountHostSync();
+	const generation = syncGeneration;
+	const controller = new AbortController();
+	const current = async () => (await loadAccount())?.id === account.id && generation === syncGeneration;
+	const promise = (async () => {
+		if (await current()) await performSync(account, controller.signal, current);
+	})().finally(() => {
+		if (pendingSync?.promise === promise) pendingSync = undefined;
 	});
+	pendingSync = { accountId: account.id, controller, promise };
+	return promise;
 }
 
-async function performSync(account: Account): Promise<void> {
+async function syncFetch(url: string, init: RequestInit, timeoutMs: number, signal: AbortSignal): Promise<{ ok: boolean; status: number; body: unknown }> {
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	signal.addEventListener("abort", abort);
+	if (signal.aborted) controller.abort();
+	const timer = setTimeout(abort, timeoutMs);
+	try {
+		const response = await fetch(url, { ...init, signal: controller.signal });
+		// Keep cancellation and the timeout alive until the body finishes too.
+		const body: unknown = response.ok && init.method !== "PUT" ? await response.json() : undefined;
+		return { ok: response.ok, status: response.status, body };
+	}
+	finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
+}
+
+// A session from the previous WorkOS environment tagged this phone's account
+// machines with that environment's user ID. The control plane links both users
+// to one AO account, so the listing still has those machines: retag them in
+// place, keeping the phone's name, icon and endpoints, and carry the hidden set
+// over. Otherwise the stale-ID cleanup below would unpair every one of them and
+// re-import them without their local preferences. Only the same email counts
+// as the same person.
+async function adoptPreviousAccount(account: Account, listed: Set<string>, current: () => Promise<boolean>): Promise<void> {
+	const previous = await loadPreviousAccount();
+	if (!previous || previous.id === account.id) return;
+	if (previous.email.trim().toLowerCase() === account.email.trim().toLowerCase()) {
+		const adopted = await mutateAccountHosts(async () => {
+			if (!await current()) return false;
+			await moveIgnoredAccountHosts(previous.id, account.id);
+			for (const host of await loadHosts()) {
+				if (host.accountUserId === previous.id && listed.has(host.id)) await saveHost({ ...host, accountUserId: account.id });
+			}
+			return true;
+		});
+		if (!adopted) return;
+	}
+	await clearPreviousAccount(previous.id);
+}
+
+async function performSync(account: Account, signal: AbortSignal, current: () => Promise<boolean>): Promise<void> {
 	const access = await getAccountAccessToken();
-	if (!access) return;
-	const response = await fetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
+	if (!access || !await current()) return;
+	const response = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts`, {
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
-		signal: AbortSignal.timeout(10_000),
-	});
-	if (!response.ok) throw new Error(`AO Cloud host sync failed (${response.status}).`);
-	const { hosts } = await response.json() as { hosts: AccountHost[] };
+	}, 10_000, signal);
+	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
+	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
+	if (!await current()) return;
+	await adoptPreviousAccount(account, new Set(hosts.map((item) => item.hostId)), current);
+	if (!await current()) return;
 	const paired = await loadHosts();
-	const ignored = await ignoredHosts(account.id);
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
 		for (const address of manual.endpoints) {
+			if (!await current()) return;
+			if ((await ignoredAccountHosts(account.id)).has(manual.id)) break;
 			try {
 				const base = endpointBaseUrl(address);
-				const identity = await fetch(`${base}/api/v1/identity`, { signal: AbortSignal.timeout(5_000) });
-				const found = await identity.json() as { hostId?: string };
-				if (!identity.ok || found.hostId !== manual.id) continue;
-				const claim = await fetch(`${base}/api/v1/remote-host/account-token`, {
+				const identity = await syncFetch(`${base}/api/v1/identity`, {}, 5_000, signal);
+				if (!identity.ok) continue;
+				const found = identity.body as { hostId?: string };
+				if (found.hostId !== manual.id) continue;
+				if (!await current() || (await ignoredAccountHosts(account.id)).has(manual.id)) break;
+				const claim = await syncFetch(`${base}/api/v1/remote-host/account-token`, {
 					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id, "X-AO-Account-ID": account.id },
-					signal: AbortSignal.timeout(5_000),
-				});
+				}, 5_000, signal);
 				if (!claim.ok) continue;
-				const issued = await claim.json() as { hostId?: string; token?: string };
+				const issued = claim.body as { hostId?: string; token?: string; hostKey?: string };
 				if (issued.hostId !== manual.id || !/^[0-9a-f]{64}$/.test(issued.token ?? "")) continue;
 				const item = { hostId: manual.id, label: manual.name, url: base, token: issued.token! };
-				const saved = await fetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts/${encodeURIComponent(manual.id)}`, {
+				if (!await current() || (await ignoredAccountHosts(account.id)).has(manual.id)) break;
+				const saved = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts/${encodeURIComponent(manual.id)}`, {
 					method: "PUT", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-					body: JSON.stringify({ label: item.label, url: item.url, token: item.token }),
-					signal: AbortSignal.timeout(10_000),
-				});
+					// The machine's host key, only where AO Cloud says it takes one: it then needs the machine's own signature.
+					body: JSON.stringify({ label: item.label, url: item.url, token: item.token, hostKey: hostKeys === true ? issued.hostKey : undefined }),
+				}, 10_000, signal);
 				if (saved.ok) hosts.push(item);
 				break;
 			} catch { /* This endpoint may be offline; another endpoint can work. */ }
 		}
 	}
+	if (!await current()) return;
+	const ignored = await ignoredAccountHosts(account.id);
 	const visible = hosts.filter((item) => !ignored.has(item.hostId));
 	const ids = new Set(visible.map((item) => item.hostId));
-	for (const old of paired) {
-		if (old.accountUserId && (old.accountUserId !== account.id || !ids.has(old.id))) await removeHost(old.id);
+	for (const old of await loadHosts()) {
+		if (!await current()) return;
+		if (old.accountUserId && (old.accountUserId !== account.id || !ids.has(old.id))) await forgetPairedHost(old, { ignoreAccount: false });
 	}
 	for (const item of visible) {
-		const address = endpoint(item.url);
-		if (!address || !/^h_[0-9a-f-]{36}$/.test(item.hostId) || !/^[0-9a-f]{64}$/.test(item.token)) continue;
-		const existing = paired.find((host) => host.id === item.hostId);
-		if (existing && !existing.accountUserId) {
-			// Keep the original pairing password and private-network endpoints,
-			// but accept the host's newly published quick-tunnel address.
-			const endpoints = [address, ...existing.endpoints.filter((candidate) =>
-				address.kind === "tunnel" ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
-			if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
-			continue;
-		}
-		if (existing && existing.accountUserId === account.id && existing.name === item.label && existing.token === item.token &&
-			existing.endpoints.length === 1 && JSON.stringify(existing.endpoints[0]) === JSON.stringify(address)) continue;
-		await saveHost({
-			id: item.hostId, name: item.label, platform: existing?.platform ?? "unknown",
-			endpoints: [address], token: item.token,
-			lastConnected: existing?.lastConnected ?? 0,
-			accountUserId: account.id,
-		} satisfies Host);
+		await mutateAccountHosts(async () => {
+			if (!await current() || (await ignoredAccountHosts(account.id)).has(item.hostId)) return;
+			const address = endpoint(item.url);
+			if (!address || !/^h_[0-9a-f-]{36}$/.test(item.hostId) || !/^[0-9a-f]{64}$/.test(item.token)) return;
+			const existing = (await loadHosts()).find((host) => host.id === item.hostId);
+			if (!await current()) return;
+			if (existing && !existing.accountUserId) {
+				// Keep the original pairing password and private-network endpoints,
+				// but accept the host's newly published quick-tunnel address. A
+				// fixed address goes beside the pairing's tunnel, not in its place:
+				// a listing the machine no longer updates, after a new password or
+				// a link to another account, keeps a fixed address nothing serves.
+				const endpoints = [address, ...existing.endpoints.filter((candidate) =>
+					address.kind === "tunnel" && isQuickTunnelHost(address.host) ? candidate.kind !== "tunnel" : JSON.stringify(candidate) !== JSON.stringify(address))];
+				if (JSON.stringify(endpoints) !== JSON.stringify(existing.endpoints)) await saveHost({ ...existing, endpoints });
+				return;
+			}
+			if (existing && existing.accountUserId === account.id && existing.token === item.token &&
+				existing.endpoints.length === 1 && JSON.stringify(existing.endpoints[0]) === JSON.stringify(address)) return;
+			await saveHost({
+				// Directory labels seed new machines; a phone's chosen name and icon
+				// remain local preferences when remote credentials/routes rotate.
+				id: item.hostId, name: existing?.name ?? item.label, platform: existing?.platform ?? "unknown",
+				appearance: existing?.appearance,
+				endpoints: [address], token: item.token,
+				lastConnected: existing?.lastConnected ?? 0,
+				accountUserId: account.id,
+			} satisfies Host);
+		});
 	}
 }
 
 export async function clearAccountHosts(): Promise<void> {
-	await pendingSync;
-	for (const host of await loadHosts()) if (host.accountUserId) await removeHost(host.id);
+	cancelAccountHostSync();
+	await mutateAccountHosts(async () => {});
+	for (const host of await loadHosts()) if (host.accountUserId) await forgetPairedHost(host, { ignoreAccount: false });
 }

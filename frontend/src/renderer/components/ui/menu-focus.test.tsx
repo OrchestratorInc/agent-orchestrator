@@ -189,7 +189,7 @@ describe("keepFocusOnOpenedSurface", () => {
 });
 
 // The teardown report is how a surface opened from a menu item (e.g. the
-// switch-agent dialog) learns that the opening interaction is over: the menu
+// dialog) learns that the opening interaction is over: the menu
 // content is gone and the deferred focus restore has been decided.
 describe("menu teardown signal", () => {
 	it("reports the menu and its trigger once the restore has been decided", async () => {

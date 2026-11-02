@@ -38,7 +38,7 @@ ao project ls
 ao project get <project-id>
 ```
 
-Use Project Settings in the desktop app for interactive changes. The CLI's `set-config` command replaces the entire project config, even when you use focused flags. Before using it, read [the CLI update warning](/configuration/projects#update-from-the-cli). The CLI ignores unknown JSON keys and drops existing effort values; use Project Settings or the daemon API to view or change effort.
+Use Project Settings in the desktop app for interactive changes. The CLI's `set-config` flags change only the fields they name, while `--config-json` replaces the entire project config. Before using it, read [the CLI update warning](/configuration/projects#update-from-the-cli). The CLI ignores unknown JSON keys.
 
 Project configuration has typed fields for the base branch, session prefix, environment variables, symlinks, setup commands, worker and orchestrator agents, agent options, project rules, reviewers, automatic review, trusted repository URLs, issue intake, and container cleanup. The daemon API rejects unknown fields. The CLI's `--config-json` decoder ignores unknown keys, so a typo can clear existing settings when the full config is replaced.
 
@@ -54,7 +54,7 @@ The primary daemon listener is always loopback-only and unauthenticated. Its bin
 | `AO_DATA_DIR` | `~/.ao/data` | Durable daemon data |
 | `AO_RUN_FILE` | `~/.ao/running.json` | Daemon discovery file |
 | `AO_REQUEST_TIMEOUT` | `60s` | REST request timeout |
-| `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline |
+| `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown deadline. It also scales how long a starting daemon waits for a previous daemon to release the data directory (9 × this + 18 s) |
 | `AO_ALLOWED_ORIGINS` | packaged desktop origin | Additional trusted browser origins |
 | `AO_TRACKER_INTAKE` | `off` | Enables the issue-intake observer; a project's own `trackerIntake` cannot enable it alone |
 

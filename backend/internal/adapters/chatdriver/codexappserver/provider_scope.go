@@ -45,3 +45,5 @@ func (c *conversation) scopedEvent(event ports.ChatEvent) ports.ChatEvent {
 	}
 	return event
 }
+
+func (c *conversation) NativeTurnID(id string) string { return c.nativeID(id) }

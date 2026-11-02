@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -12,6 +13,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
+
+	agyagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -436,6 +441,7 @@ type transitionRuntime struct {
 	styledOutputCalls          int
 	styledOutputErr            error
 	blockAliveUntilContextDone bool
+	onCreate                   func() // runs as a target terminal starts
 }
 
 // unstyledTransitionRuntime models a legacy runtime that cannot return a
@@ -494,6 +500,9 @@ func (r *transitionRuntime) Destroy(ctx context.Context, handle ports.RuntimeHan
 
 func (r *transitionRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	*r.log = append(*r.log, "start:tui")
+	if r.onCreate != nil {
+		r.onCreate()
+	}
 	if r.runtimeOccupied {
 		return ports.RuntimeHandle{}, fmt.Errorf("session %q already exists", cfg.SessionID)
 	}
@@ -540,6 +549,7 @@ type transitionChat struct {
 	relayMessages    []string
 	relayIDs         []string
 	supportsChat     bool
+	switchMarks      []string // account moves that told the chat why its turn stopped
 }
 
 type historyPolicyTransitionChat struct {
@@ -627,24 +637,6 @@ func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 	return l.store.RestoreSessionControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
-}
-func (l *sqliteTransitionLifecycle) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	return l.store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *sqliteTransitionLifecycle) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	return l.store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *sqliteTransitionLifecycle) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	return l.store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 func (l *sqliteTransitionLifecycle) MarkTerminated(
 	ctx context.Context,
@@ -767,6 +759,10 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 	default:
 	}
 	return c.armErr
+}
+func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
+	c.switchMarks = append(c.switchMarks, accountID)
+	return nil
 }
 func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy
@@ -3309,4 +3305,86 @@ func (c *transitionChat) QueueChatPrompt(_ context.Context, _ domain.SessionID, 
 
 func (c *transitionChat) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
+}
+
+func TestAgyAdapterEnablesInterfaceTransitionStatusInBothDirections(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			manager, store, _, _, _ := newTransitionManager(t, mode)
+			geminiHome := t.TempDir()
+			store.projects["proj"] = domain.ProjectRecord{
+				ID: "proj", Path: "/repo", Config: domain.ProjectConfig{Env: map[string]string{"GEMINI_HOME": geminiHome}},
+			}
+			dirName := "antigravity-acp"
+			if mode == domain.SessionModeTUI {
+				dirName = "antigravity-cli"
+			}
+			conversationDB := filepath.Join(geminiHome, dirName, "conversations", "native-1.db")
+			if err := os.MkdirAll(filepath.Dir(conversationDB), 0700); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(conversationDB))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+				_ = db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			rec := store.sessions["session-1"]
+			rec.Harness = domain.HarnessAgy
+			store.sessions["session-1"] = rec
+			manager.agents = singleAgent{agent: agyagent.New()}
+
+			status, err := manager.InterfaceTransitionStatus(context.Background(), "session-1")
+			if err != nil {
+				t.Fatalf("InterfaceTransitionStatus: %v", err)
+			}
+			if !status.Supported {
+				t.Fatalf("status = %+v, want supported handoff to %s", status, status.TargetMode)
+			}
+		})
+	}
+}
+
+func TestInterfaceTransitionAgyFailsWhenSourceDatabaseMissing(t *testing.T) {
+	// A TUI session with an older ACP DB but missing CLI DB must fail interface transition.
+	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeTUI)
+	geminiHome := t.TempDir()
+	store.projects["proj"] = domain.ProjectRecord{
+		ID: "proj", Path: "/repo", Config: domain.ProjectConfig{Env: map[string]string{"GEMINI_HOME": geminiHome}},
+	}
+	// Destination ACP db exists:
+	conversationDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "native-1.db")
+	if err := os.MkdirAll(filepath.Dir(conversationDB), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(conversationDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	rec := store.sessions["session-1"]
+	rec.Harness = domain.HarnessAgy
+	store.sessions["session-1"] = rec
+	manager.agents = singleAgent{agent: agyagent.New()}
+
+	status, err := manager.InterfaceTransitionStatus(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("InterfaceTransitionStatus: %v", err)
+	}
+	if status.Supported {
+		t.Fatalf("status = %+v, want unsupported handoff when source CLI database is missing", status)
+	}
+	if status.ReasonCode != "NATIVE_SESSION_MISSING" {
+		t.Fatalf("status.ReasonCode = %q, want NATIVE_SESSION_MISSING", status.ReasonCode)
+	}
 }

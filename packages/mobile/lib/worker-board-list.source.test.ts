@@ -14,9 +14,12 @@ describe("worker board list identity", () => {
 	// once: recycled cells of the old grouping under the new data, and the empty
 	// state drawn on top of rows that were still on screen. A different set of
 	// workers is a different list, so it is mounted as one.
-	it("remounts the list when the set of workers changes", () => {
-		expect(list).toContain("key={identityKey}");
-		expect(board).toContain("identityKey={`${workerProjectId}|${query.trim()}`}");
+	it("remounts the whole animation boundary without retaining outgoing rows", () => {
+		expect(list).toContain("<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>");
+		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
+		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;");
+		expect(board).toContain("key={boardIdentityKey}");
+		expect(board).toContain("identityKey={boardIdentityKey}");
 	});
 });
 
@@ -73,11 +76,11 @@ describe("worker row working indicator", () => {
 describe("board sections that cannot be folded", () => {
 	const board = source("./worker-board-list.tsx");
 
-	// "Needs you" is why the app was opened, and "Pinned" is what the user put at
-	// the top on purpose. Both were foldable, so both could be hidden by a chevron
-	// — the board could show a clean, empty-looking screen with work waiting in it.
-	it("keeps needs-you, pinned and search results always open", () => {
-		expect(board).toContain('const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned"]);');
+	// "Needs you" is why the app was opened, "Pinned" is what the user put at the
+	// top on purpose, and "Recent" is a plain separator for the normal worker list.
+	// None should behave like an accordion or hide its rows behind a chevron.
+	it("keeps every live worker section always open", () => {
+		expect(board).toContain('const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned", "recent"]);');
 		expect(board).toContain("const collapsible = !ALWAYS_OPEN.has(section.zone);");
 		// The previous rule made everything but search foldable.
 		expect(board).not.toContain('const collapsible = section.zone !== "search";');

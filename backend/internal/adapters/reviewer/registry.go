@@ -102,3 +102,11 @@ func (r *Resolver) Reviewer(harness domain.ReviewerHarness) (ports.Reviewer, boo
 	rv, ok := r.reviewers[harness]
 	return rv, ok
 }
+
+// InvalidateBinaryResolution makes harness's reviewer resolve its executable
+// again, after an install changed which one should run.
+func (r *Resolver) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if invalidator, ok := r.reviewers[domain.ReviewerHarness(harness)].(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}

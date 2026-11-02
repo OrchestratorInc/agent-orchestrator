@@ -47,6 +47,11 @@ describe("filterWorkerSessions", () => {
 	])("matches %s across worker fields", (query, expected) => {
 		expect(filterWorkerSessions(sessions, query, projectNameFor, statusLabelFor).map(({ id }) => id)).toEqual(expected);
 	});
+
+	it("finds a worker by its separately displayed machine name", () => {
+		const hosted = { ...session("remote"), hostId: "host-a", hostName: "Studio Mac" } as DashboardSession;
+		expect(filterWorkerSessions([hosted], "studio mac", projectNameFor, statusLabelFor).map(({ id }) => id)).toEqual(["remote"]);
+	});
 });
 
 describe("workerSearchClearState", () => {

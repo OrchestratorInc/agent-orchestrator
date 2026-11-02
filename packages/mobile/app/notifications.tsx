@@ -1,5 +1,6 @@
 import { Feather } from "../lib/icons";
-import { useLocalSearchParams, useRouter, type Href } from "expo-router";
+import { useFocusEffect, useRouter, type Href } from "expo-router";
+import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -7,7 +8,6 @@ import {
 	Alert,
 	Pressable,
 	RefreshControl,
-	ScrollView,
 	SectionList,
 	StyleSheet,
 	Text,
@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+	clearAllNotifications,
 	clearNotification,
 	getNotifications,
 	markAllNotificationsRead,
@@ -24,61 +25,46 @@ import {
 import { haptics } from "../lib/haptics";
 import { NotificationTypeIcon } from "../lib/notification-type-icon";
 import {
+	notificationIdentity,
+	notificationsAcrossHosts,
 	notificationSections,
-	notificationRowsForHost,
 	notificationAction,
 	notificationTarget,
 	notificationVisual,
 	relativeTime,
+	type HostedNotification,
 } from "../lib/notificationView";
-import { HostScope, useApp } from "../lib/store";
+import { useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
 import { UnpairedState } from "../lib/UnpairedState";
-import { press, space, type } from "../lib/tokens";
+import { space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
-import { shouldKeepPolling, userFacingError } from "../lib/connectionError";
+import { userFacingError } from "../lib/connectionError";
+import { NotificationSwipeRow } from "../lib/NotificationSwipeRow";
+import { MachineIdentity } from "../lib/MachineIdentity";
+import { machineAppearance } from "../lib/machineAppearance";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 const PAGE_SIZE = 50;
+type FeedItem = HostedNotification<NotificationRecord>;
+type HostFeed = {
+	hostId: string;
+	hostName: string;
+	items: NotificationRecord[];
+	nextCursor?: string;
+	unreadCount: number;
+	error?: string;
+};
 
 // The durable record of what the daemon has notified about. Push only reaches a
 // phone that was reachable at the time; this list is what the user can come back
 // to afterwards.
 export default function NotificationsScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	const { hostStates } = useApp();
-	if (hostId) return <HostScope key={hostId} hostId={hostId}><NotificationsContent /></HostScope>;
-	if (hostStates.length > 1) return <NotificationsHostPicker />;
 	return <NotificationsContent />;
-}
-
-function NotificationsHostPicker() {
-	const { hostStates } = useApp();
-	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
-	const insets = useSafeAreaInsets();
-	return (
-		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader title="Notifications" left={<HeaderIconButton icon="back" label="Back" onPress={() => backOr(router)} />} />
-			<ScrollView contentContainerStyle={[styles.hostPicker, { paddingBottom: insets.bottom + space.lg }]}>
-				<Text style={styles.hostPickerHint}>Choose a machine to view its notifications.</Text>
-				{hostStates.map((host) => (
-					<Button
-						key={host.hostId}
-						title={`${host.name}${host.notificationsUnread > 0 ? ` · ${host.notificationsUnread} unread` : ""}`}
-						icon="server"
-						variant="ghost"
-						onPress={() => router.push({ pathname: "/notifications", params: { hostId: host.hostId } })}
-					/>
-				))}
-			</ScrollView>
-		</View>
-	);
 }
 
 function NotificationsContent() {
@@ -87,121 +73,230 @@ function NotificationsContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
-	const { config, connection, unreachable, errorStatus, sessions, loading: sessionsLoading, restore } = useApp();
+	const { hostStates, configForHost, refreshHost, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
-	const [clearingIds, setClearingIds] = useState<Set<string>>(() => new Set());
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
 	const [notice, setNotice] = useState<string>();
 	const now = useNow(MINUTE_MS);
-	const [items, setItems] = useState<NotificationRecord[]>([]);
-	const [itemsHostId, setItemsHostId] = useState<string>();
-	const currentConfig = useRef(config);
-	currentConfig.current = config;
+	const [feeds, setFeeds] = useState<Record<string, HostFeed>>({});
+	const feedsRef = useRef(feeds);
+	feedsRef.current = feeds;
+	const hostsRef = useRef(hostStates);
+	hostsRef.current = hostStates;
+	const loadGeneration = useRef(0);
+	const loadingMoreRef = useRef(false);
+	const loadedOnceRef = useRef(false);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
-	const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
-	const [unreadCount, setUnreadCount] = useState(0);
-	const [error, setError] = useState<string | null>(null);
-	const visibleItems = useMemo(() => notificationRowsForHost(items, itemsHostId, config?.hostId), [items, itemsHostId, config?.hostId]);
-	const sections = useMemo(() => notificationSections(visibleItems), [visibleItems]);
-	const visibleUnreadCount = config?.hostId && itemsHostId === config.hostId ? unreadCount : 0;
+	// Opening the screen marks what it loaded as read, as the desktop panel does.
+	// Those rows keep their unread look for this visit so the user can still see
+	// what was new.
+	const [highlightedIds, setHighlightedIds] = useState<Set<string>>(() => new Set());
+	const acknowledgedRef = useRef(new Set<string>());
+	// Which ack attempt last claimed each row. A reload re-acks the same rows, so
+	// an older attempt that fails late must not roll back a newer one.
+	const ackOwnerRef = useRef(new Map<string, number>());
+	const ackAttemptRef = useRef(0);
+	// A visit ends when the screen loses focus, not when it unmounts: tapping into
+	// a session leaves this screen mounted underneath, and coming back should
+	// show those rows as read, like reopening the desktop panel.
+	useFocusEffect(useCallback(() => () => setHighlightedIds(new Set()), []));
+	const focused = useIsFocused();
+	const items = useMemo(() => notificationsAcrossHosts(Object.values(feeds).map((feed) => {
+		const host = hostStates.find((candidate) => candidate.hostId === feed.hostId);
+		return {
+			hostId: feed.hostId,
+			hostName: feed.hostName,
+			hostAppearance: machineAppearance({ id: feed.hostId, name: feed.hostName, appearance: host?.appearance }),
+			items: feed.items,
+		};
+	})), [feeds, hostStates]);
+	const sections = useMemo(() => notificationSections(items), [items]);
+	const unavailableFeeds = useMemo(() => Object.values(feeds).filter((feed) => feed.error), [feeds]);
+	const hasMore = useMemo(() => Object.values(feeds).some((feed) => Boolean(feed.nextCursor)), [feeds]);
+	const knownHostIds = useMemo(() => new Set(hostStates.map((host) => host.hostId)), [hostStates]);
+	const hostSignature = hostStates.map((host) => {
+		const source = host.config;
+		return `${host.hostId}:${source ? `${source.host}:${source.httpPort}:${source.secure ? "secure" : "plain"}` : "offline"}`;
+	}).join("|");
+
+	const updateFeeds = useCallback((update: (current: Record<string, HostFeed>) => Record<string, HostFeed>) => {
+		setFeeds((current) => {
+			const next = update(current);
+			feedsRef.current = next;
+			return next;
+		});
+	}, []);
 
 	const load = useCallback(
 		async (mode: "initial" | "refresh" | "more") => {
-			if (!config) {
-				setLoading(false);
-				return;
-			}
-			if (mode === "more" && (!nextCursor || loadingMore)) return;
+			if (mode === "more" && loadingMoreRef.current) return;
+			const hosts = hostsRef.current;
+			const currentFeeds = feedsRef.current;
+			const generation = mode === "more" ? loadGeneration.current : ++loadGeneration.current;
+			// A reload may bring back rows whose ack failed; let them be retried.
+			if (mode !== "more") acknowledgedRef.current = new Set();
+			const targets = hosts.flatMap((host) => {
+				const source = configForHost(host.hostId);
+				const cursor = currentFeeds[host.hostId]?.nextCursor;
+				if (!source || (mode === "more" && !cursor)) return [];
+				return [{ host, source, cursor: mode === "more" ? cursor : undefined }];
+			});
+			if (mode === "initial" && !loadedOnceRef.current) setLoading(true);
 			if (mode === "refresh") setRefreshing(true);
-			if (mode === "more") setLoadingMore(true);
-			setError(null);
-			try {
-				const page = await getNotifications(config, {
-					status: "all",
-					limit: PAGE_SIZE,
-					cursor: mode === "more" ? nextCursor : undefined,
-				});
-				if (currentConfig.current !== config) return;
-				setItemsHostId(config.hostId);
-				setItems((previous) => {
-					if (mode !== "more") return page.notifications;
-					const seen = new Set(previous.map((notification) => notification.id));
-					return [
-						...previous,
-						...page.notifications.filter((notification) => !seen.has(notification.id)),
-					];
-				});
-				setNextCursor(page.nextCursor);
-				setUnreadCount(page.unreadCount);
-			} catch (cause) {
-				if (currentConfig.current !== config) return;
-				setItemsHostId(config.hostId);
-				setError(userFacingError(cause, "Couldn't load notifications."));
-			} finally {
-				if (currentConfig.current === config) {
-					setLoading(false);
-					setRefreshing(false);
-					setLoadingMore(false);
-				}
+			if (mode === "more") {
+				loadingMoreRef.current = true;
+				setLoadingMore(true);
 			}
+			const results = await Promise.all(targets.map(async ({ host, source, cursor }) => {
+				try {
+					const page = await getNotifications(source, { status: "all", limit: PAGE_SIZE, cursor });
+					return { host, source, page } as const;
+				} catch (cause) {
+					return { host, source, error: userFacingError(cause, `Couldn't load notifications from ${host.name}.`) } as const;
+				}
+			}));
+			if (generation !== loadGeneration.current) return;
+			updateFeeds((previous) => {
+				const paired = new Set(hosts.map((host) => host.hostId));
+				const next = Object.fromEntries(Object.entries(previous).filter(([hostId]) => paired.has(hostId)));
+				for (const host of hosts) {
+					if (configForHost(host.hostId)) continue;
+					const retained = next[host.hostId];
+					next[host.hostId] = {
+						hostId: host.hostId,
+						hostName: host.name,
+						items: retained?.items ?? [],
+						nextCursor: retained?.nextCursor,
+						unreadCount: retained?.unreadCount ?? host.notificationsUnread,
+						error: `${host.name} is offline.`,
+					};
+				}
+				for (const result of results) {
+					if (configForHost(result.host.hostId) !== result.source) continue;
+					const previousFeed = next[result.host.hostId];
+					if ("error" in result) {
+						next[result.host.hostId] = {
+							hostId: result.host.hostId,
+							hostName: result.host.name,
+							items: previousFeed?.items ?? [],
+							nextCursor: previousFeed?.nextCursor,
+							unreadCount: previousFeed?.unreadCount ?? result.host.notificationsUnread,
+							error: result.error,
+						};
+						continue;
+					}
+					const priorItems = mode === "more" ? previousFeed?.items ?? [] : [];
+					const seen = new Set(priorItems.map((item) => item.id));
+					next[result.host.hostId] = {
+						hostId: result.host.hostId,
+						hostName: result.host.name,
+						items: [...priorItems, ...result.page.notifications.filter((item) => !seen.has(item.id))],
+						nextCursor: result.page.nextCursor,
+						unreadCount: result.page.unreadCount,
+					};
+				}
+				return next;
+			});
+			loadedOnceRef.current = true;
+			setLoading(false);
+			setRefreshing(false);
+			loadingMoreRef.current = false;
+			setLoadingMore(false);
 		},
-		[config, nextCursor, loadingMore],
+		[configForHost, updateFeeds],
 	);
 
 	useEffect(() => {
-		setItems([]);
-		setItemsHostId(undefined);
-		setNextCursor(undefined);
-		setUnreadCount(0);
-		setError(null);
-		setRefreshing(false);
-		setLoadingMore(false);
-		setLoading(Boolean(config));
 		void load("initial");
-		// Paging state changes must not refetch the first page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [config]);
+	}, [hostSignature]);
 
-	// A load that failed while the desktop was unreachable retries as soon as the
-	// board's poll reconnects, which is what the offline state promises. Keyed on
-	// the reconnect itself: `load` clears `error` as it starts, so keying on the
-	// error would loop against an endpoint that keeps failing while connected.
-	const previousConnection = useRef(connection);
+	// Concrete loaded ids only, never "everything": unread rows on pages not
+	// loaded yet stay unread until the user scrolls to them. Only while focused:
+	// a reload under an open session (a host reconnecting) must not mark rows
+	// the user has not seen. They are acked, and highlighted, on return.
 	useEffect(() => {
-		const reconnected = previousConnection.current !== "open" && connection === "open";
-		previousConnection.current = connection;
-		if (reconnected && error) void load("refresh");
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [connection]);
-	// The board's poll is the app's view of the link: when it is down, say so in
-	// the board's words rather than as a failed load.
-	const offline = Boolean(config) && unreachable && Boolean(error);
-	// A rejected password (or the lockout it leads to) stops the board's poll for
-	// good. Retrying would only spend another failed attempt toward the lockout,
-	// so offer the fix instead, as the board does.
-	const rejected = errorStatus !== null && !shouldKeepPolling(errorStatus);
+		if (!focused) return;
+		for (const feed of Object.values(feeds)) {
+			const source = feed.error ? null : configForHost(feed.hostId);
+			if (!source) continue;
+			const ids = feed.items
+				.filter((item) => item.status === "unread" && !acknowledgedRef.current.has(notificationIdentity(feed.hostId, item.id)))
+				.map((item) => item.id);
+			if (ids.length === 0) continue;
+			const keys = ids.map((id) => notificationIdentity(feed.hostId, id));
+			const attempt = ++ackAttemptRef.current;
+			for (const key of keys) {
+				acknowledgedRef.current.add(key);
+				ackOwnerRef.current.set(key, attempt);
+			}
+			setHighlightedIds((current) => new Set([...current, ...keys]));
+			const acked = new Set(ids);
+			updateFeeds((previous) => {
+				const current = previous[feed.hostId];
+				if (!current) return previous;
+				const marked = current.items.filter((item) => acked.has(item.id) && item.status === "unread").length;
+				return { ...previous, [feed.hostId]: {
+					...current,
+					items: current.items.map((item) => acked.has(item.id) ? { ...item, status: "read" } : item),
+					unreadCount: Math.max(0, current.unreadCount - marked),
+				} };
+			});
+			markAllNotificationsRead(source, ids).then(
+				// Refresh that machine so the bell badge is already clear on the way back.
+				// Its failure says nothing about the ack, so it must not roll rows back.
+				() => { void refreshHost(feed.hostId).catch(() => {}); },
+				() => {
+					// Put back to unread only the rows this attempt still owns, without
+					// forgetting the ack, so a machine that keeps refusing is not retried
+					// in a loop. Pull-to-refresh retries.
+					const owned = new Set(ids.filter((id) => ackOwnerRef.current.get(notificationIdentity(feed.hostId, id)) === attempt));
+					if (owned.size === 0) return;
+					setNotice(`Couldn't mark notifications read on ${feed.hostName}.`);
+					updateFeeds((previous) => {
+						const current = previous[feed.hostId];
+						if (!current) return previous;
+						const restored = current.items.filter((item) => owned.has(item.id) && item.status === "read").length;
+						return { ...previous, [feed.hostId]: {
+							...current,
+							items: current.items.map((item) => owned.has(item.id) ? { ...item, status: "unread" } : item),
+							unreadCount: current.unreadCount + restored,
+						} };
+					});
+				},
+			);
+		}
+	}, [configForHost, feeds, focused, refreshHost, updateFeeds]);
 
-	function open(notification: NotificationRecord) {
-		if (!config?.hostId || itemsHostId !== config.hostId) return;
+	function open(notification: FeedItem) {
+		const source = configForHost(notification.hostId);
+		if (!source) {
+			haptics.warning();
+			setNotice(`${notification.hostName} is offline.`);
+			return;
+		}
 		haptics.tap();
-		setItems((previous) =>
-			previous.map((item) =>
-				item.id === notification.id ? { ...item, status: "read" } : item,
-			),
-		);
+		updateFeeds((previous) => {
+			const feed = previous[notification.hostId];
+			if (!feed) return previous;
+			return { ...previous, [notification.hostId]: {
+				...feed,
+				items: feed.items.map((item) => item.id === notification.id ? { ...item, status: "read" } : item),
+				unreadCount: notification.status === "unread" ? Math.max(0, feed.unreadCount - 1) : feed.unreadCount,
+			} };
+		});
 		if (notification.status === "unread") {
-			setUnreadCount((count) => Math.max(0, count - 1));
-			if (config) markNotificationRead(config, notification.id).catch(() => {});
+			markNotificationRead(source, notification.id).catch(() => void load("refresh"));
 		}
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
-		const action = notificationAction(notification, sessionState(notification.sessionId));
-		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: config.hostId } });
-		else if (action.kind === "review") openPage(notificationTarget({ ...notification, hostId: config.hostId }, config.hostId) as Href);
-		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: config.hostId } });
+		const action = notificationAction(notification, sessionState(notification.hostId, notification.sessionId));
+		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
+		else if (action.kind === "review") openPage(notificationTarget(notification, knownHostIds) as Href);
+		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: notification.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
 			setNotice("This session is terminated. Tap restore to bring it back.");
@@ -211,60 +306,113 @@ function NotificationsContent() {
 		}
 	}
 
-	async function clear(notification: NotificationRecord) {
-		if (!config?.hostId || itemsHostId !== config.hostId || clearingIds.has(notification.id)) return;
-		const source = config;
-		setClearingIds((current) => new Set(current).add(notification.id));
-		try {
-			await clearNotification(source, notification.id);
-			if (currentConfig.current !== source) return;
-			setItems((current) => current.filter((item) => item.id !== notification.id));
-			if (notification.status === "unread") setUnreadCount((count) => Math.max(0, count - 1));
-		} catch (cause) {
-			if (currentConfig.current === source) setError(userFacingError(cause, "Couldn't clear notification."));
-		} finally {
-			setClearingIds((current) => {
-				const next = new Set(current);
-				next.delete(notification.id);
-				return next;
-			});
+	function clear(notification: FeedItem) {
+		const source = configForHost(notification.hostId);
+		if (!source) {
+			haptics.warning();
+			setNotice(`${notification.hostName} is offline.`);
+			return false;
 		}
+		haptics.warning();
+		updateFeeds((previous) => {
+			const feed = previous[notification.hostId];
+			if (!feed || !feed.items.some((item) => item.id === notification.id)) return previous;
+			return { ...previous, [notification.hostId]: {
+				...feed,
+				items: feed.items.filter((item) => item.id !== notification.id),
+				unreadCount: notification.status === "unread" ? Math.max(0, feed.unreadCount - 1) : feed.unreadCount,
+			} };
+		});
+		void clearNotification(source, notification.id).catch((cause) => {
+			haptics.error();
+			setNotice(userFacingError(cause, "Couldn't clear that notification."));
+			updateFeeds((previous) => {
+				const feed = previous[notification.hostId];
+				if (!feed || feed.items.some((item) => item.id === notification.id)) return previous;
+				return { ...previous, [notification.hostId]: {
+					...feed,
+					items: [notification, ...feed.items],
+					unreadCount: notification.status === "unread" ? feed.unreadCount + 1 : feed.unreadCount,
+				} };
+			});
+		});
+		return true;
 	}
 
-	function sessionState(sessionId?: string) {
-		const session = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+	function sessionState(hostId: string, sessionId?: string) {
+		const host = hostStates.find((item) => item.hostId === hostId);
+		const session = sessionId ? host?.sessions.find((item) => item.id === sessionId) : undefined;
 		return {
 			terminated: Boolean(session?.isTerminated || session?.status === "terminated"),
 			// Without the board we cannot tell a terminated session from a live one,
-			// and guessing lands on a screen that cannot resolve it.
-			sessionsReady: !sessionsLoading && sessions.length > 0,
+			// and guessing lands on a screen that cannot resolve it. A machine that
+			// pages its archive has answered once it reports the archive's size,
+			// even with no live workers. Its archived workers are not in `sessions`,
+			// so one of those offers Open, whose screen offers Restore.
+			sessionsReady: Boolean(host && !host.loading && (host.sessions.length > 0 || host.archive)),
 		};
 	}
 
-	function restoreSession(sessionId: string) {
-		if (!config?.hostId || itemsHostId !== config.hostId) return;
+	function restoreSession(hostId: string, sessionId: string) {
+		const key = notificationIdentity(hostId, sessionId);
 		haptics.tap();
-		setRestoringId(sessionId);
-		void restore(sessionId)
+		setRestoringId(key);
+		void restore(sessionId, hostId)
 			.then(() => {
 				haptics.success();
-				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId: config.hostId } });
+				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId } });
 			})
 			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
 			.finally(() => setRestoringId(undefined));
 	}
 
-	async function markAll() {
-		if (!config?.hostId || itemsHostId !== config.hostId || unreadCount === 0) return;
-		haptics.success();
-		setItems((previous) => previous.map((item) => ({ ...item, status: "read" })));
-		setUnreadCount(0);
-		try {
-			await markAllNotificationsRead(config);
-		} catch {
-			// Restore server truth if the optimistic update failed.
-			void load("refresh");
+	function confirmClearAll() {
+		Alert.alert("Clear all notifications?", "This removes the notification history on every connected machine.", [
+			{ text: "Cancel", style: "cancel" },
+			{ text: "Clear all", style: "destructive", onPress: () => void clearAll() },
+		]);
+	}
+
+	// Mirrors the desktop panel's Clear all: each machine's whole history goes,
+	// including pages this screen never loaded.
+	async function clearAll() {
+		const feedList = Object.values(feedsRef.current);
+		const targets = feedList.flatMap((feed) => {
+			const source = configForHost(feed.hostId);
+			return source ? [{ feed, source }] : [];
+		});
+		const offline = feedList.filter((feed) => !configForHost(feed.hostId) && feed.items.length > 0);
+		if (targets.length === 0) {
+			haptics.warning();
+			setNotice("Notifications are on machines that are currently offline.");
+			return;
 		}
+		haptics.warning();
+		// Drop anything in flight so a page that lands now cannot bring rows back.
+		loadGeneration.current += 1;
+		// Each emptied feed is kept by identity, so a failed clear can put the old
+		// rows back without overwriting anything a reload has written since. The
+		// recovery reload below may fail too, and it keeps whatever feed it finds.
+		const cleared = new Map(targets.map(({ feed }) => [feed.hostId, { ...feed, items: [], nextCursor: undefined, unreadCount: 0 }]));
+		updateFeeds((previous) => Object.fromEntries(Object.entries(previous).map(([hostId, feed]) => [hostId, cleared.get(hostId) ?? feed])));
+		const results = await Promise.allSettled(targets.map(async ({ feed, source }) => {
+			try {
+				await clearAllNotifications(source);
+			} catch (cause) {
+				updateFeeds((previous) => previous[feed.hostId] === cleared.get(feed.hostId) ? { ...previous, [feed.hostId]: feed } : previous);
+				throw new Error(userFacingError(cause, `Couldn't clear notifications on ${feed.hostName}.`));
+			}
+			void refreshHost(feed.hostId);
+		}));
+		const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+		if (failure) {
+			haptics.error();
+			setNotice(failure.reason instanceof Error ? failure.reason.message : "Couldn't clear notifications.");
+		} else if (offline.length > 0) {
+			setNotice(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`);
+		}
+		// Also releases pagination that the generation bump cut off.
+		void load("refresh");
 	}
 
 	useEffect(() => {
@@ -273,10 +421,6 @@ function NotificationsContent() {
 		return () => clearTimeout(timer);
 	}, [notice]);
 
-	const subtitle = visibleUnreadCount > 0
-		? `${visibleUnreadCount} ${visibleUnreadCount === 1 ? "update needs" : "updates need"} you`
-		: "You're all caught up";
-
 	return (
 		<View style={styles.screen}>
 			<View style={{ height: insets.top }} />
@@ -284,23 +428,23 @@ function NotificationsContent() {
 				title="Notifications"
 				left={<HeaderIconButton icon="back" label="Back" onPress={() => backOr(router)} />}
 				right={
-					visibleUnreadCount > 0 ? (
-						<HeaderIconButton icon="check" label="Mark all read" onPress={() => void markAll()} />
+					items.length > 0 ? (
+						<HeaderIconButton icon="trash" label="Clear all" onPress={confirmClearAll} />
 					) : undefined
 				}
 			/>
 
-			{loading || (config && itemsHostId !== config.hostId) ? (
+			{loading ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<SectionList
 					sections={sections}
-					keyExtractor={(notification) => notification.id}
+					keyExtractor={(item) => notificationIdentity(item.hostId, item.id)}
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={
-						visibleItems.length === 0
+						items.length === 0
 							? { flexGrow: 1 }
 							: { paddingBottom: insets.bottom + 24 }
 					}
@@ -315,13 +459,17 @@ function NotificationsContent() {
 							tintColor={t.accent}
 						/>
 					}
-					onEndReached={() => void load("more")}
+					onEndReached={() => { if (hasMore) void load("more"); }}
 					onEndReachedThreshold={0.4}
 					ListHeaderComponent={
-						error && visibleItems.length > 0 ? (
+						unavailableFeeds.length > 0 && items.length > 0 ? (
 							<View style={styles.inlineError}>
-								<Feather name="alert-circle" size={15} color={t.red} />
-								<Text selectable style={styles.inlineErrorText}>{offline ? "This machine is offline. Showing the last notifications loaded." : error}</Text>
+								<Feather name="wifi-off" size={15} color={t.textSecondary} />
+								<Text style={styles.inlineErrorText}>
+									{unavailableFeeds.length === hostStates.length
+										? `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} offline. Showing previously loaded activity.`
+										: `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} unavailable. Showing activity from the available machines.`}
+								</Text>
 							</View>
 						) : null
 					}
@@ -333,13 +481,13 @@ function NotificationsContent() {
 					renderItem={({ item }) => (
 						<NotificationRow
 							item={item}
+							highlighted={highlightedIds.has(notificationIdentity(item.hostId, item.id))}
 							now={now}
-							action={notificationAction(item, sessionState(item.sessionId)).kind}
-							restoring={restoringId === item.sessionId}
-							clearing={clearingIds.has(item.id)}
+							action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
+							restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
 							onPress={() => open(item)}
-							onClear={() => void clear(item)}
-							onRestore={() => item.sessionId && restoreSession(item.sessionId)}
+							onRestore={() => item.sessionId && restoreSession(item.hostId, item.sessionId)}
+							onClear={() => clear(item)}
 						/>
 					)}
 					ListFooterComponent={
@@ -350,27 +498,22 @@ function NotificationsContent() {
 						) : null
 					}
 					ListEmptyComponent={
-						offline ? (
+						hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
 							<EmptyState
 								icon="wifi-off"
-								title="This machine is offline"
-								message="Notifications load once the app reconnects."
+								title="Machines are offline"
+								message="Notifications will appear when at least one paired machine reconnects."
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
 							/>
-						) : !config && !error ? (
+						) : hostStates.length === 0 ? (
 							// Shared with the tabs: "Connecting…" while the launch race runs,
 							// the pairing prompt only once it has found no machine.
 							<UnpairedState />
 						) : (
 							<EmptyState
-								icon={error ? "alert-circle" : "check-circle"}
-								title={error ? "Couldn't load notifications" : "All caught up"}
-								message={error ?? "Updates from workers and pull requests will appear here when they need you."}
-								action={
-									!error ? undefined
-										: rejected ? <Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />
-										: <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />
-								}
+								icon="check-circle"
+								title="All caught up"
+								message="Updates from workers and pull requests across your machines will appear here when they need you."
 							/>
 						)
 					}
@@ -400,75 +543,66 @@ function NotificationSectionHeader({ title, count }: { title: string; count: num
 	);
 }
 
-function NotificationRow({ item, now, action, restoring, clearing, onPress, onClear, onRestore }: {
-	item: NotificationRecord;
+function NotificationRow({ item, highlighted, now, action, restoring, onPress, onRestore, onClear }: {
+	item: FeedItem;
+	highlighted: boolean;
 	now: number;
 	action: "open" | "review" | "restore" | "prs" | "none";
 	restoring: boolean;
-	clearing: boolean;
 	onPress: () => void;
-	onClear: () => void;
 	onRestore: () => void;
+	onClear: () => boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const visual = notificationVisual(t, item.type);
-	const unread = item.status === "unread";
+	const unread = item.status === "unread" || highlighted;
 
 	return (
-		<View style={[styles.row, action === "none" && styles.rowInert]}>
-		<Pressable
-			onPress={onPress}
-			accessibilityRole="button"
-			accessibilityState={{ disabled: action === "none" }}
-			accessibilityLabel={`${item.title || visual.label}, ${visual.label}`}
-			accessibilityHint={action === "restore" ? "This session is terminated. Use the restore button to bring it back." : undefined}
-			style={({ pressed }) => [styles.rowTap, pressed && action !== "none" && styles.rowPressed]}
-		>
-			<View style={styles.rowCopy}>
-				<View style={styles.metaRow}>
-					<NotificationTypeIcon icon={visual.icon} color={unread ? visual.color : t.textFaint} />
-					<Text style={[styles.kind, unread && { color: visual.color }]} numberOfLines={1}>
-						{visual.label}
-					</Text>
-					{unread ? <Dot color={t.accent} size={7} /> : null}
-					<Text style={styles.time}>{relativeTime(item.createdAt, now)}</Text>
-				</View>
-				<Text style={[styles.title, unread && styles.titleUnread]} numberOfLines={1}>
-					{item.title || visual.label}
-				</Text>
-				{item.body ? (
-					<Text style={styles.body} numberOfLines={1}>
-						{item.body}
-					</Text>
+		<NotificationSwipeRow onClear={onClear}>
+			<View style={[styles.row, action === "none" && styles.rowInert]}>
+				<Pressable
+					onPress={onPress}
+					accessibilityRole="button"
+					accessibilityState={{ disabled: action === "none" }}
+					accessibilityLabel={`${item.title || visual.label}, ${visual.label}, ${item.hostName} machine`}
+					accessibilityHint={action === "restore" ? "This session is terminated. Use the restore button to bring it back." : undefined}
+					accessibilityActions={[{ name: "delete", label: "Clear notification" }]}
+					onAccessibilityAction={(event) => {
+						if (event.nativeEvent.actionName === "delete") onClear();
+					}}
+					style={({ pressed }) => [styles.rowTap, pressed && action !== "none" && styles.rowPressed]}
+				>
+					<View style={styles.rowCopy}>
+						<View style={styles.metaRow}>
+							<NotificationTypeIcon icon={visual.icon} color={unread ? visual.color : t.textFaint} />
+							<Text style={[styles.kind, unread && { color: visual.color }]} numberOfLines={1}>{visual.label}</Text>
+							{unread ? <Dot color={t.accent} size={7} /> : null}
+							<MachineIdentity
+								name={item.hostName}
+								appearance={machineAppearance({ id: item.hostId, name: item.hostName, appearance: item.hostAppearance })}
+								style={styles.machineIdentity}
+							/>
+							<Text style={styles.time}>{relativeTime(item.createdAt, now)}</Text>
+						</View>
+						<Text style={[styles.title, unread && styles.titleUnread]} numberOfLines={1}>{item.title || visual.label}</Text>
+						{item.body ? <Text style={styles.body} numberOfLines={1}>{item.body}</Text> : null}
+					</View>
+				</Pressable>
+				{action === "restore" ? (
+					<Pressable
+						onPress={onRestore}
+						disabled={restoring}
+						accessibilityRole="button"
+						accessibilityLabel={`Restore ${item.title || visual.label}`}
+						accessibilityState={{ busy: restoring, disabled: restoring }}
+						style={({ pressed }) => [styles.restoreButton, pressed && styles.restorePressed]}
+					>
+						{restoring ? <ActivityIndicator size="small" color={t.textSecondary} /> : <Feather name="rotate-ccw" size={20} color={t.textSecondary} />}
+					</Pressable>
 				) : null}
 			</View>
-		</Pressable>
-		{action === "restore" ? (
-			<Pressable
-				onPress={onRestore}
-				disabled={restoring}
-				accessibilityRole="button"
-				accessibilityLabel={`Restore ${item.title || visual.label}`}
-				accessibilityState={{ busy: restoring, disabled: restoring }}
-				style={({ pressed }) => [styles.restoreButton, pressed && styles.restorePressed]}
-			>
-				{restoring
-					? <ActivityIndicator size="small" color={t.textSecondary} />
-					: <Feather name="rotate-ccw" size={20} color={t.textSecondary} />}
-			</Pressable>
-		) : null}
-		<Pressable
-			onPress={onClear}
-			disabled={clearing}
-			accessibilityRole="button"
-			accessibilityLabel={`Clear ${item.title || visual.label}`}
-			accessibilityState={{ busy: clearing, disabled: clearing }}
-			style={({ pressed }) => [styles.clearButton, pressed && styles.rowPressed]}
-		>
-			{clearing ? <ActivityIndicator size="small" color={t.textSecondary} /> : <Feather name="x" size={18} color={t.textTertiary} />}
-		</Pressable>
-		</View>
+		</NotificationSwipeRow>
 	);
 }
 
@@ -476,8 +610,6 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		hostPicker: { paddingHorizontal: space.lg, paddingTop: space.xl, gap: space.md },
-		hostPickerHint: { ...type.body, color: t.textSecondary, marginBottom: space.xs },
 		inlineError: {
 			flexDirection: "row",
 			alignItems: "center",
@@ -487,9 +619,9 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			borderRadius: 12,
 			borderCurve: "continuous",
-			backgroundColor: t.tintRed,
+			backgroundColor: t.bgSubtle,
 		},
-		inlineErrorText: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, flex: 1 },
+		inlineErrorText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, flex: 1 },
 		sectionHeader: {
 			flexDirection: "row",
 			alignItems: "center",
@@ -507,6 +639,7 @@ const makeStyles = (t: Theme) =>
 			fontWeight: "600",
 			fontVariant: ["tabular-nums"],
 		},
+		machineIdentity: { maxWidth: 112 },
 		row: {
 			minHeight: 76,
 			flexDirection: "row",
@@ -518,7 +651,6 @@ const makeStyles = (t: Theme) =>
 		// Its own column, wide enough to hit without aiming: restoring is the only
 		// thing a terminated row can do, and it should not share the row's tap.
 		restoreButton: { width: 56, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
-		clearButton: { width: 48, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
 		restorePressed: { backgroundColor: t.bgElevated },
 		rowInert: { opacity: 0.55 },
 		notice: {
@@ -540,7 +672,7 @@ const makeStyles = (t: Theme) =>
 		rowPressed: { backgroundColor: t.bgElevated },
 		rowCopy: { flex: 1, gap: space.hair },
 		metaRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-		kind: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+		kind: { flexShrink: 1, fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
 		time: { fontFamily: "Geist_400Regular",
 			color: t.textFaint,
 			fontSize: type.caption1.fontSize,

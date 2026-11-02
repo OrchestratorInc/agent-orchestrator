@@ -43,6 +43,9 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 // inline, and optional suggestions must not be.
 func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
+	if !strings.Contains(prompt, "implementation pull request(s) owned by worker session mer-1") || !strings.Contains(system, "implementation PRs owned by an AO worker") {
+		t.Fatalf("native review prompts must identify their owned implementation scope:\n%s\n%s", prompt, system)
+	}
 	for _, want := range []string{
 		"The worker receives only your inline comments, never the summary",
 		"Put every finding that requires a change in \"comments\" as its own inline comment",

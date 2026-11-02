@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	agentSheetRoute,
 	connectSheetRoute,
+	machineNameSheetRoute,
 	parkSheetResult,
 	projectSheetRoute,
 	modelSheetRoute,
@@ -90,11 +91,24 @@ describe("route builders", () => {
 		expect(fn).toHaveBeenCalledWith("gpt-5.4");
 	});
 
-	it("builds the connect route", () => {
+	it("passes the saved machine id to a reconnect form", () => {
 		const fn = vi.fn();
-		const route = connectSheetRoute(fn);
+		const route = connectSheetRoute(fn, "h_dev");
 		expect(route.pathname).toBe("/sheets/connect");
+		expect(route.params.hostId).toBe("h_dev");
 		takeSheetResult<void>(route.params.resultKey)?.();
 		expect(fn).toHaveBeenCalled();
+	});
+
+	it("builds the machine-name route and reports a nullable choice", () => {
+		const fn = vi.fn();
+		const route = machineNameSheetRoute({ suggested: "studio-mac", appearance: { symbol: "laptop" }, hostId: "h_new", onSelect: fn });
+		expect(route.pathname).toBe("/sheets/machine-name");
+		expect(route.params.suggested).toBe("studio-mac");
+		expect(route.params.symbol).toBe("laptop");
+		expect(route.params.hostId).toBe("h_new");
+		const choice = { name: "Studio", appearance: { symbol: "desktop" as const } };
+		takeSheetResult<typeof choice | null>(route.params.resultKey)?.(choice);
+		expect(fn).toHaveBeenCalledWith(choice);
 	});
 });

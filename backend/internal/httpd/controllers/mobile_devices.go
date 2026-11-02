@@ -1,8 +1,6 @@
 package controllers
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
 	"sort"
 	"time"
@@ -17,7 +15,6 @@ import (
 // *mobilebridge.DeviceRegistry.
 type DeviceRoster interface {
 	List() []mobilebridge.PushDevice
-	SetMuted(installID string, muted bool) error
 	Delete(installID string) error
 }
 
@@ -34,7 +31,7 @@ type LiveSet interface {
 
 // MobileDevicesController owns the desktop-only roster routes. They are mounted
 // under /api/v1/mobile, which lanControlBlock 404s on the LAN listener, so a
-// paired phone can neither enumerate the household's devices nor unmute itself.
+// paired phone can neither enumerate nor remove the household's devices.
 type MobileDevicesController struct {
 	Registry DeviceRoster
 	Presence LiveSet
@@ -78,7 +75,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 			Token:                d.Token,
 			Platform:             d.Platform,
 			DeviceName:           d.DeviceName,
-			Muted:                d.Muted,
 			Live:                 live[d.InstallID],
 			NotificationsEnabled: d.Token != "",
 			CreatedAt:            d.CreatedAt,
@@ -94,33 +90,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 		return out[i].LastSeenAt.After(out[j].LastSeenAt)
 	})
 	envelope.WriteJSON(w, http.StatusOK, MobileDevicesResponse{Devices: out})
-}
-
-// Mute handles PATCH /api/v1/mobile/devices/{installId}.
-func (c *MobileDevicesController) Mute(w http.ResponseWriter, r *http.Request) {
-	if c.Registry == nil {
-		writeRegistryUnavailable(w, r)
-		return
-	}
-	installID := chi.URLParam(r, "installId")
-	var req MuteDeviceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	if err := c.Registry.SetMuted(installID, req.Muted); err != nil {
-		// A failed write is not a missing device. Answering 404 for a full or
-		// read-only disk sends the user hunting for a device that is plainly in
-		// the list, and disguises a fault as a routine miss.
-		if errors.Is(err, mobilebridge.ErrDeviceNotFound) {
-			envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "DEVICE_NOT_FOUND", "Unknown device", nil)
-			return
-		}
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_MUTE_FAILED",
-			"Could not save the device's notification setting", nil)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]bool{"muted": req.Muted})
 }
 
 // Remove handles DELETE /api/v1/mobile/devices/{installId}.

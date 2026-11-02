@@ -50,7 +50,6 @@ describe("selectCloudOrchestratorHarness", () => {
 
 describe("spawnCloudOrchestrator", () => {
 	beforeEach(() => {
-		window.localStorage.removeItem("ao.cloud.sandboxProvider");
 		cloudMocks.me.mockReset();
 		cloudMocks.listUserProviderConnections.mockReset();
 		cloudMocks.listProjects.mockReset();
@@ -82,16 +81,34 @@ describe("spawnCloudOrchestrator", () => {
 			harness: "claude-code",
 			displayName: "Orchestrator",
 			prompt: "",
+			defaultInterfaceMode: "tui",
 		});
 	});
 
-	it("does not send a saved provider absent from this control plane", async () => {
-		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
-		const queryClient = primeClient({ id: "project-1" });
+	// The control plane starts the orchestrator in Chat as the local daemon does
+	// and keeps the default for the workers it spawns. "tui" is sent too: an
+	// orchestrator created without a default starts in the terminal.
+	it("is created with the user's default session interface", async () => {
+		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", "tui"]] as const) {
+			const queryClient = primeClient({ id: "project-1" });
+			queryClient.setQueryData<Settings>(settingsQueryKey, {
+				cloudControlPlaneUrl: "https://cloud.example.com",
+				defaultSessionMode,
+			} as Settings);
+			cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+			cloudMocks.createSession.mockClear();
+
+			await spawnCloudOrchestrator(queryClient, "project-1");
+			expect(cloudMocks.createSession.mock.calls[0]?.[1]?.defaultInterfaceMode).toBe(interfaceMode);
+		}
+	});
+
+	it("leaves the provider to the project and org default on the control plane", async () => {
+		const queryClient = primeClient({ id: "project-1", config: { sandboxProvider: "coder" } });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
 
 		await spawnCloudOrchestrator(queryClient, "project-1");
-		expect(cloudMocks.createSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
+		expect(cloudMocks.createSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
 	});
 
 	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {

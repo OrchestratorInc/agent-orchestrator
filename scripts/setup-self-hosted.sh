@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
 	printf '%s\n' 'Usage: setup-self-hosted.sh [--nightly | --bundle PATH] [--tunnel] [--install-only]'
-	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and prints pairing details.'
+	printf '%s\n' 'Installs AO under ~/.ao/host, starts a user service, and links it to your AO account (or prints pairing details).'
 	printf '%s\n' 'Downloads stable by default; --nightly downloads the newest published nightly.'
 }
 
@@ -108,8 +108,8 @@ PY
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
-	release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases/latest'
-	"$nightly" && release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100'
+	release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases/latest'
+	"$nightly" && release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases?per_page=100'
 	curl -fsSL --retry 3 "$release_api" -o "$metadata"
 	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys
@@ -375,7 +375,33 @@ if "$tunnel" && [[ "$enable_output" != *"Address: https://"* ]]; then
 		exit 1
 	fi
 fi
+# At a terminal, sign in from any device instead of copying a password: the
+# host then appears on every desktop and phone signed in to that AO account.
+# A release without `link`, or a sign-in that does not finish, falls back to
+# the pairing details below.
+# Without a terminal (an agent over SSH), say how to link instead.
+# A release without `link` exits 0 for it too, printing its parent's help, so
+# look for a flag only `link` has.
+link_help="$("$host_root/current/resources/daemon/ao" remote-host link --help 2>/dev/null || true)"
+# An upgrade of a linked host keeps its account; its devices already list it.
+if "$tunnel" && [[ "$enable_output" == *"Linked to an AO account"* ]]; then
+	printf '\n%s\n' "${addresses[@]}"
+	exit 0
+fi
+if "$tunnel" && [[ "$link_help" == *--no-qr* ]]; then
+	if [[ -t 1 ]]; then
+		printf '\n%s\n' 'Press Ctrl-C to skip signing in and see the pairing details instead.'
+		# Ctrl-C ends only the sign-in; this script goes on to the details.
+		trap ':' INT
+		linked=true
+		"$host_root/current/resources/daemon/ao" remote-host link || linked=false
+		trap - INT
+		"$linked" && exit 0
+	fi
+	printf '\nThe host is not linked to an AO account. To link it, run: %s remote-host link\n' "$host_root/current/resources/daemon/ao"
+	printf '%s\n' 'Or pair it by hand with these details.'
+fi
 printf '\nPair this host\n\n'
 printf '%s\n' "${addresses[@]}"
 printf '\nPassword: %s\n\n' "$password"
-printf 'On your laptop: enable Developer mode, then Settings → Remote hosts → Add host.\n'
+printf 'On your laptop: Settings → Remote hosts → Add host.\n'

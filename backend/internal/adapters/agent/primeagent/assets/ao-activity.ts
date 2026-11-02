@@ -37,6 +37,20 @@ function nativeSessionId(context) {
   return typeof sessionId === "string" ? sessionId : "";
 }
 
+// The run's final assistant text. The event shape is the agent's, so anything
+// unexpected only means "no text".
+function finalAssistantText(event) {
+  try {
+    for (const message of [...(event?.messages ?? [])].reverse()) {
+      if (message?.role !== "assistant") continue;
+      const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+      const text = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+      if (text.trim()) return text;
+    }
+  } catch {}
+  return "";
+}
+
 export default function aoActivityExtension(prime) {
   let pendingPrompt = "";
 
@@ -59,8 +73,8 @@ export default function aoActivityExtension(prime) {
     report("user-prompt-submit", { prompt }, context.cwd);
   }));
 
-  prime.on("agent_end", bestEffort((_event, context) => {
-    report("stop", {}, context.cwd);
+  prime.on("agent_end", bestEffort((event, context) => {
+    report("stop", { last_assistant_message: finalAssistantText(event) }, context.cwd);
   }));
 
   prime.on("session_shutdown", bestEffort((event, context) => {

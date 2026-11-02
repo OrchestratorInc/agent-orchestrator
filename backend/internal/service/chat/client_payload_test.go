@@ -42,3 +42,58 @@ func TestClientPayloadHashPreservesLegacyEmptySenderHash(t *testing.T) {
 		t.Fatal("sender identity did not change the payload hash")
 	}
 }
+
+func TestClientPayloadHashDistinguishesContinuation(t *testing.T) {
+	ordinary := ports.ChatUserMessage{ClientMessageID: "c1", Text: "Continue from where you stopped."}
+	continued := ordinary
+	continued.Continuation = true
+	first, err := clientPayloadHash(ordinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := clientPayloadHash(continued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("continuation must change the client payload hash")
+	}
+	stored := domain.ConversationMessage{Text: ordinary.Text, Origin: domain.MessageOriginHuman}
+	if legacyMessageMatches(stored, continued) {
+		t.Fatal("ordinary message must not match a continuation")
+	}
+	stored.Continuation = true
+	if !legacyMessageMatches(stored, continued) {
+		t.Fatal("matching continuation must remain idempotent")
+	}
+}
+
+func TestClientPayloadFileFormattingPreservesLegacyRetryIdentity(t *testing.T) {
+	ref := testFileReference()
+	msg := ports.ChatUserMessage{ClientMessageID: "receipt", Text: "question", Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}}
+	legacy, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(msg.Content)
+	stored := domain.ConversationMessage{Text: msg.Text, Origin: domain.MessageOriginHuman, DeliveryContentJSON: string(raw)}
+	msg.Content[0].Text = FileReferenceQuotedPath
+	current, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != legacy || !legacyMessageMatches(stored, msg) {
+		t.Fatal("prompt format changed a frozen client receipt")
+	}
+	if msg.Content[0].Text != FileReferenceQuotedPath {
+		t.Fatal("hashing mutated the saved dispatch format")
+	}
+	ref.Lines[0].Text = "different code"
+	changed, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == legacy || legacyMessageMatches(stored, msg) {
+		t.Fatal("changed captured code reused a receipt")
+	}
+}

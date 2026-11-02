@@ -10,16 +10,19 @@
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
+	CloudCpOffering,
 	CloudCpAgentProvider,
 	CloudCpCancelTurnResponse,
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
 	CloudCpChatModelsResponse,
+	CloudCpCoderTemplateParametersResponse,
 	CloudCpCoderTemplatesResponse,
 	CloudCpClientEvent,
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateStandaloneProjectRequest,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
@@ -31,6 +34,8 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpBillingLinkResponse,
+	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
@@ -51,6 +56,14 @@ import type {
 	CloudCpSendMessageRequest,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
+	CloudCpComposerAnswer,
+	CloudCpSessionChatSettings,
+	CloudCpSharedSessionParticipants,
+	CloudCpMergeRequest,
+	CloudCpCreateShareLinkRequest,
+	CloudCpShareLink,
+	CloudCpSharedProject,
+	CloudCpSession,
 	CloudCpSessionChildrenResponse,
 	CloudCpHarnessInspectResponse,
 	CloudCpHarnessStatus,
@@ -60,6 +73,8 @@ import type {
 	CloudCpRestoreSessionResponse,
 	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
+	CloudCpArtifactAccessResponse,
+	CloudCpSessionArtifact,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
 	CloudCpInterfaceTransitionStatusResponse,
@@ -104,10 +119,22 @@ export interface CloudCpClientOptions {
 	 * re-resolve the current org so callers stop hammering a dead org.
 	 */
 	onForbidden?: () => void;
+	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
+	onPlanRefused?: (code: string) => void;
 }
 
 export interface CloudCpRequestOptions {
 	signal?: AbortSignal;
+}
+
+/**
+ * Options for a session workspace call (/sessions/{id}/workspace/*). In a
+ * multi-repository session, `repository` is the folder name of one of the
+ * session's additional repositories (from the review summary's
+ * `repositories`); absent means the main repository.
+ */
+export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
+	repository?: string;
 }
 
 /**
@@ -180,6 +207,18 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	createSessionArtifactAccess(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpArtifactAccessResponse>;
+	listSessionArtifacts(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<{ artifacts: CloudCpSessionArtifact[] }>;
+	/** Deletes one artifact file from cloud storage and the session's worker. */
+	deleteSessionArtifact(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<void>;
 	updateSessionPreferences(
 		orgId: string,
 		sessionId: string,
@@ -220,8 +259,46 @@ export interface CloudCpClient {
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/**
+	 * Lists the rich parameters of a Coder template's active version. An older
+	 * control plane without the route answers 404.
+	 */
+	getCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
+	/**
+	 * A Coder template's parameters with draft values applied, so a parameter
+	 * the template declares only for some value of another appears once it
+	 * applies. An older control plane without the route answers 404 or 405.
+	 */
+	evaluateCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		values: Readonly<Record<string, string>>,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
 	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** The org's plan, its limits, and usage against them. */
+	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
+	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
+	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
+	 */
+	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
+	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
+	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/**
+	 * Set the org's default sandbox provider (org admins; only an org offered
+	 * more than one provider). "" clears it. Returns the org's updated offering.
+	 */
+	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -258,10 +335,18 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionReviewState>;
 	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
+	/** Ask a shared project's owner to merge a pull request this person may not merge. */
+	requestPullRequestMerge(orgId: string, sessionId: string, number: number, prUrl: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	/** A project's merge requests: all for its owner, a guest's own for them. */
+	listProjectMergeRequests(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequests: CloudCpMergeRequest[] }>;
+	/** Merge a requested pull request as its owner. */
+	approveMergeRequest(orgId: string, requestId: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	rejectMergeRequest(orgId: string, requestId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	/** Archive a session; `deleteArtifacts` also deletes its artifact files. */
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions,
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -278,13 +363,13 @@ export interface CloudCpClient {
 		path: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpWorkspaceDiffFileDetail>;
-	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
-	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
-	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
-	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
-	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
-	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
-	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
+	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
+	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
+	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
+	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
+	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
+	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
 	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
@@ -329,6 +414,30 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
+	/** Takes a shared session's composer lease, or renews it when already held. */
+	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Extends a held grant; `typing` reports a keystroke since the last renewal. */
+	renewComposer(orgId: string, sessionId: string, epoch: number, typing: boolean, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	releaseComposer(orgId: string, sessionId: string, epoch: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Gets in line for the composer lease. */
+	requestComposerTurn(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	leaveComposerQueue(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Takes the lease from its holder (session creator, org owners and admins). */
+	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Sets the model and settings the session's turns run with (its owner only). */
+	setSessionChatSettings(orgId: string, sessionId: string, settings: CloudCpSessionChatSettings, options?: CloudCpRequestOptions): Promise<{ chatSettings: CloudCpSessionChatSettings }>;
+	/** Who is in each of these sessions that someone has shared; the rest are left out. */
+	listSessionParticipants(orgId: string, sessionIds: readonly string[], options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSharedSessionParticipants[] }>;
+	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
+	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
+	listShareLinks(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ links: CloudCpShareLink[] }>;
+	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Turns a share link's token into the caller's own access grant. */
+	redeemShareLink(orgId: string, token: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
+	listSharedProjects(options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject[] }>;
+	/** The sessions of a project shared with the caller that their grant reaches. */
+	listSharedProjectSessions(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSession[] }>;
 	listChatEvents(
 		orgId: string,
 		sessionId: string,
@@ -354,6 +463,8 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	/** The models a new task for this agent runs with in this organization. 409 MODEL_CATALOG_UNAVAILABLE: none for this agent. */
+	listUserAgentModels(orgId: string, agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
@@ -392,9 +503,16 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
+	createStandaloneProject(
+		orgId: string,
+		body: CloudCpCreateStandaloneProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
 }
 
-type QueryParams = Record<string, string | number | undefined>;
+/** A value per key; an array repeats the key once per item. */
+type QueryParams = Record<string, string | number | readonly string[] | undefined>;
 
 interface SendOptions {
 	body?: unknown;
@@ -409,7 +527,11 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 	if (query !== undefined) {
 		const params = new URLSearchParams();
 		for (const [key, value] of Object.entries(query)) {
-			if (value !== undefined) params.set(key, String(value));
+			if (Array.isArray(value)) {
+				for (const item of value) params.append(key, item);
+			} else if (value !== undefined) {
+				params.set(key, String(value));
+			}
 		}
 		const search = params.toString();
 		if (search !== "") url += `?${search}`;
@@ -417,10 +539,26 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 	return url;
 }
 
+/** The `repository` query parameter of a workspace call; undefined for the main repository. */
+function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
+	const repository = options?.repository?.trim();
+	return repository ? { repository } : undefined;
+}
+
 /** Build one path segment from a caller-supplied identifier. */
 function seg(value: string): string {
 	return encodeURIComponent(value);
 }
+
+/** Error codes the control plane uses when a plan does not allow the request. */
+export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+	"PLAN_REQUIRED",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WORKER_SLOTS_FULL",
+	"SESSION_LIMIT_REACHED",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
 
 async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
@@ -457,7 +595,7 @@ function newIdempotencyKey(): string {
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
-	const { baseUrl, getToken, onForbidden } = options;
+	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -487,7 +625,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
 			if (response.status === 403) onForbidden?.();
-			throw await errorFromResponse(response);
+			const error = await errorFromResponse(response);
+			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
+			throw error;
 		}
 		return response;
 	}
@@ -634,6 +774,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		createSessionArtifactAccess: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
+		listSessionArtifacts: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
+		deleteSessionArtifact: (orgId, sessionId, path, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts?path=${encodeURIComponent(path)}`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, { signal: o?.signal }),
 		startInterfaceTransition: (orgId, sessionId, body, o) =>
@@ -668,8 +814,26 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getCoderTemplateParameters: (orgId, templateId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
+		evaluateCoderTemplateParameters: (orgId, templateId, values, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters/evaluate`, {
+				body: { values },
+				signal: o?.signal,
+			}),
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
+		createBillingCheckout: (orgId, plan, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
+		createBillingPortal: (orgId, flow, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
+		resetBillingUsage: (orgId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
+		touchSessionPresence: (orgId, sessionId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
+		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>
@@ -683,6 +847,16 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests`, {
 				signal: o?.signal,
 			}),
+		requestPullRequestMerge: (orgId, sessionId, number, prUrl, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge-requests`, {
+				body: { prUrl }, signal: o?.signal,
+			}),
+		listProjectMergeRequests: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/merge-requests`, { signal: o?.signal }),
+		approveMergeRequest: (orgId, requestId, expectedHeadSha, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/merge-requests/${seg(requestId)}/approve`, { body: { expectedHeadSha }, signal: o?.signal }),
+		rejectMergeRequest: (orgId, requestId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/merge-requests/${seg(requestId)}/reject`, { signal: o?.signal }),
 		mergePullRequest: (orgId, sessionId, number, prUrl, expectedHeadSha, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge`, {
 				body: { prUrl, expectedHeadSha }, signal: o?.signal,
@@ -694,7 +868,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>
@@ -715,33 +889,35 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		getWorkspaceReview: (orgId, sessionId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, { signal: o?.signal }),
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
 		getWorkspaceReviewTree: (orgId, sessionId, path, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/tree`, {
-				query: { path }, signal: o?.signal,
+				query: { path, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		searchWorkspaceReview: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
-				query: { query: query.query, cursor: query.cursor, limit: query.limit }, signal: o?.signal,
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				query: { path: query.path, scope: query.scope, commitSha: query.commitSha }, signal: o?.signal,
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
-					expectedRevision: query.expectedRevision, commitSha: query.commitSha,
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
 				}, signal: o?.signal,
 			}),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
@@ -779,9 +955,39 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/approvals/${seg(requestId)}/decide`, {
 				body: { decisionId }, signal: o?.signal,
 			}),
+		acquireComposer: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/acquire`, { signal: o?.signal }),
+		renewComposer: (orgId, sessionId, epoch, typing, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/renew`, { body: { epoch, typing }, signal: o?.signal }),
+		releaseComposer: (orgId, sessionId, epoch, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/release`, { body: { epoch }, signal: o?.signal }),
+		requestComposerTurn: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
+		leaveComposerQueue: (orgId, sessionId, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
+		takeOverComposer: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/takeover`, { signal: o?.signal }),
+		setSessionChatSettings: (orgId, sessionId, settings, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-settings`, { body: settings, signal: o?.signal }),
+		listSessionParticipants: (orgId, sessionIds, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/session-participants`, { query: { sessionId: sessionIds }, signal: o?.signal }),
+		publishComposerDraft: (orgId, sessionId, epoch, text, cursor, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/draft`, { body: { epoch, text, cursor }, signal: o?.signal }),
+		createShareLink: (orgId, projectId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { body, signal: o?.signal }),
+		listShareLinks: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { signal: o?.signal }),
+		revokeShareLink: (orgId, projectId, linkId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/${seg(linkId)}/revoke`, { signal: o?.signal }),
+		redeemShareLink: (orgId, token, o) =>
+			requestJson("POST", "/share-links/redeem", { body: { orgId, token }, signal: o?.signal }),
+		listSharedProjects: (o) =>
+			requestJson("GET", "/shared/projects", { signal: o?.signal }),
+		listSharedProjectSessions: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/shared/projects/${seg(projectId)}/sessions`, { signal: o?.signal }),
 		listChatEvents: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
-				query: { after: query?.after, limit: query?.limit },
+				query: { after: query?.after, limit: query?.limit, types: query?.types?.length ? query.types.join(",") : undefined },
 				signal: o?.signal,
 			}),
 		subscribeSessionEvents,
@@ -799,6 +1005,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
+		listUserAgentModels: (orgId, agent, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/providers/${seg(agent)}/models`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),
@@ -823,6 +1031,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createGitHubProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),

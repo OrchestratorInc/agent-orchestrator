@@ -102,6 +102,10 @@ func (f *fakeAgentCatalog) Models(_ context.Context, agentID, _ string, _ bool) 
 	}, nil
 }
 
+func (f *fakeAgentCatalog) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	return f.Models(ctx, agentID, projectID, refresh)
+}
+
 func (f *fakeAgentCatalog) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
 	return f.Models(ctx, agentID, projectID, false)
 }
@@ -148,6 +152,10 @@ func (f *fakeProjectManager) Clone(_ context.Context, in projectsvc.CloneInput) 
 
 func (f *fakeProjectManager) PrepareClone(_ context.Context, in projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
 	return projectsvc.ClonePreparationResult{Path: "/tmp/" + in.RemoteURL, RemoteURL: in.RemoteURL}, nil
+}
+
+func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in projectsvc.CloneInput) (projectsvc.CloneDestination, error) {
+	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
 }
 
 func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.ClonePreparationCleanupInput) error {
@@ -218,6 +226,7 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 			"--issue", "ISS-1",
 			"--name", "my worker",
 			"--model", "gpt-5.6-sol",
+			"--output", "artifact",
 		})
 		if err := root.Execute(); err != nil {
 			t.Fatalf("spawn execute: %v\noutput: %s", err, out.String())
@@ -244,6 +253,9 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 		}
 		if got.AgentConfig.Model != "gpt-5.6-sol" {
 			t.Errorf("AgentConfig.Model = %q, want %q (CLI json:\"model\" vs SpawnSessionRequest)", got.AgentConfig.Model, "gpt-5.6-sol")
+		}
+		if got.RequestedOutput != "artifact" {
+			t.Errorf("RequestedOutput = %q, want %q (CLI json:\"requestedOutput\" vs SpawnSessionRequest)", got.RequestedOutput, "artifact")
 		}
 		if !bytes.Contains(out.Bytes(), []byte("spawned session")) {
 			t.Errorf("output missing %q; got: %s", "spawned session", out.String())
@@ -304,4 +316,8 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 
 func (f *fakeProjectManager) SetPermissions(_ context.Context, id domain.ProjectID, in projectsvc.SetPermissionsInput) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: in.Permissions}}}, nil
+}
+
+func (f *fakeProjectManager) ForgetPermissions(_ context.Context, id domain.ProjectID) (projectsvc.Project, error) {
+	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{}}, nil
 }

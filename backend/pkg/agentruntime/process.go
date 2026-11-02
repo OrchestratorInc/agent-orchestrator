@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -51,7 +53,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		return nil, err
 	}
 
-	cmd := exec.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // argv is host-owned
+	cmd := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...)
 	cmd.Dir = cfg.Dir
 	cmd.Env = cfg.Env
 	cmd.Stdin = cfg.Stdin

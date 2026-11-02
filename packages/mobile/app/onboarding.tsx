@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { setOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { useApp } from "../lib/store";
-import { Button, NumberedStep } from "../lib/ui";
+import { Button, MASCOT_ASPECT, NumberedStep } from "../lib/ui";
 import MASCOT from "../assets/mascot.png";
 import { useThemedStyles } from "../lib/ThemeProvider";
 import type { Theme } from "../lib/theme";
@@ -37,7 +37,7 @@ export default function OnboardingScreen() {
 			<View style={styles.topBar}>
 				<View style={styles.brand}>
 					<Image source={MASCOT} style={styles.mascot} resizeMode="contain" />
-					<Text style={styles.brandName}>AO</Text>
+					<Text style={styles.brandName}>Orchestrator.inc</Text>
 				</View>
 				<Pressable onPress={() => { haptics.tap(); void skip(); }} hitSlop={12} accessibilityRole="button">
 					<Text style={styles.skip}>Skip</Text>
@@ -50,9 +50,9 @@ export default function OnboardingScreen() {
 				showsVerticalScrollIndicator={false}
 			>
 				<View style={styles.hero}>
-					<Text style={styles.title}>Connect to AO</Text>
+					<Text style={styles.title}>Connect to Orchestrator</Text>
 					<Text style={styles.lede}>
-						Pair with AO on a computer or self-hosted machine to check on your agents, jump into any terminal, and drive work from your
+						Pair with Orchestrator on a computer or self-hosted machine to check on your agents, jump into any terminal, and drive work from your
 						phone.
 					</Text>
 					<Button
@@ -100,7 +100,7 @@ const makeStyles = (t: Theme) =>
 		paddingBottom: space.xxs,
 	},
 	brand: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	mascot: { width: 26, height: 23 },
+	mascot: { width: 26, height: 26 * MASCOT_ASPECT },
 	brandName: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", letterSpacing: -0.2 },
 	skip: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
 

@@ -7,7 +7,6 @@ const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localG
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQueryHealthy: vi.fn() } }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 
@@ -68,6 +67,7 @@ it.each([
 	[401, true],
 	[426, true],
 	[502, true],
+	[530, true],
 	[500, false],
 ])("rechecks a connected host after a remote HTTP %i response only when connection health is in doubt", async (status, shouldRecheck) => {
 	const hostId = `box-${status}`;
@@ -147,4 +147,18 @@ it("maps remote artifact raw reads through the host proxy", async () => {
 	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
 	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.rawUrl).toBe(mapped));
 	expect(remotePreviewUrl).toHaveBeenCalledWith("box-a", "session-1", rawUrl);
+});
+
+it("never keeps a remote daemon's inline artifact origin, which here would name this computer", async () => {
+	await prepareTwoHosts();
+	remotePreviewUrl.mockResolvedValue("http://ao-preview-token.localhost:4000/q3/report.html?raw=true");
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const url = input instanceof Request ? input.url : String(input);
+		return Response.json(url.endsWith("/projects")
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [], artifactFiles: [{ path: "q3/report.html", name: "report.html", kind: "html", size: 12, rawUrl: "http://ao-preview-artifact.x.localhost:3001/q3/report.html?raw=true", inlineUrl: "http://ao-inline-artifact.x.localhost:3001/q3/report.html" }] }] });
+	}));
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.path).toBe("q3/report.html"));
+	expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.inlineUrl).toBeUndefined();
 });

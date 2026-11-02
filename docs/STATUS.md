@@ -64,7 +64,7 @@ surface (`npm run sqlc`, `npm run api`).
   archive/projection, controller-generation fencing, turns, messages,
   activities, approvals, structured input, usage, compaction, and rollback.
 - Chat drivers for the user's installed Codex (native app-server), Claude Code
-  (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, and
+  (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, GitHub Copilot, and
   the built-in Unreal Agent library. Unreal Agent Chat runs on macOS and Linux
   behind AO's detached provider host, persists its native session plus an
   acknowledged AO event journal, and currently requires an explicit
@@ -74,7 +74,9 @@ surface (`npm run sqlc`, `npm run api`).
   Qwen Code's ACP mode enforces approval modes over `session/request_permission`
   (verified live: a non-read-only shell under auto-edit asks), so AO maps its
   permission modes onto Qwen's (default to Ask Permissions) and admits Qwen Chat
-  in every mode. OMP Chat uses native `omp acp` and requires OMP
+  in every mode. GitHub Copilot Chat uses native `copilot --acp` and requires
+  Copilot CLI 1.0.93 or newer; see [the Copilot harness note](harnesses/copilot.md)
+  for its approval mapping and model limits. OMP Chat uses native `omp acp` and requires OMP
   15.0.0 or newer. Pi's independently installed pi-acp adapter does not enforce
   approval modes, so AO admits Pi Chat only after the user explicitly chooses the
   per-session bypass-permissions fallback. The binding reuses the existing Pi config environment and auth
@@ -192,6 +194,11 @@ surface (`npm run sqlc`, `npm run api`).
   immediately, and delegate open/focus/selection freshness decisions to the
   daemon coordinator.
 - Electron main handles daemon discovery, launch, and status reporting.
+- On macOS, window close and desktop Quit/Cmd+Q destroy the window while the
+  Dock, menu-bar tray, app-owned daemon, and enabled mobile access remain alive.
+  Reopening creates a fresh window; **Quit AO Completely** in the tray performs
+  a full exit. Desktop browser targets stop with the window. Updates and system
+  shutdown still exit the app; Windows/Linux quit behavior is unchanged.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,
   spawn-orchestrator flow.
@@ -244,7 +251,7 @@ surface (`npm run sqlc`, `npm run api`).
 - Pairing uses v2 endpoint offers and host identity verification, with optional
   managed cloudflared remote access and Tailscale secure pairing. The primary
   listener remains loopback-only. Direct LAN transport remains plaintext.
-- Paired-device push, mute/unpair controls, supported macOS keep-awake, and
+- Paired-device push, device removal, supported macOS keep-awake, and
   mobile review/reviewer screens.
 
 ## In flight / not yet a runtime feature

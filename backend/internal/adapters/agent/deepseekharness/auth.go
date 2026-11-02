@@ -9,6 +9,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -30,7 +32,7 @@ const deepseekCredentialKey = "DEEPSEEK_API_KEY" //nolint:gosec // a credential'
 // AuthStatus reports whether DeepSeek Harness has a DeepSeek credential. The
 // Harness ACP server advertises no authentication surface (its initialize
 // response carries no auth methods and authenticate always succeeds), so the
-// only local evidence is the credential store and the environment. Absent
+// only local evidence is the credential store, then the environment. Absent
 // evidence stays unknown: Harness may be routed through a provider configured in
 // its profile, which AO cannot see from here.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
@@ -45,18 +47,32 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// deepseekLocalAuthStatus checks the Harness credential store first;
+// DEEPSEEK_API_KEY in the environment is the fallback.
 func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	if strings.TrimSpace(os.Getenv(deepseekCredentialKey)) != "" {
+	status, ok, err := deepseekStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, deepseekCredentialKey) != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
+
+func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	path, err := deepseekCredentialsPath()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	return deepseekCredentialsStatus(path)
+	status, ok, err := deepseekCredentialsStatus(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+	}
+	return status, ok, err
 }
 
 // deepseekCredentialsPath resolves the Harness credential store. DSH_HOME moves

@@ -75,11 +75,14 @@ frontend/test-results/
 
 # built daemon binary copied into the frontend bundle dir
 frontend/daemon/
+# built AO Browser Bridge extension (scripts/build-browser-extension.mjs)
+frontend/browser-extension/
 frontend/tmux/
 frontend/resources/acp-runtime/
 
-# pinned native browser automation binary copied during package preparation
+# pinned native binaries (browser automation, cloudflared) copied during package preparation
 frontend/agent-browser/
+frontend/cloudflared/
 
 # Locally-added agent skills (not for the team), except curated project skills
 .agents/
@@ -103,3 +106,5 @@ pnpm-lock.yaml
 
 # Serena MCP local project config
 .serena/
+
+/frontend/wake-helper/

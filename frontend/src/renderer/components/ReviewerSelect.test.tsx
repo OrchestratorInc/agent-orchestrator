@@ -94,6 +94,62 @@ describe("ReviewerSelect", () => {
 		expect(onConfigChange).toHaveBeenCalledWith("codex", {});
 	});
 
+	it("offers a keyboard-reachable agent default in a non-current harness submenu", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(["agent-models", "codex", ""], {
+			agentId: "codex", selectionMode: "catalog", models: [
+				{ id: "gpt-test", label: "GPT Test", isDefault: true },
+				{ id: "gpt-other", label: "GPT Other" },
+			],
+		});
+		const onConfigChange = vi.fn();
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="claude-code" defaultHarness="claude-code"
+			agents={[agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")]}
+			onChange={() => undefined} onConfigChange={onConfigChange}
+		/></QueryClientProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
+		screen.getByRole("menuitem", { name: /Codex/ }).focus();
+		await userEvent.keyboard("{ArrowRight}");
+		const item = await screen.findByRole("menuitem", { name: "Use agent model" });
+		item.focus();
+		await userEvent.keyboard("{Enter}");
+		expect(onConfigChange).toHaveBeenCalledWith("codex", {});
+	});
+
+	it("does not duplicate the agent default for the current harness, and marks the default model selected", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(["agent-models", "codex", ""], {
+			agentId: "codex", selectionMode: "catalog", models: [
+				{ id: "gpt-test", label: "GPT Test", isDefault: true },
+				{ id: "gpt-other", label: "GPT Other" },
+			],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="codex" defaultHarness="claude-code"
+			onChange={() => undefined} onConfigChange={() => undefined}
+		/></QueryClientProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
+		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
+		expect(screen.getByText("GPT Test").closest("[data-active]")).not.toBeNull();
+		expect(screen.getByText("GPT Other").closest("[data-active]")).toBeNull();
+	});
+
+	it("offers a single agent default for the current harness while a non-default model is selected without a reported default", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(["agent-models", "codex", ""], {
+			agentId: "codex", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test" }],
+		});
+		render(<QueryClientProvider client={client}><ReviewerSelect
+			ariaLabel="Reviewer" value="codex" model="gpt-test" defaultHarness="claude-code"
+			onChange={() => undefined} onConfigChange={() => undefined}
+		/></QueryClientProvider>);
+		await userEvent.click(screen.getByRole("button", { name: "Reviewer" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));
+		expect(screen.getAllByRole("menuitem", { name: "Use agent model" })).toHaveLength(1);
+	});
+
 	it("can clear a reviewer model override when no agent model is reported", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		client.setQueryData(["agent-models", "codex", ""], {

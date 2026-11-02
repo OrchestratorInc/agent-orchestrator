@@ -75,22 +75,17 @@ export type SessionArtifact = {
 	path: string;
 	previewUrl?: string;
 	rawUrl?: string;
+	/**
+	 * The page on its own inline origin, for framing it in the chat thread: its
+	 * files load same-origin there, and the daemon refuses that origin. html only.
+	 */
+	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
 };
 
 /** The daemon-committed controller currently responsible for the session. */
 export type SessionMode = "chat" | "tui";
-
-export type AgentSwitchSummary = {
-	agentHandoffStatus: string;
-	errorCode?: string;
-	fromHarness: string;
-	id: string;
-	state: string;
-	targetHarness: string;
-	updatedAt?: string;
-};
 
 /** One stage of an asynchronous Chat start. */
 export type SessionProvisionStep = {
@@ -103,8 +98,13 @@ export type SessionProvisionStep = {
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
 export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
 
+/** The session's current launch still runs a harness release an update has replaced. */
+export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
+
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
+	/** The cleanup was started by a sweep, not an archive: its state raises no app feedback. */
+	workspaceCleanupReportOnly?: boolean;
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;
@@ -175,6 +175,10 @@ export type WorkspaceSession = {
 	provisionSteps?: SessionProvisionStep[];
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
+	/** Set while this launch runs a harness release an update replaced; it moves to `version` when idle. */
+	staleBinary?: SessionStaleBinary;
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */
@@ -198,7 +202,6 @@ export type WorkspaceSession = {
 	pinnedAt?: string;
 	/** Raw agent lifecycle activity from the daemon. */
 	activity?: SessionActivity;
-	activeAgentSwitch?: AgentSwitchSummary;
 	/**
 	 * Live preview target set by the daemon (via `ao preview`) and streamed over
 	 * CDC. When non-empty, the browser panel opens and navigates here.
@@ -222,6 +225,8 @@ export type WorkspaceSession = {
 	prs: PullRequestFacts[];
 	/** What kind of durable output this session has produced, when known. */
 	outputType?: SessionOutputType;
+	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */
+	requestedOutput?: "artifact";
 	/**
 	 * Files present in this session's artifact directory, when {@link outputType}
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
@@ -234,6 +239,10 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Reached through a share link: what this person may do comes from its grant. */
+		shared?: boolean;
+		/** The guest the session was started for, when someone the project was shared with asked for it. */
+		requestedBy?: { userId: string; name: string };
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
@@ -243,7 +252,9 @@ export type WorkspaceSession = {
 		runtimeState?: string;
 		runtimeError?: string;
 		/** Why the worker has not started; cleared once it connects. */
-		startupError?: { code: string; message: string; at: string };
+		startupError?: { code: string; message: string; at: string; detail?: string };
+		/** Bring-your-own Coder workspace page; absent for managed compute. */
+		coderWorkspaceUrl?: string;
 	};
 };
 
@@ -420,6 +431,12 @@ export type { AttentionZone } from "../lib/session-presentation";
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
+	/**
+	 * Set on a cloud project someone in another organization shared with this
+	 * person. It carries no role: each shared session has its own grant, which
+	 * the session's live state reports.
+	 */
+	shared?: { byName?: string };
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;

@@ -16,8 +16,8 @@ function root(children: Root["children"]): Root {
 }
 
 describe("languageForPath", () => {
-	it("resolves common extensions to the grammar highlight.js already bundles", () => {
-		expect(languageForPath("src/App.tsx")).toBe("typescript");
+	it("resolves common extensions to the bundled Shiki grammar", () => {
+		expect(languageForPath("src/App.tsx")).toBe("tsx");
 		expect(languageForPath("main.go")).toBe("go");
 		expect(languageForPath("README.md")).toBe("markdown");
 		expect(languageForPath("script.py")).toBe("python");
@@ -53,7 +53,7 @@ describe("splitHastByLine", () => {
 
 	it("reopens an ancestor class on every line it spans", () => {
 		// One element wraps a 3-line multi-line string, exactly like a template
-		// literal or triple-quoted string tokenized by highlight.js in one call.
+		// literal or triple-quoted string tokenized by Shiki in one call.
 		const tree = root([el("hljs-string", [text("`line1\nline2\nline3`")])]);
 		expect(splitHastByLine(tree, 3)).toEqual([
 			[{ text: "`line1", className: "hljs-string" }],

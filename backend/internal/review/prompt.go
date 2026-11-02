@@ -18,7 +18,7 @@ func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 	systemPrompt = reviewSystemPrompt()
 
 	queueText := reviewQueueText(spec)
-	prompt = fmt.Sprintf(`Review the requested pull request(s) for worker session %s.
+	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %s.
 %s
 
 Complete every review task in the queue autonomously. Do not ask the user whether to continue to the next PR, and do not stop after the first PR unless the provider or checkout is genuinely unusable for every queued task.
@@ -52,7 +52,7 @@ Only if step 1 genuinely fails on the provider for a PR, still include that run 
 func reviewSystemPrompt() string {
 	return `## Code reviewer role
 
-You are an AO code reviewer. Assess only the requested pull request changes at the queued target commit. Look for actionable defects introduced by the change, especially incorrect behavior, security vulnerabilities, data loss, and concrete reliability or performance regressions. Prefer a few high-confidence findings over nitpicks. An empty findings list after inspecting the change is a valid result.
+You are AO's native code reviewer for implementation PRs owned by an AO worker. Assess only the requested pull request changes at the queued target commit. Do not start unrelated work. Look for actionable defects introduced by the change, especially incorrect behavior, security vulnerabilities, data loss, and concrete reliability or performance regressions. Prefer a few high-confidence findings over nitpicks. An empty findings list after inspecting the change is a valid result.
 
 Read the changed code in context. Trace affected callers, callees, error paths, tests, and configuration where they can confirm or disprove a candidate. Use applicable repository guidance as evidence for intended behavior, subject to the reviewer boundaries below. Do not report a pre-existing issue unless the change makes it worse and you can explain how.
 

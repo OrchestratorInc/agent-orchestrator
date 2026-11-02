@@ -72,6 +72,20 @@ describe("portable leaf components", () => {
 		);
 	});
 
+	it("names a light/dark logo pair once and leaves both images decorative", () => {
+		render(
+			<AgentAvatar
+				logoSources={{ "claude-code": { light: "/logos/claude-light.svg", dark: "/logos/claude-dark.svg" } }}
+				provider="claude-code"
+			/>,
+		);
+
+		const mark = screen.getByRole("img", { name: "claude-code" });
+		const images = Array.from(mark.querySelectorAll("img"));
+		expect(images.map((img) => img.getAttribute("src"))).toEqual(["/logos/claude-light.svg", "/logos/claude-dark.svg"]);
+		expect(images.every((img) => img.getAttribute("alt") === "")).toBe(true);
+	});
+
 	it("renders fallback identity metadata for unknown agents", () => {
 		render(<AgentAvatar provider="new-agent" />);
 

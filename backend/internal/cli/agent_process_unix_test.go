@@ -44,6 +44,29 @@ func TestAgentProcessSuperviseRejectsInvalidGeneration(t *testing.T) {
 	}
 }
 
+func TestAgentProcessSuperviseAcceptsDottedProjectSessionID(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{In: strings.NewReader("")}, "agent-process", "supervise", "--session", "acme.dev-2", "--launch", "launch-3", "--", "sh", "-c", "exit 0")
+	if err != nil {
+		t.Fatalf("supervise rejected a session id from a dotted project id: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/acme.dev-2/activity" {
+		t.Fatalf("exit report path = %q, want session activity endpoint", capture.path)
+	}
+}
+
+func TestAgentProcessSuperviseRejectsDotPathSessionIDs(t *testing.T) {
+	for _, id := range []string{".", "..", "../ao-7", ".ao-7", "ao..7", "ao-7."} {
+		_, _, err := executeCLI(t, Deps{}, "agent-process", "supervise", "--session", id, "--launch", "launch-3", "--", "true")
+		if err == nil {
+			t.Fatalf("session id %q should be rejected before starting the child", id)
+		}
+	}
+}
+
 func TestAgentProcessSuperviseReportsReviewExitToReviewActivity(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)

@@ -9,11 +9,22 @@ import type {
 	CloudCpWorkspaceReviewScope,
 	CloudCpWorkspaceReviewSearchQuery,
 } from "../lib/cloud-cp";
-import { CloudCpError } from "../lib/cloud-cp";
+import { CloudCpError, workspaceRepositoryOf } from "../lib/cloud-cp";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 
 export const cloudWorkspaceReviewQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
 	["cloud-workspace-review", baseUrl, orgId, sessionId] as const;
+
+/**
+ * The cache key prefix of one repository of a session: the session's own key
+ * for the main repository, with the sibling's name added for a scoped client
+ * (withWorkspaceRepository), so invalidating the session covers every repository.
+ */
+function repositoryKey(client: CloudCpClient, baseUrl: string, orgId: string, sessionId: string) {
+	const repository = workspaceRepositoryOf(client);
+	const key = cloudWorkspaceReviewQueryKey(baseUrl, orgId, sessionId);
+	return repository ? [...key, `repository:${repository}`] as const : key;
+}
 
 export function cloudWorkspaceReviewSummaryQueryOptions(args: {
 	client: CloudCpClient;
@@ -25,7 +36,7 @@ export function cloudWorkspaceReviewSummaryQueryOptions(args: {
 }) {
 	const { client, baseUrl, orgId, sessionId } = args;
 	return {
-		queryKey: [...cloudWorkspaceReviewQueryKey(baseUrl, orgId, sessionId), "summary"] as const,
+		queryKey: [...repositoryKey(client, baseUrl, orgId, sessionId), "summary"] as const,
 		queryFn: () => client.getWorkspaceReview(orgId, sessionId),
 		enabled: args.enabled ?? true,
 		refetchInterval: args.visible === false ? false as const : 5_000,
@@ -41,7 +52,7 @@ export function cloudWorkspaceReviewTreeQueryOptions(args: {
 	path?: string;
 }) {
 	return {
-		queryKey: [...cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), "tree", args.path ?? ""] as const,
+		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "tree", args.path ?? ""] as const,
 		queryFn: () => args.client.getWorkspaceReviewTree(args.orgId, args.sessionId, args.path),
 		retry: cloudWorkspaceReviewRetry,
 	};
@@ -55,7 +66,7 @@ export function cloudWorkspaceReviewSearchQueryOptions(args: {
 	query: CloudCpWorkspaceReviewSearchQuery;
 }) {
 	return {
-		queryKey: [...cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), "search", args.query.query, args.query.cursor ?? "", args.query.limit ?? 50] as const,
+		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "search", args.query.query, args.query.cursor ?? "", args.query.limit ?? 50] as const,
 		queryFn: ({ signal }: { signal?: AbortSignal } = {}) =>
 			args.client.searchWorkspaceReview(args.orgId, args.sessionId, args.query, { signal }),
 		retry: cloudWorkspaceReviewRetry,
@@ -73,7 +84,7 @@ export function cloudWorkspaceReviewFileQueryOptions(args: {
 }) {
 	const query: CloudCpWorkspaceReviewFileQuery = { path: args.path, scope: args.scope, commitSha: args.commitSha };
 	return {
-		queryKey: [...cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), "file", args.scope ?? "combined", args.commitSha ?? "", args.path] as const,
+		queryKey: [...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "file", args.scope ?? "combined", args.commitSha ?? "", args.path] as const,
 		queryFn: () => args.client.getWorkspaceReviewFile(args.orgId, args.sessionId, query),
 		retry: cloudWorkspaceReviewRetry,
 	};
@@ -101,7 +112,7 @@ export function cloudWorkspaceReviewDiffsQueryOptions(args: {
 	};
 	return {
 		queryKey: [
-			...cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), "diffs", args.scope,
+			...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "diffs", args.scope,
 			args.commitSha ?? "", [...args.paths], body.contextLines, body.ignoreWhitespace, args.workspaceVersion ?? "",
 		] as const,
 		queryFn: () => args.client.getWorkspaceReviewDiffs(args.orgId, args.sessionId, body),
@@ -118,7 +129,7 @@ export function cloudWorkspaceReviewRevisionQueryOptions(args: {
 }) {
 	return {
 		queryKey: [
-			...cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), "revision", args.query.scope ?? "combined",
+			...repositoryKey(args.client, args.baseUrl, args.orgId, args.sessionId), "revision", args.query.scope ?? "combined",
 			args.query.commitSha ?? "", args.query.side ?? "after", args.query.path, args.query.workspaceVersion ?? "", args.query.expectedRevision ?? "",
 		] as const,
 		queryFn: () => args.client.getWorkspaceReviewRevision(args.orgId, args.sessionId, args.query),

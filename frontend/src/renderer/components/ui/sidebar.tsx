@@ -229,6 +229,9 @@ function Sidebar({
 	// Cast once so callers can keep passing through plain div props.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const motionSafeProps = props as any;
+	const childList = React.Children.toArray(children);
+	const rail = childList.filter((child) => React.isValidElement(child) && child.type === SidebarRail);
+	const rest = childList.filter((child) => !rail.includes(child));
 
 	return (
 		<div
@@ -277,7 +280,13 @@ function Sidebar({
 					data-slot="sidebar-inner"
 					className="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 				>
-					{children}
+					{/* The expand rail stays live while the rest is off-screen: a collapsed
+					    sidebar's controls must not be tabbable or readable, but its edge
+					    strip is how the pointer reopens it. */}
+					{rail}
+					<div aria-hidden={isOffcanvasCollapsed ? true : undefined} className="contents" inert={isOffcanvasCollapsed}>
+						{rest}
+					</div>
 				</div>
 			</motion.div>
 		</div>
@@ -493,7 +502,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-	"peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-control-form! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-icon-base [&>svg]:shrink-0",
+	"peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-hidden transition-[width,height,padding] [[data-sidebar=menu-item]:has(>[data-sidebar=menu-action])>&]:pr-8 group-data-[collapsible=icon]:size-control-form! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-icon-base [&>svg]:shrink-0",
 	{
 		variants: {
 			variant: {

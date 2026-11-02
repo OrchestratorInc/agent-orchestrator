@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -49,6 +50,31 @@ func (s *Store) WriteSCMObservation(ctx context.Context, pr domain.PullRequest, 
 	return s.writePR(ctx, pr, checks, reviews, threads, comments, reviewMode, false)
 }
 
+// MarkPRMerged records the authoritative success returned by the provider's
+// merge endpoint without replacing concurrently refreshed CI or review facts.
+// The pr_cdc_update trigger emits the corresponding pr_updated event.
+func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qr.MarkPRMerged(ctx, gen.MarkPRMergedParams{
+		MergeCommitSha: mergeCommitSHA,
+		StateChangedAt: sql.NullTime{Time: mergedAt, Valid: true},
+		UpdatedAt:      mergedAt,
+		ObservedAt:     sql.NullTime{Time: mergedAt, Valid: true},
+		URL:            prURL,
+	})
+	if err != nil {
+		return fmt.Errorf("mark pr merged %s: %w", prURL, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("mark pr merged %s: updated %d rows", prURL, rows)
+	}
+	if err := s.qw.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: prURL, ExportAllowed: s.usageAllowed()}); err != nil {
+		slog.Warn("record merged pr usage failed", "error", err)
+	}
+	return nil
+}
+
 // ClaimPR moves (or creates) a PR row to pr.SessionID and applies the live SCM
 // observation in the same transaction. The session_id update is what fires the
 // pr_session_changed CDC trigger added in migration 0005.
@@ -91,7 +117,7 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 		}); err != nil {
 			return err
 		}
-		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, false, false)
+		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, false, false, s.usageAllowed())
 	})
 	return outcome, err
 }
@@ -100,11 +126,11 @@ func (s *Store) writePR(ctx context.Context, pr domain.PullRequest, checks []dom
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "write pr observation", func(q *gen.Queries) error {
-		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, replaceLegacyComments, true)
+		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, replaceLegacyComments, true, s.usageAllowed())
 	})
 }
 
-func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, replaceLegacyComments, rejectReassignment bool) error {
+func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, replaceLegacyComments, rejectReassignment, exportAllowed bool) error {
 	pr = normalizedPRIdentity(pr)
 	var err error
 	pr, err = resolveWeakPRAlias(ctx, q, pr)
@@ -128,6 +154,12 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 		if err := upsertPRWithIdentity(ctx, q, pr, rejectReassignment); err != nil {
 			return err
 		}
+	}
+	if err := q.UpgradeWorkerPRUsageIdentity(ctx, pr.URL); err != nil {
+		slog.Warn("upgrade worker pr usage identity failed", "error", err)
+	}
+	if err := q.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: pr.URL, ExportAllowed: exportAllowed}); err != nil {
+		slog.Warn("record worker pr usage failed", "error", err)
 	}
 	for _, c := range checks {
 		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {

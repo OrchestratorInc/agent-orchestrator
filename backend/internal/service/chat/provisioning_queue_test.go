@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,9 +47,14 @@ func openProvisioningStore(t *testing.T, state domain.SessionProvisionState) (*s
 
 func provisioningService(t *testing.T, st *sqlite.Store) *chatsvc.Service {
 	t.Helper()
+	return provisioningServiceOver(t, st, st)
+}
+
+func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store) *chatsvc.Service {
+	t.Helper()
 	next := 0
 	return chatsvc.New(chatsvc.Options{
-		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Store: store, Sessions: st, Reader: fullSnapshotReader(st),
 		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
 		Log:     slog.New(slog.DiscardHandler),
 		NewID: func() string {
@@ -56,6 +62,30 @@ func provisioningService(t *testing.T, st *sqlite.Store) *chatsvc.Service {
 			return fmt.Sprintf("queued-%d", next)
 		},
 	})
+}
+
+func TestQueueUserMessageExcludesSpawnOpeningPromptFromUsage(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	st.SetUsageTelemetryAllowed(func() bool { return true })
+	svc := provisioningService(t, st)
+	ctx := context.Background()
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "spawn task brief", Origin: domain.MessageOriginHuman, SpawnOpeningPrompt: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one"); err != nil || len(batches) != 0 {
+		t.Fatalf("opening prompt batches = %+v, err=%v", batches, err)
+	}
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "direct follow-up", Origin: domain.MessageOriginHuman, ClientMessageID: "direct-follow-up",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one")
+	if err != nil || len(batches) != 1 || batches[0].Count != 1 {
+		t.Fatalf("direct message batches = %+v, err=%v", batches, err)
+	}
 }
 
 type staleProvisioningReader struct{ record domain.SessionRecord }
@@ -291,6 +321,229 @@ func TestDrainWithoutControllerKeepsOpeningPromptForLaterStart(t *testing.T) {
 	}
 }
 
+func provisioningOrchestrator(t *testing.T, st *sqlite.Store, id domain.SessionID) {
+	t.Helper()
+	record, found, err := st.GetSession(context.Background(), id)
+	if err != nil || !found {
+		t.Fatalf("read session: found=%v err=%v", found, err)
+	}
+	record.Kind = domain.KindOrchestrator
+	if err := st.UpdateSession(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func startOrchestratorController(t *testing.T, st *sqlite.Store, svc *chatsvc.Service, id domain.SessionID) {
+	t.Helper()
+	if _, err := svc.Start(context.Background(), chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			if result.ProviderBoundary == nil {
+				return chatsvc.ControllerCommit{}, nil
+			}
+			record, _, err := st.GetSession(context.Background(), id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			record.ProvisionState = domain.SessionProvisionReady
+			record.Metadata.ProviderConversationID = result.ProviderConversationID
+			record.Metadata.ControllerGeneration = result.ControllerGeneration
+			if err := st.CommitChatSpawn(context.Background(), record, *result.ProviderBoundary); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = result.ProviderBoundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+}
+
+// An orchestrator's controller runs on the project conversation, but what the
+// user types while it provisions is queued before that controller exists
+// (#6523). The opening prompt must drain in the project conversation and stay
+// visible after the context boundary a fresh controller records there, both for
+// a new project and for a replacement orchestrator inheriting earlier history.
+func TestOrchestratorOpeningPromptDrainsInProjectConversation(t *testing.T) {
+	for _, inherited := range []bool{false, true} {
+		name := "new_project"
+		if inherited {
+			name = "replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+			ctx := context.Background()
+			provisioningOrchestrator(t, st, id)
+			if inherited {
+				previous, err := st.CreateSession(ctx, domain.SessionRecord{
+					ProjectID: testProject, Kind: domain.KindOrchestrator,
+					Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+					CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+				})
+				if err != nil {
+					t.Fatalf("seed earlier orchestrator: %v", err)
+				}
+				project, err := st.CreateConversation(ctx, "project-narrative",
+					domain.ConversationScopeProject, testProject, previous.ID, time.Now().UTC())
+				if err != nil {
+					t.Fatalf("seed project conversation: %v", err)
+				}
+				if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+					ID: "earlier-work", Kind: domain.ActivityKindSystem,
+					Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+				}, time.Now().UTC()); err != nil {
+					t.Fatalf("seed project history: %v", err)
+				}
+			}
+			svc := provisioningService(t, st)
+			if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+
+			startOrchestratorController(t, st, svc, id)
+			if err := svc.DrainQueued(ctx, id); err != nil {
+				t.Fatalf("drain after controller start: %v", err)
+			}
+
+			snapshot, err := svc.Snapshot(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Conversation.Scope != domain.ConversationScopeProject {
+				t.Fatalf("orchestrator conversation scope = %q, want project", snapshot.Conversation.Scope)
+			}
+			if inherited && snapshot.Conversation.ID != "project-narrative" {
+				t.Fatalf("orchestrator conversation = %s, want inherited project-narrative", snapshot.Conversation.ID)
+			}
+			if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
+				t.Fatalf("opening brief after start = %+v, want one running turn", snapshot.Turns)
+			}
+			page, err := st.LoadConversationSnapshotPage(ctx, snapshot.Conversation.ID, 0, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, message := range page.Messages {
+				visible = visible || message.Text == "opening brief"
+			}
+			if !visible {
+				t.Fatalf("opening brief hidden from the project timeline: %+v", page.Messages)
+			}
+		})
+	}
+}
+
+// Older builds left an orchestrator bound to both a provisioning row holding the
+// stranded opening prompt and the project row it actually ran on (#6523). That
+// prompt is stale once the session has run, so a restart shows the project
+// transcript and must not replay it.
+func TestStrandedPromptFromEarlierRunIsNotReplayed(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	provisioningOrchestrator(t, st, id)
+	svc := provisioningService(t, st)
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "stale brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	project, err := st.CreateConversation(ctx, "live-project",
+		domain.ConversationScopeProject, testProject, id, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("seed split project conversation: %v", err)
+	}
+	record, found, err := st.GetSession(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("read session: found=%v err=%v", found, err)
+	}
+	record.ProvisionState = domain.SessionProvisionReady
+	record.Metadata.ControllerGeneration = "earlier-generation"
+	if err := st.UpdateSession(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+
+	startOrchestratorController(t, st, svc, id)
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after restart: %v", err)
+	}
+
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Conversation.ID != project.ID {
+		t.Fatalf("orchestrator conversation = %s, want project row %s", snapshot.Conversation.ID, project.ID)
+	}
+	if len(snapshot.Turns) != 0 {
+		t.Fatalf("stale provisioning prompt replayed into project conversation: %+v", snapshot.Turns)
+	}
+}
+
+// staleLookupStore returns, once, the conversation a Send read before the
+// orchestrator's first controller moved the queue out of it.
+type staleLookupStore struct {
+	*sqlite.Store
+	stale *domain.ConversationRecord
+}
+
+func (s *staleLookupStore) ConversationForSession(ctx context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	if s.stale != nil {
+		stale := *s.stale
+		s.stale = nil
+		return stale, nil
+	}
+	return s.Store.ConversationForSession(ctx, id)
+}
+
+// A Send can read the provisioning row just before the orchestrator's first
+// controller moves the queue to the project conversation (#6523). The prompt
+// must still be delivered: it lands in the project conversation after the
+// prompts that moved, not in the row nothing reads any more.
+func TestQueuedSendRacingFirstStartLandsInProjectConversation(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	provisioningOrchestrator(t, st, id)
+	racing := &staleLookupStore{Store: st}
+	svc := provisioningServiceOver(t, racing, st)
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	provisioningRow, err := st.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startOrchestratorController(t, st, svc, id)
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after controller start: %v", err)
+	}
+	racing.stale = &provisioningRow
+	turn, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{Text: "sent during start", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatalf("queue against the moved-out row: %v", err)
+	}
+
+	project, err := st.ConversationForSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Scope != domain.ConversationScopeProject || turn.ConversationID != project.ID {
+		t.Fatalf("racing prompt queued in %s, want project conversation %s", turn.ConversationID, project.ID)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, message := range snapshot.Messages {
+		texts = append(texts, message.Text)
+	}
+	if strings.Join(texts, "|") != "opening brief|sent during start" {
+		t.Fatalf("project timeline = %q, want the moved prompt before the racing one", texts)
+	}
+}
+
 func TestRetryAfterControllerStartedButBeforeDrainKeepsOpeningPrompt(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	ctx := context.Background()
@@ -409,6 +662,282 @@ func TestProvisioningRetryStillReservesBoundaryForPriorProviderHistory(t *testin
 	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
 	if !boundaryReserved {
 		t.Fatal("fresh provider was attached to prior provider history without a new boundary")
+	}
+}
+
+// A replacement orchestrator inherits the project conversation, whose branch
+// still names its predecessor's provider thread. Its first controller is a fresh
+// provider thread, so it needs its own boundary. Without one only the session
+// learned the new handle, and the next resume was refused because the branch and
+// session handles disagree.
+func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	provisioningOrchestrator(t, st, id)
+	previous, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed earlier orchestrator: %v", err)
+	}
+	project, err := st.CreateConversation(ctx, "project-narrative",
+		domain.ConversationScopeProject, testProject, previous.ID, now)
+	if err != nil {
+		t.Fatalf("seed project conversation: %v", err)
+	}
+	if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+		ID: "earlier-work", Kind: domain.ActivityKindSystem,
+		Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+	}, now); err != nil {
+		t.Fatalf("seed project history: %v", err)
+	}
+	previous.Metadata.ProviderConversationID = "predecessor-thread"
+	previous.IsTerminated = true
+	if err := st.UpdateSession(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+	inherited, err := st.ConversationBranch(ctx, project.ID, project.ActiveBranchID)
+	if err != nil || inherited.ProviderConversationID != "predecessor-thread" {
+		t.Fatalf("seeded branch = %+v, err=%v; want predecessor-thread", inherited, err)
+	}
+
+	conv := newFakeConversation()
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("first-start"),
+	})
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	var boundary *domain.ConversationBranch
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			boundary = result.ProviderBoundary
+			if boundary == nil {
+				return chatsvc.ControllerCommit{}, nil
+			}
+			// The spawn path publishes the boundary with the session owner.
+			rec, _, err := st.GetSession(ctx, id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			rec.ProvisionState = domain.SessionProvisionReady
+			rec.Metadata.ProviderConversationID = result.ProviderConversationID
+			rec.Metadata.ControllerGeneration = result.ControllerGeneration
+			rec.UpdatedAt = now
+			if err := st.CommitChatSpawn(ctx, rec, *boundary); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = boundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if boundary == nil {
+		t.Fatal("fresh provider thread was attached to the predecessor's branch without a new boundary")
+	}
+	if boundary.ProviderConversationID != "thread-1" {
+		t.Fatalf("boundary provider = %q, want the fresh thread-1", boundary.ProviderConversationID)
+	}
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain after controller start: %v", err)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Conversation.ID != project.ID {
+		t.Fatalf("orchestrator conversation = %s, want inherited %s", snapshot.Conversation.ID, project.ID)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
+		t.Fatalf("opening brief after start = %+v, want one running turn", snapshot.Turns)
+	}
+	conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1", ProviderItemID: "live-answer", Text: "On it."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted},
+	)
+	waitForTurnState(t, svc, id, domain.TurnStateCompleted)
+	if err := svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// After a restart the provider replays the same exchange under turn ids
+	// it reconstructs, as ACP does, so only the text can correlate it.
+	replay := &nativeHistoryConversation{fakeConversation: newFakeConversation(), events: []ports.ChatEvent{
+		{Kind: ports.ChatEventTurnStarted, ProviderEventID: "replay-start", ProviderTurnID: "replayed-turn"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderEventID: "replay-user", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-user-item", Text: "opening brief"},
+		{Kind: ports.ChatEventMessageCompleted, ProviderEventID: "replay-answer", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-answer-item", Text: "On it."},
+		{Kind: ports.ChatEventTurnCompleted, ProviderEventID: "replay-complete", ProviderTurnID: "replayed-turn", TurnState: domain.TurnStateCompleted},
+	}}
+	var resumedCfg ports.ChatResumeConfig
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: replay, resumeCfg: &resumedCfg}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("restart"),
+	})
+	if _, err := restarted.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryImport,
+	}); err != nil {
+		t.Fatalf("resume after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), id) })
+	if resumedCfg.FreshIfMissing {
+		t.Fatal("a boundary that answered a turn may start fresh, which would drop its thread")
+	}
+	if replay.historyReads() == 0 {
+		t.Fatal("resume did not replay native history")
+	}
+	resumed, err := restarted.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := 0
+	for _, message := range resumed.Messages {
+		if message.Text == "opening brief" {
+			prompts++
+		}
+	}
+	if prompts != 1 || len(resumed.Turns) != 1 || resumed.Turns[0].State != domain.TurnStateCompleted {
+		t.Fatalf("after restart: %d opening prompts, turns %+v; want one prompt on one completed turn", prompts, resumed.Turns)
+	}
+}
+
+// A replacement orchestrator nobody wrote to never had a turn on its own
+// boundary, so its provider may never have saved the thread (Codex keeps no
+// rollout before the first message). After a restart it starts fresh in place
+// instead of failing every resume, and the branch moves to the fresh thread.
+func TestUnansweredReplacementOrchestratorStartsFreshAfterRestart(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	provisioningOrchestrator(t, st, id)
+	previous, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed earlier orchestrator: %v", err)
+	}
+	project, err := st.CreateConversation(ctx, "project-narrative",
+		domain.ConversationScopeProject, testProject, previous.ID, now)
+	if err != nil {
+		t.Fatalf("seed project conversation: %v", err)
+	}
+	if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+		ID: "earlier-work", Kind: domain.ActivityKindSystem,
+		Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+	}, now); err != nil {
+		t.Fatalf("seed project history: %v", err)
+	}
+	previous.Metadata.ProviderConversationID = "predecessor-thread"
+	previous.IsTerminated = true
+	if err := st.UpdateSession(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("first-start"),
+	})
+	var boundary *domain.ConversationBranch
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			boundary = result.ProviderBoundary
+			if boundary == nil {
+				return chatsvc.ControllerCommit{}, errors.New("no provider boundary for the replacement")
+			}
+			rec, _, err := st.GetSession(ctx, id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			rec.ProvisionState = domain.SessionProvisionReady
+			rec.Metadata.ProviderConversationID = result.ProviderConversationID
+			rec.Metadata.ControllerGeneration = result.ControllerGeneration
+			rec.UpdatedAt = now
+			if err := st.CommitChatSpawn(ctx, rec, *boundary); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = boundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// The provider cannot find thread-1 and starts fresh-thread in its place.
+	fresh := newFakeConversation()
+	fresh.providerConversationID = "fresh-thread"
+	var resumedCfg ports.ChatResumeConfig
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: fresh, resumeCfg: &resumedCfg}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("restart"),
+	})
+	if _, err := restarted.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryImport,
+	}); err != nil {
+		t.Fatalf("resume after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), id) })
+	if !resumedCfg.FreshIfMissing {
+		t.Fatal("resume of an unanswered replacement boundary may not start fresh, so it fails forever")
+	}
+	branch, err := st.ConversationBranch(ctx, project.ID, boundary.ID)
+	if err != nil || branch.ProviderConversationID != "fresh-thread" {
+		t.Fatalf("boundary after fresh start = %+v, err=%v; want fresh-thread", branch, err)
+	}
+}
+
+func sequentialIDs(prefix string) func() string {
+	var mu sync.Mutex
+	next := 0
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		next++
+		return fmt.Sprintf("%s-%d", prefix, next)
+	}
+}
+
+func waitForTurnState(t *testing.T, svc *chatsvc.Service, id domain.SessionID, want domain.TurnState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := svc.Snapshot(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Turns) == 1 && snapshot.Turns[0].State == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("turns = %+v, want one %s turn", snapshot.Turns, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

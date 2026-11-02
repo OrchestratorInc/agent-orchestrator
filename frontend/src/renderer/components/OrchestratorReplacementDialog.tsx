@@ -15,6 +15,8 @@ import {
 type OrchestratorReplacementDialogProps = {
 	projectId: string | null;
 	pending?: boolean;
+	/** Number of projects with a pending replacement failure (including this one). */
+	pendingCount?: number;
 	error?: OrchestratorReplacementFailure;
 	workspaces: WorkspaceSummary[];
 	onOpenChange: (open: boolean) => void;
@@ -26,6 +28,7 @@ type OrchestratorReplacementDialogProps = {
 export function OrchestratorReplacementDialog({
 	projectId,
 	pending = false,
+	pendingCount = 1,
 	error,
 	workspaces,
 	onOpenChange,
@@ -82,6 +85,11 @@ export function OrchestratorReplacementDialog({
 								<Dialog.Title className="settings-dialog-title">{t("orchestratorReplacement.title")}</Dialog.Title>
 								<Dialog.Description className="mt-1 text-control leading-5 text-settings-muted">
 									{error?.message ?? t("orchestratorReplacement.fallback")}
+									{pendingCount > 1 ? (
+										<span className="mt-1 block">
+											{t("orchestratorReplacement.morePending", { count: pendingCount - 1 })}
+										</span>
+									) : null}
 								</Dialog.Description>
 							</div>
 						</div>

@@ -9,8 +9,9 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain("const HARNESS_MENU_WIDTH = 124");
 		expect(source).toContain('frame({ width: HARNESS_MENU_WIDTH })');
 		expect(source).toContain('const PROJECT_MENU_WIDTH = 224');
-		expect(source).toContain('{projectLabel}</Text>\n\t\t\t\t\t\t\t<Image systemName="chevron.up.chevron.down"');
-		expect(source).toContain('padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" })');
+		expect(source).toContain('{projectLabel}</Text>');
+		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
+		expect(source).toContain('padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" })');
 		expect(source).toContain('layoutPriority(1)');
 		expect(source).toContain('accessibilityIdentifier("spawn-project")');
 		expect(source).toContain('accessibilityIdentifier("spawn-model")');
@@ -27,5 +28,11 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain('project?.icon === "message-square-plus" ? "plus.bubble" : "folder"');
 		expect(source).toContain("systemName={projectSystemImage(selectedProject)}");
 		expect(source).toContain("systemName={projectSystemImage(project)}");
+	});
+
+	it("lets the attach button choose a photo or a file", () => {
+		expect(source).toContain('systemImage="paperclip"');
+		expect(source).toContain('<Button label="Choose Photo" systemImage="photo"');
+		expect(source).toContain('<Button label="Choose File" systemImage="doc"');
 	});
 });

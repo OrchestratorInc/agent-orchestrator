@@ -37,10 +37,16 @@ func DeriveActivityState(event string, payload []byte) (domain.ActivityState, bo
 		// tool, which lifecycle snapshots for the correlated clear above.
 		return domain.ActivityBlocked, true
 	case "stop":
-		// End of a turn (including a user interrupt): the agent is idle but
-		// alive (not exited). A following Notification(idle_prompt) also maps to
-		// idle, so an interrupted or finished turn reads Idle until the next
-		// prompt — only a real permission request flips it to waiting_input.
+		// End of a turn: the agent is idle but alive (not exited). A following
+		// Notification(idle_prompt) also maps to idle, so a finished turn reads
+		// Idle until the next prompt; only a real permission request flips it
+		// to waiting_input. An Esc interrupt fires no Stop; the turn-failure
+		// observer reads it from the transcript (turn_interrupts.go).
+		return domain.ActivityIdle, true
+	case "stop-failure":
+		// StopFailure fires instead of Stop when an API error ended the turn
+		// (rate or usage limit, unknown model, expired login, server error).
+		// The agent is back at its prompt, so the turn ended like a Stop.
 		return domain.ActivityIdle, true
 	case "notification":
 		return notificationState(payload)

@@ -1,0 +1,32 @@
+{
+  "description": "Precedence for the interface (controller mode) a new session starts in, before the harness check: an explicit request, else Chat for an orchestrator, else the user's default session interface, else tui. The local daemon (backend/internal/session_manager startSessionMode) and the cloud control plane (cloud/internal/domain.StartInterface) are both tested against these cases, each of which carries the default a client sends.",
+  "notes": [
+    "On a cloud create, requested is interfaceMode and default is defaultInterfaceMode. A current desktop sends interfaceMode with a task (resolved by the composer from its choice or the default session mode, as a local task's mode is) and defaultInterfaceMode with an orchestrator, tui included. A create may carry neither: desktop v0.14.3 and older never send them. The cloud then starts the session in tui, an orchestrator too, as those desktops expect (they send approvalMode default with every Chat turn, so a trusted orchestrator in Chat would ask before each command). The local daemon always has a default (an unset setting is the empty string), so orchestrators always start in Chat there. withoutDefault holds both sides' cases.",
+    "After the precedence, chat holds only for a harness with a Chat controller (the cloud's chatHarnesses: claude-code, codex, cursor); any other starts in tui. A cloud create that explicitly requests chat for such a harness is refused with SESSION_MODE_UNSUPPORTED instead, as the local daemon refuses it.",
+    "A cloud orchestrator's workers resolve from the default stored when the orchestrator was created (agent_config.defaultInterface), unless the spawn sends its own. Local spawns read the user's default at spawn time, so a changed default reaches a cloud orchestrator's workers only once a new orchestrator is created."
+  ],
+  "cases": [
+    {"kind": "worker", "requested": "", "default": "tui", "want": "tui"},
+    {"kind": "worker", "requested": "", "default": "chat", "want": "chat"},
+    {"kind": "worker", "requested": "", "default": "bogus", "want": "tui"},
+    {"kind": "worker", "requested": "tui", "default": "chat", "want": "tui"},
+    {"kind": "worker", "requested": "chat", "default": "tui", "want": "chat"},
+    {"kind": "orchestrator", "requested": "", "default": "tui", "want": "chat"},
+    {"kind": "orchestrator", "requested": "", "default": "chat", "want": "chat"},
+    {"kind": "orchestrator", "requested": "tui", "default": "chat", "want": "tui"},
+    {"kind": "orchestrator", "requested": "chat", "default": "tui", "want": "chat"}
+  ],
+  "withoutDefault": {
+    "local": [
+      {"kind": "worker", "requested": "", "want": "tui"},
+      {"kind": "orchestrator", "requested": "", "want": "chat"},
+      {"kind": "orchestrator", "requested": "tui", "want": "tui"}
+    ],
+    "cloud": [
+      {"kind": "worker", "requested": "", "want": "tui"},
+      {"kind": "worker", "requested": "chat", "want": "chat"},
+      {"kind": "orchestrator", "requested": "", "want": "tui"},
+      {"kind": "orchestrator", "requested": "chat", "want": "chat"}
+    ]
+  }
+}

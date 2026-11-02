@@ -62,6 +62,7 @@ describe("host store", () => {
 		const original = { id: "b", name: "B", platform: "linux", endpoints: [lan("host-b")], token: "pw", lastConnected: 1 };
 		expect(sameHostConnections([original], [{ ...original, lastConnected: 2 }])).toBe(true);
 		expect(sameHostConnections([original], [{ ...original, endpoints: [lan("new-host-b")] }])).toBe(false);
+		expect(sameHostConnections([original], [{ ...original, appearance: { symbol: "cloud" } }])).toBe(false);
 	});
 
 	it("keeps simultaneous endpoint updates from different machines", async () => {
@@ -99,6 +100,19 @@ describe("host store", () => {
 		await saveHost({ id: "h_one", name: "old", platform: "linux", endpoints: [lan("host")], token: "secret", lastConnected: 1 });
 		await renameHost("h_one", " AzureLinux ");
 		expect((await loadHosts())[0]).toEqual(expect.objectContaining({ name: "AzureLinux", endpoints: [lan("host")], token: "secret" }));
+	});
+
+	it("persists a machine appearance without changing its connection or credential", async () => {
+		const { saveHost, updateHostAppearance, loadHosts } = await mod();
+		await saveHost({ id: "h_one", name: "Studio Mac", platform: "darwin", endpoints: [lan("host")], token: "secret", lastConnected: 1 });
+
+		await updateHostAppearance("h_one", { symbol: "server" });
+
+		expect((await loadHosts())[0]).toEqual(expect.objectContaining({
+			appearance: { symbol: "server" },
+			endpoints: [lan("host")],
+			token: "secret",
+		}));
 	});
 
 	// The connection token authorises terminal input, spawns and PR actions. It

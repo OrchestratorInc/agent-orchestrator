@@ -101,6 +101,12 @@ func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name stri
 	if err := validateName(name); err != nil {
 		return err
 	}
+	return s.writeCanonical(ctx, id, name, data)
+}
+
+// writeCanonical stores bytes in a session's canonical directory only. Callers
+// validate the name first: attachment names and render names follow different rules.
+func (s *Store) writeCanonical(ctx context.Context, id domain.SessionID, name string, data []byte) error {
 	if len(data) == 0 {
 		return errEmpty
 	}

@@ -2,6 +2,7 @@ import { Feather } from "./icons";
 import { usePathname, useRouter } from "expo-router";
 import {
 	createContext,
+	memo,
 	useCallback,
 	useContext,
 	useEffect,
@@ -22,19 +23,18 @@ import {
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AgentLogo } from "./AgentLogo";
 import { SidebarDestinationIcon } from "./sidebar-destination-icon";
 import { MascotLamp } from "./ui";
 import type { DashboardSession } from "./api";
 import { haptics } from "./haptics";
-import { hostedProjectKey, hostedSessionKey, sessionHostId } from "./hostedRows";
+import { hostedProjectKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
+import { MachineIdentity } from "./MachineIdentity";
 import { sessionTitle } from "./sessionStatus";
 import {
 	activeSidebarDestination,
 	sidebarDestinationBadge,
 	RECENT_WORKERS_LABEL,
 	selectedPrimarySidebarDestination,
-	sidebarNavigationSettled,
 	sidebarDestinations,
 	sidebarSessions,
 	type PrimarySidebarDestinationId,
@@ -47,6 +47,7 @@ import {
 	shouldCaptureSidebarGesture,
 } from "./sidebar-gesture";
 import { SidebarSettingsButton } from "./sidebar-settings-button";
+import { SidebarSessionLogo } from "./SidebarSessionLogo";
 import { SidebarSpawnButton } from "./sidebar-spawn-button";
 import { useReducedMotion } from "./useReducedMotion";
 import { useApp } from "./store";
@@ -82,8 +83,8 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	const gestureLatestDx = useRef(0);
 	const gestureReady = useRef(false);
 	const pendingGestureEnd = useRef<{ dx: number; velocityX: number; cancelled: boolean } | null>(null);
-	const pendingClosePath = useRef<string | null>(null);
 	const [scrollRequest, setScrollRequest] = useState<SidebarScrollRequest | null>(null);
+	const scrollSequence = useRef(0);
 	const activeDestination = activeSidebarDestination(pathname);
 	const lastPrimaryDestination = useRef<PrimarySidebarDestinationId>("agents");
 	const selectedPrimaryDestination = selectedPrimarySidebarDestination(
@@ -99,10 +100,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 	);
 	const projectLabel = (session: DashboardSession) => {
 		const hostId = sessionHostId(session);
-		const name = projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
-		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
-		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return hostStates.length > 1 && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
+		return projectNames.get(hostedProjectKey({ id: session.projectId, hostId })) ?? session.projectId;
 	};
 
 	const animateSidebar = useCallback((nextOpen: boolean) => {
@@ -110,6 +108,13 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 		drawerSettling.current = true;
 		setScrimVisible(nextOpen);
 		if (nextOpen) setOpen(true);
+		if (reduceMotion) {
+			progress.stopAnimation();
+			progress.setValue(nextOpen ? 1 : 0);
+			drawerSettling.current = false;
+			setOpen(nextOpen);
+			return;
+		}
 		Animated.spring(progress, {
 			toValue: nextOpen ? 1 : 0,
 			useNativeDriver: true,
@@ -121,19 +126,14 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 			drawerSettling.current = false;
 			if (!nextOpen) setOpen(false);
 		});
-	}, [progress]);
+	}, [progress, reduceMotion]);
+	useEffect(() => () => progress.stopAnimation(), [progress]);
 
 	const openSidebar = useCallback(() => {
 		haptics.tap();
 		animateSidebar(true);
 	}, [animateSidebar]);
 	const closeSidebar = useCallback(() => animateSidebar(false), [animateSidebar]);
-
-	useEffect(() => {
-		if (!sidebarNavigationSettled(pendingClosePath.current, pathname)) return;
-		pendingClosePath.current = null;
-		closeSidebar();
-	}, [closeSidebar, pathname]);
 
 	const panResponder = useMemo(() => {
 		const settleGesture = (dx: number, velocityX: number, cancelled: boolean) => {
@@ -216,32 +216,23 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 
 	const selectDestination = useCallback((destination: SidebarDestination) => {
 		haptics.select();
-		if (destination.id === activeDestination) {
-			setScrollRequest((current) => ({
-				destination: destination.id,
-				sequence: (current?.sequence ?? 0) + 1,
-			}));
-		} else {
-			pendingClosePath.current = destination.href;
-			router.replace(destination.href);
-			return;
-		}
 		closeSidebar();
+		if (destination.id === activeDestination) {
+			setScrollRequest({
+				destination: destination.id,
+				sequence: ++scrollSequence.current,
+			});
+		} else {
+			setScrollRequest(null);
+			router.navigate(destination.href);
+		}
 	}, [activeDestination, closeSidebar, router]);
 
 	const selectSession = useCallback((session: DashboardSession) => {
 		haptics.select();
-		const targetPath = `/session/${session.id}`;
-		// Two hosts can have the same session ID. Switching between them changes
-		// only the hostId param, so usePathname will not fire the settling effect.
-		if (sidebarNavigationSettled(targetPath, pathname)) {
-			pendingClosePath.current = null;
-			closeSidebar();
-		} else {
-			pendingClosePath.current = targetPath;
-		}
+		closeSidebar();
 		router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? config?.hostId } });
-	}, [closeSidebar, config?.hostId, pathname, router]);
+	}, [closeSidebar, config?.hostId, router]);
 
 	const spawnWorker = useCallback(() => {
 		haptics.tap();
@@ -317,7 +308,8 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					<SessionRow
 						session={item}
 						projectName={projectLabel(item)}
-						onPress={() => selectSession(item)}
+						offline={hostStates.find((host) => host.hostId === sessionHostId(item))?.connection === "closed"}
+						onSelect={selectSession}
 					/>
 				)}
 				ListEmptyComponent={<Text style={styles.emptySessions}>No active sessions</Text>}
@@ -335,7 +327,12 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 			<View style={styles.shell} {...(open ? panResponder.panHandlers : {})}>
 				{navigationView()}
 
-				<Animated.View style={[styles.contentFrame, contentTransform]}>
+				<Animated.View
+					// Reuse the complex list's native layer during translation/scale.
+					// `open` stays true through closing; release GPU memory afterward.
+					renderToHardwareTextureAndroid={open}
+					style={[styles.contentFrame, contentTransform]}
+				>
 					<View style={[styles.contentSurface, open && styles.contentSurfaceOpen]}>
 						{children}
 						{open ? (
@@ -397,40 +394,38 @@ function DestinationRow({ destination, active, badge, onPress }: {
 	);
 }
 
-function SessionRow({ session, projectName, onPress }: {
+const SessionRow = memo(function SessionRow({ session, projectName, offline, onSelect }: {
 	session: DashboardSession;
 	projectName: string;
-	onPress: () => void;
+	offline: boolean;
+	onSelect: (session: DashboardSession) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const visual = statusVisual(t, session.status);
 	const statusLabel = session.status === "idle" ? "Active" : visual.label;
+	const machine = sessionMachineIdentity(session);
+	const machineName = machine ? `${machine.name}${offline ? " (offline)" : ""}` : undefined;
 	return (
 		<Pressable
-			onPress={onPress}
+			onPress={() => onSelect(session)}
 			accessibilityRole="button"
-			accessibilityLabel={`${sessionTitle(session)}, ${statusLabel}, ${projectName}`}
+			accessibilityLabel={`${sessionTitle(session)}, ${statusLabel}, ${projectName}${machineName ? `, ${machineName} machine` : ""}`}
 			android_ripple={{ color: t.bgElevatedHover }}
 			style={({ pressed }) => [styles.sessionRow, pressed && styles.sessionRowPressed]}
 		>
-			<AgentLogo harness={session.harness} size={28} />
+			<SidebarSessionLogo harness={session.harness} pinned={Boolean(session.isPinned)} />
 			<View style={styles.sessionText}>
 				<Text numberOfLines={1} style={styles.sessionTitle}>{sessionTitle(session)}</Text>
 				<View style={styles.sessionMetaRow}>
 					<View style={[styles.statusDot, { backgroundColor: visual.color }]} />
 					<Text numberOfLines={1} style={styles.sessionMeta}>{statusLabel} · {projectName}</Text>
+					{machine && machineName ? <MachineIdentity name={machineName} appearance={machine.appearance} style={styles.sessionMachine} /> : null}
 				</View>
 			</View>
-			{/* Upright, like the desktop's own row (`{isPinned ? <PinOff/> : <Pin/>}` with
-			    no rotation anywhere). It was tilted 28° here and in the rail to match a
-			    tilt the desktop does not have — and a rotated glyph does not sit in the
-			    middle of its button: on Android the rail's pin measured 11px left of
-			    centre in an 81px circle, where the untilted trash beside it was 0.6px. */}
-			{session.isPinned ? <Feather name="pin" size={14} color={t.textTertiary} /> : null}
 		</Pressable>
 	);
-}
+});
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	shell: { flex: 1, overflow: "hidden", backgroundColor: t.bgSide },
@@ -510,6 +505,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	sessionMetaRow: { marginTop: 2, flexDirection: "row", alignItems: "center", gap: space.xs },
 	statusDot: { width: 6, height: 6, borderRadius: 4 },
 	sessionMeta: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize, includeFontPadding: false },
+	sessionMachine: { maxWidth: "42%" },
 	sidebarActions: {
 		height: 52,
 		marginHorizontal: 4,

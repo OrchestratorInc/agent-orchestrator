@@ -117,6 +117,14 @@ const RETRY_MAX_MS = 8_000;
 // Exponential backoff here only adds dead seconds between "worker ready" and
 // "terminal attached" (a worker ready at 17s would wait for the 23s attempt).
 const CLOUD_CONNECT_RETRY_MS = 1_000;
+// While the worker is still starting (mint 409, "waiting"), poll faster for the
+// first seconds of a cold start: the agent terminal typically appears within a
+// few seconds, and a 1s poll leaves up to a second between "terminal exists"
+// and "terminal attached". A 409 costs the control plane a few milliseconds.
+// Past the window, or for a genuine socket failure (which counts toward the
+// connect breaker below), the flat 1s poll applies unchanged.
+const CLOUD_STARTUP_RETRY_MS = 250;
+const CLOUD_STARTUP_WINDOW_MS = 15_000;
 // Stop retrying and surface a real error after this many consecutive genuine
 // socket failures for a cloud session that has never successfully attached.
 // Only post-mint socket failures count; "worker still provisioning" (mint 409,
@@ -229,6 +237,8 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// Reset on a real open and on a fresh attach; provisioning waits do not
 		// touch it. Trips the connect-failure circuit breaker at the cap.
 		cloudConnectFailures: 0,
+		// When this attachment began; bounds the fast startup poll.
+		connectStartedAt: 0,
 		detached: true,
 		// True only after this attachment opens parked at 0×0. The next visible
 		// activation must promote it back to a positive primary grid.
@@ -378,10 +388,12 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		// First connect of a cloud pane = polling for sandbox readiness; keep it
 		// flat (see CLOUD_CONNECT_RETRY_MS). After a real attachment, drops back
 		// to exponential backoff like every other reconnect.
-		const delay =
-			!r.hasAttachedOnce && sessionRef.current?.cloud
-				? CLOUD_CONNECT_RETRY_MS
-				: Math.min(RETRY_BASE_MS * 2 ** r.attempts, RETRY_MAX_MS);
+		const cloudStartup = !r.hasAttachedOnce && sessionRef.current?.cloud;
+		const delay = !cloudStartup
+			? Math.min(RETRY_BASE_MS * 2 ** r.attempts, RETRY_MAX_MS)
+			: !countAsCloudFailure && Date.now() - r.connectStartedAt < CLOUD_STARTUP_WINDOW_MS
+				? CLOUD_STARTUP_RETRY_MS
+				: CLOUD_CONNECT_RETRY_MS;
 		r.attempts += 1;
 		r.retryTimer = setTimeout(() => {
 			r.retryTimer = null;
@@ -585,6 +597,10 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			terminal.showLatestOutput();
 			setReplaySettled(true);
 		};
+		// Frames after the replay went quiet are the agent's live output, so a colour
+		// query in them is answered. Only a replay cut short by its size cap leaves
+		// history in the tail.
+		let tailHoldsHistory = false;
 		const drainPostReplayWrites = () => {
 			if (!isCurrentAttachment(generation, handle, mux)) return;
 			if (pendingReplayWrites > 0 || postReplayWriteActive) return;
@@ -601,7 +617,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				postReplayWriteActive = false;
 				pendingReplayWrites = Math.max(0, pendingReplayWrites - 1);
 				drainPostReplayWrites();
-			}, initialWriteSource);
+			}, tailHoldsHistory ? initialWriteSource : "live");
 		};
 
 		// End the buffered part of the initial replay: concatenate what arrived so
@@ -670,6 +686,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 					// A stream that never idles would restart the quiet window forever
 					// and grow the buffer without bound; flush on size instead.
 					if (r.replayBytes >= REPLAY_MAX_BYTES) {
+						tailHoldsHistory = initialWriteSource === "replay";
 						flushReplay(true);
 						return;
 					}
@@ -923,6 +940,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			r.attempts = 0;
 			r.cloudConnectFailures = 0;
 			r.hasAttachedOnce = false;
+			r.connectStartedAt = Date.now();
 			setError(undefined);
 			setHasAttached(false);
 			if (handle) {
@@ -1000,11 +1018,36 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	// before the cache's activation preparation, so the first visible frame
 	// always publishes its final positive grid even when xterm's local size no
 	// longer changes.
+	// Tell the daemon nobody is looking at this terminal. A 0×0 grid is the mux's
+	// "attached without claiming a size": the daemon stops counting this client
+	// as showing the terminal (so an idle agent may be restarted on a new harness
+	// release) and leaves the PTY at its size unless another client shows it.
+	// Forgetting the published grid makes the next visible sync send the real
+	// one again. The cloud mux has no such frame, so it is skipped. (Ported from
+	// Account Manager, #6274.)
+	const parkOffScreen = useCallback(() => {
+		const r = runtime.current;
+		r.needsVisibleSizeSync = true;
+		if (!r.mux || !r.handle || !r.lastPublishedGrid || sessionRef.current?.cloud) return;
+		r.mux.resize(r.handle, 0, 0);
+		r.lastPublishedGrid = null;
+	}, []);
+
 	const isVisible = options.isVisible !== false;
 	useLayoutEffect(() => {
-		if (isVisible) return;
-		runtime.current.needsVisibleSizeSync = true;
-	}, [isVisible]);
+		if (!isVisible) parkOffScreen();
+	}, [isVisible, parkOffScreen]);
+
+	// A hidden or minimised window takes its active pane off screen as well.
+	useEffect(() => {
+		const onWindowVisibility = () => {
+			const terminal = runtime.current.terminal;
+			if (document.visibilityState === "hidden") parkOffScreen();
+			else if (terminal?.hasMeasuredGrid) syncVisibleSize(terminal.cols, terminal.rows);
+		};
+		document.addEventListener("visibilitychange", onWindowVisibility);
+		return () => document.removeEventListener("visibilitychange", onWindowVisibility);
+	}, [parkOffScreen, syncVisibleSize]);
 
 	useEffect(() => {
 		const r = runtime.current;

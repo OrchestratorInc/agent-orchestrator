@@ -1,3 +1,4 @@
+import type { PROpener } from "@aoagents/product-ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import type { components } from "../../api/schema";
@@ -9,7 +10,9 @@ import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useSettings } from "./useSettings";
 
-export type SessionPRSummary = components["schemas"]["SessionPRSummary"];
+// openedBy only comes from AO Cloud, which names the person behind a PR its
+// GitHub App opened for them.
+export type SessionPRSummary = components["schemas"]["SessionPRSummary"] & { openedBy?: PROpener };
 export type SessionPRReference = components["schemas"]["SessionPRReference"];
 
 export const sessionScmSummaryQueryKey = (sessionId?: string, hostId?: string) =>

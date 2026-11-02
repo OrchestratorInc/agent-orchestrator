@@ -19,6 +19,11 @@ export class RemoteRegistry {
 
 	constructor(private readonly start: StartProxy) {}
 
+	connected(entry: RemoteEntry): ConnectedHostView | undefined {
+		const existing = this.live.get(entry.url);
+		return existing && existing.view.hostId === entry.hostId && existing.password === entry.password ? existing.view : undefined;
+	}
+
 	private enqueue<T>(action: () => Promise<T>): Promise<T> {
 		const result = this.tail.then(action, action);
 		this.tail = result.then(() => undefined, () => undefined);
@@ -29,8 +34,8 @@ export class RemoteRegistry {
 		if (this.closing) return Promise.reject(new Error("remote connections are closing"));
 		return this.enqueue(async () => {
 			if (!entry.hostId) throw new Error("remote host must be paired again to record its identity");
-			const existing = this.live.get(entry.url);
-			if (existing?.view.hostId === entry.hostId && existing.password === entry.password) return existing.view;
+			const existing = this.connected(entry);
+			if (existing) return existing;
 			for (const [url, connected] of this.live) {
 				if (url !== entry.url && connected.view.hostId !== entry.hostId) continue;
 				this.live.delete(url);
@@ -49,10 +54,26 @@ export class RemoteRegistry {
 		return connected.proxy.previewUrl(sessionId, sourceUrl);
 	}
 
+	isAgentBrowserUrl(url: string): boolean {
+		return [...this.live.values()].some(({ proxy }) => proxy.isAgentBrowserUrl(url));
+	}
+
+	agentBrowserUrl(hostId: string, sessionId: string): Promise<string> {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		if (!connected) throw new Error(`Host ${hostId} is not connected`);
+		return connected.proxy.agentBrowserUrl(sessionId);
+	}
+
 	resolvePreviewUrl(hostId: string, sessionId: string, viewedUrl: string): string {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
 		if (!connected) throw new Error(`Host ${hostId} is not connected`);
 		return connected.proxy.resolvePreviewUrl(sessionId, viewedUrl);
+	}
+
+	externalUrl(hostId: string, url: string): string {
+		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
+		if (!connected) throw new Error(`Host ${hostId} is not connected`);
+		return connected.proxy.externalUrl(url);
 	}
 
 	disconnect(url: string): Promise<void> {

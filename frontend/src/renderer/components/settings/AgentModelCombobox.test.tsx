@@ -66,6 +66,26 @@ describe("AgentModelCombobox", () => {
 		expect(picker).toHaveTextContent("Low");
 	});
 
+	it("disables a model the installed CLI is too old for and explains the fix", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+			{
+				id: "claude-opus-5-5",
+				label: "Opus 5.5",
+				requiresVersion: "2.1.280",
+				unavailableReason: "Requires Claude Code 2.1.280 or newer (installed: 2.1.239). Run `claude update`, then try again.",
+			},
+		], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const gated = screen.getByRole("menuitem", { name: /Opus 5\.5/ });
+		expect(gated).toHaveAttribute("aria-disabled", "true");
+		expect(gated).toHaveTextContent("Requires Claude Code 2.1.280 or newer");
+		await userEvent.click(gated);
+		expect(onChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Sonnet 5.5" }));
+		expect(onChange).toHaveBeenCalledWith("claude-sonnet-5-5");
+	});
+
 	it("closes only the effort submenu on Escape", async () => {
 		renderCombobox(
 			[{ id: "capable", label: "Capable", efforts: ["low", "high"] }],
@@ -119,6 +139,32 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(picker);
 		expect(screen.queryByRole("menuitem", { name: "Agent default" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
+	});
+
+	it("applies menuClassName to the menu", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], { menuClassName: "w-56!" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const menu = screen.getByRole("menu");
+		expect(menu).toHaveClass("w-56!");
+	});
+
+	it("hides the can't-find footer in compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			compact: true,
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByText("Can’t find your model?")).not.toBeInTheDocument();
+	});
+
+	it("keeps the can't-find footer in non-compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByText("Can’t find your model?")).toBeInTheDocument();
 	});
 
 	it("clears an override when the reported agent model is selected", async () => {
@@ -203,8 +249,14 @@ describe("AgentModelCombobox", () => {
 			expect(screen.queryByRole("menuitem", { name: "Other models" })).not.toBeInTheDocument();
 		});
 
-		it("still finds other models by search", async () => {
+		it("hides search while only the newest models are listed", async () => {
+			await open({ allowCustom: false, customModelEntry: "none" });
+			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		});
+
+		it("still finds other models by search once they are expanded", async () => {
 			await open();
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
 			await userEvent.keyboard("opus 4.5");
 			expect(menuLabels()).toContain("Opus 4.5");
 		});
@@ -255,9 +307,9 @@ describe("AgentModelCombobox", () => {
 
 	it("keeps compact catalogs free of search and result-count chrome", async () => {
 		renderCombobox(
-			Array.from({ length: 7 }, (_, index) => ({
+			Array.from({ length: 4 }, (_, index) => ({
 				id: `gpt-${index}`,
-				label: index === 6 ? "GPT Luna" : `GPT ${index}`,
+				label: index === 3 ? "GPT Luna" : `GPT ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false, customModelEntry: "none" },
@@ -285,11 +337,11 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
 	});
 
-	it("adds simple model search at eight models", async () => {
+	it("adds simple model search at five models", async () => {
 		renderCombobox(
-			Array.from({ length: 8 }, (_, index) => ({
-				id: index === 6 ? "gpt-luna" : index === 7 ? "claude-fable" : `model-${index}`,
-				label: index === 6 ? "Luna" : index === 7 ? "Fable" : `Model ${index}`,
+			Array.from({ length: 5 }, (_, index) => ({
+				id: index === 3 ? "gpt-luna" : index === 4 ? "claude-fable" : `model-${index}`,
+				label: index === 3 ? "Luna" : index === 4 ? "Fable" : `Model ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false },
@@ -297,7 +349,7 @@ describe("AgentModelCombobox", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models…");
+		expect(search).toHaveAttribute("placeholder", "Search models");
 		await userEvent.type(search, "fab");
 		expect(screen.getByRole("menuitem", { name: "Fable" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Luna" })).not.toBeInTheDocument();
@@ -328,7 +380,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.getByText("Can’t find your model?")).toBeInTheDocument();
 		expect(screen.getByText("Configure the model in OpenCode, then refresh.")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Refresh models" }));
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -340,18 +392,18 @@ describe("AgentModelCombobox", () => {
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(screen.queryByRole("button", { name: "Refresh models" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Refresh models" })).not.toBeInTheDocument();
 		await userEvent.type(search, "missing-model");
-		const refresh = screen.getByRole("button", { name: "Refresh models" });
+		const refresh = screen.getByRole("menuitem", { name: "Refresh models" });
 		expect(search.parentElement?.parentElement).toContainElement(refresh);
 		expect(screen.queryByText(/Last updated/)).not.toBeInTheDocument();
 		await userEvent.click(refresh);
-		const busy = screen.getByRole("button", { name: /Refreshing/ });
-		expect(busy).toBeDisabled();
+		const busy = screen.getByRole("menuitem", { name: /Refreshing/ });
+		expect(busy).toHaveAttribute("aria-disabled", "true");
 		await userEvent.click(busy);
 		expect(onRefresh).toHaveBeenCalledOnce();
 		finish();
-		await waitFor(() => expect(screen.getByRole("button", { name: "Refresh models" })).toBeEnabled());
+		await waitFor(() => expect(screen.getByRole("menuitem", { name: "Refresh models" })).not.toHaveAttribute("aria-disabled"));
 	});
 
 	it("shows refresh when the catalog is empty", async () => {
@@ -359,7 +411,7 @@ describe("AgentModelCombobox", () => {
 		renderCombobox([], { allowCustom: false, onRefresh });
 
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Refresh models" }));
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -371,9 +423,18 @@ describe("AgentModelCombobox", () => {
 			retryAt: "2026-09-07T09:30:00Z",
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		const retry = screen.getByRole("button", { name: /Retry refresh/ });
+		const retry = screen.getByRole("menuitem", { name: /Retry refresh/ });
 		expect(retry).toHaveAttribute("title", "Provider temporarily unavailable");
 		await userEvent.click(retry);
+		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+
+	it("activates the retry action from the keyboard", async () => {
+		const onRefresh = vi.fn();
+		renderCombobox([{ id: "cached", label: "Cached model" }], { onRefresh, refreshError: "Provider temporarily unavailable" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		screen.getByRole("menuitem", { name: /Retry refresh/ }).focus();
+		await userEvent.keyboard("{Enter}");
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -383,7 +444,7 @@ describe("AgentModelCombobox", () => {
 			retryAt: null,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getByRole("button", { name: /Retry refresh/ })).not.toHaveTextContent("·");
+		expect(screen.getByRole("menuitem", { name: /Retry refresh/ })).not.toHaveTextContent("·");
 	});
 
 	it("preserves a saved selection while a refreshed catalog no longer lists it", async () => {
@@ -455,7 +516,7 @@ describe("AgentModelCombobox", () => {
 		const { onChange } = renderCombobox(models);
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models or providers…");
+		expect(search).toHaveAttribute("placeholder", "Search models or providers");
 		await userEvent.type(search, "provider-1/model-99");
 
 		expect(screen.getByText("provider-1", { selector: "div" })).toBeInTheDocument();
@@ -480,5 +541,19 @@ describe("AgentModelCombobox", () => {
 
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/custom-model” as a custom model" }));
 		expect(onCustom).toHaveBeenCalledWith("private/custom-model");
+	});
+
+	it("lists a Cursor model once and keeps its thinking with its effort", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
+			{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
+			{ id: "gpt-5.5-high", label: "GPT-5.5 High" },
+		], { agentId: "cursor", value: "claude-opus-4-8-high", compact: true, tuning: { effort: "", onEffortChange: vi.fn() } });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getAllByRole("menuitem", { name: /Claude Opus 4.8/ })).toHaveLength(1);
+		expect(screen.queryByText("Fast mode")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await userEvent.click(await screen.findByText("Thinking"));
+		expect(onChange).toHaveBeenCalledWith("claude-opus-4-8-thinking-high");
 	});
 });

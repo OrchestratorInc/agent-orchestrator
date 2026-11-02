@@ -5,6 +5,9 @@ import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types
 import { space } from "./tokens";
 
 export function SpawnComposerControls({
+	hosts,
+	hostId,
+	onSelectHost,
 	projects,
 	projectId,
 	onSelectProject,
@@ -15,7 +18,8 @@ export function SpawnComposerControls({
 	modelSelection,
 	modelLabel,
 	onSelectModel,
-	onAttach,
+	onChoosePhoto,
+	onChooseFile,
 	onSpawn,
 	busy,
 	disabled,
@@ -24,15 +28,25 @@ export function SpawnComposerControls({
 	const { scheme } = useThemeState();
 	return (
 		<View style={styles.stack}>
-			<Host style={styles.projectHost} colorScheme={scheme} seedColor={t.accent}>
-				<Picker selectedValue={projectId ?? ""} onValueChange={onSelectProject} appearance="menu">
-					<Picker.Item label="Choose project" value="" />
-					{projects.map((project) => <Picker.Item key={project.id} label={project.label} value={project.id} />)}
-				</Picker>
-			</Host>
+			<View style={styles.destinationRow}>
+				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
+					<Picker selectedValue={hostId ?? ""} onValueChange={onSelectHost} appearance="menu">
+						{hosts.map((host) => <Picker.Item key={host.id} label={`Run on ${host.label}`} value={host.id} />)}
+					</Picker>
+				</Host>
+				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
+					<Picker selectedValue={projectId ?? ""} onValueChange={onSelectProject} appearance="menu">
+						<Picker.Item label="Choose project" value="" />
+						{projects.map((project) => <Picker.Item key={project.id} label={project.label} value={project.id} />)}
+					</Picker>
+				</Host>
+			</View>
 			<View style={styles.rail}>
 				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
-					<Button label="📎" variant="text" onPress={onAttach} style={styles.iconButton} />
+					<Button label="🖼" variant="text" onPress={onChoosePhoto} style={styles.iconButton} />
+				</Host>
+				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
+					<Button label="📎" variant="text" onPress={onChooseFile} style={styles.iconButton} />
 				</Host>
 				<Host style={styles.menuHost} colorScheme={scheme} seedColor={t.accent}>
 					<Picker selectedValue={harness} onValueChange={onSelectHarness} appearance="menu">
@@ -55,7 +69,8 @@ export function SpawnComposerControls({
 
 const styles = StyleSheet.create({
 	stack: { gap: space.hair },
-	projectHost: { width: 180, height: 36 },
+	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
+	destinationHost: { flex: 1, minWidth: 0, height: 36 },
 	rail: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.xs },
 	iconHost: { width: 44, height: 44 },
 	iconButton: { width: 44, height: 44, borderRadius: 20 },

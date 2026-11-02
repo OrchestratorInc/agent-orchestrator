@@ -8,7 +8,6 @@ import {
 	RECENT_WORKERS_LABEL,
 	scrollSidebarRefToTop,
 	selectedPrimarySidebarDestination,
-	sidebarNavigationSettled,
 	sidebarDestinations,
 	sidebarSessions,
 } from "./sidebar-navigation";
@@ -99,13 +98,6 @@ describe("sidebar navigation", () => {
 	it("keeps the previous primary destination selected while settings is presented", () => {
 		expect(selectedPrimarySidebarDestination("/settings", "projects")).toBe("projects");
 		expect(selectedPrimarySidebarDestination("/prs", "projects")).toBe("prs");
-	});
-
-	it("only closes the Android drawer after the requested route is committed", () => {
-		expect(sidebarNavigationSettled("/projects", "/")).toBe(false);
-		expect(sidebarNavigationSettled("/projects", "/(tabs)/projects")).toBe(true);
-		expect(sidebarNavigationSettled("/session/worker-7", "/session/worker-7")).toBe(true);
-		expect(sidebarNavigationSettled(null, "/projects")).toBe(false);
 	});
 
 	it("scrolls a standard scroll view to the top when its active item is reselected", () => {

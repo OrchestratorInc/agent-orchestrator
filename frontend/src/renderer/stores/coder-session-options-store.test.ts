@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCoderRequestOptions } from "./coder-session-options-store";
+import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "./coder-session-options-store";
 
 const base = {
 	templateId: "",
@@ -76,5 +76,28 @@ describe("buildCoderRequestOptions", () => {
 		});
 		expect(buildCoderRequestOptions({ ...base, templateId: "tpl-5", workspaceNamePrefix: "" })).toEqual({ templateId: "tpl-5" });
 		expect(buildCoderRequestOptions({ ...base, workspaceNamePrefix: "team" })).toEqual({ workspaceNamePrefix: "team" });
+	});
+
+	it("sends template options only alongside a chosen template, and only when some changed", () => {
+		expect(buildCoderRequestOptions({ ...base, templateId: "tpl-6", parameters: { region: "us" } })).toEqual({
+			templateId: "tpl-6",
+			parameters: { region: "us" },
+		});
+		expect(buildCoderRequestOptions({ ...base, templateId: "tpl-6", parameters: {} })).toEqual({ templateId: "tpl-6" });
+		expect(buildCoderRequestOptions({ ...base, parameters: { region: "us" } })).toBeUndefined();
+	});
+});
+
+describe("useCoderSessionOptionsStore", () => {
+	it("clears template options when the template changes", () => {
+		const store = useCoderSessionOptionsStore.getState();
+		store.reset();
+		store.setTemplate("tpl-1", []);
+		useCoderSessionOptionsStore.getState().setParameters({ region: "us" });
+		// Re-selecting the same template keeps them.
+		useCoderSessionOptionsStore.getState().setTemplate("tpl-1", ["size"]);
+		expect(useCoderSessionOptionsStore.getState().parameters).toEqual({ region: "us" });
+		useCoderSessionOptionsStore.getState().setTemplate("tpl-2", []);
+		expect(useCoderSessionOptionsStore.getState().parameters).toEqual({});
 	});
 });

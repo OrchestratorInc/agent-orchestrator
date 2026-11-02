@@ -1,0 +1,48 @@
+{
+ "name": "ao-grok-bot",
+ "version": "2026.10.28.1",
+ "skills": [
+  {
+   "id": "ao-actions",
+   "path": "skills/ao-actions/SKILL.md",
+   "bytes": 4375,
+   "sha256": "fb9e8c902c604c0c0c2b896f029e58252cf4812ccec46c76748dcb4f2c75858f"
+  },
+  {
+   "id": "ao-answer",
+   "path": "skills/ao-answer/SKILL.md",
+   "bytes": 5677,
+   "sha256": "edfbad2f88cb4549095ae391798ead691e613ae35d1a4806165b2dbd547703c5"
+  },
+  {
+   "id": "ao-orchestrator",
+   "path": "skills/ao-orchestrator/SKILL.md",
+   "bytes": 6120,
+   "sha256": "6114fa278fde766d44057e4824c2db9b5263019c55aff89776933d6c0d034c23"
+  },
+  {
+   "id": "ao-rules",
+   "path": "skills/ao-rules/SKILL.md",
+   "bytes": 8905,
+   "sha256": "4354893fa60c998f48ff1fe6edd98f035d52e62ca38d45e8d9cbf2db66762332"
+  },
+  {
+   "id": "ao-setup",
+   "path": "skills/ao-setup/SKILL.md",
+   "bytes": 14134,
+   "sha256": "b77aa44ed6675448ac279ce8796ae55608f1ba84338aee7d27f2fd5c66621504"
+  },
+  {
+   "id": "ao-status",
+   "path": "skills/ao-status/SKILL.md",
+   "bytes": 4854,
+   "sha256": "b6831908e8f9a58df481e070ccff7283c1fa9eb0c0b7b701c5a48dbad8678a67"
+  },
+  {
+   "id": "ao-update",
+   "path": "skills/ao-update/SKILL.md",
+   "bytes": 5349,
+   "sha256": "44420b8ca465a2e6321fdcdbcdd42454418964019e3711f9af32c436d0cf3de4"
+  }
+ ]
+}

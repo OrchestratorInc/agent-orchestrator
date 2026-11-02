@@ -1,0 +1,23 @@
+#!/usr/bin/env node
+// browser: agent-browser commands for the shared Chromium the user watches in AO's
+// Browser panel. The user can click and type in the same page at the same time.
+// The browser may run in another container, so files travel with the command:
+// local files named in the arguments go up (upload), files it writes come back
+// (screenshot, pdf, download). Relative paths are to this directory, on both
+// sides. RB_URL is the browser service (default http://127.0.0.1:8080);
+// RB_TOKEN is its token.
+const fs = require("node:fs"), path = require("node:path");
+const args = process.argv.slice(2), files = {};
+// An argument no file can have (too long a name, a folder it may not look in) is just text.
+const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+// Relative names go up for an upload only: a word typed into a page (README.md, .env) is no file to copy.
+const upload = args.find((a) => !a.startsWith("-")) === "upload";
+for (const a of args) if ((upload || path.isAbsolute(a)) && isFile(a)) files[a] = fs.readFileSync(a).toString("base64");
+fetch(`${process.env.RB_URL || "http://127.0.0.1:8080"}/agent`, { method: "POST", headers: { Authorization: `Bearer ${process.env.RB_TOKEN}` }, body: JSON.stringify({ args, files }) })
+	.then((res) => res.json())
+	.then((body) => {
+		for (const [p, b64] of Object.entries(body.files ?? {})) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, Buffer.from(b64, "base64")); }
+		process.stdout.write(body.output ?? "");
+		if (body.error) { console.error(body.error); process.exit(1); }
+	})
+	.catch((error) => { console.error("browser: " + error.message); process.exit(1); });

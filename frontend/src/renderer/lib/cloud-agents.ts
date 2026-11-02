@@ -4,7 +4,7 @@ import type { CloudCpProviderConnection } from "./cloud-cp";
 
 /** The agents AO cloud offers: the ones with a cloud login on the Harness
  * settings page. Each must be accepted by the control plane's
- * validAgentProvider (cloud/internal/httpapi/provider_handlers.go). Unlike
+ * validAgentProvider (the control plane's internal/httpapi/provider_handlers.go). Unlike
  * local's full AGENT_OPTIONS list, cloud has no "install" step, so any
  * unlisted agent would just be a dead end. */
 export const CLOUD_AGENT_PROVIDERS = ["claude-code", "codex", "cursor", "opencode"] as const;
@@ -24,6 +24,14 @@ const CREDENTIAL_SCOPE_PREFIX = "@cred:";
  * type (e.g. "anthropic_api_key" -> "@cred:anthropic_api_key"). */
 export function credentialModelScope(credentialType: string): string {
 	return `${CREDENTIAL_SCOPE_PREFIX}${credentialType}`;
+}
+
+/** The model-catalog scope a picker reads. Model catalogs are device-wide: only
+ * a cloud credential scope (credentialModelScope) caches separately, and
+ * anything else, including a project id, is the one catalog per agent. Keep in
+ * sync with modelCatalogScope in backend/internal/service/agent/service.go. */
+export function modelCatalogScope(scope: string): string {
+	return scope.startsWith(CREDENTIAL_SCOPE_PREFIX) && scope.slice(CREDENTIAL_SCOPE_PREFIX.length).trim() !== "" ? scope : "";
 }
 
 /** The credential type stored on a valid cloud connection for one provider

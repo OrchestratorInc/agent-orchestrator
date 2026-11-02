@@ -18,6 +18,8 @@ export interface CloudAccount {
 		id: string;
 		email: string;
 		displayName: string;
+		/** Profile picture from the identity provider (Google, GitHub), when it has one. */
+		avatarUrl?: string;
 	};
 	/** Organizations the user belongs to. Populated by the local provider; omitted by WorkOS. */
 	organizations?: CloudOrganization[];

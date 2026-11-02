@@ -1,11 +1,15 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { BrowserIcon, type AppIcon } from "../icons";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import type { GlobalSettingsSection } from "../../stores/ui-store";
+import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
+import { BillingSection } from "./BillingSection";
+import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
-import { Coder11xSection } from "./Coder11xSection";
+import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
+import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -32,17 +36,23 @@ type CatalogContext = {
 	developerMode: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
-	/** Signed-in user's email ends with @11x.ai — gates the bring-your-own-Coder page. */
-	is11x: boolean;
+	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
+	customCoder: boolean;
+	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
+	selfServeBilling: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
+	showDiagnostics?: HarnessDiagnosticsRequest;
+	/** One page is shown, under its own title: a first heading that only
+	 * rewords that title ("Keyboard shortcuts" on Shortcuts) is hidden. */
+	singlePage?: boolean;
 };
 
 export type SettingsCatalogItem = {
 	id: GlobalSettingsSection;
-	icon: LucideIcon;
+	icon: AppIcon;
 	label: (t: TFunction) => string;
 	visible?: (context: CatalogContext) => boolean;
 	/** Left out of the single-page "all" view; it has its own page in the nav.
@@ -51,10 +61,6 @@ export type SettingsCatalogItem = {
 	pageOnly?: boolean;
 	render: (t: TFunction, titleHidden: boolean, context: CatalogContext) => ReactNode;
 };
-
-function SettingsContentPanel({ children }: { children: ReactNode }) {
-	return <div className="rounded-md bg-[var(--color-bg-settings-row)]">{children}</div>;
-}
 
 const globalSettingsCatalog: SettingsCatalogItem[] = [
 	{
@@ -67,37 +73,53 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",
 		icon: BadgeCheck,
 		label: (t) => t("settings.agents"),
+		// In developer mode, subscription accounts live on each CLI's Harness
+		// Account tab instead.
+		visible: ({ developerMode }) => !developerMode,
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
+		id: "billing",
+		icon: CreditCard,
+		label: (t) => t("settings.billing.navLabel"),
+		visible: ({ cloudEnabled, selfServeBilling }) => cloudEnabled && selfServeBilling,
+		render: (_t, titleHidden, { singlePage }) => <BillingSection titleHidden={titleHidden || Boolean(singlePage)} />,
+	},
+	{
 		id: "browserProfiles",
-		icon: Globe2,
+		icon: BrowserIcon,
 		label: (t) => t("settings.browserProfiles"),
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
 				<BrowserDownloadsSection />
+				<BrowserChromeSection />
 			</>
 		),
 	},
 	{
-		id: "coder11x",
+		id: "computerUse",
+		icon: MousePointerClick,
+		label: (t) => t("settings.computerUse"),
+		render: (_t, titleHidden) => <ComputerUseSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "coder",
 		icon: Server,
-		label: (t) => t("settings.coder11x.navLabel"),
-		visible: ({ is11x }) => is11x,
-		render: (_t, titleHidden) => <Coder11xSection titleHidden={titleHidden} />,
+		label: (t) => t("settings.coder.navLabel"),
+		visible: ({ cloudEnabled, customCoder }) => cloudEnabled && customCoder,
+		render: (_t, titleHidden, { singlePage }) => <CoderSettingsSection titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "remoteHosts",
 		icon: Server,
 		label: (t) => t("settings.remoteHosts"),
-		visible: ({ developerMode }) => developerMode,
 		render: (_t, titleHidden) => <RemoteHostsSettings titleHidden={titleHidden} />,
 	},
 	{
@@ -105,23 +127,21 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Smartphone,
 		label: (t) => t("settings.mobile"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")}>
-				<div className="rounded-md bg-[var(--color-bg-settings-row)] pb-4 pt-0">
+			<>
+				<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")} grouped>
+					{/* Its own card rows: the pairing content row, then Keep awake. */}
 					<ConnectMobileContent active />
-					<MobileDevicesSection />
-				</div>
-			</SettingsSection>
+				</SettingsSection>
+				{/* Its own section (and card) when devices are paired; renders nothing otherwise. */}
+				<MobileDevicesSection />
+			</>
 		),
 	},
 	{
 		id: "shortcuts",
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
-		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.keyboardShortcuts")}>
-				<SettingsContentPanel><KeyboardShortcutsContent active /></SettingsContentPanel>
-			</SettingsSection>
-		),
+		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active bounded={Boolean(singlePage)} titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "diagnostics",
@@ -146,8 +166,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CircleHelp,
 		label: (t) => t("settings.help"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")}>
-				<SettingsContentPanel><ReportProblemContent active /></SettingsContentPanel>
+			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")} grouped>
+				<div className="settings-content-row">
+					<ReportProblemContent active />
+				</div>
 			</SettingsSection>
 		),
 	},

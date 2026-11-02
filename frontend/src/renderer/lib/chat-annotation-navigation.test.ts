@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "./chat-annotation-navigation";
+import { annotationTextMatches, annotationTextRange, highlightChatAnnotation, renderedSnippetText } from "./chat-annotation-navigation";
 
 describe("annotation navigation highlights", () => {
 	it("matches across formatted spans and collapsed whitespace", () => {
@@ -22,5 +22,19 @@ describe("annotation navigation highlights", () => {
 		expect(window.getSelection()?.rangeCount).toBe(0);
 		cleanup();
 		expect(body).not.toHaveClass("chat-annotation-target");
+	});
+});
+
+describe("renderedSnippetText", () => {
+	it("drops inline Markdown so a raw snippet line matches the rendered message", () => {
+		expect(renderedSnippetText("- Run **`npm test`** and see [the docs](https://example.com)")).toBe("Run npm test and see the docs");
+		expect(renderedSnippetText("## Heading  text")).toBe("Heading text");
+		expect(renderedSnippetText("> quoted *line*")).toBe("quoted line");
+		expect(renderedSnippetText("2. second step")).toBe("second step");
+	});
+	it("keeps the rendered text findable in the transcript", () => {
+		const body = document.createElement("div");
+		body.innerHTML = "<ul><li>Run <strong><code>npm test</code></strong> and see <a>the docs</a></li></ul>";
+		expect(annotationTextRange(body, renderedSnippetText("- Run **`npm test`** and see [the docs](https://example.com)"))).toBeDefined();
 	});
 });

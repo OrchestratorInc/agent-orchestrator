@@ -32,12 +32,10 @@ type RuntimeFacts struct {
 // SessionStart, allowing lifecycle to persist the native resume handle without
 // inventing an activity transition.
 //
-// Event/ToolName/ToolUseID are optional correlation facts: the AO hook
-// sub-command that produced the state and, for tool-use hooks, the native
-// tool call it concerns. Lifecycle uses them to clear a stale blocked state
-// only when the specific approved tool finishes. A signal without an Event
-// (old CLIs, adapters with no tool identity) keeps plain last-writer-wins
-// state semantics.
+// Event/ToolName/ToolUseID are optional correlation facts used by lifecycle's
+// tool-flight reducer. AgentSessionID is optional native metadata discovered by
+// a hook and persisted for later restore. A signal without these fields keeps
+// plain state-only semantics.
 type ActivitySignal struct {
 	Valid     bool
 	State     domain.ActivityState
@@ -63,6 +61,11 @@ type ActivitySignal struct {
 	// and internal <ao-...> coordination turns are filtered by the hook client.
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	// FinalAssistantMessage and TurnUserRequest are a main turn's final message
+	// and request as the agent's hooks reported them. They only feed the terminal
+	// turn history and are never a replay checkpoint, so every agent may send them.
+	FinalAssistantMessage string
+	TurnUserRequest       string
 	// ConversationCheckpointOrigin distinguishes real human turns from AO's
 	// own coordination. Lifecycle persists coordination provenance across the
 	// prompt-submit/Stop boundary; an empty value is an older hook client.
@@ -80,6 +83,18 @@ type ActivitySignal struct {
 	// LaunchID is set by AO's process supervisor. Lifecycle rejects a signal
 	// from an older process generation of the same session.
 	LaunchID string
+	// NativeEntrypoint is the provider's own process-kind marker reported by
+	// the hook (Claude's CLAUDE_CODE_ENTRYPOINT). A side `claude -p` run in the
+	// session worktree inherits AO_SESSION_ID and the current LaunchID, so the
+	// generation fence cannot tell it apart from the interactive TUI process AO
+	// launched; this field can. Empty means an older hook client or a provider
+	// that exposes no such marker.
+	NativeEntrypoint string
+	// ProcessID is the pid of the provider process that ran the hook
+	// (Claude's CLAUDE_PID), zero when unknown. A Claude process the agent or
+	// the user starts under the session inherits its env and launch id; the
+	// hook process gate (service/hookprocess) tells it from the terminal's.
+	ProcessID int
 	// ControllerGeneration is the required ownership fence for a runtime-less
 	// Chat controller. It is intentionally internal (provider events never call
 	// the public hook endpoint): lifecycle rejects a Chat signal without the

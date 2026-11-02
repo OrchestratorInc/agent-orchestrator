@@ -78,7 +78,7 @@ export function ResumeAgentControl({
 				{t("inspector.resumeAgent")}
 			</Button>
 			{error ? (
-				<p className="mt-2 text-2xs leading-normal text-error" role="status">
+				<p className="mt-2 text-xs leading-normal text-error" role="status">
 					{error}
 				</p>
 			) : null}

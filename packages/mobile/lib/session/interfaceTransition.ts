@@ -46,7 +46,7 @@ export function mobileInterfaceTransitionIsActive(transition?: InterfaceTransiti
 
 export function mobileInterfaceTransitionRecoveryMessage(transition?: InterfaceTransition): string | undefined {
 	if (!mobileInterfaceTransitionIsActive(transition) || transition?.errorCode !== "TARGET_STOP_UNCONFIRMED") return undefined;
-	return transition.errorDetail || "AO could not confirm the target controller stopped. Restart AO on your computer to retry recovery. This session remains blocked; other sessions can still be used.";
+	return transition.errorDetail || "Orchestrator could not confirm the target controller stopped. Restart Orchestrator on your computer to retry recovery. This session remains blocked; other sessions can still be used.";
 }
 
 export function mobileInterfaceTransitionIsBusy(transition?: InterfaceTransition): boolean {
@@ -191,32 +191,32 @@ export function interfaceSwitchAlert(
 	if (recheck.outcome === "not-attempted") {
 		return {
 			title: "Not connected yet",
-			message: "AO has not finished loading this phone's connection settings. Try again in a moment.",
+			message: "Orchestrator has not finished loading this phone's connection settings. Try again in a moment.",
 		};
 	}
 	if (recheck.outcome === "failed") {
 		switch (classifyConnectionFailure(recheck.status)) {
 			case "auth":
 				return {
-					title: "AO rejected this phone",
+					title: "Orchestrator rejected this phone",
 					message:
-						"The connection password has changed, so this phone can no longer talk to AO. Open Settings \u2192 Connect Mobile on your computer and scan the code again.",
+						"The connection password has changed, so this phone can no longer talk to Orchestrator. Open Settings \u2192 Connect Mobile on your computer and scan the code again.",
 				};
 			case "rate-limited":
 				return {
-					title: "AO is not accepting requests",
+					title: "Orchestrator is not accepting requests",
 					message:
-						"AO has paused this phone for a minute. That usually means the connection password changed \u2014 re-scan the code in Settings \u2192 Connect Mobile on your computer.",
+						"Orchestrator has paused this phone for a minute. That usually means the connection password changed \u2014 re-scan the code in Settings \u2192 Connect Mobile on your computer.",
 				};
 			case "server-error":
 				return {
-					title: "AO could not answer",
-					message: `AO was reached but could not say whether this session can switch to Chat. ${recheck.error}`,
+					title: "Orchestrator could not answer",
+					message: `Orchestrator was reached but could not say whether this session can switch to Chat. ${recheck.error}`,
 				};
 			default:
 				return {
-					title: "Couldn't reach AO",
-					message: `This phone could not reach AO to check whether this session can switch to Chat. ${recheck.error}`,
+					title: "Couldn't reach Orchestrator",
+					message: `This phone could not reach Orchestrator to check whether this session can switch to Chat. ${recheck.error}`,
 				};
 		}
 	}
