@@ -39,8 +39,8 @@ func TestImportedConversationImportsAgainAfterTermination(t *testing.T) {
 }
 
 func TestImportedSessionPreservesDeletedNumberFloor(t *testing.T) {
-	for _, projectID := range []domain.ProjectID{"floor", ""} {
-		name := string(projectID)
+	for _, projectID := range []string{"floor", ""} {
+		name := projectID
 		if name == "" {
 			name = "standalone"
 		}
