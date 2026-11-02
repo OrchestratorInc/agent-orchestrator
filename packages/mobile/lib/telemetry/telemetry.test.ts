@@ -168,6 +168,18 @@ describe("createMobileTelemetry", () => {
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual([]);
 			expect(captures[0].props?.$process_person_profile).toBe(false);
+			expect(captures[0].props).not.toHaveProperty("is_signed_in");
+		});
+
+		it("reports a known desktop sign-out without guessing unresolved sign-in state", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("is_signed_in");
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", isSignedIn: false, optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toHaveProperty("is_signed_in", false);
 		});
 
 		it("restores paired attribution after an incomplete identity refresh", () => {

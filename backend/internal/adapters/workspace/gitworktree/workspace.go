@@ -25,9 +25,10 @@ const (
 )
 
 // ErrUnsafePath is returned when a resolved worktree path escapes the managed
-// root (path traversal guard).
+// root (path traversal guard). It is an adapter-local alias of
+// ports.ErrWorkspaceUnsafePath, so cleanup can report it by name.
 var (
-	ErrUnsafePath = errors.New("gitworktree: unsafe workspace path")
+	ErrUnsafePath = ports.ErrWorkspaceUnsafePath
 )
 
 // teardownLocks serializes the repo-touching git worktree teardown sequences
@@ -947,6 +948,11 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 		return reclaim, err
 	}
 	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
+	// The lift reads the registration's lock from porcelain output, which git
+	// never translates, rather than matching the remove error's text.
+	if removeErr != nil && w.liftStaleAddLock(ctx, repo, path) {
+		_, removeErr = w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
+	}
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return reclaim, fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
@@ -954,10 +960,10 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err != nil {
 		return reclaim, err
 	}
-	if _, ok := findWorktree(records, path); ok {
+	if rec, ok := findWorktree(records, path); ok {
 		if removeErr != nil {
-			if isLockedWorktreeRemoveError(removeErr) {
-				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: path is still registered after git worktree prune (worktree remove: %w)", path, removeErr)
+			if rec.Locked || isLockedWorktreeRemoveError(removeErr) {
+				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: %w (worktree remove: %w)", path, ports.ErrWorkspaceLocked, removeErr)
 			}
 			// Distinguish the dirty-worktree refusal (uncommitted agent work)
 			// from other registration leftovers (e.g. a locked worktree) so the
@@ -1966,6 +1972,31 @@ func isMissingRegisteredWorktreeError(err error) bool {
 	return strings.Contains(err.Error(), "is a missing but already registered worktree")
 }
 
+// gitAddLockReason is the lock git itself writes while `git worktree add`
+// checks the tree out, and removes once it finishes.
+const gitAddLockReason = "initializing"
+
+// liftStaleAddLock unlocks a registration still carrying git's own add-time
+// lock. Destroy only runs on a workspace AO has retired, so no add is still in
+// flight there: the lock outlived a `git worktree add` that died midway, and it
+// would otherwise block every later removal. Only the lock is lifted; removal
+// stays the ordinary non-forced one, so uncommitted work is still refused. A
+// lock with any other reason is someone's deliberate "keep" and is left alone.
+// Reports whether the lock was lifted; when it was not, removal reports the
+// lock as before.
+func (w *Workspace) liftStaleAddLock(ctx context.Context, repo, path string) bool {
+	records, err := w.listRecords(ctx, repo)
+	if err != nil {
+		return false
+	}
+	rec, ok := findWorktree(records, path)
+	if !ok || !rec.Locked || rec.LockReason != gitAddLockReason {
+		return false
+	}
+	_, err = w.run(ctx, w.binary, "-C", repo, "worktree", "unlock", path)
+	return err == nil
+}
+
 func isLockedWorktreeRemoveError(err error) bool {
 	return strings.Contains(err.Error(), "cannot remove a locked working tree")
 }
@@ -2459,12 +2490,61 @@ func movePathAside(path, suffix string) (string, error) {
 
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd.Env = os.Environ()
+	if readsGitMessages(args) {
+		cmd.Env = untranslatedGitEnv(cmd.Env)
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, commandError{args: append([]string{binary}, args...), output: string(out), err: err}
 	}
 	return out, nil
+}
+
+// readsGitMessages reports a git command whose messages this adapter reads as
+// text, so it runs untranslated: `git worktree` (remove's and add's errors,
+// and the "initializing" lock reason add writes) and `git status` (the "not a
+// git repository" probe). Every other command, and any hook it runs, keeps the
+// user's locale.
+func readsGitMessages(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-C" || args[i] == "-c" {
+			i++
+			continue
+		}
+		return args[i] == "worktree" || args[i] == "status"
+	}
+	return false
+}
+
+// untranslatedGitEnv switches only the message language to English, so
+// sorting, dates and character type stay the user's, also for the
+// post-checkout hook `git worktree add` runs. With LC_MESSAGES=C gettext
+// ignores LANGUAGE. LC_ALL would override it, so its value moves to LANG,
+// where it still sets every other category; the LC_* values it overrode go
+// with it.
+func untranslatedGitEnv(environ []string) []string {
+	all := ""
+	for _, kv := range environ {
+		if val, ok := strings.CutPrefix(kv, "LC_ALL="); ok {
+			all = val
+		}
+	}
+	out := make([]string, 0, len(environ)+2)
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		switch {
+		case key == "LC_ALL" || key == "LC_MESSAGES":
+		case all != "" && (key == "LANG" || strings.HasPrefix(key, "LC_")):
+		default:
+			out = append(out, kv)
+		}
+	}
+	if all != "" {
+		out = append(out, "LANG="+all)
+	}
+	return append(out, "LC_MESSAGES=C")
 }
 
 type commandError struct {
