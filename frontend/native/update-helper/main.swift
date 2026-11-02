@@ -19,10 +19,12 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     var timer: Timer?
     var displayedStage: UpdateStage?
     var windowPresented = false
-    let title = NSTextField(labelWithString: "")
-    let detail = NSTextField(wrappingLabelWithString: "")
-    let spinner = NSProgressIndicator()
-    let recovery = NSStackView()
+    // Views are created only once AppKit starts, which happens only when a
+    // stage needs the window (see the bottom of this file).
+    lazy var title = NSTextField(labelWithString: "")
+    lazy var detail = NSTextField(wrappingLabelWithString: "")
+    lazy var spinner = NSProgressIndicator()
+    lazy var recovery = NSStackView()
 
     init(attempt: URL, request: UpdateRequest) {
         self.attempt = attempt
@@ -66,15 +68,6 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
             stack.centerYAnchor.constraint(equalTo: window.contentView!.centerYAnchor),
         ])
         refresh()
-        // READY is what the parent waits for before letting Squirrel quit AO.
-        // It is the process handshake (this stdout line), not any visible UI, so
-        // the window can stay hidden here and still hand off safely. On the
-        // healthy close-and-reopen path the window is never presented; it comes
-        // up only on the stall/failure paths (the .recovery/.reopened stages in
-        // refresh) that actually need the user's attention.
-        DispatchQueue.main.async {
-            FileHandle.standardOutput.write(Data("READY\n".utf8))
-        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
@@ -117,12 +110,16 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func refresh() {
+    func currentStage() -> UpdateStage {
         let completion = readJSON(UpdateCompletion.self, at: attempt.appendingPathComponent("complete.json"))
         let failure = readJSON(UpdateFailure.self, at: attempt.appendingPathComponent("error.json"))
         let now = Date().timeIntervalSince1970 * 1000
-        let next = state.stage(now: now,
-                               parentAlive: processAlive(request.parentPID), completion: completion, failure: failure?.message, legacy: legacyEvidence(now: now))
+        return state.stage(now: now,
+                           parentAlive: processAlive(request.parentPID), completion: completion, failure: failure?.message, legacy: legacyEvidence(now: now))
+    }
+
+    func refresh() {
+        let next = currentStage()
         if next == .complete || next == .legacyComplete {
             cleanup()
             NSApp.terminate(nil)
@@ -198,5 +195,23 @@ guard attempt == attempt.resolvingSymlinksInPath(),
       executable == attempt.appendingPathComponent("ao-update-progress"),
       let request = readJSON(UpdateRequest.self, at: attempt.appendingPathComponent("request.json")), request.valid else { exit(2) }
 let controller = ProgressController(attempt: attempt, request: request)
+// READY is the handshake the parent waits for before it lets Squirrel quit AO.
+FileHandle.standardOutput.write(Data("READY\n".utf8))
+// Stay a plain process, not an AppKit app, until a stage needs the window.
+// macOS files an app that AO launches under AO's own bundle identifier, and
+// Squirrel's ShipIt cancels the install while any app with that identifier is
+// running ("App Still Running Error"). Starting NSApplication here made this
+// helper cancel the very update it was reporting on (#6911). The window is
+// only needed on the stall and failure paths, after ShipIt has already run or
+// while AO is still open.
+while true {
+    let next = controller.currentStage()
+    if next == .complete || next == .legacyComplete {
+        controller.cleanup()
+        exit(0)
+    }
+    if next.presentsWindow { break }
+    Thread.sleep(forTimeInterval: 0.5)
+}
 NSApplication.shared.delegate = controller
 NSApplication.shared.run()
