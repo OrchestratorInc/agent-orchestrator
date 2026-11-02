@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { useAgentAccountActions, useAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useUsageLimitWindows, useUsageReport } from "../../hooks/useUsageReport";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
-import { hidesShellTopbar } from "../../lib/platform";
 import { formatRange } from "../../lib/usage-format";
 import type { UsageUnit } from "../../lib/usage-report";
 import { cn } from "../../lib/utils";
@@ -13,7 +12,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "../settings/harness/harness-ui";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
-import { topbarProjectLabelClass } from "../TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "../PageTopbar";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
@@ -44,7 +43,6 @@ function useNow(intervalMs: number): Date {
 /** Estimated cost, token use and subscription limits for AO's agent sessions. */
 export function UsageView() {
 	const { t, i18n } = useTranslation();
-	const showPageTitle = hidesShellTopbar();
 	const [chosenTab, setTab] = useState<UsageTab>("spend");
 	// The experimental Windows tab, and the readings behind it, exist only in Developer Mode.
 	const developerMode = useUiStore((state) => state.developerMode);
@@ -94,61 +92,60 @@ export function UsageView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
-				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <Gauge className="size-icon-md" aria-hidden="true" /> : null}
-					{t("usage.title")}
-				</h1>
-				<div className="workspace-topbar-actions flex min-w-0 shrink-0 items-center gap-2">
-					{tab === "spend" && projects.length > 0 ? (
-						<SettingsOptionMenu
-							aria-label={t("usage.projectFilter")}
-							value={projectFilter}
-							options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...projects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
-							onChange={setProjectFilter}
-							menuAlign="end"
-							menuClassName="max-h-72"
-							triggerClassName="h-(--size-control-md)! text-xs!"
-						/>
-					) : null}
-					{tab === "spend" ? (
-						<div className="flex items-center gap-0.5">
-							<Button variant="ghost" size="icon" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)} className="size-8">
-								<ChevronLeft aria-hidden="true" className="size-icon-sm" />
-							</Button>
+			<PageTopbar
+				lead={<PageTopbarTitle as="h1" icon={<Gauge className="size-icon-md" aria-hidden="true" />}>{t("usage.title")}</PageTopbarTitle>}
+				actions={
+					<>
+						{tab === "spend" && projects.length > 0 ? (
 							<SettingsOptionMenu
-								aria-label={t("usage.period")}
-								value={String(days)}
-								options={PERIODS.map((period) => ({ value: String(period.days), label: t(period.label) }))}
-								onChange={(value) => {
-									setDays(Number(value));
-									setOffset(0);
-								}}
+								aria-label={t("usage.projectFilter")}
+								value={projectFilter}
+								options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...projects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
+								onChange={setProjectFilter}
 								menuAlign="end"
+								menuClassName="max-h-72"
 								triggerClassName="h-(--size-control-md)! text-xs!"
-								renderTrigger={(selected) => (
-									<span className="min-w-0 truncate">
-										{/* An earlier period is named by its dates alone: "Last 7 days" would no longer be true. */}
-										{offset === 0 || !range ? selected?.label : null}
-										{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
-									</span>
-								)}
 							/>
-							<Button variant="ghost" size="icon" aria-label={t("usage.period.next")} disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))} className="size-8">
-								<ChevronRight aria-hidden="true" className="size-icon-sm" />
-							</Button>
-						</div>
-					) : null}
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button variant="ghost" size="icon" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()} className="size-8">
-								<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin")} />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>{t("usage.refresh")}</TooltipContent>
-					</Tooltip>
-				</div>
-			</header>
+						) : null}
+						{tab === "spend" ? (
+							<div className="flex items-center gap-0.5">
+								<Button variant="ghost" size="icon" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)} className="size-8">
+									<ChevronLeft aria-hidden="true" className="size-icon-sm" />
+								</Button>
+								<SettingsOptionMenu
+									aria-label={t("usage.period")}
+									value={String(days)}
+									options={PERIODS.map((period) => ({ value: String(period.days), label: t(period.label) }))}
+									onChange={(value) => {
+										setDays(Number(value));
+										setOffset(0);
+									}}
+									menuAlign="end"
+									triggerClassName="h-(--size-control-md)! text-xs!"
+									renderTrigger={(selected) => (
+										<span className="min-w-0 truncate">
+											{/* An earlier period is named by its dates alone: "Last 7 days" would no longer be true. */}
+											{offset === 0 || !range ? selected?.label : null}
+											{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
+										</span>
+									)}
+								/>
+								<Button variant="ghost" size="icon" aria-label={t("usage.period.next")} disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))} className="size-8">
+									<ChevronRight aria-hidden="true" className="size-icon-sm" />
+								</Button>
+							</div>
+						) : null}
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button variant="ghost" size="icon" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()} className="size-8">
+									<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin")} />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>{t("usage.refresh")}</TooltipContent>
+						</Tooltip>
+					</>
+				}
+			/>
 			{/* The page tabs stay put while the view under them scrolls. */}
 			<div className="shrink-0">
 				<div className="mx-auto w-full max-w-6xl px-6">

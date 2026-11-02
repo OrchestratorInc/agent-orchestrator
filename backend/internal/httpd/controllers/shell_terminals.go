@@ -72,6 +72,8 @@ func (c *ShellTerminalsController) open(w http.ResponseWriter, r *http.Request) 
 		Shell:         req.Shell,
 		StartOnAttach: req.StartOnAttach,
 		Title:         req.Title,
+		Cols:          req.Cols,
+		Rows:          req.Rows,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)

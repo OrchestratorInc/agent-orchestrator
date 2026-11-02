@@ -5,6 +5,7 @@ import type { ConversationMessage, ConversationSnapshot } from "../types/convers
 
 const inactiveQueryKey = ["conversation-prompt-suggestion", "inactive"] as const;
 const busyError = new Error("Prompt suggestion capacity is busy");
+const staleError = new Error("Prompt suggestion controller state changed");
 // Navigation and query GC must not undo Escape. Bound this to recent contexts and
 // let the QueryClient's lifetime own it, rather than retaining every past turn.
 const dismissedContextsByClient = new WeakMap<QueryClient, Set<string>>();
@@ -65,17 +66,18 @@ export function useConversationPromptSuggestion(
 		retry: (attempt, error) => error === busyError && attempt < 2,
 		retryDelay: 1000,
 		queryFn: async ({ signal }) => {
-			if (!turnId) return null;
+			if (!turnId || signal.aborted) return null;
 			try {
-				const { data, error } = await clientForSessionHost(hostId).POST(
+				const { data, error, response } = await clientForSessionHost(hostId).POST(
 					"/api/v1/sessions/{sessionId}/conversation/prompt-suggestion",
 					{ params: { path: { sessionId } }, body: { turnId }, signal },
 				);
 				if (error?.code === "CHAT_PROMPT_SUGGESTION_BUSY") throw busyError;
+				if (response?.status === 409) throw staleError;
 				if (error || data?.turnId !== turnId || !data.prompt.trim()) return null;
 				return { id, text: data.prompt.trim() };
 			} catch (error) {
-				if (signal.aborted || error === busyError) throw error;
+				if (signal.aborted || error === busyError || error === staleError) throw error;
 				// Successful omissions are cached like hints; capacity errors stay transient.
 				return null;
 			}

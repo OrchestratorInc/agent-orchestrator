@@ -20,7 +20,7 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { topbarDragStyle } from "./ShellTopbar";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -426,8 +426,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
 /**
  * Settings page rendered inside the center panel, in place of the routed page:
- * no top bar, just one centered, scrolling content column on the normal page
- * background, headed by the page's sentence-case title.
+ * shared page topbar above a centered, scrolling content column.
  */
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
@@ -436,16 +435,15 @@ export function SettingsPane() {
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
-			  * window-drag region while content scrolls up under it to the panel edge.
-			  * The body's top padding clears it (and the fixed titlebar controls that
-			  * sit over the panel when the sidebar is closed) at rest. Controls that
-			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
-			  * pointer events (the native drag region does not need them), so a click
-			  * there reaches the control under it, and it stops short of the scrollbar
-			  * so the top of the track can still be grabbed. */}
-			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
+		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			<PageTopbar
+				lead={
+					<PageTopbarTitle as="h1">
+						{layer.title}
+						{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
+					</PageTopbarTitle>
+				}
+			/>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
 				// `relative` makes the scroller the containing block for absolutely
@@ -458,11 +456,7 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
-						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
-							{entry.title}
-							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
-						</h1>
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6">
 						{entry.body()}
 					</div>
 				</div>

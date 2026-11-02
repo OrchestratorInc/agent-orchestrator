@@ -724,7 +724,7 @@ WHERE id = ?;
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
 WHERE id = ?;
 
 -- A streamed assistant item may not receive item/completed when steering causes
@@ -1149,6 +1149,7 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -1296,9 +1297,9 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
+    delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: IncrementUsageMessageSummary :exec
 -- Adds one human message: a direct Chat message (pending_count), a steer, or
@@ -1402,6 +1403,8 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_messages.sequence;
 
+-- Budget IDs and byte lengths before loading payload columns. A single
+-- oversized row remains readable so every page cursor can advance.
 -- name: SelectConversationMessagesPage :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -1417,8 +1420,10 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_messages.* FROM conversation_messages
+), page_candidates AS (
+SELECT conversation_messages.id, conversation_messages.sequence,
+       length(CAST(conversation_messages.text AS BLOB)) + length(CAST(conversation_messages.delivery_content_json AS BLOB)) AS row_bytes
+FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
   AND conversation_messages.sequence < sqlc.arg(before_sequence)
@@ -1433,7 +1438,17 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
         )
   ))
 ORDER BY conversation_messages.sequence DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_messages.* FROM conversation_messages
+JOIN page_budget AS budget ON conversation_messages.id = budget.id
+WHERE budget.total_bytes <= CAST(sqlc.arg(page_bytes) AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC;
 
 -- name: InsertConversationActivity :exec
 INSERT INTO conversation_activities (
@@ -1645,6 +1660,8 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_activities.sequence;
 
+-- Budget IDs and byte lengths before loading payload columns. A single
+-- oversized row remains readable so every page cursor can advance.
 -- name: SelectConversationActivitiesPage :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -1660,8 +1677,10 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_activities.* FROM conversation_activities
+), page_candidates AS (
+SELECT conversation_activities.id, conversation_activities.sequence,
+       length(CAST(conversation_activities.summary AS BLOB)) + length(CAST(conversation_activities.detail_json AS BLOB)) + length(CAST(conversation_activities.command_output AS BLOB)) + length(CAST(conversation_activities.streamed_text AS BLOB)) AS row_bytes
+FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND conversation_activities.sequence < sqlc.arg(before_sequence)
@@ -1675,7 +1694,17 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
         )
   ))
 ORDER BY conversation_activities.sequence DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_activities.* FROM conversation_activities
+JOIN page_budget AS budget ON conversation_activities.id = budget.id
+WHERE budget.total_bytes <= CAST(sqlc.arg(page_bytes) AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC;
 
 -- Push a provider thread title into the session label, without ever overwriting a
 -- name a person chose.
@@ -1993,6 +2022,14 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
   AND t.started_at > sqlc.arg(after_at)
   AND t.completed_at > sqlc.arg(after_at)
 ORDER BY t.completed_at DESC LIMIT 1;
+
+-- Session conversations still waiting for the user to sign in again, with the
+-- harness each session runs, so a confirmed login can be matched to them.
+-- name: SelectConversationsAwaitingLogin :many
+SELECT conversations.id AS conversation_id, sessions.id AS session_id, sessions.harness
+FROM conversations
+JOIN sessions ON sessions.id = conversations.current_session_id
+WHERE json_extract(conversations.account_json, '$.reauthRequiredAt') IS NOT NULL;
 
 
 -- Queued work stays held behind a failed source until its retry succeeds.
