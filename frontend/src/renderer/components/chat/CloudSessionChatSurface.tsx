@@ -245,6 +245,10 @@ export function mergeCloudEvents(existing: CloudCpClientEvent[], incoming: Cloud
 // How long the stream gathers events before the chat redraws: one frame's
 // worth, so a burst of deltas is one snapshot rebuild, not one per token.
 const STREAM_FLUSH_MS = 32;
+/** How often the chat's events are read while its stream is up: a safety net. */
+export const CHAT_EVENTS_SAFETY_POLL_MS = 10_000;
+/** How often they are read while the stream is down or still opening. */
+export const CHAT_EVENTS_FALLBACK_POLL_MS = 1_000;
 const STREAM_RECONNECT_MIN_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
 
@@ -253,7 +257,8 @@ const STREAM_RECONNECT_MAX_MS = 15_000;
  * plane commits them, over the session's event stream, so a reply streams in
  * as it is written instead of a second at a time. It resumes after the newest
  * event already held and reconnects with backoff. Returns whether the stream
- * is open; while it is not, the chat keeps polling.
+ * is up, from the moment it opens: an idle chat receives no event to prove
+ * it, and the chat polls quickly only while the stream is down.
  */
 function useCloudChatEventStream(orgId: string | undefined, sessionId: string, enabled: boolean): boolean {
 	const { baseUrl } = useCloudCp();
@@ -286,6 +291,9 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 			let received = false;
 			await subscribeSessionEventsBridged({
 				baseUrl, orgId, sessionId, after: loaded.at(-1)?.sequence ?? 0, signal: controller.signal,
+				// The stream is up once it opens, before any event: an idle chat
+				// would otherwise poll every second until something happened.
+				onOpen: () => setOpen(true),
 				onEvent: (event) => {
 					if (!received) {
 						received = true;
@@ -1176,8 +1184,9 @@ export function CloudSessionChatSurface({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
 		enabled: Boolean(cloud && ready),
 		// The event stream delivers events as they are committed; the poll only
-		// catches what a dropped or not-yet-open stream missed.
-		refetchInterval: streaming ? 10_000 : 1_000,
+		// catches what a dropped or not-yet-open stream missed. An open stream
+		// counts from the moment it opens, so an idle chat slows down at once.
+		refetchInterval: streaming ? CHAT_EVENTS_SAFETY_POLL_MS : CHAT_EVENTS_FALLBACK_POLL_MS,
 		queryFn: async () => {
 			if (!cloud) return [] as CloudCpClientEvent[];
 			const key = ["cloud-chat-events", cloud.orgId, session.id];

@@ -38,6 +38,8 @@ export interface SubscribeSessionEventsBridgedOptions {
 	after?: number;
 	/** Invoked once per parsed event, in stream order. */
 	onEvent: (event: CloudCpClientEvent) => void;
+	/** Invoked once the stream is open (the control plane accepted it), before any frame. */
+	onOpen?: () => void;
 	/** Invoked on setup or mid-stream failure. Aborts via `signal` are silent. */
 	onError?: (error: CloudCpError) => void;
 	/** Aborting closes the stream and resolves the subscription promise. */
@@ -77,7 +79,7 @@ function errorFromOpenFailure(error: unknown): CloudCpError {
  * callers cannot leak unhandled rejections.
  */
 export async function subscribeSessionEventsBridged(options: SubscribeSessionEventsBridgedOptions): Promise<void> {
-	const { baseUrl, orgId, sessionId, after, onEvent, onError, signal } = options;
+	const { baseUrl, orgId, sessionId, after, onEvent, onOpen, onError, signal } = options;
 	const bridge = options.bridge ?? aoBridge.cloudCp;
 	if (isAborted(signal)) return;
 
@@ -132,6 +134,7 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 			fail(new CloudCpError(event.message, { status: 0 }));
 			finish();
 		});
+		onOpen?.();
 
 		function finish(): void {
 			if (settled) return;
