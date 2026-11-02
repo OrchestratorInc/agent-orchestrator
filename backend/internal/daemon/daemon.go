@@ -615,6 +615,27 @@ func Run(buildVersion string) error {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	// A chat refused its credentials keeps asking for a sign-in until a reading
+	// of its own account finds the login working again, however it came back.
+	agentAccountSvc.SetLoginConfirmed(func(account domain.AgentAccount, at time.Time) {
+		go func() {
+			defer sentryobs.RecoverBackground()
+			waiting, err := store.ConversationsAwaitingLogin(ctx)
+			if err != nil {
+				log.Warn("list chats awaiting sign-in", "error", err)
+				return
+			}
+			for _, conversation := range waiting {
+				id, err := agentAccountSvc.SessionAccountID(ctx, conversation.SessionID, conversation.Harness)
+				if err != nil || id != account.ID {
+					continue
+				}
+				if _, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC()); err != nil {
+					log.Warn("clear chat sign-in demand", "conversation", conversation.ConversationID, "error", err)
+				}
+			}
+		}()
+	})
 	if agentSvc != nil {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {

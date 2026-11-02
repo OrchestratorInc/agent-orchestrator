@@ -3130,14 +3130,16 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc        *chatsvc.Service
-	st         *sqlite.Store
-	conv       *fakeConversation
-	ctrl       *chatsvc.Controller
-	activity   *recordingActivity
-	hostStops  atomic.Int32
-	renders    *attachmentstore.Store
-	rendersDir string
+	svc       *chatsvc.Service
+	st        *sqlite.Store
+	conv      *fakeConversation
+	ctrl      *chatsvc.Controller
+	activity  *recordingActivity
+	hostStops atomic.Int32
+	// accountRechecks counts the controller asking to read the session's account again.
+	accountRechecks atomic.Int32
+	renders         *attachmentstore.Store
+	rendersDir      string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3241,6 +3243,9 @@ func newHarnessWithConversationAndStoreForHarness(
 		Drivers:  fakeRegistry{driver: fakeDriver{conv: conv}},
 		Activity: h.activity,
 		Log:      slog.New(slog.DiscardHandler),
+		OnAccountChanged: func(domain.SessionID, string, domain.AgentHarness) {
+			h.accountRechecks.Add(1)
+		},
 		NewID: func() string {
 			counterMu.Lock()
 			defer counterMu.Unlock()
