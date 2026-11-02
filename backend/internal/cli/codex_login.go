@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -101,12 +102,50 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 	}
 
 	if err := c.deps.RunInteractiveCommand(ctx, codex, args, childInput, out, stderr); err != nil {
+		if reason := codexStartFailure(ctx, codex); reason != "" {
+			return fmt.Errorf("codex login failed: the Codex CLI at %s could not start (%s). Reinstall or update Codex (for an npm install: npm install -g @openai/codex@latest), then try again", codex, reason)
+		}
 		return fmt.Errorf("codex login failed: %w", err)
 	}
 	if _, err := fmt.Fprintf(out, "\n%s\n", style.success("Codex sign-in complete.")); err != nil {
 		return err
 	}
 	return nil
+}
+
+const codexStartProbeTimeout = 15 * time.Second
+
+// codexStartFailure returns why codex cannot even print its version, or ""
+// when it can. That separates a login Codex rejected from an install that
+// cannot start, such as an npm Codex whose native binary is missing: Node then
+// prints a spawn ENOENT or "Missing optional dependency" trace with no next step.
+func codexStartFailure(ctx context.Context, codex string) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, codexStartProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, codex, "--version") //nolint:gosec,forbidigo // same resolved binary and env as the login child.
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, codex)
+	output, err := cmd.CombinedOutput()
+	if err == nil || probeCtx.Err() != nil {
+		return ""
+	}
+	// Prefer Node's "Error: ..." line; newer launchers print a source location first.
+	first := ""
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Error") {
+			return line
+		}
+		if first == "" {
+			first = line
+		}
+	}
+	if first != "" {
+		return first
+	}
+	return err.Error()
 }
 
 func resolveLoginExecutable(explicit, name string, lookPath func(string) (string, error)) (string, error) {

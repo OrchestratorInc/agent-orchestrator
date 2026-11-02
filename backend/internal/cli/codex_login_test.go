@@ -169,6 +169,65 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 	}
 }
 
+func TestCodexLoginExplainsCodexInstallThatCannotStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell launcher fixture is Unix-specific")
+	}
+	tests := []struct {
+		name       string
+		launcher   string
+		wantReason string
+	}{
+		{
+			// npm launchers up to 0.132 spawn vendor/<triple>/codex/codex
+			// without checking it exists; Node prints the spawn error.
+			name:       "native binary missing, old launcher",
+			launcher:   "#!/bin/sh\necho \"Error: spawn /x/vendor/aarch64-apple-darwin/codex/codex ENOENT\" >&2\necho '    at ChildProcess._handle.onexit (node:internal/child_process:286:19)' >&2\nexit 1\n",
+			wantReason: "(Error: spawn /x/vendor/aarch64-apple-darwin/codex/codex ENOENT)",
+		},
+		{
+			// 0.133+ launchers throw instead; Node prints the source location first.
+			name:       "native binary missing, new launcher",
+			launcher:   "#!/bin/sh\nprintf 'file:///x/bin/codex.js:123\\n    throw new Error(\\n    ^\\n\\nError: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex: npm install -g @openai/codex@latest\\n' >&2\nexit 1\n",
+			wantReason: "(Error: Missing optional dependency @openai/codex-darwin-arm64.",
+		},
+		{
+			// A working Codex that rejects the login keeps Codex's own failure.
+			name:     "login rejected",
+			launcher: "#!/bin/sh\n[ \"$1\" = --version ] && { echo codex-cli 0.166.0; exit 0; }\nexit 1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := filepath.Join(t.TempDir(), "codex")
+			if err := os.WriteFile(launcher, []byte(tt.launcher), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			deps := Deps{In: strings.NewReader("1\n"), Out: io.Discard, Err: io.Discard}
+			cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+			cmd.SetArgs([]string{"--executable", launcher})
+			cmd.SetIn(deps.In)
+			cmd.SetOut(deps.Out)
+			cmd.SetErr(deps.Err)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("Execute succeeded, want login failure")
+			}
+			msg := err.Error()
+			hinted := strings.Contains(msg, "the Codex CLI at "+launcher+" could not start") && strings.Contains(msg, "Reinstall or update Codex")
+			if tt.wantReason == "" {
+				if hinted {
+					t.Fatalf("error = %q, want Codex's own login failure", msg)
+				}
+				return
+			}
+			if !hinted || !strings.Contains(msg, tt.wantReason) {
+				t.Fatalf("error = %q, want reinstall hint with reason %q", msg, tt.wantReason)
+			}
+		})
+	}
+}
+
 func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm env-node launcher is Unix-specific")
