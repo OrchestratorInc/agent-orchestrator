@@ -1150,7 +1150,7 @@ func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 }
 
 func (c *Collector) reconcilePiPath(ctx context.Context, path string, sessions []domain.SessionRecord) error {
-	resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessPi, path)
+	resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessPi, "", path)
 	if err != nil {
 		return err
 	}
