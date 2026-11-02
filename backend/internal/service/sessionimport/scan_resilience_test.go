@@ -10,16 +10,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// One provider's unreadable store, here a corrupt opencode.db, hides only its
+// One provider's unreadable root, here a file in place of Codex's root, hides only its
 // own chats; the other providers' chats are still offered.
 func TestScanSkipsAProviderWhoseStoreCannotBeRead(t *testing.T) {
-	claudeRoot, openCodeRoot := t.TempDir(), t.TempDir()
+	claudeRoot := t.TempDir()
+	codexRoot := filepath.Join(t.TempDir(), "not-a-directory")
 	writeClaude(t, claudeRoot, "11111111-1111-4111-8111-111111111111", "", "still importable", time.Now())
-	if err := os.WriteFile(filepath.Join(openCodeRoot, openCodeDBFile), []byte("not a database"), 0o600); err != nil {
+	if err := os.WriteFile(codexRoot, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc := New(&importStore{}, "")
-	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claudeRoot, domain.HarnessOpenCode: openCodeRoot}
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessClaudeCode: claudeRoot, domain.HarnessCodex: codexRoot}
 	preview, err := svc.Scan(context.Background())
 	if err != nil {
 		t.Fatalf("one unreadable provider failed the whole scan: %v", err)
