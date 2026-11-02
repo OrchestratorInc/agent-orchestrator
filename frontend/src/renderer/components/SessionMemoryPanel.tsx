@@ -167,6 +167,10 @@ function LegendItem({ dot, label, value }: { dot: string; label: string; value: 
 	);
 }
 
+/** AO's part of the memory bar and its dot: white on dark; grey on light,
+ * where the near-black accent outweighed the free part beside it. */
+const aoFill = "bg-passive dark:bg-accent-strong";
+
 /** One bar: AO against free, and nothing else, with its key under it. The bar
  * is scaled to the two of them, so there is no gap standing in for other apps. */
 function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemoryReading }) {
@@ -177,11 +181,11 @@ function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemor
 		<div className="settings-grouped-rows" data-testid="session-memory-stacked">
 			<div className="settings-content-row flex flex-col gap-3">
 				<div className="flex h-1.5 w-full overflow-hidden rounded-full bg-foreground/[0.06]">
-					<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(app.rssBytes) }} />
+					<div className={cn("h-full transition-[width] duration-500", aoFill)} style={{ width: pct(app.rssBytes) }} />
 					<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
 				</div>
 				<div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs tabular-nums text-settings-muted">
-					<LegendItem dot="bg-accent-strong" label={t("shell.memoryLegendAO")} value={formatMemory(app.rssBytes)} />
+					<LegendItem dot={aoFill} label={t("shell.memoryLegendAO")} value={formatMemory(app.rssBytes)} />
 					<LegendItem dot="bg-success/70" label={t("shell.memoryLegendAvailable")} value={formatMemory(system.availableBytes)} />
 				</div>
 			</div>
@@ -189,14 +193,14 @@ function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemor
 	);
 }
 
-/** The machine's memory: AO against what is free. */
-export function MachineSection({ action }: { action?: ReactNode }) {
+/** The machine's memory: AO against what is free. `titleAction` sits by the heading. */
+export function MachineSection({ titleAction }: { titleAction?: ReactNode }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
 	return (
-		<SettingsSection title={t("shell.memorySectionMachine")} action={action}>
+		<SettingsSection title={t("shell.memorySectionMachine")} titleAction={titleAction}>
 			<div className="flex flex-col">
 				{system && app ? (
 					<MemoryBar app={app} system={system} />
@@ -467,7 +471,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 		<>
 			<div className="flex flex-col gap-(--size-settings-section-gap,1.5rem)" ref={graphs}>
 				<MachineSection
-					action={<CopyReportButton value={() => diagnosticsReport({ app: appMemory?.app, system: appMemory?.system }, rows, t, sessionTitles(workspaces))} />}
+					titleAction={<CopyReportButton value={() => diagnosticsReport({ app: appMemory?.app, system: appMemory?.system }, rows, t, sessionTitles(workspaces))} />}
 				/>
 				<CpuSection />
 			</div>
@@ -1063,24 +1067,29 @@ function useCopy(value: () => string) {
 	return { copied, copy };
 }
 
-/** The Machine section's action: the whole window as text for a bug report. */
+/** An icon beside the Machine heading: the whole window as text for a bug
+ * report. The tooltip names it, and says so once it has copied. */
 function CopyReportButton({ value }: { value: () => string }) {
 	const { t } = useTranslation();
 	const { copied, copy } = useCopy(value);
+	const label = copied ? t("shell.memoryReportCopied") : t("shell.memoryCopyReport");
 	return (
-		<Button
-			aria-label={copied ? t("shell.memoryReportCopied") : t("shell.memoryCopyReport")}
-			// The label, not the hover fill, lines up with the cards' right inset.
-			className="-mr-2.5 text-settings-muted hover:text-settings-label"
-			data-testid="session-memory-copy"
-			onClick={() => void copy()}
-			size="sm"
-			type="button"
-			variant="ghost"
-		>
-			{copied ? <Check aria-hidden="true" className="size-icon-sm text-success" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
-			{t("shell.memoryCopyReport")}
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={label}
+					className="text-settings-muted hover:text-settings-label"
+					data-testid="session-memory-copy"
+					onClick={() => void copy()}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					{copied ? <Check aria-hidden="true" className="size-icon-sm text-success" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="top">{label}</TooltipContent>
+		</Tooltip>
 	);
 }
 

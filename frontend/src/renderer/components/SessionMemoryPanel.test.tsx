@@ -634,7 +634,11 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		await screen.findByTestId("session-memory-table");
-		await userEvent.click(screen.getByRole("button", { name: "Copy report" }));
+		// An icon right after the Machine heading, named by its label and tooltip rather than visible text.
+		const copy = screen.getByRole("button", { name: "Copy report" });
+		expect(screen.getByRole("heading", { name: "Machine" }).nextElementSibling).toBe(copy);
+		expect(copy.textContent).toBe("");
+		await userEvent.click(copy);
 		const report = clipboardMock.mock.calls[0][0] as string;
 		// The machine first, then every session on screen — not just one.
 		expect(report).toContain("Memory   AO 2.0 GB · 20.0 GB free of 32.0 GB");
