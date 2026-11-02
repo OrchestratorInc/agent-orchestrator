@@ -32,6 +32,7 @@ import { cloudModelLabel } from "../../lib/agent-model-choices";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
 import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
@@ -1337,15 +1338,17 @@ export function CloudSessionChatSurface({
 	// the session organization's offering), up to its per-file limit.
 	const offering = useCloudOffering(Boolean(cloud), cloud?.orgId);
 	const attachmentMaxBytes = offering.maxAttachmentBytes;
-	const cloudAttachments = useMemo(() => attachmentMaxBytes === undefined ? undefined : { maxBytes: attachmentMaxBytes }, [attachmentMaxBytes]);
+	// No more than the main process carries in one request, either.
+	const cloudAttachments = useMemo(() => attachmentMaxBytes === undefined
+		? undefined : { maxBytes: Math.min(attachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) }, [attachmentMaxBytes]);
 	// A file attached in the composer is uploaded to the session right away;
 	// the composer lists it by reference until the message is sent.
 	const stageAttachments = useMemo(() => {
 		if (!attachmentSource || !cloudAttachments || readOnly || session.isTerminated === true) return undefined;
-		return (attachments: { mimeType: string; data: string; name?: string }[]) => Promise.all(attachments.map(async (attachment) =>
+		return (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise.all(attachments.map(async (attachment) =>
 			cloudAttachmentReference(await uploadCloudAttachment(attachmentSource.baseUrl, attachmentSource.orgId, attachmentSource.sessionId, {
 				name: attachment.name || "attachment", data: attachment.data,
-			}))));
+			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
 	const send = useMutation({
 		mutationFn: async ({ text, attachmentIds, clientMessageId, display }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {

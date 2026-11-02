@@ -16,9 +16,17 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { getCloudAccessToken } from "./cloud-auth";
 import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-control-plane-url";
+import {
+	CLOUD_CP_BINARY_TIMEOUT,
+	CLOUD_CP_BINARY_TOO_LARGE,
+	DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS,
+	MAX_CLOUD_CP_BINARY_BYTES,
+	MAX_CLOUD_CP_BINARY_TIMEOUT_MS,
+} from "../shared/cloud-binary";
 
 export const CLOUD_CP_REQUEST_CHANNEL = "cloudCp:request";
 export const CLOUD_CP_REQUEST_BINARY_CHANNEL = "cloudCp:requestBinary";
+export const CLOUD_CP_CANCEL_BINARY_CHANNEL = "cloudCp:cancelBinary";
 export const CLOUD_CP_OPEN_STREAM_CHANNEL = "cloudCp:openStream";
 export const CLOUD_CP_CLOSE_STREAM_CHANNEL = "cloudCp:closeStream";
 
@@ -64,6 +72,10 @@ export interface CloudCpProxyBinaryRequestInit {
 	method: string;
 	headers?: Record<string, string>;
 	body?: Uint8Array;
+	/** Names the request for cloudCp:cancelBinary; one the renderer chose. */
+	requestId?: string;
+	/** How long the request may take, at most MAX_CLOUD_CP_BINARY_TIMEOUT_MS. */
+	timeoutMs?: number;
 }
 
 export interface CloudCpProxyBinaryResponse {
@@ -73,7 +85,7 @@ export interface CloudCpProxyBinaryResponse {
 }
 
 /** Bytes either way on the binary channel; the control plane takes attachments up to 25 MiB. */
-export const MAX_CLOUD_CP_BINARY_BYTES = 32 * 1024 * 1024;
+export { MAX_CLOUD_CP_BINARY_BYTES };
 
 export type CloudCpStreamEvent =
 	| { type: "chunk"; data: string }
@@ -93,9 +105,18 @@ export interface CloudCpStreamSender {
 
 export interface CloudCpProxy {
 	request(init: unknown): Promise<CloudCpProxyResponse>;
-	requestBinary(init: unknown): Promise<CloudCpProxyBinaryResponse>;
+	/** sender is the WebContents that asked: its requests end when it goes away. */
+	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
+	/** Abort one of a WebContents' binary requests; another's is never touched. */
+	cancelBinary(sender: Pick<CloudCpBinarySender, "id">, requestId: unknown): void;
 	openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }>;
 	closeStream(sender: Pick<CloudCpStreamSender, "id">, streamId: unknown): void;
+}
+
+/** Structural slice of Electron.WebContents the binary side needs. */
+export interface CloudCpBinarySender {
+	readonly id: number;
+	once(event: "destroyed", listener: () => void): unknown;
 }
 
 export interface CloudCpProxyOptions {
@@ -143,12 +164,32 @@ function validateInit(init: unknown): CloudCpProxyRequestInit {
 	return validateRequestTarget(init) as CloudCpProxyRequestInit;
 }
 
+const REQUEST_ID = /^[\w-]{1,64}$/;
+
 function validateBinaryInit(init: unknown): CloudCpProxyBinaryRequestInit {
-	const { body } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
+	const { body, requestId, timeoutMs } = (typeof init === "object" && init !== null ? init : {}) as Record<string, unknown>;
 	if (body !== undefined && !(body instanceof Uint8Array)) throw invalid("body must be bytes when present.");
-	if (body instanceof Uint8Array && body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) throw invalid("body is too large.");
-	return validateRequestTarget(init) as CloudCpProxyBinaryRequestInit;
+	if (requestId !== undefined && (typeof requestId !== "string" || !REQUEST_ID.test(requestId))) throw invalid("requestId must be a short token.");
+	if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+		throw invalid("timeoutMs must be a positive number.");
+	}
+	return {
+		...(validateRequestTarget(init) as CloudCpProxyBinaryRequestInit),
+		requestId: requestId as string | undefined,
+		timeoutMs: timeoutMs as number | undefined,
+	};
 }
+
+/** A binary response main makes itself, in the control plane's error envelope. */
+function binaryError(status: number, code: string, message: string): CloudCpProxyBinaryResponse {
+	return {
+		status,
+		headers: { "content-type": "application/json" },
+		body: new TextEncoder().encode(JSON.stringify({ error: code, code, message })),
+	};
+}
+
+const MiB = 1024 * 1024;
 
 function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCpProxyBinaryRequestInit {
 	if (typeof init !== "object" || init === null) {
@@ -348,33 +389,84 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		return { status: response.status, headers, body: await response.text() };
 	}
 
-	async function requestBinary(init: unknown): Promise<CloudCpProxyBinaryResponse> {
+	// In-flight binary requests by WebContents and request id, so a cancel
+	// or the WebContents going away (a reload included: preload cancels on
+	// pagehide) ends them instead of leaving an upload running unseen.
+	const binaryRequests = new Map<number, Map<string, AbortController>>();
+
+	function trackBinaryRequest(sender: CloudCpBinarySender | undefined, requestId: string | undefined, controller: AbortController): () => void {
+		if (sender === undefined || requestId === undefined) return () => undefined;
+		let requests = binaryRequests.get(sender.id);
+		if (requests === undefined) {
+			requests = new Map();
+			binaryRequests.set(sender.id, requests);
+			sender.once("destroyed", () => {
+				for (const pending of binaryRequests.get(sender.id)?.values() ?? []) pending.abort();
+				binaryRequests.delete(sender.id);
+			});
+		}
+		requests.get(requestId)?.abort();
+		requests.set(requestId, controller);
+		return () => {
+			if (requests.get(requestId) === controller) requests.delete(requestId);
+		};
+	}
+
+	function cancelBinary(sender: Pick<CloudCpBinarySender, "id">, requestId: unknown): void {
+		if (typeof requestId !== "string") return;
+		binaryRequests.get(sender.id)?.get(requestId)?.abort();
+	}
+
+	async function requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse> {
 		const valid = validateBinaryInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		// Over the channel's limit is a refusal with a message the person can
+		// read, not a request.
+		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
+			return binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to AO Cloud at once.`);
+		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
 			const unauthorized = unauthorizedResponse();
 			return { ...unauthorized, body: new TextEncoder().encode(unauthorized.body) };
 		}
-		const response = await doFetch(url, {
-			method: valid.method.toUpperCase(),
-			headers: buildHeaders(valid.headers, token),
-			// A Uint8Array over IPC may view a SharedArrayBuffer-typed buffer; copy
-			// into a plain ArrayBuffer that fetch accepts as a body.
-			body: valid.body === undefined ? undefined : new Uint8Array(valid.body).buffer,
-		});
-		const headers: Record<string, string> = {};
-		response.headers.forEach((value, key) => {
-			headers[key] = value;
-		});
-		const declared = Number(response.headers.get("content-length"));
-		if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
-			await response.body?.cancel();
-			throw new Error("The cloud response is too large.");
+		const timeoutMs = Math.min(valid.timeoutMs ?? DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS, MAX_CLOUD_CP_BINARY_TIMEOUT_MS);
+		const cancelled = new AbortController();
+		const timeout = AbortSignal.timeout(timeoutMs);
+		const untrack = trackBinaryRequest(sender, valid.requestId, cancelled);
+		try {
+			const response = await doFetch(url, {
+				method: valid.method.toUpperCase(),
+				headers: buildHeaders(valid.headers, token),
+				// A Uint8Array over IPC may view a SharedArrayBuffer-typed buffer; copy
+				// into a plain ArrayBuffer that fetch accepts as a body.
+				body: valid.body === undefined ? undefined : new Uint8Array(valid.body).buffer,
+				signal: AbortSignal.any([cancelled.signal, timeout]),
+			});
+			const headers: Record<string, string> = {};
+			response.headers.forEach((value, key) => {
+				headers[key] = value;
+			});
+			const tooLarge = () => binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from AO Cloud at once.`);
+			const declared = Number(response.headers.get("content-length"));
+			if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
+				await response.body?.cancel().catch(() => undefined);
+				return tooLarge();
+			}
+			const body = new Uint8Array(await response.arrayBuffer());
+			if (body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) return tooLarge();
+			return { status: response.status, headers, body };
+		} catch (error) {
+			if (timeout.aborted && !cancelled.signal.aborted) {
+				return binaryError(504, CLOUD_CP_BINARY_TIMEOUT,
+					`AO Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
+			}
+			throw error;
+		} finally {
+			untrack();
 		}
-		const body = new Uint8Array(await response.arrayBuffer());
-		if (body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) throw new Error("The cloud response is too large.");
-		return { status: response.status, headers, body };
 	}
 
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
@@ -430,13 +522,16 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		teardown(streamId, stream);
 	}
 
-	return { request, requestBinary, openStream, closeStream };
+	return { request, requestBinary, cancelBinary, openStream, closeStream };
 }
 
 export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
 	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
-	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (_event, init: unknown) => proxy.requestBinary(init));
+	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (event, init: unknown) => proxy.requestBinary(init, event.sender));
+	ipcMain.on(CLOUD_CP_CANCEL_BINARY_CHANNEL, (event, requestId: unknown) => {
+		proxy.cancelBinary(event.sender, requestId);
+	});
 	ipcMain.handle(CLOUD_CP_OPEN_STREAM_CHANNEL, (event, init: unknown) => proxy.openStream(event.sender, init));
 	ipcMain.on(CLOUD_CP_CLOSE_STREAM_CHANNEL, (event, streamId: unknown) => {
 		proxy.closeStream(event.sender, streamId);

@@ -393,6 +393,7 @@ export const aoBridge: AoBridge =
 			requestBinary: async () => {
 				throw new Error("AO Cloud requests require the desktop app.");
 			},
+			cancelBinary: () => undefined,
 			openStream: async () => {
 				throw new Error("AO Cloud event streams require the desktop app.");
 			},

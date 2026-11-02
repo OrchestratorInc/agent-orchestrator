@@ -5,8 +5,11 @@
 // the AO Cloud token like every other control-plane call.
 
 import { formatCapturedFileReferences, type ChatFileReference } from "../../shared/chat-file-reference";
+import { DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS, MAX_CLOUD_CP_BINARY_TIMEOUT_MS } from "../../shared/cloud-binary";
+import type { CloudCpProxyBinaryRequestInit, CloudCpProxyBinaryResponse } from "../../main/cloud-cp-proxy";
 import { aoBridge } from "./bridge";
 import { CLOUD_ATTACHMENT_REFERENCE_PREFIX } from "./cloud-attachment-reference";
+import { raceAbort } from "./cloud-cp/transport";
 
 /** An attachment as the control plane describes it. */
 export interface CloudAttachment {
@@ -32,6 +35,61 @@ function errorMessage(body: Uint8Array, status: number): string {
 	return `The attachment request failed (${status}).`;
 }
 
+/** Options for one attachment request. */
+export interface CloudAttachmentRequestOptions {
+	/** Cancels the request: the caller stops waiting at once and main aborts it. */
+	signal?: AbortSignal;
+	/** How long the request may take; main ends it after that. */
+	timeoutMs?: number;
+}
+
+// Main ends a request at its timeout; this side stops waiting a little after,
+// so a main process that never answers cannot hold the caller either.
+const RENDERER_TIMEOUT_GRACE_MS = 15_000;
+// An upload's time grows with its size, from a minute at 128 KiB/s.
+const UPLOAD_BYTES_PER_SECOND = 128 * 1024;
+
+/** How long an upload of this many bytes may take. */
+export function uploadTimeoutMs(bytes: number): number {
+	return Math.min(MAX_CLOUD_CP_BINARY_TIMEOUT_MS, 60_000 + Math.ceil(bytes / UPLOAD_BYTES_PER_SECOND) * 1000);
+}
+
+function isAbort(error: unknown): boolean {
+	return error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+/**
+ * One binary request through main, which the caller can cancel and which
+ * cannot outlive its time. Errors read as a person would: the IPC wrapper's
+ * prefix is dropped, and an unreachable control plane says so.
+ */
+async function binaryRequest(
+	init: Omit<CloudCpProxyBinaryRequestInit, "requestId" | "timeoutMs">,
+	options: CloudAttachmentRequestOptions = {},
+): Promise<CloudCpProxyBinaryResponse> {
+	const timeoutMs = options.timeoutMs ?? DEFAULT_CLOUD_CP_BINARY_TIMEOUT_MS;
+	const requestId = crypto.randomUUID();
+	const guard = AbortSignal.timeout(timeoutMs + RENDERER_TIMEOUT_GRACE_MS);
+	const signal = options.signal ? AbortSignal.any([options.signal, guard]) : guard;
+	signal.throwIfAborted();
+	const cancel = () => aoBridge.cloudCp.cancelBinary(requestId);
+	signal.addEventListener("abort", cancel, { once: true });
+	try {
+		return await raceAbort(aoBridge.cloudCp.requestBinary({ ...init, requestId, timeoutMs }), signal);
+	} catch (error) {
+		if (options.signal?.aborted) throw options.signal.reason ?? error;
+		if (guard.aborted || isAbort(error)) throw new Error("AO Cloud did not answer in time. Try again.");
+		const message = (error instanceof Error ? error.message : String(error))
+			.replace(/^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?/, "").trim();
+		if (/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|network/i.test(message)) {
+			throw new Error("Couldn’t reach AO Cloud. Check the connection and try again.");
+		}
+		throw new Error(message || "The attachment request failed.");
+	} finally {
+		signal.removeEventListener("abort", cancel);
+	}
+}
+
 function base64Bytes(data: string): Uint8Array {
 	const binary = atob(data);
 	const bytes = new Uint8Array(binary.length);
@@ -44,21 +102,27 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Upload a file (base64 bytes, as the composer holds them) to a cloud session. */
+/**
+ * Upload a file (base64 bytes, as the composer holds them) to a cloud session.
+ * A refusal throws the control plane's own message (the file too large, the
+ * session's quota, a worker that cannot take files yet, a deleted session, a
+ * name it will not take).
+ */
 export async function uploadCloudAttachment(
 	baseUrl: string,
 	orgId: string,
 	sessionId: string,
 	file: { name: string; data: string } | { name: string; bytes: Uint8Array },
+	options: Omit<CloudAttachmentRequestOptions, "timeoutMs"> = {},
 ): Promise<CloudAttachment> {
 	const bytes = "bytes" in file ? file.bytes : base64Bytes(file.data);
-	const response = await aoBridge.cloudCp.requestBinary({
+	const response = await binaryRequest({
 		baseUrl,
 		path: `${sessionPath(orgId, sessionId)}?name=${encodeURIComponent(file.name)}`,
 		method: "POST",
 		headers: { "Content-Type": "application/octet-stream", [SHA256_HEADER]: await sha256Hex(bytes) },
 		body: bytes,
-	});
+	}, { signal: options.signal, timeoutMs: uploadTimeoutMs(bytes.byteLength) });
 	if (response.status !== 201) throw new Error(errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { attachment: CloudAttachment };
 	return parsed.attachment;
@@ -70,12 +134,13 @@ export async function fetchCloudAttachment(
 	orgId: string,
 	sessionId: string,
 	attachment: Pick<CloudAttachment, "id" | "contentType">,
+	options: CloudAttachmentRequestOptions = {},
 ): Promise<Blob> {
-	const response = await aoBridge.cloudCp.requestBinary({
+	const response = await binaryRequest({
 		baseUrl,
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachment.id)}`,
 		method: "GET",
-	});
+	}, options);
 	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
 	return new Blob([response.body as BlobPart], { type: attachment.contentType });
 }
@@ -84,12 +149,18 @@ export async function fetchCloudAttachment(
  * Have the session's worker place an attachment in its workspace, for a file
  * dropped on the terminal, and answer with its path in the sandbox.
  */
-export async function placeCloudAttachment(baseUrl: string, orgId: string, sessionId: string, attachmentId: string): Promise<string> {
-	const response = await aoBridge.cloudCp.requestBinary({
+export async function placeCloudAttachment(
+	baseUrl: string,
+	orgId: string,
+	sessionId: string,
+	attachmentId: string,
+	options: CloudAttachmentRequestOptions = {},
+): Promise<string> {
+	const response = await binaryRequest({
 		baseUrl,
 		path: `${sessionPath(orgId, sessionId)}/${encodeURIComponent(attachmentId)}/place`,
 		method: "POST",
-	});
+	}, options);
 	if (response.status !== 200) throw new Error(errorMessage(response.body, response.status));
 	const parsed = JSON.parse(new TextDecoder().decode(response.body)) as { path?: unknown };
 	if (typeof parsed.path !== "string" || parsed.path === "") throw new Error("The worker did not place the attachment.");

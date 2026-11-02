@@ -188,6 +188,9 @@ function isRendererQueuePurgeRequest(value: unknown): value is RendererTelemetry
 	return Object.keys(request).length === 1 && typeof request.requestId === "string" && request.requestId.length <= 64;
 }
 
+// Binary control-plane requests this page has running, by requestId.
+const binaryRequestsInFlight = new Set<string>();
+
 const api = {
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
@@ -843,9 +846,23 @@ const api = {
 	cloudCp: {
 		request: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:request", init) as Promise<CloudCpProxyResponse>,
-		/** A request with a bytes body or response (session attachments). */
-		requestBinary: (init: CloudCpProxyBinaryRequestInit) =>
-			ipcRenderer.invoke("cloudCp:requestBinary", init) as Promise<CloudCpProxyBinaryResponse>,
+		/**
+		 * A request with a bytes body or response (session attachments). Name it
+		 * with requestId to cancel it; main ends it after timeoutMs, and on a
+		 * reload (pagehide) every one still running is cancelled.
+		 */
+		requestBinary: (init: CloudCpProxyBinaryRequestInit) => {
+			const { requestId } = init;
+			if (requestId) binaryRequestsInFlight.add(requestId);
+			return (ipcRenderer.invoke("cloudCp:requestBinary", init) as Promise<CloudCpProxyBinaryResponse>).finally(() => {
+				if (requestId) binaryRequestsInFlight.delete(requestId);
+			});
+		},
+		/** Abort a binary request by its requestId. */
+		cancelBinary: (requestId: string) => {
+			binaryRequestsInFlight.delete(requestId);
+			ipcRenderer.send("cloudCp:cancelBinary", requestId);
+		},
 		openStream: (init: CloudCpProxyRequestInit) =>
 			ipcRenderer.invoke("cloudCp:openStream", init) as Promise<{ streamId: string }>,
 		closeStream: (streamId: string) => {
@@ -864,6 +881,13 @@ const api = {
 		},
 	},
 };
+
+// A reload or navigation abandons the page that asked: its uploads and
+// downloads are cancelled rather than left running in main for no one.
+window.addEventListener("pagehide", () => {
+	for (const requestId of binaryRequestsInFlight) ipcRenderer.send("cloudCp:cancelBinary", requestId);
+	binaryRequestsInFlight.clear();
+});
 
 contextBridge.exposeInMainWorld("ao", api);
 

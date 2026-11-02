@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requestBinary } = vi.hoisted(() => ({ requestBinary: vi.fn() }));
-vi.mock("./bridge", () => ({ aoBridge: { cloudCp: { requestBinary } } }));
+const { requestBinary, cancelBinary } = vi.hoisted(() => ({ requestBinary: vi.fn(), cancelBinary: vi.fn() }));
+vi.mock("./bridge", () => ({ aoBridge: { cloudCp: { requestBinary, cancelBinary } } }));
 
 import { captureFileReference, formatCapturedFileReferences } from "../../shared/chat-file-reference";
-import { cloudAttachmentReference, cloudMessageAttachments, placeCloudAttachment, splitCloudAttachmentReferences, uploadCloudAttachment } from "./cloud-attachments";
+import { cloudAttachmentReference, cloudMessageAttachments, fetchCloudAttachment, placeCloudAttachment, splitCloudAttachmentReferences, uploadCloudAttachment, uploadTimeoutMs } from "./cloud-attachments";
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
-beforeEach(() => requestBinary.mockReset());
+beforeEach(() => {
+	requestBinary.mockReset();
+	cancelBinary.mockReset();
+});
 
 describe("cloud attachment references", () => {
 	it("round-trips the composer's attached files into attachment ids and the written text", () => {
@@ -74,5 +77,58 @@ describe("cloud attachment transport", () => {
 		requestBinary.mockResolvedValue({ status: 200, headers: {}, body: encode({ path: "/workspace/.ao/attachments/a1-a.txt" }) });
 		await expect(placeCloudAttachment("https://cp", "org", "session", "a1")).resolves.toBe("/workspace/.ao/attachments/a1-a.txt");
 		expect(requestBinary.mock.calls[0][0].path).toBe("/api/cloud/v1/orgs/org/sessions/session/attachments/a1/place");
+	});
+});
+
+describe("cloud attachment errors and cancellation", () => {
+	// The control plane's refusals, each shown in its own words.
+	it.each([
+		[409, "ATTACHMENTS_UNSUPPORTED", "This session's worker can't take files yet. Restart the session to update it."],
+		[429, "too_many_attachments", "A session can hold at most 200 attachments."],
+		[413, "attachment_quota_exceeded", "A session's attachments can hold at most 512 MiB in all."],
+		[409, "SESSION_TERMINATED", "This session was deleted. Restore it to continue."],
+		[400, "invalid_file_name", "The file name holds a hidden or direction-changing character."],
+	])("shows a %i %s with the control plane's message", async (status, code, message) => {
+		requestBinary.mockResolvedValue({ status, headers: {}, body: encode({ error: code, code, message }) });
+		await expect(uploadCloudAttachment("https://cp", "org", "session", { name: "a.txt", bytes: new Uint8Array(1) })).rejects.toThrow(message);
+	});
+
+	it("shows a read-only session's refusal of a terminal drop", async () => {
+		requestBinary.mockResolvedValue({ status: 403, headers: {}, body: encode({ code: "WORKSPACE_READ_ONLY", message: "This session does not allow workspace writes." }) });
+		await expect(placeCloudAttachment("https://cp", "org", "session", "a1")).rejects.toThrow("This session does not allow workspace writes.");
+	});
+
+	it("names each request, gives an upload time for its size, and cancels it in main when the caller does", async () => {
+		requestBinary.mockReturnValue(new Promise(() => undefined));
+		const controller = new AbortController();
+		const upload = uploadCloudAttachment("https://cp", "org", "session", { name: "a.txt", bytes: new Uint8Array(1024) }, { signal: controller.signal });
+		await vi.waitFor(() => expect(requestBinary).toHaveBeenCalled());
+		const init = requestBinary.mock.calls[0][0];
+		expect(init.requestId).toMatch(/^[\w-]{1,64}$/);
+		expect(init.timeoutMs).toBe(uploadTimeoutMs(1024));
+		controller.abort();
+		// The caller stops waiting at once, whatever main does.
+		await expect(upload).rejects.toThrow();
+		expect(cancelBinary).toHaveBeenCalledWith(init.requestId);
+	});
+
+	it("scales an upload's time with its size, within main's bound", () => {
+		expect(uploadTimeoutMs(0)).toBe(60_000);
+		expect(uploadTimeoutMs(25 * 1024 * 1024)).toBe(260_000);
+		expect(uploadTimeoutMs(10 * 1024 * 1024 * 1024)).toBe(15 * 60_000);
+	});
+
+	it("reads an IPC failure as a person would", async () => {
+		requestBinary.mockRejectedValueOnce(new Error("Error invoking remote method 'cloudCp:requestBinary': TypeError: fetch failed"));
+		await expect(fetchCloudAttachment("https://cp", "org", "session", { id: "a1", contentType: "text/plain" })).rejects.toThrow("Couldn’t reach AO Cloud. Check the connection and try again.");
+		requestBinary.mockRejectedValueOnce(new Error("Error invoking remote method 'cloudCp:requestBinary': Error: Invalid cloud control-plane request: baseUrl is not the configured AO Cloud control plane."));
+		await expect(fetchCloudAttachment("https://cp", "org", "session", { id: "a1", contentType: "text/plain" })).rejects.toThrow(/^Invalid cloud control-plane request: baseUrl is not the configured/);
+	});
+
+	it("shows main's own answers: over its 32 MiB, or out of time", async () => {
+		requestBinary.mockResolvedValueOnce({ status: 413, headers: {}, body: encode({ code: "attachment_too_large", message: "The file is larger than 32 MiB, the most the app sends to AO Cloud at once." }) });
+		await expect(uploadCloudAttachment("https://cp", "org", "session", { name: "big.bin", bytes: new Uint8Array(1) })).rejects.toThrow("larger than 32 MiB");
+		requestBinary.mockResolvedValueOnce({ status: 504, headers: {}, body: encode({ code: "request_timeout", message: "AO Cloud did not answer within 120 seconds. Try again." }) });
+		await expect(placeCloudAttachment("https://cp", "org", "session", "a1")).rejects.toThrow("did not answer within 120 seconds");
 	});
 });

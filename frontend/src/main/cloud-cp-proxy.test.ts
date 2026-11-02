@@ -29,11 +29,66 @@ describe("cloud control-plane binary requests", () => {
 		expect(Array.from(response.body)).toEqual([9, 8]);
 	});
 
-	it("refuses a text body, a path outside the API, and a body over the limit", async () => {
-		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: vi.fn() as unknown as typeof fetch });
+	it("refuses a text body and a path outside the API, and answers a body over the limit with a message, unsent", async () => {
+		const fetchImpl = vi.fn();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
 		await expect(proxy.requestBinary({ ...base, body: "text" })).rejects.toThrow(/bytes/);
 		await expect(proxy.requestBinary({ ...base, path: "/elsewhere" })).rejects.toThrow(/api\/cloud\/v1/);
-		await expect(proxy.requestBinary({ ...base, body: new Uint8Array(MAX_CLOUD_CP_BINARY_BYTES + 1) })).rejects.toThrow(/too large/);
+		const tooLarge = await proxy.requestBinary({ ...base, body: new Uint8Array(MAX_CLOUD_CP_BINARY_BYTES + 1) });
+		expect(tooLarge.status).toBe(413);
+		expect(JSON.parse(new TextDecoder().decode(tooLarge.body))).toEqual({
+			error: "attachment_too_large",
+			code: "attachment_too_large",
+			message: "The file is larger than 32 MiB, the most the app sends to AO Cloud at once.",
+		});
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	// A fetch that answers only when its signal aborts, as a stalled upload does.
+	const stalledFetch = () => vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+		init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+	}));
+
+	it("ends a request that outlives its time with a message the person can read", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: stalledFetch() as unknown as typeof fetch });
+		const response = await proxy.requestBinary({ ...base, body: new Uint8Array([1]), timeoutMs: 20 });
+		expect(response.status).toBe(504);
+		expect(JSON.parse(new TextDecoder().decode(response.body))).toMatchObject({
+			code: "request_timeout",
+			message: "AO Cloud did not answer within 0 seconds. Try again.",
+		});
+	});
+
+	it("cancels a WebContents' request by its id, and one going away cancels all of its own", async () => {
+		const fetchImpl = stalledFetch();
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		let destroyed: (() => void) | undefined;
+		const sender = { id: 7, once: vi.fn((_event: "destroyed", listener: () => void) => { destroyed = listener; }) };
+		const other = { id: 8, once: vi.fn() };
+		const first = proxy.requestBinary({ ...base, requestId: "upload-1" }, sender);
+		const second = proxy.requestBinary({ ...base, requestId: "upload-2" }, sender);
+		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+		// Another WebContents cannot cancel it.
+		proxy.cancelBinary(other, "upload-1");
+		proxy.cancelBinary(sender, "upload-1");
+		await expect(first).rejects.toThrow();
+		expect((fetchImpl.mock.calls[1][1]?.signal as AbortSignal).aborted).toBe(false);
+		destroyed?.();
+		await expect(second).rejects.toThrow();
+	});
+
+	it("refuses a request id that is not a short token", async () => {
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: vi.fn() as unknown as typeof fetch });
+		await expect(proxy.requestBinary({ ...base, requestId: "../x" })).rejects.toThrow(/requestId/);
+		await expect(proxy.requestBinary({ ...base, timeoutMs: -1 })).rejects.toThrow(/timeoutMs/);
+	});
+
+	it("answers a response over the limit with a message instead of the bytes", async () => {
+		const fetchImpl = vi.fn(async () => new Response(new Uint8Array(1), { status: 200, headers: { "content-length": String(MAX_CLOUD_CP_BINARY_BYTES + 1) } }));
+		const proxy = createCloudCpProxy(() => "/data", { controlPlaneUrl, fetchImpl: fetchImpl as unknown as typeof fetch });
+		const response = await proxy.requestBinary({ ...base, method: "GET" });
+		expect(response.status).toBe(413);
+		expect(JSON.parse(new TextDecoder().decode(response.body)).message).toMatch(/larger than 32 MiB/);
 	});
 
 	it("answers 401 without a request when signed out", async () => {
