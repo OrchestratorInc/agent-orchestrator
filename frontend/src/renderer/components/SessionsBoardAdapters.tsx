@@ -13,9 +13,11 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
 import type { MessageKey } from "../i18n";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
+import { clientForHost } from "../lib/host-clients";
 import { renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -155,12 +157,16 @@ export function ArchivedSessionCardAdapter({
 		<DesktopSessionCard
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
-				<ArchiveRestoreButton
-					isDisabled={isRestoreDisabled}
-					isRestoring={isRestoring}
-					label={t("shell.restoreNamed", { title: session.title })}
-					onClick={restoreAction}
-				/>
+				<div className="flex items-center">
+					<ArchiveRestoreButton
+						isDisabled={isRestoreDisabled}
+						isRestoring={isRestoring}
+						label={t("shell.restoreNamed", { title: session.title })}
+						onClick={restoreAction}
+					/>
+					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
+					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} session={session} />}
+				</div>
 			}
 			branchAction={
 				branch ? (
@@ -658,6 +664,75 @@ function toResourcePresentation(
 		compactLabel: `${size} · ${cpu}`,
 		tone,
 	};
+}
+
+/**
+ * Permanently deletes an archived session. A worktree still on disk is cleaned
+ * up first the way session cleanup does it, never forced: uncommitted work
+ * refuses the delete, and the dialog says why.
+ */
+function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [open, setOpen] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const confirmDelete = async () => {
+		setDeleting(true);
+		setError(null);
+		try {
+			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
+				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+			});
+			if (deleteError) {
+				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
+				return;
+			}
+			setOpen(false);
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
+		} finally {
+			setDeleting(false);
+		}
+	};
+	return (
+		<>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex">
+						<button
+							aria-label={t("shell.deleteSessionNamed", { title: session.title })}
+							className="grid size-control-board-sm shrink-0 place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-error focus-visible:text-error focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:cursor-not-allowed disabled:opacity-35"
+							disabled={isDisabled}
+							onClick={(event) => {
+								event.stopPropagation();
+								setError(null);
+								setOpen(true);
+							}}
+							type="button"
+						>
+							<Trash2 className="size-icon-md" aria-hidden="true" />
+						</button>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
+			</Tooltip>
+			<ConfirmDialog
+				busy={deleting}
+				confirmAriaLabel={t("deleteSession.confirmAria")}
+				confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
+				description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+				destructive
+				error={error}
+				onConfirm={() => void confirmDelete()}
+				onOpenChange={setOpen}
+				open={open}
+				title={t("deleteSession.dialog")}
+			/>
+		</>
+	);
 }
 
 function ArchiveRestoreButton({
