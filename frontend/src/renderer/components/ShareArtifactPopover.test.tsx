@@ -215,6 +215,16 @@ describe("ShareArtifactButton", () => {
 		expect(await screen.findByText("Sharing failed: The file is no longer available.")).toBeTruthy();
 	});
 
+	it("offers no Cancel while a cloud session's file is being shared", async () => {
+		stub(inspection, links);
+		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
+		render(<TooltipProvider><ShareArtifactButton file={{ source: "cloud", orgId: "org-1", sessionId: "cloud-1", path: "docs/cloud.html", projectId: "" }} name="cloud.html" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Share: cloud.html" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByRole("button", { name: "Publishing…" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+	});
+
 	it("returns to Publish when the upload is cancelled", async () => {
 		stub(inspection, links, { status: "cancelled" });
 		await openPopover();

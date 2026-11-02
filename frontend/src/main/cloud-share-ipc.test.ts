@@ -190,7 +190,11 @@ describe("cloudShare IPC", () => {
 		await expect(invoke("cloudShare:inspect", cloudFile)).resolves.toMatchObject({ shareId: SHARE_ID });
 		await expect(records.get(shareRecordKey("https://cp.test", CLOUD_SESSION_ID, "reports/q3 plan.md"))).resolves.toBeUndefined();
 
-		await invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256, shareId: SHARE_ID });
+		// Cancel does not stop a cloud share midway: the control plane may
+		// already have made the link, so it is waited for and shown.
+		const publishing = invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256, shareId: SHARE_ID });
+		await invoke("cloudShare:cancel");
+		await expect(publishing).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
 		expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256, shareId: SHARE_ID });
 	});
 

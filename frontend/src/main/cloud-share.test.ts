@@ -288,9 +288,14 @@ describe("cloud control-plane proxy", () => {
 			["POST", "/api/cloud/v1/me/artifact-shares"],
 			["post", "/api/cloud/v1/me/./artifact-shares/uploads"],
 			["POST", "/api/cloud/v1/orgs/../me/artifact-shares/finalize"],
+			// A cloud session's file is shared only through the main process too.
+			["POST", "/api/cloud/v1/orgs/a1a1a1a1-0000-4000-8000-000000000001/sessions/a1a1a1a1-0000-4000-8000-0000000000a1/artifacts/share"],
+			["POST", "/api/cloud/v1/orgs/o/sessions/s/artifacts%2Fshare"],
 		]) {
 			await expect(request(method, path), `${method} ${path}`).rejects.toThrow("share links can only be changed");
 		}
-		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		// Reading a session's files is still allowed.
+		await expect(request("GET", "/api/cloud/v1/orgs/o/sessions/s/artifacts")).resolves.toMatchObject({ status: 200 });
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
 	});
 });

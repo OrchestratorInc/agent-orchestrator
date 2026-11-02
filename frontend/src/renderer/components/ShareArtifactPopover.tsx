@@ -326,7 +326,10 @@ function SharePanel({
 					{footer(
 						meta(t("artifacts.share.uploaded", { percent })),
 						<>
-							<Button onClick={() => void aoBridge.cloudShare.cancel()} size="sm" type="button" variant="ghost">{t("artifacts.share.cancel")}</Button>
+							{/* A cloud file is copied by the control plane in one quick request: nothing to cancel. */}
+							{file.source === "cloud" ? null : (
+								<Button onClick={() => void aoBridge.cloudShare.cancel()} size="sm" type="button" variant="ghost">{t("artifacts.share.cancel")}</Button>
+							)}
 							<Button disabled size="sm" type="button" variant="primary">{t("artifacts.share.publishing")}</Button>
 						</>,
 					)}

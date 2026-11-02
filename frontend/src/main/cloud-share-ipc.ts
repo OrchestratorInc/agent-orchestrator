@@ -133,15 +133,15 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		};
 	};
 
-	const publishCloudFile = async (file: CloudSessionShareFile, signal: AbortSignal): Promise<CloudSharePublishResult> => {
+	const publishCloudFile = async (file: CloudSessionShareFile): Promise<CloudSharePublishResult> => {
 		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
 		if (!(await deps.getToken())) return { status: "signed_out" };
 		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file) };
 		try {
-			// The control plane copies the file inside its bucket: there is
-			// nothing to upload. Cancel stops waiting for it; sharing the file
-			// again later reuses the file's link either way.
-			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint }, signal);
+			// The control plane copies the file inside its bucket in one quick
+			// request, so there is nothing to cancel: stopping the wait could
+			// leave a public link the person was told was cancelled.
+			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
 			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
@@ -198,9 +198,8 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		inFlight.set(sender.id, controller);
 		if (isCloudFile(file)) {
 			try {
-				return await publishCloudFile(file, controller.signal);
+				return await publishCloudFile(file);
 			} catch (error) {
-				if (controller.signal.aborted) return { status: "cancelled" };
 				return refusal(error);
 			} finally {
 				inFlight.delete(sender.id);

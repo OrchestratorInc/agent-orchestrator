@@ -20,7 +20,7 @@ func TestNoBackendPathPublishesShareLinks(t *testing.T) {
 		t.Fatal("cannot locate the backend source")
 	}
 	backend := filepath.Join(filepath.Dir(here), "..", "..")
-	forbidden := []string{"/me/artifact-shares", "artifact-shares/uploads", "artifact-shares/finalize", "cloudShare:"}
+	forbidden := []string{"/me/artifact-shares", "artifact-shares/uploads", "artifact-shares/finalize", "/artifacts/share", "shareSessionArtifact", "cloudShare:"}
 	err := filepath.WalkDir(backend, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err

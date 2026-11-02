@@ -28,6 +28,8 @@ const API_PREFIX = "/api/cloud/v1";
 
 /** The share link routes, read-only through this proxy. */
 const SHARE_LINKS_ROUTE = "/me/artifact-shares";
+/** A cloud session's file is shared through POST .../sessions/{id}/artifacts/share. */
+const SESSION_FILE_SHARE_ROUTE = /\/sessions\/[^/]+\/artifacts\/share\/?$/;
 
 /** Upper bound on live SSE streams per renderer WebContents. */
 export const MAX_STREAMS_PER_WEBCONTENTS = 8;
@@ -170,7 +172,8 @@ function resolveTargetUrl(init: CloudCpProxyRequestInit): string {
 	// artifacts folder and publishes only what its inspection showed; through
 	// this proxy the renderer may only read them.
 	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
-	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`);
+	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`) ||
+		SESSION_FILE_SHARE_ROUTE.test(decodeURIComponent(target.pathname));
 	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {
 		throw invalid("share links can only be changed from the desktop's share flow.");
 	}
