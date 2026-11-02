@@ -581,6 +581,8 @@ function stagingDiagnosticSnapshot(): Record<string, number | boolean | undefine
 // within minutes rather than waiting out a day: a daily interval meant any
 // release we published took up to 24h to reach users who keep the app running.
 const AUTOMATIC_UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const AUTOMATIC_UPDATE_RETRY_CAP_MS = 4 * 60 * 60 * 1000;
+let automaticRetryFailures = 0;
 let automaticUpdateTimer: ReturnType<typeof setInterval> | undefined;
 let automaticUpdateTimerIntervalMs: number | undefined;
 type UpdaterOperation =
@@ -2413,8 +2415,8 @@ async function awaitStartedDownload(result: UpdateCheckOutcome): Promise<void> {
 async function runAutomaticUpdateCheck(
   stateDir: string,
 ): Promise<number> {
-  let nextIntervalMs =
-    automaticUpdateTimerIntervalMs ?? AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
+  let nextIntervalMs = AUTOMATIC_UPDATE_CHECK_INTERVAL_MS;
+  let failed = false;
   try {
     await runSerializedUpdaterOperation("automatic-check", async () => {
       const settings = await reconcileAndPersist(
@@ -2507,9 +2509,15 @@ async function runAutomaticUpdateCheck(
       }
     });
   } catch (err) {
+    failed = true;
     console.error("auto-update check failed:", err);
   }
-  return nextIntervalMs;
+  if (failed || automaticCheckFailureCounted) {
+    automaticRetryFailures = Math.min(automaticRetryFailures + 1, 5);
+  } else {
+    automaticRetryFailures = 0;
+  }
+  return Math.min(nextIntervalMs * 2 ** automaticRetryFailures, AUTOMATIC_UPDATE_RETRY_CAP_MS);
 }
 
 function schedulePeriodicAutomaticUpdateCheck(
@@ -2900,9 +2908,9 @@ export function getMacInstallBlocker(): string | undefined {
   if (!bundle.endsWith(".app")) return undefined;
   if (bundle.includes("/AppTranslocation/")) {
     return (
-      "macOS is running Agent Orchestrator from a temporary read-only location " +
+      "macOS is running Orchestrator from a temporary read-only location " +
       "because it was opened straight from where it was downloaded. Quit the app, " +
-      "move Agent Orchestrator.app into /Applications, reopen it from there, and " +
+      "move Orchestrator into /Applications, reopen it from there, and " +
       "then restart to update."
     );
   }
@@ -2915,9 +2923,9 @@ export function getMacInstallBlocker(): string | undefined {
     // Deliberately does NOT say "move it to /Applications": the app may already
     // be there, and telling someone to do what they have done reads as a bug.
     return (
-      "The update can't be installed because Agent Orchestrator's location isn't " +
+      "The update can't be installed because Orchestrator's location isn't " +
       `writable: ${path.dirname(bundle)}. Fix that folder's permissions, or move ` +
-      "Agent Orchestrator.app somewhere you can write to, reopen it, and then " +
+      "Orchestrator somewhere you can write to, reopen it, and then " +
       "restart to update."
     );
   }
@@ -3169,7 +3177,7 @@ export async function ensureUpdatePrefs(stateDir: string): Promise<void> {
     buttons: ["Enable auto-updates", "Not now"],
     defaultId: 0,
     cancelId: 1,
-    message: "Keep Agent Orchestrator up to date automatically?",
+    message: "Keep Orchestrator up to date automatically?",
     detail: "You can change this later in Settings.",
   });
   if (optIn.response !== 0) {
