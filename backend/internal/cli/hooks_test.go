@@ -95,6 +95,92 @@ func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
 	}
 }
 
+// Claude's background daemon inherits the AO_* variables of the session that
+// started it, so every background conversation it runs would otherwise report
+// as that AO session and move its native conversation id.
+func TestClaudeHookIgnoresBackgroundSessions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	payload := `{"session_id":"background-conversation","prompt":"background task"}`
+
+	for _, tc := range []struct{ name, kind, jobDir, attended string }{
+		// Hooks of a background session see its job directory, not the kind,
+		// and Claude marks the session as unattended.
+		{"job directory", "", "/home/user/.claude/jobs/4af50058", "0"},
+		{"job directory without the attended marker", "", "/home/user/.claude/jobs/4af50058", ""},
+		{"session kind", "bg", "", "0"},
+		{"session kind with spaces", " bg ", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_SESSION_KIND", tc.kind)
+			t.Setenv("CLAUDE_JOB_DIR", tc.jobDir)
+			t.Setenv("CLAUDE_CODE_SESSION_ATTENDED", tc.attended)
+			hits := capture.hits
+			for _, event := range []string{"session-start", "user-prompt-submit", "stop", "session-end"} {
+				stdout, _, err := executeCLI(t, Deps{
+					In:           strings.NewReader(payload),
+					ProcessAlive: func(int) bool { return true },
+				}, "hooks", "claude-code", event)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if capture.hits != hits {
+					t.Fatalf("%s posted %d activity requests, want none", event, capture.hits-hits)
+				}
+				if stdout != "" {
+					t.Fatalf("%s wrote %q, want no hook output", event, stdout)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeHookStillReportsForegroundSessions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	for _, tc := range []struct{ name, agent, kind, jobDir, attended string }{
+		{"markers unset", "claude-code", "", "", ""},
+		{"interactive kind", "claude-code", "interactive", "", "1"},
+		// An interactive session started from inside a background job inherits
+		// its markers but is attended, so its hooks must keep reporting.
+		{"inherited job directory but attended", "claude-code", "", "/home/user/.claude/jobs/4af50058", "1"},
+		{"inherited session kind but attended", "claude-code", "bg", "", "1"},
+		// The markers are Claude Code details; other harnesses ignore them.
+		{"other harness with the session kind", "codex", "bg", "", ""},
+		{"other harness with the job directory", "codex", "", "/home/user/.claude/jobs/4af50058", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_SESSION_KIND", tc.kind)
+			t.Setenv("CLAUDE_JOB_DIR", tc.jobDir)
+			t.Setenv("CLAUDE_CODE_SESSION_ATTENDED", tc.attended)
+			hits := capture.hits
+			if _, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"session_id":"foreground-conversation"}`),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", tc.agent, "session-start"); err != nil {
+				t.Fatal(err)
+			}
+			if capture.hits != hits+1 {
+				t.Fatalf("posted %d activity requests, want 1", capture.hits-hits)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "foreground-conversation" {
+				t.Fatalf("agent session id = %q, want foreground-conversation", req.AgentSessionID)
+			}
+		})
+	}
+}
+
 func TestClaudeHookReportsItsProcess(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")

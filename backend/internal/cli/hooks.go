@@ -661,6 +661,32 @@ func newHooksCommand(ctx *commandContext) *cobra.Command {
 	}
 }
 
+// Claude Code marks the sessions its own background daemon runs (`/bg`,
+// `claude --bg`, agent view dispatches). Hooks do not see the session-kind
+// variable, but they do get the job directory that only background sessions
+// have. An interactive session sets CLAUDE_CODE_SESSION_ATTENDED=1 even when it
+// inherited those variables from a parent that was itself a background job, so
+// an attended session is never treated as a background one.
+const (
+	claudeSessionKindEnv        = "CLAUDE_CODE_SESSION_KIND"
+	claudeSessionKindBackground = "bg"
+	claudeJobDirEnv             = "CLAUDE_JOB_DIR"
+	claudeSessionAttendedEnv    = "CLAUDE_CODE_SESSION_ATTENDED"
+)
+
+// isClaudeBackgroundSession reports whether this hook call comes from a Claude
+// background session instead of the foreground process AO supervises.
+func isClaudeBackgroundSession(agent string) bool {
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv(claudeSessionAttendedEnv)) == "1" {
+		return false
+	}
+	return strings.TrimSpace(os.Getenv(claudeSessionKindEnv)) == claudeSessionKindBackground ||
+		strings.TrimSpace(os.Getenv(claudeJobDirEnv)) != ""
+}
+
 func (c *commandContext) runHook(ctx context.Context, agent, event string) error {
 	observedAt := c.deps.Now()
 	if isAgyModernHookEvent(agent, event) {
@@ -680,6 +706,13 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// Not an AO-managed session (unset/empty), or an id we won't put in a
 		// request path. Return before reading stdin so a manual invocation
 		// without a piped payload can't block on EOF.
+		return nil
+	}
+	if isClaudeBackgroundSession(agent) {
+		// A background conversation is not the process AO launched. It only
+		// carries this session's AO_* variables because Claude's background
+		// daemon inherited them, so anything it reports would rebind the AO
+		// session to the wrong conversation.
 		return nil
 	}
 	if agent == "memcode" && strings.HasPrefix(event, "context-chunk-") {
