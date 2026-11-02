@@ -95,7 +95,10 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const mainLocation = !renderer && topFrame && "lineno" in topFrame && typeof topFrame.lineno === "number"
 		? `main:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
 		: undefined;
-	const topFunction = topFrame?.function === "renderer_frame" ? topLocation ?? "renderer_frame"
+	const rendererLocation = renderer && topFrame && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? topLocation ?? `renderer:${topFrame.lineno}`
+		: undefined;
+	const topFunction = topFrame?.function === "renderer_frame" ? rendererLocation ?? "renderer_frame"
 		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const title = renderer

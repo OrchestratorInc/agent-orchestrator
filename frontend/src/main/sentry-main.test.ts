@@ -284,6 +284,20 @@ describe("Electron main Sentry configuration", () => {
 		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, in_app: true }]);
 	});
 
+	it("separates dev renderer sites by line when no packaged asset name exists", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const capture = (functionName: string, lineno: number) => {
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, lineno }] } });
+			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		};
+		const first = capture("openSessionPanel", 3);
+		expect(capture("otherUnknownFunction", 3).fingerprint).toEqual(first.fingerprint);
+		expect(capture("renderUsageChart", 6).fingerprint).not.toEqual(first.fingerprint);
+		expect(first.message).toBe("Renderer TypeError in renderer:3 (unknown)");
+		expect(JSON.stringify(first)).not.toContain("openSessionPanel");
+	});
+
 	it("titles renderer API failures with the actual allowlisted code", async () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
