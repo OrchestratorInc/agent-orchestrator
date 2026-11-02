@@ -175,10 +175,11 @@ import {
 import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -2946,7 +2947,19 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		env: process.env,
 		exists: existsSync,
 	});
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	const bootstrap = await buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	if (!bootstrap || daemonStatus.state !== "ready" || !daemonStatus.port) return bootstrap;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+		if (!response.ok) return bootstrap;
+		const identity = await response.json() as { lifetimeSessions?: unknown };
+		if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
+			bootstrap.lifetimeSessions = identity.lifetimeSessions;
+		}
+	} catch {
+		// A missing daemon count stays absent.
+	}
+	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 async function flushDaemonUsage(): Promise<void> {
@@ -3162,7 +3175,18 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
-registerCloudArtifactIpc({ ipcMain });
+registerCloudArtifactIpc({
+	ipcMain,
+	openInFileManager: async (target, isFile) => {
+		if (isFile) shell.showItemInFolder(target);
+		else {
+			const error = await shell.openPath(target);
+			if (error) throw new Error(error);
+		}
+	},
+});
+// Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
+void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -3792,6 +3816,14 @@ app.whenReady().then(async () => {
 			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
+	}
+	if (trayController) {
+		const awakeTray = createAwakeTrayMonitor({
+			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+			request: (url, init) => fetch(url, init),
+			setState: (active) => trayController?.setAwakeState(active),
+		});
+		app.once("will-quit", () => awakeTray.dispose());
 	}
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());

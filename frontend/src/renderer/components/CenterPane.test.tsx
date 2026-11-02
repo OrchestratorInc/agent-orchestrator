@@ -7,6 +7,8 @@ import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const shortcutMocks = vi.hoisted(() => ({
 	closeListener: undefined as (() => void) | undefined,
 	nextTabListener: undefined as (() => void) | undefined,
@@ -499,12 +501,12 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByText("No session")).toBeInTheDocument();
 	});
 
-	it("uses the inspector tab height for the terminal header", () => {
+	it("uses the shared toolbar height for the terminal header", () => {
 		renderCenterPane({ session: worker });
 
 		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
-		const header = tablist.closest(".h-inspector-tabs");
-		expect(header?.classList.contains("h-inspector-tabs")).toBe(true);
+		const header = tablist.closest(".h-toolbar");
+		expect(header?.classList.contains("h-toolbar")).toBe(true);
 		expect(tablist.classList.contains("h-full")).toBe(true);
 	});
 
@@ -529,7 +531,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");
-		expect(actionRegion).toHaveClass("gap-1");
+		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
@@ -540,9 +542,9 @@ describe("CenterPane toolbar session label", () => {
 	it("keeps the tab strip flush with the action controls", () => {
 		renderCenterPane({ session: worker });
 
+		// Inline spacing lives on .session-topbar-actions in styles.css.
 		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pl-2");
+		expect(screen.getByTestId("session-action-region")).toHaveClass("session-topbar-actions");
 		expect(screen.getByTestId("session-action-region")).not.toHaveClass("px-3");
 	});
 
@@ -556,7 +558,11 @@ describe("CenterPane toolbar session label", () => {
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: pane });
 		act(() => document.dispatchEvent(new Event("fullscreenchange")));
 
-		expect(screen.queryByTestId("session-action-region")).not.toBeInTheDocument();
+		// Fullscreen hides the panel-owned bell, so the region keeps only its own copy.
+		const actionRegion = screen.getByTestId("session-action-region");
+		expect(actionRegion).toHaveAttribute("data-fullscreen", "true");
+		expect(within(actionRegion).queryByRole("button", { name: "Session action" })).not.toBeInTheDocument();
+		expect(within(actionRegion).getByRole("button", { name: /notifications/i })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Exit fullscreen" })).toBeNull();
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
 	});

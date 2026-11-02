@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useUiStore } from "../stores/ui-store";
 import {
 	useCreateCueMutation,
@@ -24,8 +25,15 @@ import {
 } from "./ui/dialog";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
+/** A Cloud cue the control plane refused as invalid (400, 422) or as clashing with another (409). */
+function isCueRefusal(error: unknown): boolean {
+	return error instanceof CloudCpError && (error.status === 400 || error.status === 409 || error.status === 422) && error.message !== "";
+}
+
 type CuesSettingsProps = {
 	projectId: string;
+	/** A Cloud project's organization: its cues live on the control plane. */
+	cloudOrgId?: string;
 	onBusyChange?: (busy: boolean) => void;
 	createOnly?: boolean;
 	onCreated?: () => void;
@@ -70,18 +78,18 @@ export function CuesSettings(props: CuesSettingsProps) {
 	return <ProjectCuesSettings key={props.projectId} {...props} />;
 }
 
-function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
+function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly = false, onCreated, onCancel, hideCueActions = false }: CuesSettingsProps) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const cuesQuery = useProjectCuesQuery(projectId, !createOnly);
+	const cuesQuery = useProjectCuesQuery(projectId, !createOnly, cloudOrgId);
 	useEffect(() => {
 		if (!createOnly && cuesQuery.isError && !cuesQuery.isFetching) {
 			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(cuesQuery.error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
 		}
 	}, [projectId, createOnly, cuesQuery.isError, cuesQuery.isFetching, cuesQuery.error, showGlobalToast, t]);
-	const createMutation = useCreateCueMutation(projectId);
-	const updateMutation = useUpdateCueMutation(projectId);
-	const deleteMutation = useDeleteCueMutation(projectId);
+	const createMutation = useCreateCueMutation(projectId, cloudOrgId);
+	const updateMutation = useUpdateCueMutation(projectId, cloudOrgId);
+	const deleteMutation = useDeleteCueMutation(projectId, cloudOrgId);
 
 	const [formOpen, setFormOpen] = useState<"new" | CueDTO | null>(createOnly ? "new" : null);
 	const [deletingCue, setDeletingCue] = useState<CueDTO | null>(null);
@@ -158,7 +166,11 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 			else setFormOpen(null);
 		} catch (error) {
 			if (!mounted.current) return;
-			showGlobalToast(t("cues.saveFailed"), apiErrorMessage(error, t("cues.saveFailed")), "error");
+			// The control plane refuses a cue its project's rules do not allow (a
+			// name another cue has, ignoring case; a command cue with a prompt, or
+			// an agent cue with a command) and says why: the form shows it.
+			if (isCueRefusal(error)) setFormError(apiErrorMessage(error, t("cues.saveFailed")));
+			else showGlobalToast(t("cues.saveFailed"), apiErrorMessage(error, t("cues.saveFailed")), "error");
 		} finally {
 			pending.current = false;
 			if (mounted.current) setSaving(false);
@@ -376,8 +388,9 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 }
 
 /** Session-local creation surface; shares the settings editor and validation. */
-export function CreateCueDialog({ projectId, open, onOpenChange, onClosed }: {
+export function CreateCueDialog({ projectId, cloudOrgId, open, onOpenChange, onClosed }: {
 	projectId: string;
+	cloudOrgId?: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onClosed?: () => void;
@@ -397,7 +410,7 @@ export function CreateCueDialog({ projectId, open, onOpenChange, onClosed }: {
 					<button type="button" aria-label={t("settings.close")} className="settings-close-button" disabled={busy} onClick={() => onOpenChange(false)}><X aria-hidden="true" className="size-4" /></button>
 				</DialogHeader>
 				{open ? <div className={settingsDialogBodyClass}>
-					<CuesSettings projectId={projectId} createOnly hideCueActions onBusyChange={setBusy}
+					<CuesSettings projectId={projectId} cloudOrgId={cloudOrgId} createOnly hideCueActions onBusyChange={setBusy}
 						onCreated={() => onOpenChange(false)} onCancel={() => onOpenChange(false)} />
 				</div> : null}
 			</DialogContent>
