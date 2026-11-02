@@ -2226,6 +2226,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
+		recordUserMessage(r.Context(), recorder, sessionID(r), in.SenderSessionID, false)
+	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
 }
 
@@ -2287,6 +2290,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
 		Brief:             domain.SanitizeControlChars(in.Brief),
+		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),

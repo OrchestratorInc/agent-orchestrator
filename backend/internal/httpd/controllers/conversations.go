@@ -93,6 +93,9 @@ type turnAutoResumeService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// UserMessages counts accepted human steers for product telemetry. Nil
+	// counts nothing.
+	UserMessages UserMessageRecorder
 	// Renders serves agent HTML renders. Nil answers the render route 501.
 	Renders *attachmentstore.Store
 	// Search serves chat search. Nil answers the search route 501.
@@ -1384,6 +1387,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			HasRetryAttempt: turn.HasRetryAttempt,
 			HasHumanPrompt:  turn.HasHumanPrompt,
 			ErrorMessage:    turn.ErrorMessage,
+			FailureCode:     string(turn.FailureCode),
 			UsageLimit:      usageLimitPayload(turn.UsageLimit),
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
@@ -1411,6 +1415,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 			Continuation:      msg.Continuation,
+			AuthoredByUser:    msg.AuthoredByUser,
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence

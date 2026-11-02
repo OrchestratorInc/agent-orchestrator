@@ -1,6 +1,6 @@
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, SquareTerminal } from "lucide-react";
 import { isSettingsPageOpen } from "../hooks/useAppShortcut";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, type CSSProperties } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { useOverflowScroll } from "../hooks/useOverflowScroll";
@@ -11,6 +11,8 @@ import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { useResolvedTheme, useUiStore } from "../stores/ui-store";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { TopbarButton } from "./TopbarButton";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -88,85 +90,91 @@ export function ShellTerminalsView() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col text-foreground">
-			<div className="flex h-inspector-tabs shrink-0 items-center gap-3 border-b border-border px-5">
-				<span className="shrink-0 font-mono text-caption font-semibold uppercase tracking-wide-lg text-muted-foreground">
-					{t("workbench.terminals")}
-				</span>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<button
-								aria-label={t("terminal.scrollTabsLeft")}
-								className={cn(
-									"inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:pointer-events-none disabled:opacity-0",
-									!tabsOverflow.canScrollLeft && "invisible",
-								)}
-								disabled={!tabsOverflow.canScrollLeft}
-								onClick={() => tabsOverflow.scrollByDirection(-1)}
+			<PageTopbar
+				lead={
+					<>
+						<PageTopbarTitle icon={<SquareTerminal aria-hidden="true" className="size-icon-md" />}>{t("workbench.terminals")}</PageTopbarTitle>
+						<div className="flex min-w-0 flex-1 items-center gap-3" style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<button
+											aria-label={t("terminal.scrollTabsLeft")}
+											className={cn(
+												"inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:pointer-events-none disabled:opacity-0",
+												!tabsOverflow.canScrollLeft && "invisible",
+											)}
+											disabled={!tabsOverflow.canScrollLeft}
+											onClick={() => tabsOverflow.scrollByDirection(-1)}
+											type="button"
+										>
+											<ChevronLeft aria-hidden="true" className="size-icon-md" />
+										</button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("terminal.scrollTabsLeft")}</TooltipContent>
+							</Tooltip>
+							{/* Tabs shrink and truncate down to a minimum width; beyond that the
+							    strip scrolls and edge chevrons reveal the overflow. */}
+							<div
+								ref={tabsOverflow.ref}
+								aria-label={t("terminal.tabsAria")}
+								className="scrollbar-none flex min-w-flex-min flex-1 items-center gap-3 overflow-x-auto"
+								onKeyDown={handleTerminalTabListKeyDown}
+								role="tablist"
+							>
+								{shellTerminals.map((shell) => {
+									const isActive = shell.handleId === active?.handleId;
+									return (
+										<ShellTerminalTab
+											key={shell.handleId}
+											isActive={isActive}
+											onClose={() => closeShellTerminal.mutate(shell.handleId)}
+											onRename={(title) => renameShellTerminal.mutate({ handleId: shell.handleId, title })}
+											onSelect={() => setActiveShellTerminal(shell.handleId)}
+											shell={shell}
+										/>
+									);
+								})}
+							</div>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<button
+											aria-label={t("terminal.scrollTabsRight")}
+											className={cn(
+												"inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:pointer-events-none disabled:opacity-0",
+												!tabsOverflow.canScrollRight && "invisible",
+											)}
+											disabled={!tabsOverflow.canScrollRight}
+											onClick={() => tabsOverflow.scrollByDirection(1)}
+											type="button"
+										>
+											<ChevronRight aria-hidden="true" className="size-icon-md" />
+										</button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("terminal.scrollTabsRight")}</TooltipContent>
+							</Tooltip>
+						</div>
+					</>
+				}
+				actions={
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<TopbarButton
+								aria-label={t("shortcut.new-shell-terminal")}
+								variant="icon"
+								onClick={requestNewShellTerminal}
 								type="button"
 							>
-								<ChevronLeft aria-hidden="true" className="size-icon-md" />
-							</button>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("terminal.scrollTabsLeft")}</TooltipContent>
-				</Tooltip>
-				{/* Tabs shrink and truncate down to a minimum width; beyond that the
-				    strip scrolls and edge chevrons reveal the overflow. */}
-				<div
-					ref={tabsOverflow.ref}
-					aria-label={t("terminal.tabsAria")}
-					className="scrollbar-none flex min-w-flex-min flex-1 items-center gap-3 overflow-x-auto"
-					onKeyDown={handleTerminalTabListKeyDown}
-					role="tablist"
-				>
-					{shellTerminals.map((shell) => {
-						const isActive = shell.handleId === active?.handleId;
-						return (
-							<ShellTerminalTab
-								key={shell.handleId}
-								isActive={isActive}
-								onClose={() => closeShellTerminal.mutate(shell.handleId)}
-								onRename={(title) => renameShellTerminal.mutate({ handleId: shell.handleId, title })}
-								onSelect={() => setActiveShellTerminal(shell.handleId)}
-								shell={shell}
-							/>
-						);
-					})}
-				</div>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-flex">
-							<button
-								aria-label={t("terminal.scrollTabsRight")}
-								className={cn(
-									"inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:pointer-events-none disabled:opacity-0",
-									!tabsOverflow.canScrollRight && "invisible",
-								)}
-								disabled={!tabsOverflow.canScrollRight}
-								onClick={() => tabsOverflow.scrollByDirection(1)}
-								type="button"
-							>
-								<ChevronRight aria-hidden="true" className="size-icon-md" />
-							</button>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("terminal.scrollTabsRight")}</TooltipContent>
-				</Tooltip>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							aria-label={t("shortcut.new-shell-terminal")}
-							className="ml-auto inline-flex size-control-sm shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50"
-							onClick={requestNewShellTerminal}
-							type="button"
-						>
-							<Plus aria-hidden="true" className="size-icon-md" />
-						</button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("terminal.newWithShortcut", { shortcut: newTerminalShortcutLabel })}</TooltipContent>
-				</Tooltip>
-			</div>
+								<Plus aria-hidden="true" className="size-icon-md" />
+							</TopbarButton>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("terminal.newWithShortcut", { shortcut: newTerminalShortcutLabel })}</TooltipContent>
+					</Tooltip>
+				}
+			/>
 			<div className="min-h-0 flex-1">
 				{active ? (
 					<TerminalPane

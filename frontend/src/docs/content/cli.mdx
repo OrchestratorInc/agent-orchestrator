@@ -27,6 +27,7 @@ ao
 ├── review                         ls, trigger, cancel, submit
 ├── preview                        select/clear a target; start, status, stop a server
 ├── browser                        Control the selected session browser
+├── remote-host                    status, enable, disable, link
 ├── import                         Import projects from legacy product data
 ├── completion                     Generate shell completions
 └── version                        Print build information
@@ -189,7 +190,7 @@ ao report --done --note "Focused tests passed"
 
 | Command | Purpose |
 | --- | --- |
-| `ao pr merge <pr-number>` | Request a merge through the owning SCM provider. |
+| `ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>` | Request a merge through the owning SCM provider. |
 | `ao pr resolve-comments <pr-number> [comment-id...]` | Resolve selected or eligible review comments. |
 | `ao review ls [worker-session-id]` | List review state for a worker. Defaults to the calling session. |
 | `ao review trigger [worker-session-id]` | Start Orchestrator's reviewer on a worker's PR heads; defaults to the calling session. Fetches the PRs fresh from the provider first; `--pr <url>` reviews only that PR, attaching it if needed. Fails on a head that already has a review unless `--rerun`. `--agent`, `--model`, `--effort` pick the reviewer for one pass; `--no-inject` keeps auto-inject unchanged. Aliases: `execute`, `restart`. |
@@ -226,6 +227,21 @@ The first `ao browser snapshot --delta` returns the full page tree. Later calls 
 `click` and `drag` accept `--human` for pages that ignore instant pointer movement. Keep the Browser panel visible when using `--human` or taking screenshots. Hidden or covered windows stop painting, so these commands time out.
 
 Network capture is off by default. When enabled, it records bounded metadata only, excludes request and response bodies and sensitive values, and expires automatically.
+
+## Remote access
+
+### `ao remote-host`
+
+Lets your other devices use this machine through its authenticated remote listener.
+
+| Command | Purpose |
+| --- | --- |
+| `ao remote-host status` | Show the host ID, addresses, and whether the address is fixed. It also prints the pairing password; treat the output as a credential. |
+| `ao remote-host enable` | Turn on remote access. `--tunnel-only` serves it only through a Cloudflare tunnel; `--tunnel` keeps the LAN listener too. |
+| `ao remote-host disable` | Turn off remote access. Sessions keep running. |
+| `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |
+
+`link` is how a VM or other machine without the desktop app joins your account. See [Connect a VM or other headless machine](/configuration/remote-access#connect-a-vm-or-other-headless-machine).
 
 ## Migration and shell integration
 

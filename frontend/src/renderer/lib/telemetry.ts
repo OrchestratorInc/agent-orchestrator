@@ -252,9 +252,13 @@ export function buildTelemetryContext(
 	platform: string,
 	channel: ReleaseChannel = "unknown",
 	install?: TelemetryInstallContext,
+	experimentCohort?: number,
 ): TelemetryProperties {
 	const version = appVersion.trim() || "unknown";
 	return {
+		// The install's fixed 0-99 bucket, shared with the daemon, so an
+		// onboarding test can split installs by range without feature flags.
+		...(experimentCohort === undefined ? {} : { experiment_cohort: experimentCohort }),
 		// Same names and values as the daemon stamps (backend/internal/adapters/
 		// telemetry/environment.go), so desktop and CLI events segment alike.
 		...(install
@@ -1204,7 +1208,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
-		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install);
+		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install, bootstrap.experimentCohort);
 		posthog = await loadPostHog();
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.

@@ -19,6 +19,7 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 		},
 	};
 });
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],

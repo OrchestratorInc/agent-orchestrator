@@ -1,4 +1,5 @@
 import type { WorkspaceSession } from "../types/workspace";
+import type { CloudCpClient } from "./cloud-cp";
 import { FREESTYLE_PROVIDER } from "./cloud-offering";
 
 export type CloudLifecycleStage =
@@ -125,4 +126,20 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	}
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;
+}
+
+const resumesInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Asks the control plane to resume a cloud session, sharing a request already
+ * in flight for it: opening a session asks from both its view and its Chat,
+ * and one request wakes it.
+ */
+export function resumeCloudSession(client: Pick<CloudCpClient, "resumeSession">, orgId: string, sessionId: string): Promise<unknown> {
+	const key = `${orgId}/${sessionId}`;
+	const pending = resumesInFlight.get(key);
+	if (pending) return pending;
+	const request = client.resumeSession(orgId, sessionId).finally(() => resumesInFlight.delete(key));
+	resumesInFlight.set(key, request);
+	return request;
 }

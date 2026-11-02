@@ -1422,6 +1422,7 @@ func (s *Store) appendUserMessage(
 			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
 			Continuation:        boolInt(msg.Continuation),
+			AuthoredByUser:      boolInt(msg.AuthoredByUser),
 			SenderSessionID:     msg.SenderSessionID,
 			SenderProjectID:     msg.SenderProjectID,
 			SenderDisplayName:   msg.SenderDisplayName,
@@ -1432,9 +1433,7 @@ func (s *Store) appendUserMessage(
 		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
-			if err := q.IncrementUsageMessageSummary(ctx, gen.IncrementUsageMessageSummaryParams{
-				SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},
-			}); err != nil {
+			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
 				return fmt.Errorf("record usage message count: %w", err)
 			}
 		}
@@ -1669,6 +1668,19 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+}
+
+// SettleTurnWithFailureCode retains a provider-classified cause beside the raw
+// error so recovery guidance survives a daemon or desktop restart.
+func (s *Store) SettleTurnWithFailureCode(
+	ctx context.Context,
+	conversationID, providerTurnID string,
+	state domain.TurnState,
+	errMessage string,
+	failureCode domain.ConversationFailureCode,
+	now time.Time,
+) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -1694,6 +1706,7 @@ func (s *Store) SettleTurn(
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  string(failureCode),
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turn.ID,
 	}); err != nil {
@@ -2630,7 +2643,8 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	}
 	return domain.QueuedTurn{
 		TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
-		Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
+		Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0,
+		DeliveryContentJSON: row.DeliveryContentJson,
 	}, nil
 }
 
@@ -2911,6 +2925,7 @@ func (s *Store) SettleTurnByID(
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  "",
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turnID,
 	}); err != nil {
@@ -4555,6 +4570,7 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 		ProviderInputText:  row.ProviderInputText,
 		State:              row.State,
 		ErrorMessage:       row.ErrorMessage,
+		FailureCode:        domain.ConversationFailureCode(row.FailureCode),
 		RequestedAt:        row.RequestedAt,
 	}
 	if row.RetryOfTurnID.Valid {
@@ -4619,6 +4635,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		Continuation:        row.Continuation != 0,
+		AuthoredByUser:      row.AuthoredByUser != 0,
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,
