@@ -110,15 +110,16 @@ test("chat minimap does not make the session pane scroll horizontally", async ({
 	expect(pane.overflowX).toBe("hidden");
 });
 
-test("chat keeps the latest prompt still while either sidebar animates", async ({ page }) => {
+test("chat keeps the latest prompt still while either sidebar animates @P0", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference" });
 	await page.waitForTimeout(1500);
 	for (const name of ["Open inspector panel", "Collapse sidebar", "Expand sidebar", "Close inspector panel"]) {
-		const frames = page.evaluate(async () => {
+		const samples = await page.getByRole("button", { name, exact: true }).last().evaluate(async (button) => {
 			const log = document.querySelector<HTMLElement>('[role="log"]')!;
 			const prompt = [...log.querySelectorAll<HTMLElement>('[data-chat-turn]')].at(-1)!;
-			const samples: number[][] = [];
+			const samples = [[0, log.clientWidth, log.scrollTop, log.scrollHeight, prompt.getBoundingClientRect().top]];
 			const start = performance.now();
+			button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 			while (performance.now() - start < 1000) {
 				await new Promise(requestAnimationFrame);
 				await new Promise((resolve) => setTimeout(resolve, 0));
@@ -126,25 +127,25 @@ test("chat keeps the latest prompt still while either sidebar animates", async (
 			}
 			return samples;
 		});
-		await page.getByRole("button", { name, exact: true }).last().click();
-		const samples = await frames;
+		expect(new Set(samples.map((sample) => sample[1])).size).toBeGreaterThan(1);
 		const tops = samples.map((sample) => sample[4]!);
 		expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2);
 	}
 });
 
-test("chat keeps an older turn still while either sidebar animates", async ({ page }) => {
+test("chat keeps an older turn still while either sidebar animates @P0", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference" });
 	await page.waitForTimeout(1500);
 	await page.getByRole("log").evaluate((log) => { log.scrollTop = log.scrollHeight / 2; });
 	await page.waitForTimeout(500);
 	for (const name of ["Open inspector panel", "Collapse sidebar", "Expand sidebar", "Close inspector panel"]) {
-		const frames = page.evaluate(async () => {
+		const samples = await page.getByRole("button", { name, exact: true }).last().evaluate(async (button) => {
 			const log = document.querySelector<HTMLElement>('[role="log"]')!;
 			const top = log.getBoundingClientRect().top;
 			const prompt = [...log.querySelectorAll<HTMLElement>('[data-chat-turn]')].find((row) => row.getBoundingClientRect().top <= top && row.getBoundingClientRect().bottom > top)!;
-			const samples: number[][] = [];
+			const samples = [[0, log.clientWidth, log.scrollTop, log.scrollHeight, prompt.getBoundingClientRect().top]];
 			const start = performance.now();
+			button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 			while (performance.now() - start < 1000) {
 				await new Promise(requestAnimationFrame);
 				await new Promise((resolve) => setTimeout(resolve, 0));
@@ -152,8 +153,7 @@ test("chat keeps an older turn still while either sidebar animates", async ({ pa
 			}
 			return samples;
 		});
-		await page.getByRole("button", { name, exact: true }).last().click();
-		const samples = await frames;
+		expect(new Set(samples.map((sample) => sample[1])).size).toBeGreaterThan(1);
 		const tops = samples.map((sample) => sample[4]!);
 		expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2);
 	}

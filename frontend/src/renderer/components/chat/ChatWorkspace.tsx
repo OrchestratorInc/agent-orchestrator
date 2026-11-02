@@ -2722,7 +2722,7 @@ export function Timeline({
 	// Width reflow must settle in place, even when virtual measurements reach the
 	// DOM in a later commit. Smooth follow is reserved for conversation growth.
 	const viewportSize = useRef<{ width: number; height: number } | undefined>(undefined);
-	const viewportResize = useRef<{ anchor?: { index: number; offset: number } } | undefined>(undefined);
+	const viewportResize = useRef<{ anchor?: { key: string | number | bigint; offset: number } } | undefined>(undefined);
 	const promptSpacer = useRef<HTMLDivElement>(null);
 	const scrollTrack = useRef<HTMLDivElement>(null);
 	const drag = useRef<{
@@ -3650,7 +3650,7 @@ export function Timeline({
 		if (previous && (previous.width !== next.width || previous.height !== next.height) && !viewportResize.current) {
 			const row = instance.getVirtualItemForOffset(node.scrollTop);
 			viewportResize.current = {
-				anchor: !pinnedRef.current && row ? { index: row.index, offset: row.start - node.scrollTop } : undefined,
+				anchor: !pinnedRef.current && row ? { key: row.key, offset: row.start - node.scrollTop } : undefined,
 			};
 		}
 		viewportSize.current = next;
@@ -3959,8 +3959,9 @@ export function Timeline({
 		syncPromptSpacer();
 		if (pinnedRef.current) followOrSnapToEnd(node);
 		else if (resize.anchor) {
-			const row = virtualizer.measurementsCache[resize.anchor.index];
-			if (row) node.scrollTop = row.start - resize.anchor.offset;
+			const anchor = resize.anchor;
+			const row = virtualizer.measurementsCache.find((candidate) => candidate.key === anchor.key);
+			if (row) node.scrollTop = row.start - anchor.offset;
 		}
 		markWritten(node.scrollTop);
 		lastScrollTop.current = node.scrollTop;
