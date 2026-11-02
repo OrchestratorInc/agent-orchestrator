@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { captureFileReference } from "../../../shared/chat-file-reference";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -14,6 +15,7 @@ const cloudMocks = vi.hoisted(() => ({
 	steerTurn: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
+	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
@@ -43,7 +45,27 @@ const session = {
 } satisfies WorkspaceSession;
 
 describe("CloudSessionChatSurface", () => {
-	beforeEach(() => localStorage.clear());
+	beforeEach(() => {
+		localStorage.clear();
+		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+	});
+	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
+		cloudMocks.listChatModels.mockResolvedValue({models:[]});
+		cloudMocks.sendSessionMessage.mockReset().mockRejectedValueOnce(new Error("offline")).mockResolvedValue({event:{}});
+		const queryClient=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}});
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{...session,cloud:{orgId:"org-1"}}}/></QueryClientProvider>);
+		const props=cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.fileReferenceDelivery).toBe("text");
+		const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_PROVIDER_MARKER"}]},session.id);
+		await expect(props.onSend("question",undefined,"capture-retry",undefined,[ref])).rejects.toThrow("offline");
+		await props.onSend("question",undefined,"capture-retry",undefined,[ref]);
+		const calls=cloudMocks.sendSessionMessage.mock.calls;
+		expect(calls[1]).toEqual(calls[0]);
+		expect(calls[0][2].text.match(/CLOUD_PROVIDER_MARKER/g)).toHaveLength(1);
+		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
+		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
+	});
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -237,6 +259,240 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("shows the agent's catalog while the worker cannot list its models yet", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ source: "worker", models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "opus", displayName: "Opus", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")).toMatchObject({
+			currentValue: "sonnet", choices: [{ value: "sonnet" }, { value: "opus" }],
+		}));
+		expect(cloudMocks.listUserAgentModels).toHaveBeenCalledWith("org-1", "claude-code", expect.anything());
+		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+	});
+
+	it("names the session's default model while the catalog stands in, as the worker will", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "opus", displayName: "Opus", default: false },
+			{ id: "default", displayName: "Sonnet", default: true },
+		] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().snapshot.settings.model).toBe("default"));
+		// Shown, not chosen: the turn still runs the session's default.
+		await props().onSend("go", [], "default-1");
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("model");
+	});
+
+	it("names the model the session's messages last ran with while the catalog stands in, without choosing it", async () => {
+		const message = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `message ${sequence}`, ...payload }, createdAt: "2026-10-31T07:00:00Z",
+		});
+		// The session launched on the default; a later message picked Terra at low effort, and the last one named no model.
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({
+			events: [message(1, {}), message(2, { model: "gpt-5.6-terra", reasoningEffort: "low" }), message(3, {})], hasMore: false, nextAfter: 3,
+		});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true, efforts: ["low", "medium"], defaultEffort: "medium" },
+			{ id: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", default: false, efforts: ["low", "medium"], defaultEffort: "medium" },
+		] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		// What a turn sent now runs, as the worker will report: not the catalog's default.
+		await waitFor(() => expect(props().snapshot.settings).toMatchObject({ model: "gpt-5.6-terra", reasoningEffort: "low" }));
+		// The bar sends back what it shows with a new effort: the effort is picked, the shown model is not.
+		act(() => props().onChooseSettings({ ...props().snapshot.settings, reasoningEffort: "medium" }));
+		await props().onSend("go", [], "terra-1");
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ reasoningEffort: "medium" });
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("model");
+	});
+
+	it("names no model while the catalog stands in until the session's messages have loaded", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true },
+			{ id: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models).toHaveLength(2));
+		// The catalog is there, but the session may have picked another model: none is named yet,
+		// neither as the setting nor as the list's default the composer would fall back to.
+		expect(props().snapshot.settings.model).toBeUndefined();
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+	});
+
+	it("names no Claude model while the catalog stands in until the session's messages have loaded", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const option = (id: string) => props().configOptions?.find((entry: { id: string }) => entry.id === id);
+		await waitFor(() => expect(option("model")?.choices).toHaveLength(2));
+		// The session may have last run Haiku: neither the catalog's default model nor its effort is named.
+		expect(option("model")?.currentValue).toBeUndefined();
+		expect(option("effort")).toBeUndefined();
+		expect(props().snapshot.settings.model).toBeUndefined();
+	});
+
+	it("names no Claude model from the device's own catalog before the session's messages load", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		// The control plane's catalog has not answered either.
+		cloudMocks.listUserAgentModels.mockReset().mockReturnValue(new Promise(() => {}));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models.length).toBeGreaterThan(0));
+		// The device's default (Opus) is not the session's: the composer has nothing to fall back to.
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+		expect(props().snapshot.settings.model).toBeUndefined();
+	});
+
+	it("names the control plane's default, not the device's, when the session's messages name no model", async () => {
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		let answer: (value: unknown) => void = () => {};
+		cloudMocks.listUserAgentModels.mockReset().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		await waitFor(() => expect(props().models.length).toBeGreaterThan(0));
+		// Messages loaded, no model named, the catalog still on its way: the device's Opus is not named.
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+		answer({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }, { id: "opus", displayName: "Opus" }] });
+		await waitFor(() => expect(props().snapshot.settings.model).toBe("sonnet"));
+	});
+
+	it("names the Claude model the session's messages last ran with once they load", async () => {
+		const message = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `message ${sequence}`, ...payload }, createdAt: "2026-10-31T07:00:00Z",
+		});
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [message(1, {}), message(2, { model: "haiku" })], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const option = (id: string) => props().configOptions?.find((entry: { id: string }) => entry.id === id);
+		await waitFor(() => expect(option("model")?.currentValue).toBe("haiku"));
+		// Haiku has no effort levels: Sonnet's effort is not offered for it.
+		expect(option("effort")).toBeUndefined();
+	});
+
+	it("replaces the catalog with the worker's own list once it answers", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }] });
+		let answer: (value: unknown) => void = () => {};
+		cloudMocks.listChatModels.mockReset().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const modelOption = () => props().configOptions?.find((option: { id: string }) => option.id === "model");
+		await waitFor(() => expect(modelOption()?.currentValue).toBe("sonnet"));
+		answer({ model: "opus", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		await waitFor(() => expect(modelOption()).toMatchObject({ currentValue: "opus", choices: [{ value: "opus" }] }));
+	});
+
+	it("refreshes a waking session as soon as its worker connects in the chat events", async () => {
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		const connected = (sequence: number): CloudCpClientEvent => ({ sessionId: session.id, sequence, type: "worker.connected", payload: {}, createdAt: "2026-10-31T07:00:00Z" });
+		// The first page holds an earlier worker's connect; the next poll brings this one's.
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [connected(1)], hasMore: false, nextAfter: 1 })
+			.mockResolvedValue({ events: [connected(2)], hasMore: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const refreshes = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["cloud-sessions"])).length;
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: false, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1));
+		expect(refreshes()).toBe(0);
+		await waitFor(() => expect(refreshes()).toBe(1), { timeout: 3_000 });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
 	});
 
 	it("offers only the approval modes the selected model runs, and shows and sends the mode that runs after a model switch", async () => {
@@ -471,7 +727,7 @@ describe("CloudSessionChatSurface", () => {
 				<CloudSessionChatSurface session={starting} />
 			</QueryClientProvider>,
 		);
-		await waitFor(() => expect(cloudMocks.resumeSession).toHaveBeenCalledWith("org-1", session.id, { signal: expect.any(AbortSignal) }));
+		await waitFor(() => expect(cloudMocks.resumeSession).toHaveBeenCalledWith("org-1", session.id));
 		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 		// Still not connected on the next session poll: nothing is asked again.
@@ -678,23 +934,82 @@ describe("CloudSessionChatSurface", () => {
 		}
 	});
 
+	it("asks again when a just-connected worker fails its first catalog reads", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			const failed = () => new CloudCpError("The worker could not complete the operation.", { status: 422, code: "WORKER_OPERATION_FAILED" });
+			cloudMocks.listChatModels.mockReset()
+				.mockRejectedValueOnce(failed())
+				.mockRejectedValueOnce(failed())
+				.mockResolvedValue({ models: [{ id: "opus", displayName: "Opus", default: true }] });
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+				</QueryClientProvider>,
+			);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toHaveLength(1));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(3);
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps asking quietly while the worker is still setting up the coding agent", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			cloudMocks.listChatModels.mockReset()
+				.mockRejectedValueOnce(new CloudCpError("Setting up the coding agent on this workspace. Try again in a minute.", { status: 422, code: "CHAT_AGENT_INSTALLING" }))
+				.mockRejectedValueOnce(new CloudCpError("Setting up Chat UI on this workspace. Try again in a minute.", { status: 422, code: "CHAT_ADAPTER_INSTALLING" }))
+				.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+				</QueryClientProvider>,
+			);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toHaveLength(1));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(3);
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not show a model error kept from a worker that is gone", async () => {
-		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
-		cloudMocks.listChatModels.mockReset().mockRejectedValue(new CloudCpError("The worker could not complete the operation.", { status: 422, code: "WORKER_OPERATION_FAILED" }));
-		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const view = render(
-			<QueryClientProvider client={queryClient}>
-				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
-			</QueryClientProvider>,
-		);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toMatch(/^Model choices unavailable/));
-		view.rerender(
-			<QueryClientProvider client={queryClient}>
-				<CloudSessionChatSurface session={{ ...session, runtimeConnected: false, cloud: { orgId: "org-1" } }} />
-			</QueryClientProvider>,
-		);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined());
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			cloudMocks.listChatModels.mockReset().mockRejectedValue(new CloudCpError("The worker could not complete the operation.", { status: 422, code: "WORKER_OPERATION_FAILED" }));
+			cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(
+				<QueryClientProvider client={queryClient}>
+					<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+				</QueryClientProvider>,
+			);
+			// The failure shows once its retries (about a minute) run out.
+			await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toMatch(/^Model choices unavailable/));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(7);
+			view.rerender(
+				<QueryClientProvider client={queryClient}>
+					<CloudSessionChatSurface session={{ ...session, runtimeConnected: false, cloud: { orgId: "org-1" } }} />
+				</QueryClientProvider>,
+			);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined());
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not ask a deleted session for models and loads them once its restored worker connects", async () => {
@@ -1276,5 +1591,12 @@ describe("CloudSessionChatSurface", () => {
 		expect(toSnapshot(session, [...base, {
 			sessionId: session.id, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "turn-1", steering: true }, createdAt: session.updatedAt,
 		}]).capabilities).toEqual(["steer"]);
+	});
+});
+
+describe("cloudStartupChecklist", () => {
+	it("shows no checklist while a new Freestyle session's worker connects: its composer shimmers instead", () => {
+		const starting = { ...session, mode: "chat" as const, runtimeConnected: false, cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" } };
+		expect(cloudStartupChecklist(starting, [], undefined, false)).toBeUndefined();
 	});
 });

@@ -4,7 +4,7 @@ import type { CloudCpProviderConnection } from "./cloud-cp";
 
 /** The agents AO cloud offers: the ones with a cloud login on the Harness
  * settings page. Each must be accepted by the control plane's
- * validAgentProvider (cloud/internal/httpapi/provider_handlers.go). Unlike
+ * validAgentProvider (the control plane's internal/httpapi/provider_handlers.go). Unlike
  * local's full AGENT_OPTIONS list, cloud has no "install" step, so any
  * unlisted agent would just be a dead end. */
 export const CLOUD_AGENT_PROVIDERS = ["claude-code", "codex", "cursor", "opencode"] as const;

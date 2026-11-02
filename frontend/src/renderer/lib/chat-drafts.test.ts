@@ -1,3 +1,5 @@
+import { captureFileReference } from "../../shared/chat-file-reference";
+import { writeChatFileReferences } from "./chat-drafts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -47,6 +49,20 @@ class MemoryStorage implements DraftStorage {
 		this.values.delete(key);
 	}
 }
+
+it("refuses file reference writes during reserved preparation and accepts them after release", () => {
+	const storage = new MemoryStorage();
+	const scope = "reserved-file-intake";
+	writeChatComposerText(scope, "question", storage);
+	const snapshot = readChatSessionDraft(scope, storage).composer;
+	const token = beginChatComposerMutation(scope)!;
+	const ref = captureFileReference({ path: "a.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "captured();" }] }, scope);
+	expect(writeChatFileReferences(scope, [ref], storage).ok).toBe(false);
+	expect(readChatSessionDraft(scope, storage).composer).toEqual(snapshot);
+	cancelChatComposerMutation(scope, token);
+	expect(writeChatFileReferences(scope, [ref], storage).ok).toBe(true);
+	expect(readChatSessionDraft(scope, storage).composer.fileReferences).toEqual([ref]);
+});
 
 describe("optimistic composer drafts", () => {
 	const sent = { id: "sent", path: ".ao/attachments/sent.png", name: "sent.png", mimeType: "image/png", bytes: 4 };
@@ -1268,4 +1284,52 @@ describe("Chat draft storage", () => {
 		expect(equivalent.ok).toBe(true);
 		expect(equivalent.draft.composer.revision).toBe(first.draft.composer.revision);
 	});
+});
+
+it("preserves captured file annotations through migration, edits and rejected delivery, then clears acceptance", () => {
+ const storage = new MemoryStorage();
+ const scope = {sessionId:"file-annotation-lifecycle", incarnation:"one"};
+ const ref = captureFileReference({path:"src/a.ts", side:"file", line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"original();"}]},scope.sessionId);
+ writeChatComposerText(scope,"question",storage);
+ for (const [key,raw] of storage.values) { if(raw.includes('"composer"')) storage.setItem(key,JSON.stringify({...JSON.parse(raw),schemaVersion:2})); }
+ expect(readChatSessionDraft(scope,storage).schemaVersion).toBe(3);
+ expect(writeChatFileReferences(scope,[ref],storage).ok).toBe(true);
+ writeChatComposerText(scope,"edited question",storage);
+ writeChatAttachments(scope,[],storage);
+ expect(readChatSessionDraft(scope,storage).composer.fileReferences).toEqual([ref]);
+ const input = {kind:"send" as const,composerText:"edited question",requestText:"edited question",attachments:[],fileReferences:[ref],clientMessageId:"receipt",optimistic:true};
+ const prepared=prepareChatComposerDelivery(scope,input,storage);
+ expect(prepared.ok).toBe(true);
+ expect(prepared.draft.composer.delivery?.fileReferences).toEqual([ref]);
+ expect(prepared.draft.composer.delivery?.draft).toBeUndefined();
+ clearRejectedChatComposerDelivery(scope,"receipt",prepared.draft.composer.revision,storage);
+ expect(readChatSessionDraft(scope,storage).composer.fileReferences).toEqual([ref]);
+ const retry=prepareChatComposerDelivery(scope,input,storage);
+ clearAcceptedChatComposer(scope,retry.draft.composer.revision,storage);
+ expect(readChatSessionDraft(scope,storage).composer.fileReferences ?? []).toEqual([]);
+});
+
+it("acceptance removes only delivered annotations when a newer draft exists",()=>{
+ const storage=new MemoryStorage();const scope="newer-file-draft";
+ const ref=captureFileReference({path:"a.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"captured();"}]},scope);
+ const next={...ref,id:"next-selection"};
+ writeChatComposerText(scope,"first question",storage);writeChatFileReferences(scope,[ref],storage);
+ const prepared=prepareChatComposerDelivery(scope,{kind:"send",composerText:"first question",requestText:"first question",attachments:[],fileReferences:[ref],clientMessageId:"first"},storage);
+ writeChatComposerText(scope,"next question",storage);writeChatFileReferences(scope,[ref,next],storage);
+ clearAcceptedChatComposer(scope,prepared.draft.composer.revision,storage);
+ const draft=readChatSessionDraft(scope,storage);
+ expect(draft.composer.text).toBe("next question");expect(draft.composer.fileReferences).toEqual([next]);
+});
+
+it("restores a question and mixed-side file selection whose new line precedes its old line number", () => {
+ const storage = new MemoryStorage();
+ const scope = {sessionId:"mixed-side-reload",incarnation:"one"};
+ const ref = captureFileReference({path:"a.ts",side:"old",endSide:"new",line:10,endLine:9,lines:[{kind:"del",side:"old",oldNo:10,newNo:null,text:"removed();"},{kind:"context",side:"new",oldNo:11,newNo:9,text:"context();"}]},scope.sessionId);
+ expect(writeChatComposerText(scope,"keep my question",storage).ok).toBe(true);
+ expect(writeChatFileReferences(scope,[ref],storage).ok).toBe(true);
+ expect(readChatSessionDraft(scope,storage).composer.text).toBe("keep my question");
+ expect(readChatSessionDraft(scope,storage).composer.fileReferences).toEqual([ref]);
+ const prepared=prepareChatComposerDelivery(scope,{kind:"send",composerText:"keep my question",requestText:"keep my question",attachments:[],fileReferences:[ref],clientMessageId:"mixed-receipt"},storage);
+ expect(prepared.ok).toBe(true);
+ expect(readChatSessionDraft(scope,storage).composer.delivery?.fileReferences).toEqual([ref]);
 });

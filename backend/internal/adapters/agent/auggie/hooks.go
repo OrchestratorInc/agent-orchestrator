@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -87,7 +88,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err != nil {
 		return fmt.Errorf("auggie.GetAgentHooks: resolve workspace path: %w", err)
 	}
-	executable, err := os.Executable()
+	executable, err := agentlaunch.Executable()
 	if err != nil {
 		return fmt.Errorf("auggie.GetAgentHooks: resolve AO executable: %w", err)
 	}

@@ -12,15 +12,6 @@ import {
 import type { ConversationSnapshot } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
 
-// The sign-in banner reads the session's account; these tests cover the chrome
-// without a daemon, so the account reads answer nothing.
-vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
-	useSessionAgentAccounts: () => ({ data: undefined }),
-	useAgentAccounts: () => ({ data: undefined }),
-	useAgentAccountActions: () => ({}),
-}));
-
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.
 
@@ -175,6 +166,9 @@ describe("plan", () => {
 });
 
 describe("provider state chrome", () => {
+	// The notice never repeats the provider's error; the timeline already shows it once.
+	const expiredNotice = "Your Codex login has expired. Log in again to keep using this chat.";
+
 	it.each(["completion", "notification", "both"])("keeps the %s failure in chat while preserving sign-in guidance", (source) => {
 		const reason = "Provider access denied.\n\nContact your administrator.";
 		const snapshot: ConversationSnapshot = {
@@ -226,17 +220,13 @@ describe("provider state chrome", () => {
 		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
 			fireEvent.click(trigger);
 		}
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 		expect(screen.getByText(/Contact your administrator/)).toBeInTheDocument();
 		expect(screen.getByText("Earlier recovered warning")).toBeInTheDocument();
 
 		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 
 		rerender(
@@ -245,12 +235,13 @@ describe("provider state chrome", () => {
 			/>,
 		);
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
-		expect(screen.getByRole("alert")).toHaveTextContent("Session expired.");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 	});
 
 	it("keeps credential recovery available when the failure is not in loaded history", () => {
 		render(<ChatWorkspace snapshot={chatFixtureReauth} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(/Provider authentication needs attention/);
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 	});
 
 	it("reports a provider-side thread fault while the controller is healthy", () => {

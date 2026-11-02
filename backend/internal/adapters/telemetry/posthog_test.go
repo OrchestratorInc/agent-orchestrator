@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -79,6 +80,96 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	for _, name := range []string{"ao.usage.messages_sent", "ao.prs.closed"} {
+		t.Run(name, func(t *testing.T) {
+			sink := &PostHogSink{ch: make(chan ports.TelemetryEvent, 1), log: slog.Default()}
+			sink.ch <- ports.TelemetryEvent{Name: "queued"}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				sink.Emit(ctx, ports.TelemetryEvent{Name: name})
+				close(done)
+			}()
+			select {
+			case <-done:
+				t.Fatal("durable event dropped while the queue was full")
+			case <-time.After(20 * time.Millisecond):
+			}
+			<-sink.ch
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("durable event did not enter the queue after capacity opened")
+			}
+			if event := <-sink.ch; event.Name != name {
+				t.Fatalf("queued event = %q", event.Name)
+			}
+		})
+	}
+}
+
+func TestUsageEventPayloadAllowlistRejectsContentAndInvalidIdentifiers(t *testing.T) {
+	projectID := "e484ce2d-1eb9-445a-ae52-a2e088870328"
+	sessionID := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{"ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed"} {
+		got := sanitizeRemotePayload(name, map[string]any{
+			"project_telemetry_id": projectID,
+			"session_telemetry_id": sessionID,
+			"count":                int64(3),
+			"historical":           true,
+			"repo":                 "private/repo",
+			"url":                  "https://github.com/private/repo/pull/1",
+			"title":                "private PR title",
+			"text":                 "private message",
+		})
+		if got["project_telemetry_id"] != projectID || got["count"] != int64(3) {
+			t.Fatalf("%s required payload = %#v", name, got)
+		}
+		for _, forbidden := range []string{"repo", "url", "title", "text"} {
+			if _, ok := got[forbidden]; ok {
+				t.Fatalf("%s leaked %s", name, forbidden)
+			}
+		}
+	}
+	if got := sanitizeRemotePayload("ao.usage.messages_sent", map[string]any{
+		"project_telemetry_id": "/private/repo", "session_telemetry_id": "worker-1",
+	}); len(got) != 0 {
+		t.Fatalf("invalid identifiers exported: %#v", got)
+	}
+}
+
+func TestMergedViaOnlyExportsKnownSurfaces(t *testing.T) {
+	for _, via := range []string{"desktop", "mobile", "cli", "github"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if got["merged_via"] != via {
+			t.Fatalf("merged_via %q = %#v", via, got)
+		}
+	}
+	for _, via := range []string{"other", "mobile_swipe", "https://example.com/private"} {
+		got := sanitizeRemotePayload("ao.usage.worker_pr_merged", map[string]any{"merged_via": via})
+		if _, ok := got["merged_via"]; ok {
+			t.Fatalf("merged_via %q escaped sanitization: %#v", via, got)
+		}
+	}
+}
+
+func TestRenamedEventAllowlists(t *testing.T) {
+	ended := sanitizeRemotePayload("ao.sessions.ended", map[string]any{
+		"kind": "standalone", "duration_ms": int64(1500), "duration_s": int64(1), "text": "private",
+	})
+	if ended["kind"] != "standalone" || ended["duration_ms"] != int64(1500) || len(ended) != 2 {
+		t.Fatalf("ended payload = %#v", ended)
+	}
+	closed := sanitizeRemotePayload("ao.prs.closed", map[string]any{
+		"kind": "worker", "count": int64(1), "title": "private",
+	})
+	if closed["kind"] != "worker" || closed["count"] != int64(1) || len(closed) != 2 {
+		t.Fatalf("closed payload = %#v", closed)
 	}
 }
 

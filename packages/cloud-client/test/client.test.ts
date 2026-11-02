@@ -775,6 +775,25 @@ describe("CloudClient", () => {
     );
   });
 
+  it("loads the model catalog a new task's agent runs with", async () => {
+    const catalog = {
+      models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }],
+      source: "release" as const,
+      cliVersion: "2.1.287",
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listUserAgentModels("org/a", "claude-code")).resolves.toEqual(catalog);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%2Fa/providers/claude-code/models",
+    );
+  });
+
   it("streams replayed SSE events from an explicit cursor", async () => {
     const abort = new AbortController();
     const encoder = new TextEncoder();

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
@@ -87,7 +88,7 @@ var codexManagedHooks = []codexHookSpec{
 // hooks through a login shell, which may replace PATH, so every hook invokes
 // this exact AO executable instead of relying on a bare `ao` lookup.
 func appendSessionHookFlags(cmd *[]string) error {
-	executable, err := os.Executable()
+	executable, err := agentlaunch.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve AO hook executable: %w", err)
 	}

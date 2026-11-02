@@ -227,3 +227,25 @@ func TestStartPollLoop_LogsPollErrorWithoutPanic(t *testing.T) {
 		t.Fatalf("expected at least 2 polls under error path, got %d", ran.Load())
 	}
 }
+
+func TestStartTriggeredPollLoopPollsOnTriggerBeforeTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	polls := make(chan struct{}, 4)
+	trigger := make(chan struct{}, 1)
+	done := StartTriggeredPollLoop(ctx, time.Hour, trigger, func(context.Context) error {
+		polls <- struct{}{}
+		return nil
+	}, nil, "test")
+	defer func() { cancel(); <-done }()
+
+	for i, step := range []string{"initial poll", "triggered poll"} {
+		if i == 1 {
+			trigger <- struct{}{}
+		}
+		select {
+		case <-polls:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s did not run", step)
+		}
+	}
+}

@@ -1,3 +1,8 @@
+import {
+  sanitizeBrowserTitle,
+  sanitizeBrowserURL,
+  sanitizeURLsInText,
+} from "../shared/browser-sanitize";
 import type {
   IpcMain,
   IpcMainEvent,
@@ -26,6 +31,7 @@ import type {
   BrowserAnnotationStatePayload,
   BrowserAnnotationSubmitPayload,
 } from "../shared/browser-annotations";
+import { createBrowserAnnotationSession } from "../shared/browser-annotations";
 import {
   browserProfilePartition,
   isValidBrowserProfileSessionId,
@@ -503,6 +509,8 @@ export type BrowserViewHostOptions = {
   // Answers passkey account selection for every Browser tab session.
   webAuthnAccountChooser?: WebAuthnAccountChooser;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
+  // Configures a browser partition's session before its first page exists.
+  prepareBrowserPartition?: (partition: string) => void;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -868,7 +876,9 @@ export function clampBoundsToWindow(
   return {
     x,
     y,
-    width: Math.min(rounded.width, Math.max(0, maxX - x)),
+    // The inspector slides beyond the window's right edge. Let the native
+    // window clip it rather than resizing the page to the visible slice.
+    width: Math.min(rounded.width, maxX),
     height: Math.min(rounded.height, Math.max(0, maxY - y)),
   };
 }
@@ -1046,10 +1056,17 @@ export function createBrowserViewHost(
     view: BrowserViewLike,
     bounds: BrowserRect,
     visible?: boolean,
-  ): void => {
-    view.setBounds(bounds);
+  ): BrowserRect => {
+    // Parking a hidden page must only move it: the default offscreen size
+    // would reflow it on every inspector close, session switch, and tab switch.
+    const current = bounds === OFFSCREEN_BOUNDS ? view.getBounds?.() : undefined;
+    const applied = current && current.width > 0 && current.height > 0
+      ? { ...bounds, width: current.width, height: current.height }
+      : bounds;
+    view.setBounds(applied);
     if (visible !== undefined) view.setVisible?.(visible);
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
+    return applied;
   };
   const pushDevToolsState = (
     session: BrowserSessionEntry,
@@ -1145,6 +1162,7 @@ export function createBrowserViewHost(
       preload: options.annotatePreloadPath,
       sandbox: true,
     };
+    options.prepareBrowserPartition?.(session.profilePartition);
     const view = new options.WebContentsView({
       webPreferences,
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
@@ -2666,10 +2684,10 @@ export function createBrowserViewHost(
         // Show the native view before moving it so Chromium updates its bounds,
         // but keep it completely outside the window while mobile is watching.
         entry.view.setVisible?.(true);
-        applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS);
+        const parkingBounds = applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS);
         const parked = entry.view.getBounds?.();
-        if (parked && (parked.x !== OFFSCREEN_BOUNDS.x || parked.y !== OFFSCREEN_BOUNDS.y ||
-          parked.width !== OFFSCREEN_BOUNDS.width || parked.height !== OFFSCREEN_BOUNDS.height)) {
+        if (parked && (parked.x !== parkingBounds.x || parked.y !== parkingBounds.y ||
+          parked.width !== parkingBounds.width || parked.height !== parkingBounds.height)) {
           entry.view.setVisible?.(false);
           session.live.sink.error("BROWSER_CAPTURE_UNAVAILABLE", "Browser capture could not be parked outside the desktop window");
         }
@@ -3565,15 +3583,19 @@ export function createBrowserViewHost(
     if (!stored || stored.token !== input.sessionToken) return;
     entry.annotationEnabled = false;
     if (input.success) entry.annotationSessions.delete(input.pageKey);
-    if (activeEntry(browserSession) !== entry) return;
+    const active = activeEntry(browserSession) === entry;
+    // The page keeps its own copy of the batch and only drops it when handed
+    // a replacement, so a sent batch is replaced even on a background tab.
+    if (!active && !input.success) return;
+    const pageSession = input.success
+      ? createBrowserAnnotationSession(stored.session.page.url, stored.session.page.title)
+      : annotationSessionFor(entry);
     entry.view.webContents.send("browser:annotation:setMode", {
       enabled: false,
-      ...(annotationSessionFor(entry)
-        ? { session: annotationSessionFor(entry) }
-        : {}),
+      ...(pageSession ? { session: pageSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
     });
-    pushAnnotationState(options, entry);
+    if (active) pushAnnotationState(options, entry);
   };
 
   const discardAnnotationFromShell = (
@@ -6393,50 +6415,6 @@ function selectedNetworkHeaders(
   return Object.keys(selected).length > 0 ? selected : undefined;
 }
 
-// Safe-to-retain URL form: keep the location useful while removing values that
-// commonly carry credentials or one-time handoff material.
-export function sanitizeBrowserURL(raw: string): string {
-  if (!raw) return "";
-  if (raw === "about:blank") return raw;
-  try {
-    const url = new URL(raw);
-    if (!["http:", "https:", "file:"].includes(url.protocol)) {
-      return `${url.protocol}[redacted]`;
-    }
-    url.username = "";
-    url.password = "";
-    url.hash = "";
-    for (const name of [...url.searchParams.keys()]) {
-      url.searchParams.set(name, "[redacted]");
-    }
-    return url.href;
-  } catch {
-    const withoutFragment = raw.split("#", 1)[0] ?? "";
-    const withoutQuery = withoutFragment.split("?", 1)[0] ?? "";
-    return withoutQuery
-      .replace(/^([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@/i, "$1")
-      .slice(0, 2_000);
-  }
-}
-
-export function sanitizeBrowserTitle(raw: string): string {
-  const title = raw.trim();
-  if (
-    /^(?:[a-z][a-z\d+.-]*:\/\/|(?:about|mailto|data|javascript|blob):)/i.test(
-      title,
-    )
-  ) {
-    return sanitizeBrowserURL(title);
-  }
-  return sanitizeURLsInText(raw);
-}
-
-function sanitizeURLsInText(raw: string): string {
-  return raw.replace(/\b(?:https?|file):\/\/[^\s<>"']+/gi, (match) =>
-    sanitizeBrowserURL(match),
-  );
-}
-
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -6637,3 +6615,5 @@ function abortableBrowserResult<T>(
 function browserError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
 }
+
+export { sanitizeBrowserTitle, sanitizeBrowserURL };

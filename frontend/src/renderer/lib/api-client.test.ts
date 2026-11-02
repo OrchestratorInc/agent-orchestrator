@@ -322,6 +322,18 @@ describe("api error telemetry", () => {
 		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps daemon unavailability and probe 4xx out of Sentry", async () => {
+		setApiBaseUrl(null);
+		setApiDaemonStatus({ state: "stopped" });
+		await apiClient.GET("/api/v1/agents");
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
+		setApiBaseUrl("http://127.0.0.1:3037");
+		await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/models", { params: { path: { sessionId: "test" } } });
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+	});
+
 	it("reports a failed project or session list like any other request", async () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("oops", { status: 500 }));
 		setApiBaseUrl("http://127.0.0.1:3037");

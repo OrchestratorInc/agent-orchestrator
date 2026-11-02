@@ -17,13 +17,10 @@ import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
-import { sniffImageMimeType } from "../imageMime";
+import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
+import { useImagePaste } from "./useImagePaste";
 
-const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 500_000;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
-const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 /** Reviewer-only composer: send/attachments/interrupt, deliberately no session actions. */
 export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnabled = true, onSend, onAcknowledgeSend, completedRetry, onInterrupt, restingInset, dockRiseOverride }: {
@@ -58,6 +55,10 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		void onAcknowledgeSend(completedRetry.id).catch((cause) => setError(cause instanceof Error ? cause.message : "Could not clear the sent reply."));
 	}, [completedRetry, onAcknowledgeSend, text, clearAttachments]);
 
+	const pasteLayout = useImagePaste(stopped || submitting || !attachmentsEnabled ? null : (assets, overflow) => {
+		setError("");
+		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
+	});
 	const addPhoto = async () => {
 		// Captured now: the pick can outlive this composer (see ChatComposer).
 		const key = attachmentKey;
@@ -66,25 +67,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
-			const errors = new Set<string>();
-			const next = result.assets.flatMap((asset): Attachment[] => {
-				if (!asset.base64) { errors.add("Some images couldn't be read and were skipped."); return []; }
-				// Typed by the exported bytes, not the picker's label (see ChatComposer).
-				const mimeType = (sniffImageMimeType(asset.base64) ?? (asset.mimeType || "image/jpeg")).toLowerCase();
-				if (!IMAGE_TYPES.has(mimeType)) { errors.add("Only PNG, JPEG, GIF, WebP, and BMP images are supported."); return []; }
-				const bytes = asset.fileSize ?? Math.floor(asset.base64.length * 0.75);
-				if (bytes > MAX_IMAGE_BYTES) { errors.add("Each image must be under 10 MB."); return []; }
-				return [{ id: `${asset.assetId || asset.uri}-${Date.now()}`, kind: "image", name: asset.fileName || "Image", bytes, image: { mimeType, data: asset.base64 } }];
-			});
-			const accepted = [...readComposerAttachments(key).items];
-			let imageBytes = accepted.reduce((sum, item) => sum + (item.kind === "image" ? item.bytes : 0), 0);
-			for (const item of next) {
-				if (accepted.length >= MAX_ATTACHMENTS) { errors.add(`You can attach up to ${MAX_ATTACHMENTS} items.`); break; }
-				if (item.kind === "image" && imageBytes + item.bytes > MAX_IMAGE_BYTES_TOTAL) { errors.add("Images must total under 25 MB."); break; }
-				accepted.push(item);
-				if (item.kind === "image") imageBytes += item.bytes;
-			}
-			updateComposerAttachments(key, () => ({ items: accepted, notice: errors.size ? [...errors].join(" ") : undefined }));
+			attachComposerImages(key, result.assets);
 		} catch (cause) {
 			const notice = cause instanceof Error ? cause.message : "Could not attach this photo.";
 			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
@@ -147,6 +130,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 			<View style={styles.composerRow}>
 				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
 				<TextInput
+					onLayout={pasteLayout}
 					accessibilityLabel="Reply to reviewer"
 					value={text}
 					onChangeText={setText}

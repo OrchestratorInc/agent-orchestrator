@@ -9,7 +9,7 @@ const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
 // The commit selection is not here: its key (the SHAs, a view's fenced tip and base, or
 // the manifest version) names content that never changes.
-const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-branches", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
+const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-branches", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file", "files-preview-end-of-file"] as const;
 const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
 const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
 
@@ -97,7 +97,29 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const stream = {} as WorkspaceStream;
 	const key = sessionUiKey(sessionId, hostId);
 	const queryPrefix = (name: string) => hostId ? [name, hostId, sessionId] : [name, sessionId];
+	let annotationTimer: ReturnType<typeof setTimeout> | undefined;
+	let annotationRunning = false;
+	let annotationDirty = false;
+	const scheduleAnnotations = () => {
+		annotationDirty = true;
+		if (stream.disposed || annotationTimer || annotationRunning) return;
+		// Event throttle, not a quiet-period debounce: continuous writes still refresh.
+		annotationTimer = setTimeout(() => {
+			annotationTimer = undefined;
+			annotationDirty = false;
+			annotationRunning = true;
+			const alreadyFetching = queryClient.isFetching({ queryKey: queryPrefix("file-annotation-source") }) > 0;
+			void Promise.resolve(queryClient.invalidateQueries({ queryKey: queryPrefix("file-annotation-source") }, { cancelRefetch: false }))
+				.finally(() => {
+					annotationRunning = false;
+					// A pre-existing request may have read the source before this event.
+					annotationDirty ||= alreadyFetching;
+					if (annotationDirty && !stream.disposed) scheduleAnnotations();
+				});
+		}, 2000);
+	};
 	const scheduleInvalidation = (names: readonly string[]) => {
+		if (names.includes("session-workspace-file")) scheduleAnnotations();
 		for (const name of names) stream.pendingInvalidations.add(name);
 		// Bound the wait from the first event: continuous agent writes must not
 		// postpone visible content refresh until the workspace becomes quiet.
@@ -251,6 +273,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	stream.disconnectBaseUrl = hostId ? subscribeConnectedHosts(stream.ensureConnected) : subscribeApiBaseUrl(stream.ensureConnected);
 	stream.dispose = () => {
 		stream.disposed = true;
+		if (annotationTimer) clearTimeout(annotationTimer);
 		if (stream.debounce) clearTimeout(stream.debounce);
 		stream.pendingInvalidations.clear();
 		stream.disconnectBaseUrl();

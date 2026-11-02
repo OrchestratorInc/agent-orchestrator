@@ -1,13 +1,15 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
+import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
+import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -97,8 +99,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
 				<BrowserDownloadsSection />
+				<BrowserChromeSection />
 			</>
 		),
+	},
+	{
+		id: "computerUse",
+		icon: MousePointerClick,
+		label: (t) => t("settings.computerUse"),
+		render: (_t, titleHidden) => <ComputerUseSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "coder",

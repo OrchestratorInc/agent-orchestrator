@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
@@ -22,7 +23,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
-import { topbarDragStyle } from "./ShellTopbar";
+import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -70,10 +71,17 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
+	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
+	const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
+	const onHeldAttachmentsChange = useCallback((attachments: FileAttachmentPayload[], preparing: boolean) => {
+		setHeldAttachments(attachments);
+		setAttachmentsPreparing(preparing);
+	}, []);
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
 	// "@" files and attachments go through the prepared worktree's session, which
-	// becomes the task's session on send. Scratchpad has none, so it offers neither.
+	// becomes the task's session on send. Until it is ready, and in Scratchpad, which
+	// has none, attachments stay in the composer and are uploaded with the task.
 	const preparedId = task.preparedSessionId || undefined;
 	const workspaceFiles = useQuery({
 		queryKey: ["new-chat-files", hostKey, preparedId ?? ""],
@@ -227,7 +235,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}, 0);
 	};
 
-	const send = async (text: string, _attachments?: unknown, clientMessageId: string = crypto.randomUUID()) => {
+	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
 		const target = { ...targetRef.current };
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
@@ -256,7 +264,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -277,7 +285,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const sendFallback = async () => {
 		const text = readChatSessionDraft(draftScope).composer.text.trim();
 		// A second click before the page re-renders must not start it twice.
-		if (!text || fallbackInFlight.current) return;
+		if (!text || fallbackInFlight.current || attachmentsPreparing) return;
 		fallbackInFlight.current = true;
 		const target = { ...targetRef.current };
 		fallbackRequest.current ??= crypto.randomUUID();
@@ -292,9 +300,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId);
+			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
+			writeChatAttachments(draftScope, []);
+			purgeFileAttachments(chatDraftScopeKey(draftScope));
 			await openSession(sessionId, brief, settings, fallback === "tui" ? "tui" : task.effectiveInterface, target);
 		} catch (error) {
 			if (!sendIsUncertain(error)) fallbackRequest.current = undefined;
@@ -310,12 +320,25 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
 	pendingRef.current = pending;
-	const notice = pending ? null : task.fallbackAction ? (
-		<div className="flex items-center justify-end">
-			<Button size="sm" variant="secondary" onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
+	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
+		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
+			<span>{task.error}</span>
+			{task.errorAction ? <div className="flex items-center gap-2">
+				{task.errorAction.input ? <input
+					aria-label={task.errorAction.input.label}
+					value={task.errorAction.input.value}
+					onChange={(event) => task.errorAction?.input?.onChange(event.target.value)}
+					className="min-w-0 max-w-40 rounded border border-current bg-background px-2 py-1 text-foreground"
+				/> : null}
+				<Button size="sm" variant="ghost" disabled={Boolean(task.errorAction.input && !task.errorAction.input.value.trim())} onClick={task.errorAction.onClick}>{task.errorAction.label}</Button>
+			</div> : null}
 		</div>
-	) : fallbackFailed && task.error ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
+	) : task.status ? (
+		<p role="status" className="px-1 text-xs text-foreground">{task.status}</p>
+	) : task.fallbackAction ? (
+		<div className="flex items-center justify-end">
+			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
+		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
 	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
@@ -331,9 +354,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			{/* No topbar yet: the strip only holds the session header's place, so the
-			    chat does not move when the session takes over, and drags the window. */}
-			<div aria-hidden="true" className="h-inspector-tabs w-full shrink-0" style={topbarDragStyle} />
+			{/* No session yet: the shared session frame with no tabs holds the header's
+			    place and surface, so nothing moves or changes colour at handoff. */}
+			<div aria-hidden="true" className="flex h-toolbar w-full shrink-0 overflow-hidden">
+				<SessionTabsTopbar hideActions tabs={null} />
+			</div>
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
 				// draft (text kept, staged files dropped above).
@@ -347,7 +372,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				attachLater={!workspaceReady}
+				holdAttachments
+				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}

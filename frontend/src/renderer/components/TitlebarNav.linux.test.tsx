@@ -39,7 +39,7 @@ describe("TitlebarNav on Linux", () => {
 		const { container } = render(<TitlebarNav />);
 
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("left-titlebar-cluster-left-linux", "top-0.75");
+		expect(nav).toHaveClass("left-titlebar-cluster-left-linux", "top-0.75", "h-toolbar");
 		expect(nav).not.toHaveClass("left-0");
 		expect(nav).not.toHaveClass("left-titlebar-cluster-left");
 	});

@@ -64,7 +64,7 @@ Paired phones can receive push notifications when notifications are allowed on t
 Orchestrator does not currently configure Slack, Discord, webhook notifiers, per-reaction retry budgets, or automatic merge from project config. Merge explicitly from the desktop or with:
 
 ```bash
-ao pr merge <pr-number>
+ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>
 ```
 
 ## Reviews

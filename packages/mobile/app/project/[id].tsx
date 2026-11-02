@@ -37,7 +37,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive } = useApp();
+	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -115,7 +115,13 @@ function ProjectScreenContent() {
 						<ActivityIndicator color={t.accent} />
 					</View>
 				) : connection !== "open" ? (
-					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+					linkHealth === "phone-offline" ? (
+						<EmptyState icon="wifi-off" title="You're offline" message="This project loads once this phone is back online." />
+					) : linkHealth === "reconnecting" ? (
+						<EmptyState icon="refresh-cw" title="Reconnecting…" message="This project loads once the app reconnects." />
+					) : (
+						<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
+					)
 				) : (
 					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
