@@ -56,17 +56,24 @@ func geminiText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &text) == nil {
 		return text
 	}
-	var parts []struct {
+	var part struct {
 		Text    string `json:"text"`
 		Thought bool   `json:"thought"`
 	}
+	if json.Unmarshal(raw, &part) == nil {
+		if part.Thought {
+			return ""
+		}
+		return part.Text
+	}
+	var parts []json.RawMessage
 	if json.Unmarshal(raw, &parts) != nil {
 		return ""
 	}
 	var out []string
-	for _, part := range parts {
-		if !part.Thought && part.Text != "" {
-			out = append(out, part.Text)
+	for _, raw := range parts {
+		if text := geminiText(raw); text != "" {
+			out = append(out, text)
 		}
 	}
 	return strings.Join(out, "\n")
@@ -294,6 +301,7 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 
 func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 	byID := map[string]sourceFiles{}
+	activity := map[string]time.Time{}
 	err := filepath.WalkDir(filepath.Join(root, "tmp"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -310,8 +318,9 @@ func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 			return nil
 		}
 		file := sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()}
-		if old, ok := byID[t.nativeID]; !ok || file.modTime.After(old.modTime) {
+		if _, ok := byID[t.nativeID]; !ok || t.last.After(activity[t.nativeID]) {
 			byID[t.nativeID] = file
+			activity[t.nativeID] = t.last
 		}
 		return nil
 	})

@@ -142,7 +142,7 @@ func readGooseTranscript(ctx context.Context, root string, paths ...string) (tra
 	if len(t.messages) == 0 {
 		return t, errors.New("no readable goose conversation")
 	}
-	if strings.TrimSpace(name) != "" && name != "New Chat" {
+	if strings.TrimSpace(name) != "" && name != "New Chat" && name != "CLI Session" {
 		t.title = importTitle(name)
 	} else if t.title == "" {
 		t.title = importTitle(description)
