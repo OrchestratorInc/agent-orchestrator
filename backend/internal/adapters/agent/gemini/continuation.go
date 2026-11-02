@@ -59,7 +59,10 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-func geminiSessionHeader(root *os.Root, path string) (string, error) {
+func geminiSessionHeader(ctx context.Context, root *os.Root, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	f, err := root.Open(path)
 	if err != nil {
 		return "", err
@@ -106,7 +109,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 		if err != nil || !filepath.IsLocal(rel) {
 			return nil
 		}
-		if id, err := geminiSessionHeader(root, rel); err == nil && id == ref.NativeSessionID {
+		if id, err := geminiSessionHeader(ctx, root, rel); err == nil && id == ref.NativeSessionID {
 			found = path
 			return fs.SkipAll
 		}
@@ -139,7 +142,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil || !filepath.IsLocal(rel) {
 		return errors.New("gemini source is outside provider home")
 	}
-	id, err := geminiSessionHeader(root, rel)
+	id, err := geminiSessionHeader(ctx, root, rel)
 	if err != nil || id != r.NativeSessionID {
 		return errors.New("gemini source no longer holds the imported conversation")
 	}
@@ -179,7 +182,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 			return errors.New("gemini destination belongs to another folder")
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
-		if err := writeGeminiImport(root, marker, []byte(cwd)); err != nil {
+		if err := writeGeminiImport(ctx, root, marker, []byte(cwd)); err != nil {
 			return err
 		}
 	} else {
@@ -187,7 +190,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	}
 	destination := filepath.Join(dir, "chats", filepath.Base(r.TranscriptPath))
 	if _, err := root.Stat(destination); err == nil {
-		if existing, err := geminiSessionHeader(root, destination); err != nil || existing != r.NativeSessionID {
+		if existing, err := geminiSessionHeader(ctx, root, destination); err != nil || existing != r.NativeSessionID {
 			return errors.New("gemini destination does not hold the imported conversation")
 		}
 		return nil // a retry must never overwrite AO's later turns
@@ -252,10 +255,13 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		}
 		copied.Write(encoded)
 	}
-	return writeGeminiImport(root, destination, copied.Bytes())
+	return writeGeminiImport(ctx, root, destination, copied.Bytes())
 }
 
-func writeGeminiImport(root *os.Root, path string, body []byte) error {
+func writeGeminiImport(ctx context.Context, root *os.Root, path string, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// First-open runs under the session input lease; the temporary name is
 	// private and never follows a pre-existing symlink or overwrites a source.
 	tmp := path + ".ao-import-tmp"
@@ -268,6 +274,9 @@ func writeGeminiImport(root *os.Root, path string, body []byte) error {
 	err = errors.Join(writeErr, f.Close())
 	if err != nil {
 		return fmt.Errorf("write gemini copy: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return root.Rename(tmp, path)
 }

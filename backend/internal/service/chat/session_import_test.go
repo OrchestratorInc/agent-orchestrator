@@ -167,7 +167,7 @@ func TestTerminalImportArchiveIsReadableButCannotSendChat(t *testing.T) {
 	st := sqlitetest.MustOpen(t)
 	now := time.Now()
 	rec, _, err := st.CreateImportedSession(ctx, domain.SessionRecord{
-		Kind: domain.KindWorker, Harness: domain.HarnessGoose, Mode: domain.SessionModeTUI,
+		Kind: domain.KindWorker, Harness: domain.HarnessGemini, Mode: domain.SessionModeTUI,
 		Activity: domain.Activity{State: domain.ActivityIdle}, CreatedAt: now, UpdatedAt: now,
 		Metadata: domain.SessionMetadata{AgentSessionID: "native-terminal",
 			ImportSource: &domain.SessionImportSource{NativeID: "native-terminal", ConfigDir: "/provider"}},

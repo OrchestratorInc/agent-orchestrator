@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -78,5 +79,31 @@ func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
 	got, err := readGeminiTranscript(context.Background(), root, path)
 	if err != nil || got.cwd != cwd || len(got.messages) != 2 {
 		t.Fatalf("legacy = %#v, %v", got, err)
+	}
+}
+
+func TestGeminiSkimsOversizeToolRecordAndKeepsVisibleText(t *testing.T) {
+	before := maxRecordBytes
+	maxRecordBytes = 256
+	t.Cleanup(func() { maxRecordBytes = before })
+	root, cwd := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "tmp", "synthetic", "chats")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), ".project_root"), []byte(cwd), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "session-2026-11-02T08-00-11111111.jsonl")
+	body := `{"sessionId":"11111111-1111-4111-8111-111111111111","projectHash":"synthetic"}
+{"id":"u","type":"user","content":"synthetic prompt"}
+{"id":"a","type":"gemini","content":"visible answer","toolCalls":[{"result":"` + strings.Repeat("synthetic tool payload ", 1000) + `"}]}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readGeminiTranscript(context.Background(), root, path)
+	if err != nil || len(got.messages) != 2 || !got.shortened || got.messages[1].Text != "visible answer" {
+		t.Fatalf("oversize = %#v, %v", got, err)
 	}
 }
