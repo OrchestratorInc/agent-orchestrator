@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useUiStore } from "../stores/ui-store";
 import {
 	useCreateCueMutation,
@@ -23,6 +24,11 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+
+/** A Cloud cue the control plane refused as invalid (400, 422) or as clashing with another (409). */
+function isCueRefusal(error: unknown): boolean {
+	return error instanceof CloudCpError && (error.status === 400 || error.status === 409 || error.status === 422) && error.message !== "";
+}
 
 type CuesSettingsProps = {
 	projectId: string;
@@ -160,7 +166,11 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 			else setFormOpen(null);
 		} catch (error) {
 			if (!mounted.current) return;
-			showGlobalToast(t("cues.saveFailed"), apiErrorMessage(error, t("cues.saveFailed")), "error");
+			// The control plane refuses a cue its project's rules do not allow (a
+			// name another cue has, ignoring case; a command cue with a prompt, or
+			// an agent cue with a command) and says why: the form shows it.
+			if (isCueRefusal(error)) setFormError(apiErrorMessage(error, t("cues.saveFailed")));
+			else showGlobalToast(t("cues.saveFailed"), apiErrorMessage(error, t("cues.saveFailed")), "error");
 		} finally {
 			pending.current = false;
 			if (mounted.current) setSaving(false);
