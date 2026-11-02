@@ -431,6 +431,28 @@ describe("CloudSessionChatSurface", () => {
 		expect(props().models.map((model: ChatModel) => model.id)).toEqual(["opus", "haiku"]);
 	});
 
+	it("names a Claude model's effort levels, so the composer shows the effort a turn runs with", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ model: "opus", models: [
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: true, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "high" },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const effort = () => props().configOptions?.find((option: { id: string }) => option.id === "effort");
+		await waitFor(() => expect(effort()?.currentValue).toBe("high"));
+		expect(effort().choices).toEqual([
+			{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "high", name: "High" },
+			{ value: "xhigh", name: "Extra high" }, { value: "max", name: "Max" },
+		]);
+		const composer = composerFor(props());
+		expect(composer.efforts.find((choice) => choice.value === composer.effort)?.label).toBe("High");
+	});
+
 	it("shows the agent's catalog while the worker cannot list its models yet", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });

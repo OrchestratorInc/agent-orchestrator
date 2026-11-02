@@ -418,7 +418,8 @@ export function TurnSettingsBar({
 			efforts: [
 				...(acpEffortOption?.choices ?? [])
 					.filter((choice) => choice.value && choice.value !== "default")
-					.map((choice) => ({ value: choice.value, label: choice.name })),
+					// A level the provider leaves unnamed is named as AO names it, never left blank.
+					.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
 				...(offersUltracode ? [{ value: ULTRACODE, label: "Ultracode" }] : []),
 			],
 			effort: offersUltracode && ultracode?.on

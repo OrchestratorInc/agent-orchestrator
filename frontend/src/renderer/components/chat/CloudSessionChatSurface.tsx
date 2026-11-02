@@ -26,6 +26,7 @@ import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspa
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
+import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -1491,10 +1492,11 @@ export function CloudSessionChatSurface({
 			? `Model choices unavailable: ${modelsQuery.error.message}`
 			: undefined;
 	// Claude's model and effort as provider options, the shape local Claude Chat gets from its agent.
+	// Effort levels are named as the local chat and New Task name them ("Extra high" for xhigh).
 	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && listedModels.length > 0 ? [
 		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: listedModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
 		...(selectedModel?.efforts?.length
-			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: shownSettings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: "" })) }]
+			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: shownSettings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: formatEffortLabel(value, appI18n.t) })) }]
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
