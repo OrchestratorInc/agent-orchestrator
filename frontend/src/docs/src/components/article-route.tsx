@@ -10,6 +10,7 @@ import { DEFAULT_LOCALE, type SupportedLocale } from "@/i18n/locales";
 import { localePath } from "@/i18n/paths";
 import { visibleProductName } from "@/lib/branding";
 import { COMPANY } from "@/lib/constants";
+import { faqEntries } from "@/lib/faq";
 import { markdownPath, sourceUrl } from "@/lib/llms";
 import { articleStructuredData, OG_IMAGE_SIZE, OG_LOCALES, ogImagePath } from "@/lib/seo";
 import { source } from "@/lib/source";
@@ -19,6 +20,9 @@ import { PageActions } from "./page-actions";
 import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
+
+// The article whose questions are also published as `FAQPage` structured data.
+const FAQ_SLUG = "faq";
 
 // Escapes `<` so the JSON cannot close the script element.
 function JsonLd({ data }: { data: object }) {
@@ -42,6 +46,7 @@ export function articleRoute(locale: SupportedLocale) {
     const page = getArticle(slug, locale);
     const MDX = page.data.body;
     const RelativeLink = createRelativeLink(source, page);
+    const faq = page.slugs.join("/") === FAQ_SLUG ? faqEntries(await page.data.getText("raw")) : undefined;
 
     return (
       <DocsPage toc={page.data.toc} full={page.data.full}>
@@ -59,7 +64,7 @@ export function articleRoute(locale: SupportedLocale) {
             })}
           />
         </DocsBody>
-        <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale, path: page.path })} />
+        <JsonLd data={articleStructuredData({ title: page.data.title, description: page.data.description, slugs: page.slugs, url: page.url, locale, path: page.path, faq })} />
       </DocsPage>
     );
   }

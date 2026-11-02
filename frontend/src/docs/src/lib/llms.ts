@@ -22,11 +22,48 @@ export function sourceUrl(page: Page): string {
 
 /** The article as Markdown, headed by its title, URL and description. */
 export async function pageMarkdown(page: Page): Promise<string> {
-  const header = [`# ${page.data.title}`, "", `URL: ${COMPANY.DOCS_URL}${articlePath(page.slugs)}`];
+  const url = `${COMPANY.DOCS_URL}${articlePath(page.slugs)}`;
+  const header = [`# ${page.data.title}`, "", `URL: ${url}`];
   if (page.data.description) header.push("", `> ${page.data.description}`);
-  const body = (await page.data.getText("processed")).trim();
+  // Links to a section of the same article are written as `](#id)`.
+  const body = (await page.data.getText("processed")).trim().replaceAll("](#", `](${url}#`);
   return `${header.join("\n")}\n\n${body}\n`;
 }
+
+/** Pages on the main site that compare Orchestrator with other ways to run coding agents, listed in llms.txt. */
+const COMPARISONS: { title: string; path: string; description: string }[] = [
+  { title: "All comparisons", path: "/compare/", description: "Every Orchestrator.inc comparison and guide." },
+  {
+    title: "Best AI coding agent orchestrators",
+    path: "/compare/best-ai-coding-agent-orchestrators/",
+    description: "Orchestrators compared on platforms, license, agents, worktrees, CI and review handling.",
+  },
+  {
+    title: "Orchestrator.inc vs Claude Code worktrees and agent teams",
+    path: "/compare/orchestrator-vs-claude-code-worktrees/",
+    description: "When Claude Code's own parallel sessions are enough, and when a supervisor helps.",
+  },
+  {
+    title: "Orchestrator.inc vs the Codex app",
+    path: "/compare/orchestrator-vs-codex-app/",
+    description: "Running Codex in parallel with Worktree mode or with a cross-agent board.",
+  },
+  {
+    title: "Orchestrator.inc vs Cursor parallel and cloud agents",
+    path: "/compare/orchestrator-vs-cursor-cloud-agents/",
+    description: "Cursor's in-editor and cloud agents next to a supervisor for several agents.",
+  },
+  {
+    title: "How to run multiple Claude Code agents in parallel",
+    path: "/compare/how-to-run-multiple-claude-code-agents-in-parallel/",
+    description: "Terminal tabs, tmux, git worktrees, ports and CI, then the same workflow in Orchestrator.",
+  },
+  {
+    title: "Git worktrees for AI coding agents",
+    path: "/compare/git-worktrees-for-ai-coding-agents/",
+    description: "Why each coding agent needs its own worktree and how to manage them.",
+  },
+];
 
 function link(title: string, href: string): string {
   return `[${title.replace(/([[\]])/g, "\\$1")}](${href})`;
@@ -66,7 +103,8 @@ function sections(): { title: string; pages: Page[] }[] {
 
 /**
  * The index of the English docs: a summary, then every article grouped by
- * sidebar section, each linking to its Markdown copy.
+ * sidebar section, each linking to its Markdown copy, then the comparison
+ * pages on the main site.
  */
 export function llmsIndex(): string {
   const out = ["# Orchestrator.inc Docs", "", `> ${PRODUCT_SUMMARY}`, ""];
@@ -77,6 +115,12 @@ export function llmsIndex(): string {
     if (!section.pages.length) continue;
     out.push("", `## ${section.title}`, "", ...section.pages.map(listItem));
   }
+  out.push(
+    "",
+    "## Orchestrator.inc comparisons",
+    "",
+    ...COMPARISONS.map(({ title, path, description }) => `- ${link(title, `${COMPANY.MARKETING_URL}${path}`)}: ${description}`),
+  );
   return `${out.join("\n")}\n`;
 }
 
