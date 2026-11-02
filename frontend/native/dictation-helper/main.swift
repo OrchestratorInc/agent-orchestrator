@@ -119,6 +119,7 @@ final class Dictation {
 	func stop() {
 		guard !stopping else { return }
 		stopping = true
+		emit(["type": "finishing"])
 		engine.stop()
 		engine.inputNode.removeTap(onBus: 0)
 		request.endAudio()

@@ -1,11 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { ipcMain, type WebContents } from "electron";
+import { app, ipcMain, type WebContents } from "electron";
 import type { DictationEvent } from "../shared/dictation";
 
-// One dictation at a time, run by the native helper and streamed to the shell renderer.
-export function registerDictationIpc(helperPath: string, shellWebContents: () => WebContents | null): void {
+// One dictation at a time, run by the native helper and streamed to the shell
+// renderer. Returns `stop`, which finishes a running dictation and keeps its text.
+export function registerDictationIpc(helperPath: string, shellWebContents: () => WebContents | null): { stop(): void } {
 	let helper: ChildProcess | null = null;
+	const stop = () => {
+		helper?.stdin?.write("stop\n");
+	};
+	app.on("will-quit", () => helper?.kill());
 
 	ipcMain.handle("dictation:start", (event) => {
 		if (process.platform !== "darwin" || event.sender !== shellWebContents()) return;
@@ -19,6 +24,8 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 			if (helper === child && !sender.isDestroyed()) sender.send("dictation:event", message);
 		};
 		previous?.kill();
+		// A stop written while the helper is exiting would otherwise throw EPIPE in main.
+		child.stdin?.on("error", () => undefined);
 		createInterface({ input: child.stdout! }).on("line", (line) => {
 			try {
 				send(JSON.parse(line) as DictationEvent);
@@ -36,7 +43,7 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 	});
 
 	ipcMain.handle("dictation:stop", (event) => {
-		if (event.sender === shellWebContents()) helper?.stdin?.write("stop\n");
+		if (event.sender === shellWebContents()) stop();
 	});
 
 	ipcMain.handle("dictation:cancel", (event) => {
@@ -44,4 +51,6 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 		helper?.stdin?.write("cancel\n");
 		helper = null;
 	});
+
+	return { stop };
 }

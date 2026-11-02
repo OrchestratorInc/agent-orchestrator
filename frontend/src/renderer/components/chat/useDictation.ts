@@ -35,6 +35,9 @@ export function useDictation(target: DictationTarget) {
 			case "listening":
 				setPhase("listening");
 				break;
+			case "finishing":
+				setPhase("finishing");
+				break;
 			case "text":
 				targetRef.current.onText(event.text);
 				break;
