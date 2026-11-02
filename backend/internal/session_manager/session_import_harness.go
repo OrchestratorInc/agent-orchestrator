@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -17,9 +18,12 @@ type importedHarnessHooks struct {
 	adoptedOwnedElsewhere func(context.Context, domain.SessionRecord) bool
 }
 
-var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{}
+var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
+	domain.HarnessGemini: {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
+	domain.HarnessGoose: {ownedElsewhere: gooseImportOwnedElsewhere, adoptedOwnedElsewhere: gooseImportOwnedElsewhere},
+}
 
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "droid"}
+var importedProcessNames = []string{"claude", "codex", "droid", "goose", "gemini", "node"}

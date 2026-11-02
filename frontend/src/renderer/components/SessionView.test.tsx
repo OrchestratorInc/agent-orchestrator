@@ -2387,6 +2387,20 @@ describe("SessionView", () => {
 		});
 	});
 
+	it("shows a pending Terminal import archive and switches to Terminal after adoption", () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		session.provider = "goose";
+		session.needsResume = true;
+		session.status = "idle";
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		session.needsResume = undefined;
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-target")).toBeInTheDocument();
+	});
+
 	it("activates a new terminal opened while a file tab is selected", async () => {
 		const shell = {
 			handleId: "sh-after-file",
