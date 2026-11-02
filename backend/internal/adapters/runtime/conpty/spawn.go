@@ -160,3 +160,17 @@ func interactiveTerminalEnv(base []string, configured map[string]string, assignm
 	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
 	return env
 }
+
+// hostStartGrid decides how the pty-host starts its process: at an explicit
+// grid when one was given (even with StartOnAttach, since the caller already
+// knows the grid its viewer shows), deferred to the first client's grid for
+// StartOnAttach alone, and otherwise immediately at the default grid.
+func hostStartGrid(opts HostOptions) (cols, rows uint16, deferred bool) {
+	if opts.Cols > 0 && opts.Rows > 0 {
+		return opts.Cols, opts.Rows, false
+	}
+	if opts.StartOnAttach {
+		return 0, 0, true
+	}
+	return initialConPTYColumns, initialConPTYRows, false
+}

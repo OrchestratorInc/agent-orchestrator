@@ -236,6 +236,27 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 	}
 }
 
+func TestHostStartGrid(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		opts       HostOptions
+		cols, rows uint16
+		deferred   bool
+	}{
+		{name: "explicit grid starts now", opts: HostOptions{StartOnAttach: true, Cols: 146, Rows: 37}, cols: 146, rows: 37},
+		{name: "start-on-attach waits for the viewer", opts: HostOptions{StartOnAttach: true}, deferred: true},
+		{name: "one-sided grid still waits", opts: HostOptions{StartOnAttach: true, Cols: 146}, deferred: true},
+		{name: "default starts now at the default grid", opts: HostOptions{}, cols: initialConPTYColumns, rows: initialConPTYRows},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols, rows, deferred := hostStartGrid(tc.opts)
+			if cols != tc.cols || rows != tc.rows || deferred != tc.deferred {
+				t.Fatalf("hostStartGrid(%+v) = (%d, %d, %v), want (%d, %d, %v)", tc.opts, cols, rows, deferred, tc.cols, tc.rows, tc.deferred)
+			}
+		})
+	}
+}
+
 func TestPtyHostArgsCarryInitialGrid(t *testing.T) {
 	argv := []string{"/bin/zsh"}
 	opts := HostOptions{StartOnAttach: true, LazySurface: true, Cols: 146, Rows: 37}

@@ -59,8 +59,8 @@ func RunHost(args []string, stdout io.Writer) int {
 	port := tcpAddr.Port
 
 	var pty ptyConn
-	sized := opts.Cols > 0 && opts.Rows > 0
-	if opts.StartOnAttach && !sized {
+	cols, rows, deferred := hostStartGrid(opts)
+	if deferred {
 		pty = newDeferredPTY(func(cols, rows uint16) (ptyConn, error) {
 			conn, err := newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 			if err != nil {
@@ -69,10 +69,6 @@ func RunHost(args []string, stdout io.Writer) int {
 			return conn, err
 		})
 	} else {
-		cols, rows := uint16(initialConPTYColumns), uint16(initialConPTYRows)
-		if sized {
-			cols, rows = opts.Cols, opts.Rows
-		}
 		pty, err = newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 		if err != nil {
 			_ = ln.Close()
