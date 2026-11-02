@@ -16,7 +16,7 @@ var autohandNativeID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
+	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
 
 // NativeSessionConfigDir mirrors AUTOHAND_HOME, not AUTOHAND_CONFIG (which
@@ -29,11 +29,11 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	if !set {
 		root = os.Getenv("AUTOHAND_HOME")
 	}
-	if root = strings.TrimSpace(root); len(root) > 0 {
+	if root = strings.TrimSpace(root); root != "" {
 		return filepath.Abs(root)
 	}
 	home := env["HOME"]
-	if len(home) == 0 {
+	if home == "" {
 		var err error
 		home, err = os.UserHomeDir()
 		if err != nil {
@@ -43,6 +43,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return filepath.Join(home, ".autohand"), nil
 }
 
+// LocateTranscript finds Autohand's native conversation within its state root.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -50,7 +51,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	if !autohandNativeID.MatchString(ref.NativeSessionID) {
 		return "", false, errors.New("autohand invalid native session id")
 	}
-	if len(ref.ConfigDir) == 0 {
+	if ref.ConfigDir == "" {
 		return "", false, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)
@@ -72,8 +73,9 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return filepath.Join(ref.ConfigDir, rel), info.Mode().IsRegular() && info.Size() > 0, nil
 }
 
+// ProbeNativeSession reports whether Autohand's local conversation is available.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if len(ref.ConfigDir) == 0 {
+	if ref.ConfigDir == "" {
 		return ports.NativeSessionAvailabilityUnknown, ctx.Err()
 	}
 	_, exists, err := p.LocateTranscript(ctx, ref)

@@ -20,6 +20,7 @@ type importedHarnessHooks struct {
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessAutohand: {configEnvKey: "AUTOHAND_HOME", ownedElsewhere: autohandImportOwnedElsewhere, adoptedOwnedElsewhere: autohandImportOwnedElsewhere},
+
 	domain.HarnessGemini: {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
 }
 

@@ -52,7 +52,7 @@ func autohandImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord)
 			if err != nil || live.ID != source.NativeID || live.PID <= 0 || !processalive.Alive(live.PID) {
 				continue
 			}
-			if len(rec.Metadata.WorkspacePath) > 0 && pathWithin(rec.Metadata.WorkspacePath, live.CWD) {
+			if rec.Metadata.WorkspacePath != "" && pathWithin(rec.Metadata.WorkspacePath, live.CWD) {
 				continue
 			}
 			name, started, known := processStart(ctx, live.PID)
