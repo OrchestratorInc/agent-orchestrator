@@ -100,27 +100,46 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	}
 	t.cwd = summary.Info.CWD
 	var items []tagged
+	var promptStarts []int
+	var tracker grokPromptTracker
+	held, drop := 0, 1
+	var fallback time.Time
+	if info, err := os.Stat(t.path); err == nil {
+		fallback = info.ModTime()
+	}
 	var role, text string
 	var at time.Time
 	flush := func() {
 		if strings.TrimSpace(text) != "" {
 			items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
+			held += len(text)
 		}
 		role, text = "", ""
-		before := len(items)
-		items = trimVisible(items)
-		t.shortened = t.shortened || len(items) < before
+		// Keep stable prompt indexes until all rewinds have been applied. Drop
+		// old text under the same memory budget without deleting its boundary.
+		for held > maxClaudeHeld && drop < len(items) {
+			held -= len(items[drop].Text)
+			items[drop].Text = ""
+			t.shortened = true
+			drop++
+		}
 	}
 	err = readOne(r, root, t.path, func(raw []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var event struct {
-			Timestamp int64 `json:"timestamp"`
+			Timestamp int64  `json:"timestamp"`
+			Method    string `json:"method"`
 			Params    struct {
 				SessionID string `json:"sessionId"`
 				Update    struct {
-					Kind    string                      `json:"sessionUpdate"`
+					Kind   string `json:"sessionUpdate"`
+					Target *int   `json:"target_prompt_index"`
+					Meta   struct {
+						PromptIndex *int `json:"promptIndex"`
+						HostTurn    bool `json:"hostTurn"`
+					} `json:"_meta"`
 					Content struct{ Type, Text string } `json:"content"`
 				} `json:"update"`
 			} `json:"params"`
@@ -129,6 +148,34 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 			return nil //nolint:nilerr // Ignore torn/malformed records and updates for another session.
 		}
 		u := event.Params.Update
+		eventAt := fallback
+		if event.Timestamp > 0 {
+			eventAt = time.Unix(event.Timestamp, 0)
+		}
+		if eventAt.After(t.last) {
+			t.last = eventAt
+		}
+		if event.Method == "_x.ai/session/update" && u.Kind == "rewind_marker" && u.Target != nil && *u.Target >= 0 {
+			flush()
+			if target := *u.Target; target < len(promptStarts) {
+				items = items[:promptStarts[target]]
+				promptStarts = promptStarts[:target]
+			}
+			held, drop = 0, 1
+			for _, item := range items {
+				held += len(item.Text)
+			}
+			tracker.other()
+			return nil
+		}
+		if u.Kind == "user_message_chunk" && event.Method != "_x.ai/session/update" && !u.Meta.HostTurn {
+			if tracker.user(u.Meta.PromptIndex) {
+				flush()
+				promptStarts = append(promptStarts, len(items))
+			}
+		} else {
+			tracker.other()
+		}
 		if u.Kind == "turn_completed" {
 			flush()
 			return nil
@@ -136,7 +183,9 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		next := ""
 		switch u.Kind {
 		case "user_message_chunk":
-			next = "user"
+			if !u.Meta.HostTurn && event.Method != "_x.ai/session/update" {
+				next = "user"
+			}
 		case "agent_message_chunk":
 			next = "assistant"
 		}
@@ -146,15 +195,12 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		if next != role {
 			flush()
 			role = next
-			at = time.UnixMilli(event.Timestamp)
+			at = eventAt
 		}
 		if len(text)+len(u.Content.Text) <= maxVisibleBytes {
 			text += u.Content.Text
 		} else {
 			t.shortened = true
-		}
-		if at.After(t.last) {
-			t.last = at
 		}
 		return nil
 	})
@@ -162,8 +208,14 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, err
 	}
 	flush()
+	before := len(items)
+	items = trimVisible(items)
+	t.shortened = t.shortened || len(items) < before
 	hasUser := false
 	for _, item := range items {
+		if strings.TrimSpace(item.Text) == "" {
+			continue
+		}
 		t.messages = append(t.messages, item.Message)
 		if item.Role == domain.MessageRoleUser && !hasUser {
 			hasUser = true
