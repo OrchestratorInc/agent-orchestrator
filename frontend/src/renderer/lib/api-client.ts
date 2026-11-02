@@ -21,6 +21,26 @@ export function getApiBaseUrl(): string {
 	return runtimeApiBaseUrl ?? "";
 }
 
+// Chromium allows six HTTP/1.1 connections per host, and every EventSource
+// holds one for its whole life. The renderer keeps three to five streams open
+// on the daemon, which left two or three connections for every other request,
+// so one slow request queued the rest (Settings among them). A *.localhost name
+// resolves to loopback in Chromium but is a separate host, so streams opened on
+// it get their own connections. Only the loopback daemon address is remapped.
+const eventStreamHostname = "ao-events.localhost";
+
+/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
+export function eventStreamBaseUrl(baseUrl: string): string {
+	try {
+		const url = new URL(baseUrl);
+		if (url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
+		url.hostname = eventStreamHostname;
+		return url.href.replace(/\/+$/, "");
+	} catch {
+		return baseUrl.replace(/\/+$/, "");
+	}
+}
+
 export function hasTrustedApiBaseUrl(): boolean {
 	return runtimeApiBaseUrl !== null;
 }

@@ -41,6 +41,8 @@ export interface Settings {
 	sessionRetentionDays?: number;
 }
 
+const settingsReadTimeoutMs = 10_000;
+
 export function useSettings(hostId?: string, enabled = true) {
 	const query = useQuery({
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
@@ -52,8 +54,15 @@ export function useSettings(hostId?: string, enabled = true) {
 		// query so it self-heals once the daemon is ready.
 		refetchInterval: 15_000,
 		retry: 5,
-		queryFn: async (): Promise<Settings> => {
-			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings");
+		queryFn: async ({ signal }): Promise<Settings> => {
+			// The read is one SQLite row, but the renderer shares six connections
+			// to the daemon with its event streams and slow probes, so a read can
+			// sit queued behind them. Bound it: a read that never completes would
+			// otherwise hold the query in loading, with no retry or refetch, until
+			// the app restarts.
+			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings", {
+				signal: AbortSignal.any([signal, AbortSignal.timeout(settingsReadTimeoutMs)]),
+			});
 			if (error) throw error;
 			return {
 				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
