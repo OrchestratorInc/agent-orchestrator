@@ -38,6 +38,7 @@ import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
 import { droppedPathsText } from "../lib/terminal-drop";
+import { LoaderCircle, TriangleAlert, X } from "lucide-react";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import {
@@ -64,6 +65,14 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+
+/** A dropped file that was not placed: its reason, or the limit it was over. */
+type DropFailure = { name: string; reason?: string; maxMegabytes?: number };
+type DropNotice = { kind: "placing"; names: string[] } | { kind: "failed"; failures: DropFailure[] };
+/** A local save shows its progress only once it takes longer than this. */
+const LOCAL_DROP_NOTICE_DELAY_MS = 400;
+/** How long a drop failure stays unless dismissed first. */
+const DROP_FAILURE_NOTICE_MS = 10_000;
 
 export type XtermTerminalProps = {
 	ariaLabel?: string;
@@ -502,6 +511,48 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		link: null,
 	});
 	const [copiedToast, setCopiedToast] = useState(false);
+	// What a file dropped on the terminal is doing: being placed, or why it
+	// could not be. Non-blocking; a failure stays until dismissed or it times out.
+	const [dropNotice, setDropNotice] = useState<DropNotice | null>(null);
+	const dropNoticeTimerRef = useRef<number | undefined>(undefined);
+	const dropNoticeRef = useRef({
+		next: 0,
+		active: new Map<number, string[]>(),
+		failures: [] as DropFailure[],
+		begin(names: string[], delayMs: number): number {
+			const id = ++this.next;
+			this.active.set(id, names);
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+			const show = () => {
+				dropNoticeTimerRef.current = undefined;
+				if (this.active.size > 0) setDropNotice({ kind: "placing", names: [...this.active.values()].flat() });
+			};
+			if (delayMs > 0) dropNoticeTimerRef.current = window.setTimeout(show, delayMs);
+			else show();
+			return id;
+		},
+		end(id: number, failures: DropFailure[]): void {
+			this.active.delete(id);
+			this.failures = [...this.failures, ...failures];
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+			dropNoticeTimerRef.current = undefined;
+			if (this.active.size > 0) {
+				setDropNotice({ kind: "placing", names: [...this.active.values()].flat() });
+				return;
+			}
+			const shown = this.failures;
+			this.failures = [];
+			if (shown.length === 0) {
+				setDropNotice(null);
+				return;
+			}
+			setDropNotice({ kind: "failed", failures: shown });
+			dropNoticeTimerRef.current = window.setTimeout(() => {
+				dropNoticeTimerRef.current = undefined;
+				setDropNotice(null);
+			}, DROP_FAILURE_NOTICE_MS);
+		},
+	});
 	const [searchOpen, setSearchOpen] = useState(false);
 	const copiedToastTimerRef = useRef<number | undefined>(undefined);
 	const showCopiedToastRef = useRef<() => void>(() => undefined);
@@ -616,6 +667,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 	useEffect(
 		() => () => {
+			if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
 			if (copiedToastTimerRef.current !== undefined) window.clearTimeout(copiedToastTimerRef.current);
 			if (linkPreviewTimerRef.current !== undefined) window.clearTimeout(linkPreviewTimerRef.current);
 		},
@@ -1638,21 +1690,31 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// never shows the overlay.
 			void (async () => {
 				const paths: string[] = [];
+				const failures: DropFailure[] = [];
 				const sandbox = saveDroppedFileRef.current;
 				const save = sandbox ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
 				const maxBytes = sandbox ? droppedFileMaxBytesRef.current : undefined;
-				for (const file of files) {
-					if (maxBytes !== undefined && file.size > maxBytes) {
-						console.warn("Unable to attach dropped file: it is larger than the session takes", file.size);
-						continue;
+				// Uploading and placing a file in a sandbox takes a while: say so. A
+				// local save is quick, so it says so only if it is not.
+				const drop = dropNoticeRef.current.begin(files.map((file) => file.name), sandbox ? 0 : LOCAL_DROP_NOTICE_DELAY_MS);
+				try {
+					for (const file of files) {
+						if (maxBytes !== undefined && file.size > maxBytes) {
+							failures.push({ name: file.name, maxMegabytes: Math.floor(maxBytes / (1024 * 1024)) });
+							continue;
+						}
+						try {
+							const bytes = new Uint8Array(await file.arrayBuffer());
+							const saved = await save({ name: file.name, bytes });
+							if (saved) paths.push(saved);
+						} catch (error) {
+							console.warn("Unable to attach dropped file", error);
+							const reason = error instanceof Error ? error.message.trim() : "";
+							failures.push({ name: file.name, ...(reason ? { reason } : {}) });
+						}
 					}
-					try {
-						const bytes = new Uint8Array(await file.arrayBuffer());
-						const saved = await save({ name: file.name, bytes });
-						if (saved) paths.push(saved);
-					} catch (error) {
-						console.warn("Unable to attach dropped file", error);
-					}
+				} finally {
+					dropNoticeRef.current.end(drop, failures);
 				}
 				if (paths.length === 0) return;
 				pasteText(droppedPathsText(paths, Boolean(sandbox)));
@@ -2013,6 +2075,53 @@ export function XtermTerminal(props: XtermTerminalProps) {
 					open={searchOpen && props.isVisible !== false}
 					searchAddon={searchAddonRef.current}
 				/>
+				{dropNotice && props.isVisible !== false ? (
+					dropNotice.kind === "placing" ? (
+						<div
+							aria-live="polite"
+							className="pointer-events-none absolute left-1/2 top-3 z-10 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+							role="status"
+						>
+							<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 motion-safe:animate-spin" />
+							<span className="truncate">
+								{dropNotice.names.length === 1
+									? t("terminal.drop.attachingOne", { name: dropNotice.names[0] })
+									: t("terminal.drop.attachingMany", { number: dropNotice.names.length })}
+							</span>
+						</div>
+					) : (
+						<div
+							className="absolute left-1/2 top-3 z-10 flex w-max max-w-[min(36rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] py-1.5 pl-3 pr-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+							role="alert"
+						>
+							<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-error" />
+							<ul className="min-w-0 space-y-0.5">
+								{dropNotice.failures.map((failure, index) => (
+									<li key={`${failure.name}-${index}`} className="break-words">
+										{t("terminal.drop.failed", {
+											name: failure.name,
+											reason: failure.maxMegabytes !== undefined
+												? t("terminal.drop.tooLarge", { size: failure.maxMegabytes })
+												: failure.reason ?? t("terminal.drop.unknownReason"),
+										})}
+									</li>
+								))}
+							</ul>
+							<button
+								aria-label={t("terminal.drop.dismiss")}
+								className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring"
+								onClick={() => {
+									if (dropNoticeTimerRef.current !== undefined) window.clearTimeout(dropNoticeTimerRef.current);
+									dropNoticeTimerRef.current = undefined;
+									setDropNotice(null);
+								}}
+								type="button"
+							>
+								<X aria-hidden="true" className="size-3" />
+							</button>
+						</div>
+					)
+				) : null}
 				{copiedToast && props.isVisible !== false ? (
 					<div
 						aria-live="polite"

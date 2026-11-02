@@ -3014,6 +3014,61 @@ describe("XtermTerminal", () => {
 		expect(saveDroppedFile).toHaveBeenCalledWith({ name: "small.txt", bytes: expect.any(Uint8Array) });
 	});
 
+	it("shows that a dropped file is being placed, then says why one could not be, without blocking the terminal", async () => {
+		let finishPlacing!: (path: string) => void;
+		const saveDroppedFile = vi.fn(({ name }: { name: string }) => name === "notes.txt"
+			? new Promise<string>((resolve) => (finishPlacing = resolve))
+			: Promise.reject(new Error("This session does not allow workspace writes.")));
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={1024 * 1024} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const files = [
+			new File(["hello"], "notes.txt", { type: "text/plain" }),
+			new File(["hello"], "locked.txt", { type: "text/plain" }),
+			new File([new Uint8Array(1024 * 1024 + 1)], "huge.bin", { type: "application/octet-stream" }),
+		];
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, files) });
+		const placing = await screen.findByRole("status");
+		expect(placing).toHaveTextContent("Attaching 3 files…");
+		expect(placing).toHaveClass("pointer-events-none");
+		finishPlacing("/workspace/.ao/attachments/notes.txt");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Couldn’t attach locked.txt: This session does not allow workspace writes.");
+		expect(alert).toHaveTextContent("Couldn’t attach huge.bin: The file is larger than 1 MB, the most this session takes.");
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		// The file that was placed is still typed.
+		expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/notes.txt' ", "paste");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("shows a local save's progress only when it is slow", async () => {
+		vi.useFakeTimers();
+		try {
+			let finish!: (path: string) => void;
+			window.ao!.terminal.saveDroppedFile = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
+			const { container } = render(<XtermTerminal theme="dark" />);
+			fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [new File(["x"], "quick.txt")]) });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(100);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(400);
+			});
+			expect(screen.getByRole("status")).toHaveTextContent("Attaching quick.txt…");
+			await act(async () => {
+				finish("/tmp/ao-dropped/quick.txt");
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// Regression: a dropped folder is the app-wide "open as project" gesture
 	// (_shell.tsx's window-level drop handler), not a file to attach — dropping
 	// one over an active terminal pane must not be swallowed as a file-attach.
