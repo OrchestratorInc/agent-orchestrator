@@ -935,7 +935,7 @@ INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
 ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
 		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
 	}
-	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+	if err := foldDeletedSessionAccountUsage(ctx, s.txQueries(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
 	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.

@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
@@ -18,6 +20,7 @@ import (
 // CDC is captured by DB triggers (migration 0001), NOT by this layer: the store
 // never writes change_log, it only reads it for the CDC poller.
 type Store struct {
+	stopTimestampRepair   func()
 	writeDB               *sql.DB
 	readDB                *sql.DB
 	qw                    *gen.Queries // bound to the single writer connection
@@ -103,8 +106,30 @@ func NewStore(writeDB, readDB *sql.DB) *Store {
 	}
 }
 
+// StartTimestampRepair lets health and readers run while legacy timestamps are
+// normalized. Close cancels and joins the worker before closing its pools.
+func (s *Store) StartTimestampRepair(repair func(context.Context) error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	s.stopTimestampRepair = func() { cancel(); <-done }
+	go func() {
+		defer close(done)
+		start := time.Now()
+		if err := repair(ctx); err != nil {
+			if ctx.Err() == nil {
+				slog.Error("timestamp repair failed; will retry on next open", "error", err)
+			}
+			return
+		}
+		slog.Info("timestamp repair completed", "duration", time.Since(start))
+	}()
+}
+
 // Close closes both pools.
 func (s *Store) Close() error {
+	if s.stopTimestampRepair != nil {
+		s.stopTimestampRepair()
+	}
 	err := s.writeDB.Close()
 	if e := s.readDB.Close(); e != nil && err == nil {
 		err = e

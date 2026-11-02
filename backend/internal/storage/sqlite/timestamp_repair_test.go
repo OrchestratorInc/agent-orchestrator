@@ -29,9 +29,6 @@ var offsetOnlyCases = []struct {
 // untouched values must come through byte for byte.
 var untouchedCases = []struct{ name, stored string }{
 	{"UTC text", "2026-10-21 16:15:40.647754 +0000 UTC"},
-	{"named zone", "2026-10-21 18:15:40.647754 +0200 CEST"},
-	{"named zone with monotonic suffix", "2026-10-22 01:02:08.140566 +0530 IST m=+5.311991126"},
-	{"RFC 3339 with offset", "2026-10-21T18:15:40+02:00"},
 	{"not a time", "not a time"},
 	{"empty", ""},
 	// Matches the shape but is not a date: leave it for a human rather than guess.
@@ -45,7 +42,7 @@ func openRepairDB(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY, at TIMESTAMP, plain TEXT, day DATE, moment DATETIME)`); err != nil {
 		t.Fatal(err)
 	}
-	// The migration run during open already marked the database repaired.
+	// Exercise legacy repair markers independently of schema migrations.
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatal(err)
 	}
@@ -208,9 +205,8 @@ func TestRepairRewritesEveryRow(t *testing.T) {
 	}
 }
 
-// The pass runs once: it scans every timestamp column, which is too much to do
-// on each start. A second run is harmless, and a database marked done is skipped.
-func TestRepairRunsOncePerDatabase(t *testing.T) {
+// A downgrade can add bad rows after a completed repair. Re-entry must repair them.
+func TestRepairAfterOldWriter(t *testing.T) {
 	db := openRepairDB(t)
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (1, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
 		t.Fatal(err)
@@ -239,15 +235,15 @@ func TestRepairRunsOncePerDatabase(t *testing.T) {
 		t.Fatalf("second repair changed %q to %q (err %v)", first, second, err)
 	}
 
-	// A database already marked repaired is not scanned again.
+	// Simulate an old writer after the successful upgrade.
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (2, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repairOffsetOnlyTimestamps(db); err != nil {
 		t.Fatalf("marked repair: %v", err)
 	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id = 2`); err == nil {
-		t.Fatal("a database marked repaired was scanned again")
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id = 2`); err != nil {
+		t.Fatalf("old writer left an unreadable row after re-upgrade: %v", err)
 	}
 }
 
@@ -266,7 +262,7 @@ func TestRepairKeepsAHigherUserVersion(t *testing.T) {
 	}
 }
 
-// The repair rolls back as one unit: a failure leaves the database unmarked so it runs again.
+// A failed batch rolls back and leaves detection enabled for the next open.
 func TestRepairFailureLeavesTheDatabaseUnmarked(t *testing.T) {
 	db := openRepairDB(t)
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (1, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
@@ -295,8 +291,8 @@ func TestRepairFailureLeavesTheDatabaseUnmarked(t *testing.T) {
 	}
 }
 
-// migrate runs the repair, so a daemon that opens a poisoned database can list its rows again.
-func TestMigrateRepairsOffsetOnlyTimestampsInRealTables(t *testing.T) {
+// The repair covers real project columns as well as the isolated fixtures.
+func TestRepairOffsetOnlyTimestampsInRealTables(t *testing.T) {
 	db := openMigratedTestDB(t)
 	const stored = "2026-10-21 18:15:40.647754 +0200 +0200"
 	if _, err := db.Exec(`INSERT INTO projects (id, path, registered_at) VALUES ('p1', '/tmp/p1', ?)`, stored); err != nil {
@@ -308,8 +304,8 @@ func TestMigrateRepairsOffsetOnlyTimestampsInRealTables(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if err := repairOffsetOnlyTimestamps(db); err != nil {
+		t.Fatalf("repair: %v", err)
 	}
 	var got sql.NullTime
 	if err := db.QueryRow(`SELECT registered_at FROM projects WHERE id = 'p1'`).Scan(&got); err != nil {

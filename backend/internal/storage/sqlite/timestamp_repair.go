@@ -1,136 +1,145 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
 )
 
-// offsetOnlyTimestampRepairVersion is the PRAGMA user_version that marks a
-// database whose offset-only timestamps have been rewritten. Nothing else in the
-// repository uses user_version.
+// Kept for older builds; a completed pass is no proof an old writer has not
+// subsequently stored more local times. Never use this marker to skip detection.
 const offsetOnlyTimestampRepairVersion = 1
+const timestampRepairBatch = 256
 
-// offsetOnlyTimestamp matches the text the driver writes for a time in a zone
-// with no name: a hook or API caller sent "2026-10-21T18:15:40+02:00" and the
-// daemon is not itself in that zone. The driver stores
-// "2026-10-21 18:15:40.647754 +0200 +0200" and cannot scan it back into a
-// time.Time, so every query that reads the row fails with "unsupported Scan,
-// storing driver.Value type string into type *time.Time" (#7026). A zone with a
-// name ("+0200 CEST"), UTC, and the monotonic-clock suffix (" m=+5.31") all read
-// back fine and are left alone.
-var offsetOnlyTimestamp = regexp.MustCompile(
-	`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) ([+-]\d{4}) [+-]\d{4}(?: m=[+-][0-9.]+)?$`)
+var legacyDriverTimestamp = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) ([+-]\d{4}) \S+(?: m=[+-][0-9.]+)?$`)
 
-// repairOffsetOnlyTimestamps rewrites every offset-only timestamp, in any
-// timestamp column of any table, as the same instant in UTC. Releases up to
-// 0.14.4 wrote them from hook timestamps; the daemon then fails to list sessions
-// (and 0.14.4 fails to boot). The pass is idempotent and runs once per database:
-// scanning every timestamp column is too much work to repeat on each start.
+func legacyTimestamp(value string) (time.Time, bool) {
+	if match := legacyDriverTimestamp.FindStringSubmatch(value); match != nil {
+		at, err := time.Parse("2006-01-02 15:04:05.999999999 -0700", match[1]+" "+match[2])
+		return at.UTC(), err == nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, value)
+	return at.UTC(), err == nil
+}
+
 func repairOffsetOnlyTimestamps(db *sql.DB) error {
-	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
-		return fmt.Errorf("read user_version: %w", err)
-	}
-	if version >= offsetOnlyTimestampRepairVersion {
-		return nil
-	}
-	columns, err := timestampColumns(db)
+	return repairTimestamps(context.Background(), db)
+}
+
+// Scan forward by row identity, with bounded memory and write transactions.
+// Each row is visited once per column, regardless of timestamp cardinality.
+// SQL-side UTC defaults remain unchanged. Invalid dates are preserved.
+func repairTimestamps(ctx context.Context, db *sql.DB) error {
+	columns, err := timestampColumns(ctx, db)
 	if err != nil {
 		return err
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin timestamp repair: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, column := range columns {
-		if err := repairOffsetOnlyColumn(tx, column); err != nil {
-			return err
+	for _, c := range columns {
+		cursor := int64(math.MinInt64)
+		for {
+			next, done, err := repairTimestampBatch(ctx, db, c, cursor)
+			if err != nil {
+				return fmt.Errorf("repair %s.%s: %w", c.table, c.column, err)
+			}
+			if done {
+				break
+			}
+			cursor = next
 		}
 	}
-	// PRAGMA takes no bound parameters.
-	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, offsetOnlyTimestampRepairVersion)); err != nil {
-		return fmt.Errorf("mark timestamp repair done: %w", err)
+	var version int
+	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
 	}
-	return tx.Commit()
+	if version < offsetOnlyTimestampRepairVersion {
+		_, err = db.ExecContext(ctx, `PRAGMA user_version=1`)
+	}
+	return err
+}
+
+func repairTimestampBatch(ctx context.Context, db *sql.DB, c timestampColumn, cursor int64) (int64, bool, error) {
+	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
+	// The range is indexed by rowid; LIMIT bounds results even for distinct times.
+	// Exclude canonical UTC before parsing, so clean databases only do detection.
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,CAST(%[2]s AS TEXT) FROM %[1]s
+WHERE rowid>=? AND typeof(%[2]s)='text'
+AND ((%[2]s GLOB '* [+-][0-9][0-9][0-9][0-9] *' AND %[2]s NOT GLOB '* +0000 UTC')
+OR %[2]s GLOB '????-??-??T*') ORDER BY rowid LIMIT ?`, table, column), cursor, timestampRepairBatch)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	type change struct {
+		id     int64
+		before string
+		after  time.Time
+	}
+	changes := make([]change, 0, timestampRepairBatch)
+	n, last := 0, cursor
+	for rows.Next() {
+		var id int64
+		var value string
+		if err = rows.Scan(&id, &value); err != nil {
+			break
+		}
+		n++
+		last = id
+		if at, ok := legacyTimestamp(value); ok && at.String() != value {
+			changes = append(changes, change{id, value, at})
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if len(changes) > 0 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return 0, false, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %[1]s SET %[2]s=? WHERE rowid=? AND CAST(%[2]s AS TEXT)=?`, table, column))
+		if err != nil {
+			return 0, false, err
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, v := range changes {
+			// A concurrent writer may have replaced this value since detection.
+			if _, err = stmt.ExecContext(ctx, v.after, v.id, v.before); err != nil {
+				return 0, false, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, false, err
+		}
+	}
+	return last + 1, n < timestampRepairBatch || last == math.MaxInt64, nil
 }
 
 type timestampColumn struct{ table, column string }
 
-// timestampColumns lists the columns the driver decodes as times: the ones
-// declared TIMESTAMP, DATETIME or DATE.
-func timestampColumns(db *sql.DB) ([]timestampColumn, error) {
-	rows, err := db.Query(`
-SELECT m.name, p.name
-FROM sqlite_master AS m, pragma_table_info(m.name) AS p
-WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.sql NOT LIKE 'CREATE VIRTUAL%'
-  AND upper(p.type) IN ('TIMESTAMP', 'DATETIME', 'DATE')
-ORDER BY m.name, p.cid`)
+func timestampColumns(ctx context.Context, db *sql.DB) ([]timestampColumn, error) {
+	rows, err := db.QueryContext(ctx, `SELECT m.name,p.name FROM sqlite_master AS m,pragma_table_info(m.name) AS p
+WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND m.sql NOT LIKE 'CREATE VIRTUAL%'
+AND upper(p.type) IN ('TIMESTAMP','DATETIME','DATE') ORDER BY m.name,p.cid`)
 	if err != nil {
-		return nil, fmt.Errorf("list timestamp columns: %w", err)
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var columns []timestampColumn
 	for rows.Next() {
 		var c timestampColumn
 		if err := rows.Scan(&c.table, &c.column); err != nil {
-			return nil, fmt.Errorf("scan timestamp column: %w", err)
+			return nil, err
 		}
 		columns = append(columns, c)
 	}
 	return columns, rows.Err()
 }
-
-// offsetOnlyCandidates returns the distinct values of the column that look like
-// offset-only timestamps. They are read completely before any is rewritten so
-// the update does not run while the result set is open.
-func offsetOnlyCandidates(tx *sql.Tx, c timestampColumn) ([]string, error) {
-	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
-	rows, err := tx.Query(fmt.Sprintf(
-		`SELECT DISTINCT CAST(%[2]s AS TEXT) FROM %[1]s WHERE typeof(%[2]s) = 'text'
-AND CAST(%[2]s AS TEXT) GLOB '*[+-][0-9][0-9][0-9][0-9] [+-][0-9][0-9][0-9][0-9]*'`, table, column))
-	if err != nil {
-		return nil, fmt.Errorf("find offset-only timestamps in %s.%s: %w", c.table, c.column, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var values []string
-	for rows.Next() {
-		var value string
-		if err := rows.Scan(&value); err != nil {
-			return nil, fmt.Errorf("scan %s.%s: %w", c.table, c.column, err)
-		}
-		values = append(values, value)
-	}
-	return values, rows.Err()
-}
-
-func repairOffsetOnlyColumn(tx *sql.Tx, c timestampColumn) error {
-	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
-	values, err := offsetOnlyCandidates(tx, c)
-	if err != nil {
-		return err
-	}
-	for _, value := range values {
-		match := offsetOnlyTimestamp.FindStringSubmatch(value)
-		if match == nil {
-			continue
-		}
-		at, err := time.Parse("2006-01-02 15:04:05.999999999 -0700", match[1]+" "+match[2])
-		if err != nil {
-			continue // not a real date; leave the value as it is
-		}
-		if _, err := tx.Exec(fmt.Sprintf(
-			`UPDATE %[1]s SET %[2]s = ? WHERE typeof(%[2]s) = 'text' AND CAST(%[2]s AS TEXT) = ?`, table, column,
-		), at.UTC(), value); err != nil {
-			return fmt.Errorf("rewrite offset-only timestamp in %s.%s: %w", c.table, c.column, err)
-		}
-	}
-	return nil
-}
-
-func quoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
+func quoteIdentifier(name string) string { return `"` + strings.ReplaceAll(name, `"`, `""`) + `"` }
