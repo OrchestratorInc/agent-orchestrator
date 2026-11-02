@@ -459,6 +459,8 @@ export const ChatComposer = memo(function ChatComposer({
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
+	// Dictation is in preview: macOS only, behind Developer mode.
+	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -2164,7 +2166,7 @@ export const ChatComposer = memo(function ChatComposer({
 								Steer
 							</Button>
 						) : null}
-						{isMacPlatform() ? (
+						{canDictate ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
 									<span className="inline-flex">

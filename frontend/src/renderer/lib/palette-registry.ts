@@ -33,7 +33,6 @@ const SHORTCUT_COMMANDS: { id: AppShortcutId; keywords: string[] }[] = [
 	{ id: "open-in-editor", keywords: ["vscode", "cursor", "ide", "code", "zed"] },
 	{ id: "copy-session-path", keywords: ["worktree", "folder", "directory", "clipboard"] },
 	{ id: "model-picker", keywords: ["switch model", "llm", "gpt", "claude", "opus", "sonnet"] },
-	{ id: "dictate", keywords: ["voice", "speech", "microphone", "talk", "speak"] },
 	{ id: "toggle-sidebar", keywords: ["show", "hide", "open", "close", "left panel"] },
 	{ id: "toggle-inspector", keywords: ["show", "hide", "open", "close", "right panel", "details panel"] },
 	{ id: "toggle-terminal", keywords: ["show", "hide", "open", "close", "bottom panel", "shell"] },
