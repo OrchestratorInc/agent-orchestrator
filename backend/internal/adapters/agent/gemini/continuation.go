@@ -27,6 +27,7 @@ var (
 
 const maxImportedGeminiBytes = 128 << 20
 
+// NativeSessionConfigDir returns Gemini's state root for the launch environment.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -45,6 +46,7 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return filepath.Join(home, ".gemini"), nil
 }
 
+// ProbeNativeSession checks for readable local history with the exact native id.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if strings.TrimSpace(ref.ConfigDir) == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
@@ -79,6 +81,7 @@ func geminiSessionHeader(ctx context.Context, root *os.Root, path string) (strin
 	return header.SessionID, err
 }
 
+// LocateTranscript finds a matching session header within Gemini's state root.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -100,14 +103,14 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 			return err
 		}
 		if walkErr != nil || !entry.Type().IsRegular() || filepath.Base(filepath.Dir(path)) != "chats" || !strings.HasPrefix(entry.Name(), "session-") {
-			return nil
+			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
 		if !strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
 		rel, err := filepath.Rel(ref.ConfigDir, path)
 		if err != nil || !filepath.IsLocal(rel) {
-			return nil
+			return nil //nolint:nilerr // Files outside the provider root are ineligible.
 		}
 		if id, err := geminiSessionHeader(ctx, root, rel); err == nil && id == ref.NativeSessionID {
 			found = path
