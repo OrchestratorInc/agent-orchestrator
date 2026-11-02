@@ -88,6 +88,7 @@ func discoverFX(ctx context.Context, root string) ([]sourceFiles, error) {
 type fxImportRecord struct {
 	ID            string          `json:"id"`
 	WorkspaceRoot string          `json:"workspace_root"`
+	SubagentChild bool            `json:"subagent_child"`
 	UpdatedAt     int64           `json:"updated_at_ms"`
 	Timestamp     int64           `json:"timestamp_ms"`
 	TS            int64           `json:"ts"`
@@ -160,7 +161,7 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 			return nil //nolint:nilerr // A torn tail does not hide the committed conversation.
 		}
 		if record.ID != "" && (record.Kind == "session_created" || record.WorkspaceRoot != "") {
-			if record.ID != t.nativeID || record.Role == "child" {
+			if record.ID != t.nativeID || record.Role == "child" || record.SubagentChild {
 				return errors.New("fx native identity mismatch or child session")
 			}
 			sawHeader = true

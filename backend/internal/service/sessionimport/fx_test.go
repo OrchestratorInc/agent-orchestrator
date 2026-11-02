@@ -87,6 +87,30 @@ func TestFXDiscoveryPrefersConvertedConversation(t *testing.T) {
 	}
 }
 
+func TestFXScanRefusesV1ChildConversation(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	path := writeFXImport(t, root, cwd, false)
+	metadata := filepath.Join(filepath.Dir(path), "session.json")
+	body, err := os.ReadFile(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = []byte(strings.TrimSuffix(string(body), "}") + `,"subagent_child":true}`)
+	if err := os.WriteFile(metadata, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readFXTranscript(context.Background(), root, path); err == nil {
+		t.Fatal("accepted a v1 subagent child as an independently resumable chat")
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-fx-child", Path: cwd}}}
+	svc := New(st, "", nil)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessFX: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 0 {
+		t.Fatalf("child scan = %#v, %v", preview, err)
+	}
+}
+
 func TestFXImportRejectsSymlinksAndMismatchedID(t *testing.T) {
 	root := t.TempDir()
 	path := writeFXImport(t, root, t.TempDir(), true)
