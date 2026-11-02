@@ -96,6 +96,7 @@ export function CloudProjectEnvironmentSettings({ projectId, cloudOrgId, onSaveS
 	const initial = Object.fromEntries(environment.variables.map((variable) => [variable.name, variable.value ?? ""]));
 	return <VariablesEditor key={`${cloudOrgId}/${projectId}`} initial={initial} readOnly={!environment.editable}
 		description={`${t("settings.cloudProject.environmentDescription")}${environment.editable ? "" : ` ${t("settings.cloudProject.environmentReadOnly")}`}`}
+		note={t("settings.cloudProject.environmentNote")}
 		persist={async (env) => {
 			const saved = await client.putProjectEnvironment(cloudOrgId, projectId, env);
 			queryClient.setQueryData(queryKey, saved);
@@ -103,9 +104,11 @@ export function CloudProjectEnvironmentSettings({ projectId, cloudOrgId, onSaveS
 		onSaveState={onSaveState} onSaved={() => undefined} />;
 }
 
-function VariablesEditor({ initial, description, readOnly = false, persist, onSaveState, onSaved }: {
+function VariablesEditor({ initial, description, note, readOnly = false, persist, onSaveState, onSaved }: {
 	initial?: Record<string, string>;
 	description: string;
+	/** Who can read the values once they are set, under the description. */
+	note?: string;
 	/** Names only: a Cloud member who is not an owner or admin cannot see or change the values. */
 	readOnly?: boolean;
 	persist: (env: Record<string, string>) => Promise<void>;
@@ -199,6 +202,8 @@ function VariablesEditor({ initial, description, readOnly = false, persist, onSa
 			env[name] = row.value;
 		}
 		setError(null);
+		// Autosave does not send the same draft again after this save fails.
+		attempted.current = JSON.stringify(env);
 		mutation.mutate(env);
 	};
 	// Autosave: a draft with valid, unique names saves shortly after the last edit.
@@ -211,6 +216,7 @@ function VariablesEditor({ initial, description, readOnly = false, persist, onSa
 	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
 		<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{description}</p>
+		{note ? <p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{note}</p> : null}
 		{readOnly ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			{rows.length === 0 ? <div className="settings-row-bar"><span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span></div>
 				: rows.map((row) => <div className="settings-row-bar gap-2" key={row.name}>
