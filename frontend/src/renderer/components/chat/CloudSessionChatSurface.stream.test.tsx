@@ -141,6 +141,20 @@ describe("CloudSessionChatSurface event stream", () => {
 		expect(streams).toHaveLength(1);
 	});
 
+	it("reads the session's events once when a session view opens", async () => {
+		const view = renderView(
+			<>
+				<SessionViewParts />
+				<CloudSessionChatSurface session={session} />
+			</>,
+		);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1);
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { after: 0, limit: 500 });
+		view.unmount();
+	});
+
 	it("streams events into the chat's list", async () => {
 		const view = renderView(<CloudSessionChatSurface session={session} />);
 		await waitFor(() => expect(chatStream()?.emit).toBeDefined());

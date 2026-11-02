@@ -40,6 +40,35 @@ function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): 
 	return useSyncExternalStore(subscribe, read, read);
 }
 
+/**
+ * The chat surface's events of the session while it is reading them now, so
+ * the step log waits for that read instead of asking again: a session view
+ * mounts its chat and its inspector together, and both used to read the
+ * session's events at once. Undefined when no such read is in flight.
+ */
+async function chatEventsInFlight(queryClient: QueryClient, queryKey: readonly unknown[], signal: AbortSignal): Promise<CloudCpClientEvent[] | undefined> {
+	// Components mounting together start their reads in turn: let the chat's start first.
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const cache = queryClient.getQueryCache();
+	const query = cache.find<CloudCpClientEvent[]>({ queryKey, exact: true });
+	if (!query || signal.aborted) return undefined;
+	if (query.state.data !== undefined || query.state.fetchStatus !== "fetching") return query.state.data;
+	return new Promise((resolve) => {
+		const done = (events: CloudCpClientEvent[] | undefined) => {
+			unsubscribe();
+			signal.removeEventListener("abort", stop);
+			resolve(events);
+		};
+		const stop = () => done(undefined);
+		const unsubscribe = cache.subscribe((event) => {
+			if (event.query !== query) return;
+			if (query.state.data !== undefined) done(query.state.data);
+			else if (query.state.fetchStatus !== "fetching") done(undefined);
+		});
+		signal.addEventListener("abort", stop, { once: true });
+	});
+}
+
 /** The event types the step log reads; everything else is skipped server side when the control plane supports it. */
 const SCRIPT_RUN_EVENT_TYPES = [SCRIPT_STEP_EVENT, ...SCRIPT_RUN_END_EVENTS] as const;
 
@@ -65,7 +94,7 @@ function cloudSessionDeleting(lifecycle: CloudScriptRunsLifecycle | undefined): 
  * Setup and Cleanup runs for a Cloud session, oldest first.
  *
  * Reads, in order of preference: the chat surface's event list when it is
- * loaded (it already refreshes while the chat is open), then the script-step
+ * loaded or being loaded (it already refreshes while the chat is open), then the script-step
  * cache the startup loader fills from its live stream. Otherwise it reads the
  * session's step events: only those (the `types` filter) where the control
  * plane supports it, every event where it does not, and on a later read only
@@ -99,7 +128,8 @@ export function useCloudScriptRuns(
 		refetchOnWindowFocus: false,
 		queryFn: async ({ signal }) => {
 			const known = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!)) ?? [];
-			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(cloudChatEventsQueryKey(orgId!, sessionId!));
+			const chatKey = cloudChatEventsQueryKey(orgId!, sessionId!);
+			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(chatKey) ?? await chatEventsInFlight(queryClient, chatKey, signal);
 			if (chat) return mergeScriptStepEvents(known, chat);
 			// Every writer of the cache read the session from its start, so
 			// nothing it lacks precedes its newest event.
