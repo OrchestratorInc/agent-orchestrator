@@ -1422,6 +1422,7 @@ func (s *Store) appendUserMessage(
 			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
 			Continuation:        boolInt(msg.Continuation),
+			AuthoredByUser:      boolInt(msg.AuthoredByUser),
 			SenderSessionID:     msg.SenderSessionID,
 			SenderProjectID:     msg.SenderProjectID,
 			SenderDisplayName:   msg.SenderDisplayName,
@@ -1432,9 +1433,7 @@ func (s *Store) appendUserMessage(
 		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
-			if err := q.IncrementUsageMessageSummary(ctx, gen.IncrementUsageMessageSummaryParams{
-				SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},
-			}); err != nil {
+			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
 				return fmt.Errorf("record usage message count: %w", err)
 			}
 		}
@@ -1669,6 +1668,19 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+}
+
+// SettleTurnWithFailureCode retains a provider-classified cause beside the raw
+// error so recovery guidance survives a daemon or desktop restart.
+func (s *Store) SettleTurnWithFailureCode(
+	ctx context.Context,
+	conversationID, providerTurnID string,
+	state domain.TurnState,
+	errMessage string,
+	failureCode domain.ConversationFailureCode,
+	now time.Time,
+) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -1694,6 +1706,7 @@ func (s *Store) SettleTurn(
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  string(failureCode),
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turn.ID,
 	}); err != nil {
@@ -2248,18 +2261,70 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 	if account.AuthVerifiedAt != nil && !turn.CompletedAt.Time.After(*account.AuthVerifiedAt) && account.ReauthRequiredAt == nil {
 		return account, nil
 	}
+	markAuthenticated(account, turn.CompletedAt.Time)
+	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
+// ConversationAwaitingLogin is a session conversation whose provider asked for
+// credentials, and the harness its session runs.
+type ConversationAwaitingLogin struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+}
+
+// ConversationsAwaitingLogin lists session conversations with an unanswered
+// credential demand.
+func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationAwaitingLogin, error) {
+	rows, err := s.qr.SelectConversationsAwaitingLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ConversationAwaitingLogin, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ConversationAwaitingLogin(row))
+	}
+	return out, nil
+}
+
+// ConfirmConversationLogin clears a credential demand that a later check of the
+// session's account answered: at is when a check began that found the account
+// signed in and read its limits from the provider with that login. A demand
+// recorded at or after at stays, since that check cannot speak for it.
+func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	cleared := false
+	err := s.inTx(ctx, "confirm conversation login", func(q *gen.Queries) error {
+		row, err := q.SelectConversationByID(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		account := conversationToDomain(row).Account
+		if account == nil || account.ReauthRequiredAt == nil || !account.ReauthRequiredAt.Before(at) {
+			return nil
+		}
+		markAuthenticated(account, at)
+		cleared = true
+		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now)
+	})
+	return cleared && err == nil, err
+}
+
+// markAuthenticated records provider success at verifiedAt. A demand it
+// answers is kept as the last failure.
+func markAuthenticated(account *domain.ConversationAccount, verifiedAt time.Time) {
 	if account.ReauthRequiredAt != nil && account.LastAuthFailureAt == nil {
 		account.LastAuthFailureAt = account.ReauthRequiredAt
 		account.LastAuthFailureReason = account.ReauthReason
 	}
 	account.AuthenticationState = "authenticated"
-	account.AuthVerifiedAt = &turn.CompletedAt.Time
+	account.AuthVerifiedAt = &verifiedAt
 	account.ReauthRequiredAt = nil
 	account.ReauthReason = ""
-	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
-		return nil, err
-	}
-	return account, nil
 }
 
 // RecordThreadState stores the provider's lifecycle view of the thread.
@@ -2630,7 +2695,8 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	}
 	return domain.QueuedTurn{
 		TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
-		Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
+		Origin: row.Origin, AuthoredByUser: row.AuthoredByUser != 0,
+		DeliveryContentJSON: row.DeliveryContentJson,
 	}, nil
 }
 
@@ -2911,6 +2977,7 @@ func (s *Store) SettleTurnByID(
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  "",
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turnID,
 	}); err != nil {
@@ -3753,7 +3820,8 @@ func (r *conversationPageRows[T]) at(index int, before, visibleAfter int64) (*T,
 		if err != nil {
 			return nil, err
 		}
-		r.done = int64(len(chunk)) < r.chunk
+		// A byte-bounded fetch can be shorter than the row limit without reaching EOF.
+		r.done = len(chunk) == 0
 		for _, row := range chunk {
 			if r.sequence(row) <= visibleAfter {
 				r.done = true
@@ -3860,7 +3928,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationMessage) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationMessage, error) {
 				rows, err := s.qr.SelectConversationMessagesPage(ctx, gen.SelectConversationMessagesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select message page: %w", err)
@@ -3873,7 +3941,7 @@ func (s *Store) conversationPage(
 			sequence: func(row gen.ConversationActivity) int64 { return row.Sequence },
 			read: func(before, n int64) ([]gen.ConversationActivity, error) {
 				rows, err := s.qr.SelectConversationActivitiesPage(ctx, gen.SelectConversationActivitiesPageParams{
-					ConversationID: conversationID, BeforeSequence: before, PageLimit: n,
+					ConversationID: conversationID, BeforeSequence: before, PageLimit: n, PageBytes: conversationPageMaxBytes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("select activity page: %w", err)
@@ -4555,6 +4623,7 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 		ProviderInputText:  row.ProviderInputText,
 		State:              row.State,
 		ErrorMessage:       row.ErrorMessage,
+		FailureCode:        domain.ConversationFailureCode(row.FailureCode),
 		RequestedAt:        row.RequestedAt,
 	}
 	if row.RetryOfTurnID.Valid {
@@ -4619,6 +4688,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
 		Continuation:        row.Continuation != 0,
+		AuthoredByUser:      row.AuthoredByUser != 0,
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,

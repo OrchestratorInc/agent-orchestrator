@@ -91,6 +91,8 @@ export type XtermTerminalProps = {
 	onSessionLinkOpen?: (uri: string) => void;
 	/** Publish the positive grid after a retained terminal becomes visible. */
 	onVisibleSize?: (cols: number, rows: number) => void;
+	/** Every grid a visible terminal commits, including later resizes. */
+	onGridChange?: (cols: number, rows: number) => void;
 	/** Hidden retained terminals keep parsing output but expose no UI overlays. */
 	isVisible?: boolean;
 	/** Cursor Agent understands AO's terminal color protocol; generic terminals do not. */
@@ -215,16 +217,18 @@ function terminalFontSizeDelta(event: KeyboardEvent): -1 | 0 | 1 {
 function normalizedTerminalShortcut(event: KeyboardEvent): string | null {
 	if (event.shiftKey) return null;
 
-	// macOS Command+Left/Right → readline beginning/end of line. Do not treat
-	// the Windows key (metaKey on Win/Linux) as Command, and do not rewrite
-	// Windows Home/End: those must fall through to xterm's native sequences
-	// because Ctrl+A is SelectAll in default PSReadLine (#3093).
+	// macOS Command chords → readline (iTerm2 Natural Text Editing). Do not
+	// treat the Windows key (metaKey on Win/Linux) as Command, and do not
+	// rewrite Windows Home/End: those must fall through to xterm's native
+	// sequences because Ctrl+A is SelectAll in default PSReadLine (#3093).
 	if (event.metaKey && !event.ctrlKey && !event.altKey && isMacPlatform()) {
 		switch (event.key) {
 			case "ArrowLeft":
 				return "\x01";
 			case "ArrowRight":
 				return "\x05";
+			case "Backspace":
+				return "\x15";
 			default:
 				return null;
 		}
@@ -1089,8 +1093,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// shells, where ESC+CR is not a "newline" affordance. The correct fix is to
 			// scope it by pane kind — TerminalPane already branches on
 			// `terminalTarget?.kind === "shell"` at the XtermTerminal call site — once
-			// this branch is rebased onto main, which brings that discriminator (and
-			// ShellTerminalsView) that does not yet exist here. Until then the behavior
+			// this branch is rebased onto main, which brings that discriminator that does
+			// not yet exist here. Until then the behavior
 			// is left unchanged and the emitted bytes are identical for all panes.
 			if (event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
 				consumeTerminalShortcut(event);
@@ -1345,6 +1349,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (firstMeasurement && callbacksRef.current.isVisible !== false) {
 				callbacksRef.current.onVisibleSize?.(term.cols, term.rows);
 			}
+			if (callbacksRef.current.isVisible !== false) callbacksRef.current.onGridChange?.(term.cols, term.rows);
 		};
 		const synchronizedFrames = term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
 			if (params.includes(2026)) usesSynchronizedOutput = true;
@@ -1379,8 +1384,29 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			wasDragging = dragging;
 		});
 		dragStateObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+		// The host's content box as the ResizeObserver last delivered it. Grids
+		// derived from it plus xterm's cell metrics need no layout read.
+		let observedBox: { width: number; height: number } | null = null;
+		const gridFromObservedBox = () => {
+			const cell = term.dimensions?.css.cell;
+			if (!observedBox || observedBox.width <= 0 || observedBox.height <= 0) return undefined;
+			if (!cell || !Number.isFinite(cell.width) || !Number.isFinite(cell.height)
+				|| cell.width <= 0 || cell.height <= 0) {
+				return undefined;
+			}
+			const gutter = term.options.scrollback === 0 || term.options.scrollbar?.showScrollbar === false
+				? 0 : (term.options.scrollbar?.width ?? MAC_TERMINAL_SCROLLBAR_WIDTH);
+			return {
+				cols: Math.max(2, Math.floor((Math.floor(observedBox.width) - paddingX - gutter) / cell.width)),
+				rows: Math.max(1, Math.floor((Math.floor(observedBox.height) - paddingY) / cell.height)),
+			};
+		};
 		const observer = new ResizeObserver((entries) => {
 			if (disposed) return;
+			// Track the box even while parked, so the stabilizer never proposes
+			// from a box that changed while this terminal was hidden.
+			const observed = entries.find((entry) => entry.target === host)?.contentRect;
+			if (observed) observedBox = { width: observed.width, height: observed.height };
 			if (callbacksRef.current.isVisible === false) {
 				waitingForResizeOutput = false;
 				hasResizeFrame = false;
@@ -1390,21 +1416,17 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				scheduleVisibleFit();
 				return;
 			}
-			const box = entries.find((entry) => entry.target === host)?.contentRect;
-			const cell = term.dimensions?.css.cell;
-			if (!box || !cell || !Number.isFinite(cell.width) || !Number.isFinite(cell.height)
-				|| cell.width <= 0 || cell.height <= 0) {
+			if (!observed) {
 				scheduleLiveFit();
 				return;
 			}
-			if (box.width <= 0 || box.height <= 0) {
+			if (observed.width <= 0 || observed.height <= 0) return;
+			const grid = gridFromObservedBox();
+			if (!grid) {
+				scheduleLiveFit();
 				return;
 			}
-			const gutter = term.options.scrollback === 0 || term.options.scrollbar?.showScrollbar === false
-				? 0 : (term.options.scrollbar?.width ?? MAC_TERMINAL_SCROLLBAR_WIDTH);
-			const cols = Math.max(2, Math.floor((Math.floor(box.width) - paddingX - gutter) / cell.width));
-			const rows = Math.max(1, Math.floor((Math.floor(box.height) - paddingY) / cell.height));
-			resizeGrid(cols, rows);
+			resizeGrid(grid.cols, grid.rows);
 		});
 		observer.observe(host);
 
@@ -1437,8 +1459,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		let stableFrames = 0;
 		let refits = 0;
 		let pending: { cols: number; rows: number } | null = null;
+		// onRender runs right after xterm writes the frame, so FitAddon's
+		// computed-style read here forced a full page layout on every repaint —
+		// the main cost of opening several terminals at once. Propose from the
+		// observed box instead; only before the first observation fall back.
 		const stabilizer = term.onRender(() => {
-			const proposed = proposeGrid();
+			const proposed = gridFromObservedBox() ?? proposeGrid();
 			if (!proposed || !proposed.cols || !proposed.rows) return;
 			if (proposed.cols !== term.cols || proposed.rows !== term.rows) {
 				stableFrames = 0;
@@ -1450,7 +1476,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						stabilizer.dispose();
 						return;
 					}
-					fitTerminal();
+					resizeGrid(proposed.cols, proposed.rows);
 					return;
 				}
 				pending = { cols: proposed.cols, rows: proposed.rows };

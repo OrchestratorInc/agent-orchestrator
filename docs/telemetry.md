@@ -117,11 +117,11 @@ Orchestrator.inc sends structured events in a few broad categories:
   `exe`, `appimage`, `deb`, `rpm`, `dev`, `unknown`, or `other`, and
   `installed_at` is the UTC day the app first ran. Both come from
   `~/.ao/app-state.json`; no download path or file name is sent
-- Whether the app is running in CI or a container (`is_ci`, plus `ci_signal`
-  of `ci_env` or `container`), detected from well-known CI environment
-  variables and container marker files. Only the boolean and the category are
-  sent, never the variables themselves, so automated runs can be excluded from
-  usage counts
+- Whether the app is running in CI (`is_ci`) or a container (`is_container`),
+  detected independently from well-known CI environment variables and
+  container marker files. A development container has `is_ci: false` and
+  `is_container: true`; CI inside a container has both true. Only the booleans
+  are sent, never the variables themselves
 - If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
   address, AO Cloud user ID, and GitHub username. The email is set at sign-in
@@ -133,9 +133,9 @@ Orchestrator.inc sends structured events in a few broad categories:
   session-start events)
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
-- One-time lifecycle markers: `ao.app.first_open` is sent once per
+- One-time lifecycle markers: `ao.install.created` is sent once per
   installation identifier on any build, including installations that predate
-  the install event, and `ao.app.installed` and `ao.app.first_open` say
+  the install event, and `ao.app.installed` and `ao.install.created` say
   whether the desktop app or the CLI started the daemon (`launcher`).
   `ao.session.spawned` and `ao.projects.created` carry `first_for_install`,
   true only for the installation's first session or project. These are
@@ -145,6 +145,18 @@ Orchestrator.inc sends structured events in a few broad categories:
   `ao.onboarding.first_project_added` events are deprecated: they fire again
   whenever the session or project list is empty, and are kept only so
   existing dashboards continue
+- A fixed experiment bucket, `experiment_cohort` (a whole number from 0 to
+  99), on every desktop and daemon event. It is picked at random on the first
+  run that reaches it and stored in `~/.ao/data/telemetry_experiment_cohort`,
+  so onboarding experiments can compare bucket ranges without feature flags.
+  It is random and says nothing about you
+- Whether sessions get used and deliver: who started a session and how it
+  ended, plus categories and timings on the usage counts below. These carry
+  only categories, counts, and durations, never message text, titles, branch
+  names, or URLs. See "Usage counts by project" and "How sessions start and
+  end" below
+- Desktop onboarding milestones separately record an app open on the install
+  day, first eligible user CLI invocation, and return on a later UTC day.
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -174,15 +186,70 @@ in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
 
+Daemon `project_id_hash` uses the random install ID as a salt before hashing
+the local project ID. This keeps the session spawn grouping stable within one
+installation while preventing a short, guessable project slug from yielding
+the same hash across installations. Usage summary events retain their separate
+random `project_telemetry_id`.
+
+Desktop and daemon events carry `days_since_install` when the persisted install
+ID file has a valid timestamp. The daemon reads it at export time; the desktop
+receives that timestamp during telemetry bootstrap and recalculates the age
+for each event. The daemon also reads `lifetime_sessions` from
+a SQLite counter that increases when a session is committed and survives its
+later deletion. The daemon snapshots the count when an event enters its remote
+sink, before asynchronous export. The desktop reads that counter from the
+loopback daemon during bootstrap, and a paired phone receives it through the
+authenticated telemetry identity route. If the count cannot be read, it is
+omitted. Historical sessions
+deleted before this counter was introduced cannot be reconstructed.
+`is_signed_in` reflects the AO Cloud identity known on the emitting surface.
+The daemon and paired phone omit it until the desktop resolves and hands off
+its Cloud session; an explicit sign-out reports false. These
+properties contain no local project or session ID.
+
+Session spawn events use `created_by` from the durable session attribution
+record to describe whether a user, orchestrator, schedule, or automation
+started the session. Session telemetry reports `kind: standalone` when the
+session has no project. Failed desktop orchestrator spawn outcomes include
+the daemon error code and HTTP status when available. These values contain
+no error message, project name, or request ID.
+
+The onboarding milestones use durable local reservations. A first app open is
+recorded only on the install day.
+The next-day return requires desktop activity on the install day and again on
+the next UTC calendar day, including when the desktop remains open across midnight.
+The first eligible user CLI invocation reserves a local marker before export. None of
+these milestones treats an idle session as a successful session.
+The first project and first session are identified by `first_for_install` on
+the committed project and session events. The old `ao.onboarding.first_*`
+events remain deprecated until the separate event rename.
+`lifetime_sessions: 2` on `ao.session.spawned` identifies the second session.
+
+| Event | Authoritative source | Deduplication |
+| --- | --- | --- |
+| `ao.app.first_opened` | Desktop opens on the installation day | Desktop local reservation |
+| `ao.cli.first_used` | First eligible user CLI invocation, before command execution; the command may later fail | Install marker file |
+| `ao.projects.created` with `first_for_install` | First committed project registration | Durable project registry |
+| `ao.session.spawned` with `first_for_install` | First committed session | Durable install milestone |
+| `ao.session.spawned` with `lifetime_sessions: 2` | Second committed session | Durable lifetime counter |
+| `ao.app.next_day_returned` | Desktop active on the install day and again the next UTC day | Desktop local reservation |
+| `ao.agents.missing` | Agent readiness reports zero installed agents | Once per desktop launch |
+| `ao.agents.install_clicked` | User starts an agent install from Settings | One event per accepted click |
+
+`ao.renderer.agents_available` continues to report bounded installed,
+authorized, and supported agent inventory once per desktop launch.
+
 ## Usage counts by project
 
-The daemon sends three usage summaries when remote product telemetry is enabled:
+The daemon sends four usage summaries when remote product telemetry is enabled:
 
 | Event | What is counted |
 | --- | --- |
 | `ao.usage.messages_sent` | New, direct human Chat messages accepted into a session. One count per accepted message. |
 | `ao.usage.worker_pr_associated` | A provider PR first associated with an AO worker session. This is not proof the worker created the PR. |
 | `ao.usage.worker_pr_merged` | An associated worker PR first observed as merged. |
+| `ao.prs.closed` | An associated worker PR first observed as closed without merging. |
 
 The project grouping value, `project_telemetry_id`, is a random UUID persisted
 locally for each project and installation. It is not a hash of a repository,
@@ -225,9 +292,12 @@ are excluded. Repeated observations do not add counts. A PR already associated
 with a worker when this measurement is first installed contributes one
 association count, and an already merged PR also contributes one merged
 count. Both carry `historical: true`; newly observed associations and merges
-carry `historical: false`. Counts are grouped per project at each full flush,
-about every 30 minutes and at daemon or desktop shutdown. The one-minute
-archive pass skips the PR scan.
+carry `historical: false`. Historical counts are grouped per project; each new
+outcome is sent as its own event with `count: 1`, so summing `count` gives the
+same totals either way. PR summaries go out at each full flush, about every 30
+minutes and at daemon or desktop shutdown. The one-minute archive pass skips
+the PR scan. A PR already closed when closed outcomes started being measured
+is not reported as closed.
 PRs and messages accepted while product telemetry is off are not exported
 after a later opt-in.
 If events export is disabled in configuration when this version first runs,
@@ -235,6 +305,59 @@ backfilled worker PR associations that have not been observed again remain
 eligible for historical export if events export is enabled later. An observation
 while export is disabled marks that association reported locally. Explicit
 product telemetry opt-out discards pending associations before export.
+### Detail on the usage counts
+
+`ao.usage.messages_sent` keeps `count` as defined above and adds:
+
+- `steer_count`: guidance you steered into a running turn.
+- `send_count`: messages you sent with `/send`, meaning `ao send` outside an
+  AO session or a TUI session's composer. Messages an AO session sends another
+  session are not counted.
+- `desktop_count`, `mobile_count`, `cli_count`: all of the above split by the
+  client the message came from. The daemon works the client out from how the
+  request arrived; `cli` covers any local client without a browser origin.
+- `kind` (`orchestrator` or `worker`) and `harness` of the included project
+  session. Standalone message counts are excluded as noted above.
+
+New (`historical: false`) PR outcomes add:
+
+- `kind` and `harness` of the owning worker when known, plus
+  `scm_provider` (`github` or `gitlab`).
+- `ms_since_spawn`: from the worker starting to the PR opening, merging, or
+  closing.
+- `ms_since_open` (merged and closed): from the PR opening to its outcome.
+- `review_rounds` (merged and closed): reviews recorded on the PR.
+  `ao_review_used`: whether an AO review ran on it.
+- `merged_via` (merged): `desktop`, `mobile`, or `cli` when merged through
+  Orchestrator.inc, and `github` when the merge happened on GitHub. It is
+  omitted when the external merge surface is unknown, such as GitLab.
+- `first_for_install` (associated and merged): true only for the
+  installation's first new worker PR and first merge, recorded by
+  `telemetry_first_pr_opened` and `telemetry_first_pr_merged` under
+  `~/.ao/data`. An installation with earlier, already measured PRs reports
+  false.
+
+## How sessions start and end
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.session.spawned` | A session starts (existing event) | adds `created_by` and, for sessions a request started, `surface` |
+| `ao.sessions.ended` | A session is killed, replaced, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
+
+- `surface` is `desktop`, `mobile`, or `cli`, as above.
+- `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
+  `scheduled` (an automation's schedule), or `automation` (issue intake, or a
+  worker session starting another session). It is stored in the local
+  database next to the session. Sessions created before this was recorded
+  report no `created_by`.
+- `outcome` is `pr_opened` (the session has a pull request), `completed` (a
+  done report or a closed issue without a pull request), `killed` (stopped
+  while the agent was working), `abandoned` (stopped while it was idle or
+  waiting on you, with nothing delivered), or `failed` (its runtime died).
+- `waiting_input_count` is how many times the session stopped to wait for
+  you.
+- An ended event claims its session once in local storage after the terminal
+  state is durable. Concurrent end paths cannot export duplicate outcomes.
 
 ## Automation usage and creation
 
@@ -331,17 +454,19 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   or account switch, its anonymous `distinct_id` changes to avoid attributing
   new anonymous events to the previous person.
 - Project and session identifiers included in telemetry are one-way hashed.
-  Hashing hides the plain text but still allows related events to be grouped.
+  Daemon project hashes are salted by the random install ID. Hashing hides
+  the plain text while allowing related events on that install to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
   are replaced with redaction markers before the events are sent.
 - Daemon events sent to PostHog and mobile events accept a fixed set of
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
-- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
-  rate limit bound them, and real HTTP 500 responses also go to the existing
-  gated Sentry capture once. The local diagnostic stream keeps every
-  occurrence. CLI usage errors are one event per command path and error kind
+- Remote HTTP 5xx events contain only a count and rollup window. The minute
+  rollup and daily rate limit bound them. Reportable HTTP errors still go to
+  the existing gated daemon Sentry capture once, and local logs and local
+  telemetry retain each occurrence with diagnostic fields. CLI usage errors
+  are one event per command path and error kind
   per install per completed UTC day, with `command_path`, `error_kind`, and
   `count`. At most 20 of those events are sent per day. The minute rate limit
   does not apply to this event, because each one is already a summary. Paths
@@ -355,7 +480,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   `GET /api/v1/sessions/:id/conversation/models`, and
   `GET /api/v1/sessions/:id/conversation/skills`. Codex
   account management being unwired, and an already-closed shell terminal, are
-  not analytics events. An expired GitHub token still reports. A Codex login
+  not analytics events. A GitHub token rejected after refresh still reports
+  `GITHUB_AUTH_INVALID`. A temporary refresh outage reports
+  `GITHUB_REFRESH_UNAVAILABLE` for retry instead of claiming the credential is
+  invalid. A Codex login
   terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
   account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
   account routes. The account event stream stays open for setup-incomplete

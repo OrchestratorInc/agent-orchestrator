@@ -43,7 +43,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
-import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
+import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
@@ -107,7 +107,7 @@ import {
 	type PRReviewState,
 	type ReviewRunFacts,
 } from "../lib/session-reviews";
-import type { CloudCpAOReviewRun, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
+import type { CloudCpAOReviewRun, CloudCpProjectRepo, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
 
 type ProjectConfig = components["schemas"]["ProjectConfig"];
 type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => void;
@@ -337,7 +337,6 @@ export const SessionInspector = memo(function SessionInspector({
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
 							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
-							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
 				}
@@ -413,6 +412,20 @@ const SummaryView = memo(function SummaryView({
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
+	// A Cloud project's repositories come from the control plane: its own and
+	// the additional ones its sessions check out.
+	const { client: cloudClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
+	const cloudProjectQuery = useQuery({
+		queryKey: ["cloud-project-repositories", cloudBaseUrl, session.cloud?.orgId ?? "", session.workspaceId],
+		enabled: linkedPRs.length > 0 && Boolean(session.cloud) && cloudReady,
+		staleTime: 60_000,
+		queryFn: async () => {
+			const { project } = await cloudClient.getProject(session.cloud!.orgId, session.workspaceId);
+			const repos = (project.config as { repos?: CloudCpProjectRepo[] } | undefined)?.repos ?? [];
+			return [project.repositoryUrl, ...repos.map((repo) => repo.url)];
+		},
+	});
+	const projectRepositories = session.cloud ? cloudProjectQuery.data : projectRepositoryUrls(projectQuery.data);
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
@@ -480,7 +493,7 @@ const SummaryView = memo(function SummaryView({
 									projectId={session.workspaceId}
 								/>
 							))}
-							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
 						</>
 					) : null}
 					session={session}
@@ -594,9 +607,13 @@ function InspectorPolicyRow({
 	);
 }
 
-function isExternalRepository(pr: SessionPRReference, project: components["schemas"]["Project"] | undefined): boolean {
-	if (!project) return false;
-	const repositories = [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+function projectRepositoryUrls(project: components["schemas"]["Project"] | undefined): Array<string | undefined> | undefined {
+	if (!project) return undefined;
+	return [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+}
+
+function isExternalRepository(pr: SessionPRReference, repositories: Array<string | null | undefined> | undefined): boolean {
+	if (!repositories) return false;
 	const identities = repositories.flatMap((repository) => {
 		if (!repository) return [];
 		try {
@@ -1096,6 +1113,17 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		placeholderData: (previous) => previous,
 		enabled: !session.cloud && session.kind !== "orchestrator",
 	});
+	// A Cloud session's commits come from its worker's workspace review, the
+	// same read (and cache entry) the inspector polls for its Files count.
+	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudOrgId = session.cloud?.orgId;
+	const cloudReview = useQuery({
+		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session.id, "summary"],
+		enabled: cloudReady && cloudOrgId !== undefined && session.runtimeConnected === true && session.kind !== "orchestrator",
+		placeholderData: (previous) => previous,
+		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session.id),
+	});
+	const commits = session.cloud ? cloudReview.data?.commits : history.data?.commits;
 	const events: SortableTimelineEvent[] = [];
 	const pushEvent = (event: InspectorTimelineEvent, timestamp?: string | null) => {
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
@@ -1111,7 +1139,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		createdAt,
 	);
 
-	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
+	for (const commit of commits?.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
 		pushEvent(
 			{
 				tone: "neutral",
@@ -1279,7 +1307,6 @@ function TimelinePill({ label, tone }: { label: string; tone: string; breathe: b
 function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	const states: ScmTimelineState[] = [];
 	const seen = new Set<ScmTimelineState>();
-	const open = new Set(openPRs(session));
 	const add = (state: ScmTimelineState) => {
 		if (seen.has(state)) return;
 		seen.add(state);
@@ -1289,15 +1316,14 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	if (session.status === "ci_failed") add("ci_failed");
 	if (session.status === "changes_requested") add("changes_requested");
 	if (session.status === "commented") add("commented");
-	for (const pr of session.prs) {
-		if (open.has(pr) && pr.ci === "failing") add("ci_failed");
+	// Only open and draft PRs contribute live PR signals.
+	for (const pr of openPRs(session)) {
+		if (pr.ci === "failing") add("ci_failed");
 		if (pr.review === "changes_requested") add("changes_requested");
 		// Read the raw fact directly rather than session.status: status collapses
 		// to "working" while the agent is active, but unresolved comments from a
 		// non-blocking review must stay visible regardless of agent activity.
-		// Gated on the PR still being open so a stale comment on a merged/closed
-		// PR cannot keep the pill around.
-		if (open.has(pr) && pr.reviewComments) add("commented");
+		if (pr.reviewComments) add("commented");
 		if (pr.mergeability === "conflicting") add("conflict");
 	}
 
@@ -1664,7 +1690,10 @@ function CloudReviewsSection({
 		queryFn: () => client.inspectSessionReviewerHarnesses(orgId, session.id),
 		retry: 1,
 	});
-	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || session.provider;
+	// With no reviewer chosen, the worker's agent maps to its default reviewer
+	// the way a local project's does (WORKER_DEFAULT_REVIEWERS).
+	const defaultReviewer = defaultReviewerHarness(session.provider, true);
+	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || defaultReviewer;
 	const [selectedReviewerHarness, setSelectedReviewerHarness] = useState(effectiveReviewerHarness);
 	useEffect(() => setSelectedReviewerHarness(effectiveReviewerHarness), [effectiveReviewerHarness, session.id]);
 	const [autoReviewEnabled, setAutoReviewEnabled] = useState(session.autoReviewEnabled === true);
@@ -1681,7 +1710,7 @@ function CloudReviewsSection({
 			if (running && data.reviewerHandleId) {
 				onOpenReviewerTerminal?.({
 					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || session.provider,
+					harness: data.reviewerHarness || defaultReviewer,
 				});
 			} else if (!running) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
@@ -1753,7 +1782,7 @@ function CloudReviewsSection({
 		...session,
 		prs: (pullRequestsQuery.data?.pullRequests ?? []).map(cloudPullRequestFacts),
 	};
-	const reviewState = cloudReviewsToLocal(reviewsQuery.data, session.provider);
+	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
 	return (
 		<>
 			<ReviewPanel
@@ -2424,24 +2453,25 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	const latestAutoFailure = reviewStates
+	// A failed run stores its reason in body. Show it for manual triggers too:
+	// the trigger request itself only returns a generic "Review operation failed".
+	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
 			(run): run is ReviewRunFacts =>
 				Boolean(
-					autoReviewEnabled &&
-						run?.triggerSource === "auto" &&
-						run.status === "failed" &&
-						run.body?.trim(),
+					run?.status === "failed" &&
+						run.body?.trim() &&
+						(run.triggerSource !== "auto" || autoReviewEnabled),
 				),
 		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string | null>(null);
+	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
 	useEffect(() => {
-		if (!latestAutoFailure || latestAutoFailure.id === dismissedAutoFailureId) return;
-		const timer = window.setTimeout(() => setDismissedAutoFailureId(latestAutoFailure.id), 10_000);
+		if (!latestFailure || latestFailure.id === dismissedFailureId) return;
+		const timer = window.setTimeout(() => setDismissedFailureId(latestFailure.id), 10_000);
 		return () => window.clearTimeout(timer);
-	}, [dismissedAutoFailureId, latestAutoFailure]);
+	}, [dismissedFailureId, latestFailure]);
 	if (sortedPRs(session).length === 0) {
 		return <Section surface={false} title={t("inspector.review.controls")}><p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p></Section>;
 	}
@@ -2463,8 +2493,8 @@ function ReviewPanel({
 	const resolvedDefaultHarness = resolveDefaultReviewerHarness(config, session.provider);
 	const effectiveReviewerHarness = reviewerOverride || resolvedDefaultHarness;
 	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
-	const autoReviewFailure =
-		latestAutoFailure && latestAutoFailure.id !== dismissedAutoFailureId ? latestAutoFailure.body.trim() : null;
+	const reviewFailure =
+		latestFailure && latestFailure.id !== dismissedFailureId ? latestFailure : null;
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
@@ -2488,12 +2518,13 @@ function ReviewPanel({
 							{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
 					</p>
 				) : null}
-				{autoReviewFailure ? (
+				{reviewFailure ? (
 					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
 						<span className="font-semibold">
-							{t("inspector.autoReview")} {t("inspector.review.failed")}:
+							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}{" "}
+							{t("inspector.review.failed")}:
 						</span>{" "}
-						{autoReviewFailure}
+						{reviewFailure.body.trim()}
 					</p>
 				) : null}
 				{notice ? (

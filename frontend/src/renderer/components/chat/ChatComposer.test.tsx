@@ -4,7 +4,8 @@ import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@t
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
 import { ChatComposer } from "./ChatComposer";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
@@ -93,6 +94,115 @@ function clipboardData(files: File[]) {
 const png = (name = "shot.png") =>
 	new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
 const textFile = (name = "notes.txt") => new File(["hello"], name, { type: "text/plain" });
+
+beforeEach(() => useUiStore.setState({ chatSendKeyMode: "enter" }));
+
+describe("send key preference", () => {
+	it("inserts a newline on Enter in the Cmd/Ctrl+Enter mode", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "one");
+		await userEvent.keyboard("{Enter}");
+		await typeInComposer(field, "two");
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("one\ntwo");
+	});
+
+	it.each(["Meta", "Control"])("sends/queues with %s+Enter in newline mode, even when steering is available", async (modifier) => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const onSteer = vi.fn();
+		const { onSend, field } = renderComposer({ willQueue: true, canSteer: true, onSteer });
+		await typeInComposer(field, "queue this draft");
+		await userEvent.keyboard(`{${modifier}>}{Enter}{/${modifier}}`);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("queue this draft"));
+		expect(onSteer).not.toHaveBeenCalled();
+	});
+
+	// Cmd/Ctrl is held to send in newline mode, so the send control must not flip
+	// to a steer while the user reaches for Enter.
+	it("keeps the send control queueing while a modifier is held in newline mode", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const onSteer = vi.fn();
+		const { onSend, field } = renderComposer({ willQueue: true, canSteer: true, onSteer });
+		await typeInComposer(field, "queue this click");
+		act(() => {
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }));
+		});
+
+		expect(screen.queryByRole("button", { name: "Steer message" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Queue message" }));
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("queue this click"));
+		expect(onSteer).not.toHaveBeenCalled();
+	});
+
+	it("keeps Shift+Enter as a newline in newline mode", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "one");
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+		await typeInComposer(field, "two");
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("one\ntwo");
+	});
+
+	it("inserts a newline instead of selecting an open suggestion on bare Enter", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer({ skills: SKILLS });
+		await typeInComposer(field, "/rev");
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+		await userEvent.keyboard("{Enter}");
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field.querySelector("[data-composer-token]")).toBeNull();
+		expect(composerWireText(field)).toBe("/rev\n");
+	});
+
+	it.each(["Meta", "Control"])("selects an open suggestion on %s+Enter in newline mode", async (modifier) => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer({ skills: SKILLS });
+		await typeInComposer(field, "/rev");
+		await userEvent.keyboard(`{${modifier}>}{Enter}{/${modifier}}`);
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/review");
+	});
+
+	it("accepts a next-message suggestion with Tab and sends it with Cmd+Enter in newline mode", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const { onSend, field } = renderComposer({ promptSuggestion: { id: "suggestion", text: "Run the tests" } });
+		await userEvent.keyboard("{Tab}");
+		expect(composerWireText(field)).toBe("Run the tests");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("Run the tests\n");
+
+		await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("Run the tests"));
+	});
+
+	it.each([
+		{ action: "send", button: "Send message", props: {} },
+		{ action: "queue", button: "Queue message", props: { willQueue: true } },
+		{ action: "save edit", button: "Send message", props: { editingQueuedTurnId: "queued-1" } },
+		{ action: "insert", button: "Send message", props: { skills: SKILLS } },
+	])("updates the $action hint immediately when the preference changes", async ({ action, button, props }) => {
+		const user = userEvent.setup();
+		const { field } = renderComposer(props);
+		await typeInComposer(field, action === "insert" ? "/rev" : "hello");
+		await user.hover(screen.getByRole("button", { name: button }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(`Enter to ${action}; Shift+Enter for newline`);
+
+		act(() => useUiStore.getState().setChatSendKeyMode("mod-enter"));
+		expect(screen.getByRole("tooltip")).toHaveTextContent(`Cmd/Ctrl+Enter to ${action}; Enter for newline`);
+
+		act(() => useUiStore.getState().setChatSendKeyMode("enter"));
+		expect(screen.getByRole("tooltip")).toHaveTextContent(`Enter to ${action}; Shift+Enter for newline`);
+	});
+});
 
 /* ---- the keyboard contract the composer already had ---------------------- */
 
@@ -217,6 +327,32 @@ describe("send keys", () => {
 
 		expect(document.activeElement).toBe(field);
 	});
+
+ it("does not steal selection when the same composer becomes enabled", () => {
+  const view=render(<ChatComposer onSend={vi.fn()} autoFocusKey="same-session" disabled />);
+  const field=screen.getByLabelText("Message the agent");
+  const host=document.createElement("diffs-container");const root=host.attachShadow({mode:"open"});root.textContent="selected file text";document.body.append(host);
+  Object.assign(root,{getSelection:()=>({anchorNode:root.firstChild,anchorOffset:0,focusNode:root.firstChild,focusOffset:8})});
+  view.rerender(<ChatComposer onSend={vi.fn()} autoFocusKey="same-session" />);
+  expect(document.activeElement).not.toBe(field);host.remove();
+ });
+
+ it.each(["focus", "visibilitychange"])("preserves a native shadow selection on passive %s", event => {
+  const {field} = renderComposer({autoFocusKey:"session-1"});field.blur();
+  const host=document.createElement("diffs-container");const root=host.attachShadow({mode:"open"});
+  root.textContent="selected file text";document.body.append(host);
+  Object.assign(root,{getSelection:()=>({isCollapsed:true,anchorNode:root.firstChild,anchorOffset:0,focusNode:root.firstChild,focusOffset:8})});
+  act(()=>{if(event==="focus")window.dispatchEvent(new Event(event));else document.dispatchEvent(new Event(event));});
+  expect(document.activeElement).not.toBe(field);host.remove();
+ });
+ it("preserves selected transcript text when the window regains focus", () => {
+  const {field}=renderComposer({autoFocusKey:"session-1"});field.blur();
+  const text=document.createElement("p");text.textContent="selected transcript";document.body.append(text);
+  const range=document.createRange();range.selectNodeContents(text);window.getSelection()!.addRange(range);
+  act(()=>window.dispatchEvent(new Event("focus")));
+  expect(document.activeElement).not.toBe(field);expect(window.getSelection()!.toString()).toBe("selected transcript");
+  window.getSelection()!.removeAllRanges();text.remove();
+ });
 
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
@@ -805,6 +941,22 @@ describe("send keys", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it("retries a saved /side message as ordinary agent text with its original key", async () => {
+		const sessionId = "side-routing";
+		writeChatComposerText(sessionId, "/side original question");
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "/side original question",
+			requestText: "/side original question",
+			attachments: [],
+			clientMessageId: "original-key",
+		});
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend).toHaveBeenCalledWith("/side original question", undefined, "original-key");
+	});
 	it.each(["read", "write"])("preserves safe retry when recording acceptance fails to %s storage", async (failure) => {
 		const sessionId = `composer-live-acceptance-storage-failure-${failure}`;
 		const durableStorage = window.localStorage;
@@ -1846,6 +1998,18 @@ describe("slash commands", () => {
 		scrollIntoView.mockRestore();
 	});
 
+	it.each(["Enter", "Tab"])("finds /btw through /side and completes with %s before sending the prompt", async key => {
+		const {onSend,field}=renderComposer({skills:[{name:"btw",displayName:"btw",description:"Open a new side chat",source:"AO"}]});
+		await typeInComposer(field,"/side");
+		expect(screen.getByRole("option",{name:/\/btw/})).toBeInTheDocument();
+		expect(screen.queryByRole("option",{name:/^\/side\b/})).not.toBeInTheDocument();
+		await userEvent.keyboard(`{${key}}`);
+		expect(composerWireText(field)).toBe("/btw ");
+		expect(onSend).not.toHaveBeenCalled();
+		await typeInComposer(field,"explain this");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(()=>expect(onSend).toHaveBeenCalledWith(expect.stringContaining("/btw explain this")));
+	});
 	it("inserts the highlighted skill on Enter instead of sending", async () => {
 		const { onSend, field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/rev");
@@ -3041,7 +3205,10 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
 	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
-	expect(onSend.mock.calls[0][5]).toBeUndefined();
+	// The captures come along for the transcript only, with the message as typed;
+	// the text already carries them for the agent.
+	expect(onSend.mock.calls[0][5]?.map((item: { id: string })=>item.id)).toEqual([ref.id]);
+	expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
 	view.unmount();
 });
@@ -3065,6 +3232,51 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	expect(onSend.mock.calls[0][0]).toContain("cloud.ts#L1-L1");
 	expect(onSend.mock.calls[0][0]).not.toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][2]).toBe("legacy-receipt");
+});
+
+// A Cloud chat's composer delivers captures as text and searches files for "@";
+// the IME guard and the send-key preference hold there as in a local chat.
+describe("Cloud delivery under the send-key preference", () => {
+	it("sends a quoted selection and a capture only on Cmd/Ctrl+Enter in newline mode, never on an IME Enter", async () => {
+		useUiStore.getState().setChatSendKeyMode("mod-enter");
+		const sessionId = "cloud-send-key-capture";
+		writeChatExcerptReferences(sessionId, EXCERPTS);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text" onFileQuery={vi.fn()} />);
+		const ref = captureFileReference({ path: "cloud.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "CLOUD_CAPTURE" }] }, sessionId);
+		act(() => { expect(sendReferenceToChat(sessionId, ref)).toBe(true); });
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "question");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: false, keyCode: 229, ctrlKey: true }); });
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); });
+		expect(onSend).not.toHaveBeenCalled();
+
+		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
+		expect(onSend.mock.calls[0][4]?.map((item: { id: string }) => item.id)).toEqual(["excerpt"]);
+		expect(onSend.mock.calls[0][5]?.map((item: { id: string }) => item.id)).toEqual([ref.id]);
+		expect(onSend.mock.calls[0][6]).toContain("question");
+		expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
+	});
+
+	it.each(["enter", "mod-enter"] as const)("in %s mode, an IME Enter leaves a searched @ file unpicked and the send key picks it", async (mode) => {
+		useUiStore.getState().setChatSendKeyMode(mode);
+		const onFileQuery = vi.fn();
+		const { onSend, field } = renderComposer({ filePaths: ["README.md"], onFileQuery, fileReferenceDelivery: "text" });
+		await typeInComposer(field, "@REA");
+		expect(onFileQuery).toHaveBeenLastCalledWith("REA");
+		expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", isComposing: true, keyCode: 13, ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).toBeNull();
+		expect(composerWireText(field)).toBe("@REA");
+
+		await act(async () => { fireEvent.keyDown(field, { key: "Enter", ctrlKey: mode === "mod-enter" }); });
+		expect(field.querySelector("[data-composer-token]")).not.toBeNull();
+		expect(onSend).not.toHaveBeenCalled();
+	});
 });
 
 it("retains file annotations when the connected daemon lacks support", async () => {

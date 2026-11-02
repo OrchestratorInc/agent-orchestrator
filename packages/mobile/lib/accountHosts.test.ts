@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Host } from "./hosts";
 
-const saved = vi.hoisted(() => ({ hosts: [] as Host[], ignored: new Map<string, string>(), account: { id: "user-a", email: "person@example.com" } as { id: string; email: string } | null, unpaired: [] as string[], beforeHostRead: undefined as (() => Promise<void>) | undefined }));
+const saved = vi.hoisted(() => ({ hosts: [] as Host[], ignored: new Map<string, string>(), account: { id: "user-a", email: "person@example.com" } as { id: string; email: string } | null, unpaired: [] as string[], previous: null as { id: string; email: string } | null, beforeHostRead: undefined as (() => Promise<void>) | undefined }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => saved.ignored.get(key) ?? null,
 	setItem: async (key: string, value: string) => { saved.ignored.set(key, value); },
+	removeItem: async (key: string) => { saved.ignored.delete(key); },
 } }));
-vi.mock("./account", () => ({ getAccountAccessToken: async () => "access-token", loadAccount: async () => saved.account }));
+vi.mock("./account", () => ({
+	getAccountAccessToken: async () => "access-token", loadAccount: async () => saved.account,
+	loadPreviousAccount: async () => saved.previous,
+	clearPreviousAccount: async (id: string) => { if (saved.previous?.id === id) saved.previous = null; },
+}));
 vi.mock("./disconnect", () => ({ forgetPairedHost: async (host: Host) => {
 	saved.unpaired.push(host.id);
 	saved.hosts = saved.hosts.filter((item) => item.id !== host.id);
@@ -28,6 +33,7 @@ beforeEach(() => {
 	saved.ignored.clear();
 	saved.account = account;
 	saved.unpaired = [];
+	saved.previous = null;
 	saved.beforeHostRead = undefined;
 	vi.unstubAllGlobals();
 });
@@ -228,4 +234,42 @@ it("times out a directory response whose headers arrive but body stalls", async 
 	body.resolve({ hosts: [] });
 	await syncing;
 	expect(timeoutApplied).toBe(true);
+});
+
+it("keeps the phone's machines when the same person signs in under a new WorkOS user ID", async () => {
+	const kept = "h_00000000-0000-0000-0000-0000000000a1";
+	const hidden = "h_00000000-0000-0000-0000-0000000000a2";
+	const dropped = "h_00000000-0000-0000-0000-0000000000a3";
+	const lan = { kind: "lan" as const, host: "192.168.1.20", port: 3000, secure: false };
+	const listed = { kind: "lan" as const, host: `${kept}.example.com`, port: 443, secure: true };
+	saved.previous = { id: "legacy-user", email: "Person@Example.com" };
+	saved.hosts = [
+		{ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: "legacy-user" },
+		{ id: dropped, name: "Old box", platform: "linux", endpoints: [lan], token, lastConnected: 0, accountUserId: "legacy-user" },
+	];
+	saved.ignored.set("ao.accountHosts.ignored.legacy-user", JSON.stringify([hidden]));
+	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [host(kept), host(hidden)] }) })));
+	await syncAccountHosts(account);
+	// The machine still on the account is retagged in place; only the one the
+	// account no longer lists is unpaired.
+	expect(saved.unpaired).toEqual([dropped]);
+	expect(saved.hosts).toHaveLength(1);
+	expect(saved.hosts[0]).toEqual({ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: account.id });
+	// The hidden machine stays hidden under the new ID.
+	expect(JSON.parse(saved.ignored.get(`ao.accountHosts.ignored.${account.id}`) ?? "[]")).toEqual([hidden]);
+	expect(saved.ignored.has("ao.accountHosts.ignored.legacy-user")).toBe(false);
+	expect(saved.previous).toBeNull();
+});
+
+it("does not adopt another person's machines after a WorkOS environment change", async () => {
+	const theirs = "h_00000000-0000-0000-0000-0000000000b1";
+	saved.previous = { id: "legacy-user", email: "someone-else@example.com" };
+	saved.hosts = [{ id: theirs, name: "Their Mac", platform: "darwin", endpoints: [], token, lastConnected: 0, accountUserId: "legacy-user" }];
+	saved.ignored.set("ao.accountHosts.ignored.legacy-user", JSON.stringify(["h_hidden"]));
+	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [host(theirs)] }) })));
+	await syncAccountHosts(account);
+	expect(saved.unpaired).toEqual([theirs]);
+	expect(saved.hosts).toEqual([expect.objectContaining({ id: theirs, name: theirs, accountUserId: account.id })]);
+	expect(saved.ignored.has(`ao.accountHosts.ignored.${account.id}`)).toBe(false);
+	expect(saved.previous).toBeNull();
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { useReducedMotion } from "motion/react";
+import { useAncestorFlag } from "../hooks/useElementFlag";
 import { useResizable } from "../hooks/useResizable";
 import { INSPECTOR_SEPARATOR_RESERVE_PX, inspectorMaxWidthPx } from "../lib/inspector-width";
 import { isMacPlatform } from "../lib/platform";
@@ -82,6 +83,7 @@ export function SessionInspectorRail({
 	const prefersReducedMotion = useReducedMotion();
 	const gapRef = useRef<HTMLDivElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
+	useAncestorFlag(gapRef, ".session-split", "data-inspector-expanded", isOpen);
 	const minWidth = useCallback(() => {
 		const split = splitRef.current;
 		if (!split || split.clientWidth <= 0) return sizing.minWidth;

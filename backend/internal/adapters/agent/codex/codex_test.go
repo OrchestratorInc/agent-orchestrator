@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -166,6 +167,29 @@ func canonicalTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestSessionHookFlagsRunTheAppImageLink covers an AppImage daemon: hooks run
+// the link under the data dir instead of this launch's /tmp/.mount_* path, so
+// a Codex session that outlives an app restart still reaches the running AO.
+func TestSessionHookFlagsRunTheAppImageLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AppImage is Linux-only")
+	}
+	dataDir := t.TempDir()
+	t.Cleanup(func() { _ = agentlaunch.UseStableExecutable(dataDir, func(string) string { return "" }) })
+	appImage := func(key string) string { return map[string]string{"AO_APPIMAGE": "/home/me/AO.AppImage"}[key] }
+	if err := agentlaunch.UseStableExecutable(dataDir, appImage); err != nil {
+		t.Fatal(err)
+	}
+	var cmd []string
+	if err := appendSessionHookFlags(&cmd); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dataDir, "runtime", "ao-current", "ao")
+	if len(cmd) < 2 || !strings.Contains(cmd[1], "'"+link+"' hooks codex session-start") {
+		t.Fatalf("hook flags = %q, want hooks to run %s", cmd, link)
+	}
 }
 
 // sessionHookFlags mirrors the `-c` hook config appendSessionHookFlags emits,
