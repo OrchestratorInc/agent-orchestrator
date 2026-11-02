@@ -37,7 +37,8 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 	), [busy, canConnect, editing]);
 
 	// iOS has no per-field error, so the connection section's footer says what
-	// is wrong, in the error colour, under the fields it is about.
+	// is wrong, in the error colour, under the fields it is about. Otherwise it
+	// says what the disabled Connect is waiting for.
 	const connectionError = failure?.message ?? form.portError;
 	return (
 		<>
@@ -49,7 +50,9 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							label="Name"
 							value={form.machineName}
 							onChangeText={form.setMachineName}
-							placeholder="AzureLinux"
+							// Not an example name: right-aligned and grey, a Form row's
+							// placeholder reads as a filled value, as in Settings.
+							placeholder="Required"
 							maxLength={48}
 							returnKeyType="next"
 							testID="manual-connect-name"
@@ -57,7 +60,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 					</Section>
 					<Section
 						title="Connection"
-						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : undefined}
+						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : form.connectHint ? <FormFooter>{form.connectHint}</FormFooter> : undefined}
 						modifiers={sectionModifiers(t)}
 					>
 						<FormTextField

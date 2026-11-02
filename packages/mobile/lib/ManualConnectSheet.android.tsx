@@ -65,6 +65,8 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 					<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />
 				</Column>
 			</Host>
+			{/* What the disabled Connect is waiting for. */}
+			{form.connectHint ? <Text style={[styles.hintText, styles.connectHint]}>{form.connectHint}</Text> : null}
 			{failure?.showLocalNetworkHint ? (
 				<View style={styles.hint}>
 					<Text style={styles.hintText}>{LOCAL_NETWORK_HINT}</Text>
@@ -89,5 +91,6 @@ const makeStyles = (t: Theme) =>
 		fields: { marginTop: space.lg },
 		hint: { gap: space.sm, marginTop: space.md },
 		hintText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		connectHint: { marginTop: space.md },
 		submit: { marginTop: space.lg },
 	});

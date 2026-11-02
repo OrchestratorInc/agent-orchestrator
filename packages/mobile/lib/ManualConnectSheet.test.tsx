@@ -185,6 +185,26 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
 	});
 
+	// Right-aligned and grey, a Form row's placeholder reads as a filled value,
+	// so Name says it is required instead of suggesting one (review on #7419).
+	it("says the name is required rather than showing a name that reads as filled", () => {
+		render();
+		expect(field("manual-connect-name").props.placeholder).toBe("Required");
+	});
+
+	// A disabled Connect alone does not say what it is waiting for.
+	it("says what Connect is waiting for until the form is complete", async () => {
+		render();
+		const hint = () => renderer!.root.findAllByType("Section" as never)[1].props.footer?.props;
+		expect(hint()).toMatchObject({ children: "Add a name and a host to connect." });
+		expect(hint().error).toBeFalsy();
+		await type("manual-connect-host", "192.168.1.30");
+		expect(hint()).toMatchObject({ children: "Add a name to connect." });
+		await type("manual-connect-name", "Office PC");
+		expect(hint()).toBeUndefined();
+		expect(confirm().props.disabled).toBe(false);
+	});
+
 	it("explains an out-of-range port without enabling Connect", async () => {
 		render({ editingHost: paired });
 		await type("manual-connect-port", "70000");
@@ -236,6 +256,15 @@ describe("ManualConnectSheet on Android", () => {
 		expect(password.findByType("Icon" as never).props.contentDescription).toBe("Show password");
 		expect(renderer!.root.findByType("Switch" as never)).toBeTruthy();
 		expect(renderer!.root.findByType("RNButton" as never).props).toMatchObject({ title: "Connect", disabled: true });
+	});
+
+	it("says what Connect is waiting for until the form is complete", async () => {
+		await renderAndroid();
+		const hint = () => renderer!.root.findAll((node) => (node.type as unknown) === "Text" && typeof node.props.children === "string" && node.props.children.startsWith("Add "));
+		expect(hint().map((node) => node.props.children)).toEqual(["Add a name and a host to connect."]);
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		expect(hint()).toHaveLength(0);
 	});
 
 	it("shows a rejected password as the password field's own error", async () => {
