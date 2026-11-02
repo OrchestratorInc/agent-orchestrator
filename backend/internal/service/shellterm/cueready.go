@@ -108,6 +108,12 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 		if original == "" {
 			original = getenv("HOME")
 		}
+		// ZDOTDIR may hold AO's login-shell wrappers, which run the user's own
+		// files and keep AO's ao first. The shell still ends on the user's own.
+		userZDOTDIR, wrapped := env["AO_USER_ZDOTDIR"]
+		if !wrapped {
+			userZDOTDIR = getenv("ZDOTDIR")
+		}
 		for _, file := range []string{".zshenv", ".zshrc"} {
 			content := "if [[ -f " + shellSingleQuote(filepath.Join(original, file)) + " ]]; then source " + shellSingleQuote(filepath.Join(original, file)) + "; fi\n"
 			if file == ".zshenv" {
@@ -116,10 +122,10 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 			if file == ".zshrc" {
 				content += "function _ao_cue_ready { print -rn -- ready > " + shellSingleQuote(result.file) + "; precmd_functions=(${precmd_functions:#_ao_cue_ready}); }\n"
 				content += "precmd_functions+=(_ao_cue_ready)\n"
-				if getenv("ZDOTDIR") == "" {
+				if userZDOTDIR == "" {
 					content += "unset ZDOTDIR\n"
 				} else {
-					content += "export ZDOTDIR=" + shellSingleQuote(getenv("ZDOTDIR")) + "\n"
+					content += "export ZDOTDIR=" + shellSingleQuote(userZDOTDIR) + "\n"
 				}
 			}
 			if err := os.WriteFile(filepath.Join(wrapper, file), []byte(content), 0o600); err != nil {
