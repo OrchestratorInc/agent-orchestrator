@@ -158,6 +158,10 @@ const STREAM_SETTLE_GAP_SHARE = 0.6;
 const STREAM_MAX_GAP_MS = 1_500;
 const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
+// Long open Markdown blocks are reparsed on each reveal. Beyond this size,
+// coalesce provider snapshots rather than adding intermediate renders.
+const STREAM_SMOOTH_MAX_CHARS = 4000;
+const STREAM_LONG_UPDATE_MS = 100;
 // No frame for this long means the tab was occluded or throttled: nobody watched the
 // animation, so show the current text instead of replaying it.
 const STREAM_STALL_MS = 1000;
@@ -197,20 +201,22 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	);
 	// Set while a finished reply's last burst is still playing out.
 	const [finishing, setFinishing] = useState(false);
-	const targetGraphemes = useMemo(
-		() => message.streaming || finishing ? streamGraphemes(message.text) : [],
-		[message.text, message.streaming, finishing],
-	);
+	const smooth = (message.streaming || finishing) && !reducedMotion && message.text.length <= STREAM_SMOOTH_MAX_CHARS;
 	// A snapshot can first reach the renderer after the provider has already emitted
 	// text. Keep that first durable burst visible; only later deltas need smoothing.
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
+	const targetGraphemes = useMemo(
+		() => smooth ? streamGraphemes(message.text) : [],
+		[message.text, smooth],
+	);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
 	const frameRef = useRef<number | undefined>(undefined);
 	const lastFrameAtRef = useRef<number | undefined>(undefined);
+	const snapshotTimerRef = useRef<number | undefined>(undefined);
 	const settleMsRef = useRef(STREAM_SETTLE_MS);
 	const lastGrowthAtRef = useRef<number | undefined>(undefined);
 	const gapMsRef = useRef<number | undefined>(undefined);
@@ -224,6 +230,10 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	}, []);
 
 	const cancelDrain = useCallback(() => {
+		if (snapshotTimerRef.current !== undefined) {
+			window.clearTimeout(snapshotTimerRef.current);
+			snapshotTimerRef.current = undefined;
+		}
 		if (frameRef.current !== undefined) {
 			window.cancelAnimationFrame(frameRef.current);
 			frameRef.current = undefined;
@@ -316,10 +326,11 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			return;
 		}
 		if (!message.streaming) {
-			// The reply is done. A short remainder plays out; anything else, or a
-			// reply that was never being revealed, shows whole.
+			// The reply is done. A short remainder plays out; anything else, a reply
+			// too long to reveal smoothly, or one that was never being revealed,
+			// shows whole.
 			const remaining = message.text.startsWith(visibleRef.current) ? message.text.length - visibleRef.current.length : -1;
-			if (!adaptive || remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG) {
+			if (!adaptive || remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG || message.text.length > STREAM_SMOOTH_MAX_CHARS) {
 				showWhole();
 				return;
 			}
@@ -346,6 +357,21 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		// case the durable snapshot is authoritative and should be shown immediately.
 		if (!message.text.startsWith(visibleRef.current)) {
 			showWhole();
+			return;
+		}
+		if (message.text.length > STREAM_SMOOTH_MAX_CHARS) {
+			if (frameRef.current !== undefined) cancelDrain();
+			if (visibleRef.current === message.text) return;
+			if (visibleRef.current.length <= STREAM_SMOOTH_MAX_CHARS) {
+				visibleRef.current = message.text;
+				setVisibleText(message.text);
+			} else if (snapshotTimerRef.current === undefined) {
+				snapshotTimerRef.current = window.setTimeout(() => {
+					snapshotTimerRef.current = undefined;
+					visibleRef.current = targetRef.current;
+					setVisibleText(targetRef.current);
+				}, STREAM_LONG_UPDATE_MS);
+			}
 			return;
 		}
 		// A later combining mark or ZWJ can merge the last visible grapheme into a
@@ -1837,6 +1863,14 @@ function CommandOutput({
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
+	// A scroll container still lays out all its text. Bound both a single long
+	// line and newline-heavy logs before Chromium measures the expanding row.
+	const preview = useMemo(() => {
+		let tail = output.slice(-64 * 1024);
+		const first = tail.charCodeAt(0);
+		if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+		return tail.split("\n").slice(-400).join("\n");
+	}, [output]);
 	const streaming = activity.status === "running";
 
 	useEffect(() => {
@@ -1860,8 +1894,13 @@ function CommandOutput({
 						: "border border-border bg-background px-2.5 py-2 text-caption",
 				)}
 			>
-				{output}
+				{preview}
 			</pre>
+			{preview.length < output.length ? (
+				<p className="px-2.5 py-1 text-xs text-muted-foreground">
+					Showing the end of this large output.
+				</p>
+			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in

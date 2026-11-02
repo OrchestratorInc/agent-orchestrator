@@ -380,6 +380,16 @@ func Run(buildVersion string) error {
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
+	// The session's own account (a saved one, or this computer's login) is read
+	// again off the chat path; the CLI probe can take seconds.
+	recheckSessionAccount := func(sessionID domain.SessionID, harness domain.AgentHarness) {
+		if accounts := agentAccountSvc; accounts != nil {
+			go func() {
+				defer sentryobs.RecoverBackground()
+				accounts.RecheckSessionAccount(ctx, sessionID, harness)
+			}()
+		}
+	}
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -439,14 +449,7 @@ func Run(buildVersion string) error {
 		Log:      log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			// The session's own account (a saved one, or this computer's login) is
-			// read again off the chat path; the CLI probe can take seconds.
-			if accounts := agentAccountSvc; accounts != nil {
-				go func() {
-					defer sentryobs.RecoverBackground()
-					accounts.RecheckSessionAccount(ctx, sessionID, harness)
-				}()
-			}
+			recheckSessionAccount(sessionID, harness)
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -455,6 +458,7 @@ func Run(buildVersion string) error {
 				agentSvc.InvalidateCodexAccountAuthentication()
 			}
 		},
+		RecheckAccount: recheckSessionAccount,
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
@@ -630,6 +634,27 @@ func Run(buildVersion string) error {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	// A chat refused its credentials keeps asking for a sign-in until a reading
+	// of its own account finds the login working again, however it came back.
+	agentAccountSvc.SetLoginConfirmed(func(account domain.AgentAccount, at time.Time) {
+		go func() {
+			defer sentryobs.RecoverBackground()
+			waiting, err := store.ConversationsAwaitingLogin(ctx)
+			if err != nil {
+				log.Warn("list chats awaiting sign-in", "error", err)
+				return
+			}
+			for _, conversation := range waiting {
+				id, err := agentAccountSvc.SessionAccountID(ctx, conversation.SessionID, conversation.Harness)
+				if err != nil || id != account.ID {
+					continue
+				}
+				if _, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC()); err != nil {
+					log.Warn("clear chat sign-in demand", "conversation", conversation.ConversationID, "error", err)
+				}
+			}
+		}()
+	})
 	if agentSvc != nil {
 		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
 		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
@@ -1188,9 +1213,10 @@ func Run(buildVersion string) error {
 	// (via bs.RestoreOnBoot) re-apply the secure-pairing proxy against the
 	// port Start actually bound. Routed through bs, not lan directly, so the
 	// proxy never gets pinned to a dead port after an ephemeral fallback.
+	// Saved wake ownership is restored even when Connect Mobile is off.
 	// Best-effort: never blocks boot.
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
-		log.Warn("restore mobile bridge on boot failed", "err", err)
+		log.Warn("restore mobile and awake settings on boot failed", "err", err)
 	}
 	go func() {
 		defer sentryobs.RecoverBackground()
