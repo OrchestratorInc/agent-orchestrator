@@ -5,15 +5,39 @@ import { queryClient } from "../lib/query-client";
 
 export type LinkPreview = components["schemas"]["LinkPreviewResponse"];
 
+const NEGATIVE_TTL_MS = 2 * 60_000;
+const MAX_NEGATIVE_ENTRIES = 256;
+const negativePreviews = new Map<string, number>();
+
+function hasRecentUpstreamFailure(url: string): boolean {
+	const until = negativePreviews.get(url);
+	if (until === undefined) return false;
+	if (until > Date.now()) return true;
+	negativePreviews.delete(url);
+	return false;
+}
+
+function rememberUpstreamFailure(url: string): void {
+	negativePreviews.delete(url);
+	negativePreviews.set(url, Date.now() + NEGATIVE_TTL_MS);
+	if (negativePreviews.size > MAX_NEGATIVE_ENTRIES) {
+		negativePreviews.delete(negativePreviews.keys().next().value!);
+	}
+}
+
 export function linkPreviewQueryKey(url: string) {
 	return ["link-preview", url] as const;
 }
 
 async function fetchLinkPreview(url: string): Promise<LinkPreview> {
-	const { data, error } = await apiClient.GET("/api/v1/link-preview", {
+	const { data, error, response } = await apiClient.GET("/api/v1/link-preview", {
 		params: { query: { url } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not load link preview"));
+	if (error) {
+		if (response?.status === 502) rememberUpstreamFailure(url);
+		throw new Error(apiErrorMessage(error, "Could not load link preview"));
+	}
+	negativePreviews.delete(url);
 	return data;
 }
 
@@ -30,9 +54,8 @@ type LinkPreviewResult = {
  *
  * Uses the shared queryClient imperatively rather than useQuery so AppLink —
  * which renders in many provider-less contexts — stays safe everywhere. The
- * cache/dedupe semantics are identical: one entry per URL, fresh for the
- * session. Errors surface as `isError` and mean "no preview" for the current
- * hover; they are cleared when the hook is disabled so the next hover retries.
+ * Successful results are cached per URL. A 502 is suppressed briefly across
+ * hovers; other errors can be retried on the next hover.
  *
  * Results are keyed by URL: callers like XtermTerminal reuse one hook instance
  * while the hovered URL changes, so state from a previous URL must never be
@@ -54,7 +77,12 @@ export function useLinkPreview(url: string, enabled: boolean) {
 			if (result.url === url && result.isError) setResult({ url, isError: false });
 			return;
 		}
-		if (result.url === url && (result.data !== undefined || result.isError)) return;
+		if (hasRecentUpstreamFailure(url)) {
+			if (result.url !== url || !result.isError) setResult({ url, isError: true });
+			return;
+		}
+		if (result.url === url && result.data !== undefined) return;
+		if (result.url === url && result.isError) return;
 		if (queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url)) !== undefined) {
 			setResult({ url, data: queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url)), isError: false });
 			return;

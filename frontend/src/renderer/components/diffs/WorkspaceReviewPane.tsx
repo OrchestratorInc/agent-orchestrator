@@ -9,6 +9,8 @@ import {
 	fetchWorkspaceFileRevision,
 	filesReviewEndOfFileQueryKey,
 	invalidateWorkspaceViews,
+	isStaleWorkspaceSnapshotError,
+	sessionWorkspaceFilesQueryKey,
 	sessionWorkspaceDiffsQueryOptions,
 	workspaceErrorCode,
 	type ReviewTarget,
@@ -582,7 +584,22 @@ export function WorkspaceReviewPane({
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, regularBatches.length, reviewSelectionKey]);
-	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
+	const staleSnapshot = patchQueries.some((query) => isStaleWorkspaceSnapshotError(query.error));
+	const staleRefreshVersion = useRef<string | undefined>(undefined);
+	const staleRefreshKey = `${hostId ?? "local"}:${sessionId}:${workspaceVersion ?? ""}`;
+	useEffect(() => {
+		if (!staleSnapshot || staleRefreshVersion.current === staleRefreshKey) return;
+		staleRefreshVersion.current = staleRefreshKey;
+		void queryClient.invalidateQueries({ queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId) });
+	}, [hostId, queryClient, sessionId, staleSnapshot, staleRefreshKey]);
+	const retryAll = () => {
+		if (staleSnapshot) {
+			staleRefreshVersion.current = undefined;
+			void queryClient.invalidateQueries({ queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId) });
+			return;
+		}
+		patchQueries.forEach((query) => void query.refetch());
+	};
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
 	const loading = patchQueries.some((query) => query.isPending);
