@@ -78,7 +78,7 @@ type copilotRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
-	Data struct {
+	Data      struct {
 		SessionID               string      `json:"sessionId"`
 		Content                 contentText `json:"content"`
 		Title                   string      `json:"title"`
@@ -88,7 +88,7 @@ type copilotRecord struct {
 		ParentToolCallID        string      `json:"parentToolCallId"`
 		UpToEventID             string      `json:"upToEventId"`
 		EventIDs                []string    `json:"eventIds"`
-		Context struct {
+		Context                 struct {
 			CWD string `json:"cwd"`
 		} `json:"context"`
 	} `json:"data"`

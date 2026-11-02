@@ -17,7 +17,7 @@ import (
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
-	_ ports.AgentTranscriptLocator          = (*Plugin)(nil)
+	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
 
 // NativeSessionConfigDir follows Copilot's COPILOT_HOME override and default
