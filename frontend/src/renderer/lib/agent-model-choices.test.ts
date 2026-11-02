@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	claudeChoiceModel,
+	cloudDefaultModel,
 	cloudModelLabel,
 	filterDisabledModels,
 	foldClaudeAliasDefault,
@@ -152,6 +153,22 @@ describe("cloudModelLabel", () => {
 
 	it("leaves other agents' names as their list gives them", () => {
 		expect(cloudModelLabel("codex", cloud("gpt-6-luna", "Luna", "Haiku 4.5 · not a Claude model"))).toBe("Luna");
+	});
+});
+
+describe("cloudDefaultModel", () => {
+	const offered = [model("Opus 5", "claude-opus-5"), model("Opus 5.5 (1M context)", "opus[1m]"), model("Claude Opus 5.5", "claude-opus-5-5"), model("Opus 5.5", "opus"), model("Sonnet 4.6", "sonnet")];
+
+	it("is the model the catalog marks, when it is offered", () => {
+		expect(cloudDefaultModel([{ id: "sonnet", default: true }], offered)?.id).toBe("sonnet");
+		expect(cloudDefaultModel([{ id: "haiku", default: true }], offered)).toBeUndefined();
+		expect(cloudDefaultModel([{ id: "opus", default: false }], offered)).toBeUndefined();
+	});
+
+	it("reads a placeholder default as the alias for the model it describes, context variant included", () => {
+		expect(cloudDefaultModel([{ id: "default", description: "Opus 5.5 · Most capable", default: true }], offered)?.id).toBe("opus");
+		expect(cloudDefaultModel([{ id: "default", description: "Opus 5.5 with 1M context · Most capable", default: true }], offered)?.id).toBe("opus[1m]");
+		expect(cloudDefaultModel([{ id: "default", description: "Use the recommended model", default: true }], offered)).toBeUndefined();
 	});
 });
 

@@ -32,7 +32,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
-import { isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
+import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
@@ -610,13 +610,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 	});
+	// Named as the Cloud chat names them, from the catalog alone: Claude's "haiku" is
+	// the model its description names, which the worker's CLI runs.
 	const listedCloudModels = useMemo((): AgentModelOption[] | undefined => cloudCatalog?.models.map((item) => ({
 		id: item.id,
-		label: item.displayName,
+		label: cloudModelLabel(selectedAgent, item),
 		isDefault: false,
 		efforts: item.efforts,
 		defaultEffort: item.defaultEffort,
-	})), [cloudCatalog]);
+	})), [cloudCatalog, selectedAgent]);
 	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
 		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
 		skip: !isCloudProject,
@@ -679,9 +681,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
+	// A Cloud task opens on the model Cloud's catalog marks as its default, as its Chat
+	// does, rather than on whichever Opus row sorts first.
 	const claudeFallbackOption =
 		cloudPicksAllowed && selectedAgent === "claude-code" && !catalogUsesModes
-			? (splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			? ((cloudCatalog ? cloudDefaultModel(cloudCatalog.models, selectableModels) : undefined)
+				?? splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item))))?.id ?? ""
 			: "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&

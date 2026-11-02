@@ -2704,28 +2704,94 @@ describe("TaskComposer", () => {
 });
 
 describe("TaskComposer Cloud model catalog", () => {
-	it("lists the release catalog without a live worker and opens Claude Code on the newest Opus", async () => {
+	it("lists the release catalog without a live worker and opens Claude Code on the model it marks as the default", async () => {
 		const queryClient = cloudFixture("claude-code");
 		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
-			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true, efforts: ["low", "medium", "high"] },
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true },
 			{ id: "claude-opus-test", displayName: "Opus", default: false },
 		]));
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalledWith("org-1", "claude-code", { signal: expect.any(AbortSignal) }));
 		await userEvent.click(picker);
-		expect(await screen.findByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Use project or agent default" })).toBeInTheDocument();
 		expect(screen.getByText("Models for Claude Code 2.1.287")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		// With nothing remembered, run or configured, Claude Code opens on Opus, as a local task does.
-		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
+		// With nothing remembered, run or configured, Claude Code opens on the catalog's default,
+		// as a local task opens on its catalog's, and as the session's Chat names it.
+		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
 		fireEvent.change(task(), { target: { value: "Use the default" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
-		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "claude-opus-test" });
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "claude-sonnet-test" });
 		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
 		expect(localModelReads()).toEqual([]);
+	});
+
+	it("names Claude's aliases by the models Cloud's catalog describes, as the Cloud chat does", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: true },
+			{ id: "sonnet", displayName: "Sonnet", description: "Sonnet 4.6 · Best for everyday tasks", default: false },
+			{ id: "haiku", displayName: "Haiku", description: "Haiku 4.5 · Fastest for quick answers", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus 5.5"));
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Sonnet 4.6" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Haiku 4.5" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Haiku" })).not.toBeInTheDocument();
+	});
+
+	it("opens a Claude Cloud task on the catalog's default, not the Opus row that sorts first", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: true },
+			{ id: "sonnet", displayName: "Sonnet", description: "Sonnet 4.6 · Best for everyday tasks", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus 5.5"));
+		fireEvent.change(task(), { target: { value: "Use the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "opus" });
+	});
+
+	it("opens a Claude Cloud task on the alias a placeholder default stands for", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "default", displayName: "Default (recommended)", description: "Opus 5.5 · Most capable for complex work", default: true },
+			{ id: "claude-opus-5-5", displayName: "Claude Opus 5.5", default: false },
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus 5.5"));
+		fireEvent.change(task(), { target: { value: "Use the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		// The alias keeps following the model Cloud's agent names as its default.
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "opus" });
+	});
+
+	it("opens a Claude Cloud task on the newest Opus its catalog names when it marks no default", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable for complex work", default: false },
+			{ id: "sonnet", displayName: "Sonnet", description: "Sonnet 4.6 · Best for everyday tasks", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Opus 5.5"));
+		fireEvent.change(task(), { target: { value: "Use the newest Opus" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "opus" });
 	});
 
 	it("opens a Cloud task on the model its agent's newest Cloud session ran", async () => {

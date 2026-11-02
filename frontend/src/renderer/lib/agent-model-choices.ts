@@ -63,7 +63,7 @@ const CLAUDE_FAMILIES = ["fable", "opus", "sonnet", "haiku"];
 
 // The model a Claude list entry runs, as its description names it: "Haiku 4.5 · Fastest
 // for quick answers", "Opus 5.5 with 1M context · Most capable".
-const CLAUDE_DESCRIBED_MODEL = /^\s*(?:claude\s+)?(fable|opus|sonnet|haiku)\s+(\d{1,2}(?:\.\d{1,2})?)(?![\d.])/i;
+const CLAUDE_DESCRIBED_MODEL = /^\s*(?:claude\s+)?(fable|opus|sonnet|haiku)\s+(\d{1,2}(?:\.\d{1,2})?)(?![\d.])(\s+with\s+1m\s+context)?/i;
 
 /**
  * A Cloud model's name, from the Cloud list alone. Claude names a family alias by its
@@ -78,6 +78,25 @@ export function cloudModelLabel(agentId: string, model: { displayName: string; d
 	if (!described || !name || isDefaultPlaceholderLabel(name) || /\d/.test(name.replace(/\(.*?\)|\[.*?\]/g, ""))) return name;
 	const family = new RegExp(`\\b${described[1]}\\b`, "i");
 	return family.test(name) ? name.replace(family, (word) => `${word} ${described[2]}`) : name;
+}
+
+/**
+ * The model a Cloud catalog marks as its default, among `offered` (named by cloudModelLabel).
+ * A placeholder default ("Default (recommended)") stands for the model its description
+ * names, which Claude lists as a family alias: "Opus 5.5" is `opus`.
+ */
+export function cloudDefaultModel<T extends { id: string; label: string }>(
+	catalog: ReadonlyArray<{ id: string; description?: string; default: boolean }>,
+	offered: T[],
+): T | undefined {
+	const marked = catalog.find((model) => model.default);
+	if (!marked) return undefined;
+	if (isConcreteModelID(marked.id)) return offered.find((model) => model.id === marked.id);
+	const described = CLAUDE_DESCRIBED_MODEL.exec(marked.description ?? "");
+	if (!described) return undefined;
+	const name = `${described[1]} ${described[2]}${described[3] ? " (1m context)" : ""}`.toLowerCase();
+	const named = offered.filter((model) => agentModelDisplayLabel("claude-code", model.label).toLowerCase() === name);
+	return named.find((model) => CLAUDE_FAMILIES.includes(model.id.replace(/\[.*\]$/, "").toLowerCase())) ?? named[0];
 }
 
 function claudeFamilyVersion(model: { id: string; label: string }) {
