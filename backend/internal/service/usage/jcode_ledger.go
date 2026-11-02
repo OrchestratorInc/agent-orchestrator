@@ -19,10 +19,6 @@ import (
 // jcodeSessionIDPattern is jcode's session id: session_<word>_<millis>_<16 hex>.
 var jcodeSessionIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_\d+_[0-9a-f]{16}$`)
 
-// maxJCodeSessionBytes bounds one read of a native session file, which holds
-// the whole transcript including tool output.
-const maxJCodeSessionBytes = 64 << 20
-
 type jcodeNativeMessage struct {
 	ID         string          `json:"id"`
 	Role       string          `json:"role"`
@@ -69,6 +65,11 @@ type jcodeLedgerLine struct {
 // attributed to the session's model at export time; exports run on every hook,
 // so that is the model of the turn that just ran.
 func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessionID domain.SessionID) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	c.jcodeMu.Lock()
+	defer c.jcodeMu.Unlock()
 	if !jcodeSessionIDPattern.MatchString(nativeID) || c.roots.JCodeLedger == "" {
 		return "", nil
 	}
@@ -76,34 +77,71 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessio
 	if err != nil || home == "" {
 		return "", err
 	}
-	native, err := readJCodeSession(filepath.Join(home, "sessions", nativeID+".json"))
+	snapshotPath := filepath.Join(home, "sessions", nativeID+".json")
+	journalPath := filepath.Join(home, "sessions", nativeID+".journal.jsonl")
+	path := filepath.Join(c.roots.JCodeLedger, nativeID+".jsonl")
+	snapshotInfo, err := os.Stat(snapshotPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read jcode session: %w", err)
 	}
-	if native.ID != nativeID {
-		return "", nil
-	}
-	if err := applyJCodeJournal(filepath.Join(home, "sessions", nativeID+".journal.jsonl"), &native); err != nil {
-		return "", fmt.Errorf("read jcode session journal: %w", err)
-	}
-	if err := os.MkdirAll(c.roots.JCodeLedger, 0o700); err != nil {
-		return "", fmt.Errorf("create jcode usage ledger dir: %w", err)
-	}
-	path := filepath.Join(c.roots.JCodeLedger, nativeID+".jsonl")
-	exported, err := ledgerMessageIDs(path)
+	journalInfo, err := jcodeFileInfo(ctx, journalPath)
 	if err != nil {
 		return "", err
 	}
+	ledgerInfo, err := jcodeFileInfo(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	state := c.jcodeReads[snapshotPath]
+	if state != nil && state.synced && sameJCodeFile(state.snapshotInfo, snapshotInfo) &&
+		sameJCodeFile(state.journalInfo, journalInfo) && sameJCodeFile(state.ledgerInfo, ledgerInfo) {
+		if ledgerInfo == nil {
+			return "", nil
+		}
+		return path, nil
+	}
+	if state == nil || !sameJCodeFile(state.snapshotInfo, snapshotInfo) {
+		native, err := readJCodeSession(ctx, snapshotPath)
+		if err != nil {
+			return "", fmt.Errorf("read jcode session: %w", err)
+		}
+		if native.ID != nativeID {
+			return "", nil
+		}
+		state = &jcodeReadState{snapshotInfo: snapshotInfo, snapshot: native, native: cloneJCodeSession(native)}
+	}
+	state.synced = false
+	if state.journalInfo != nil && (journalInfo == nil || !os.SameFile(state.journalInfo, journalInfo) || journalInfo.Size() < state.journalOffset) {
+		state.native = cloneJCodeSession(state.snapshot)
+		state.journalOffset = 0
+	}
+	state.journalOffset, err = applyJCodeJournal(ctx, journalPath, &state.native, state.journalOffset)
+	if err != nil {
+		return "", fmt.Errorf("read jcode session journal: %w", err)
+	}
+	state.journalInfo = journalInfo
+	if err := os.MkdirAll(c.roots.JCodeLedger, 0o700); err != nil {
+		return "", fmt.Errorf("create jcode usage ledger dir: %w", err)
+	}
+	if state.exported == nil || !sameJCodeFile(state.ledgerInfo, ledgerInfo) {
+		state.exported, err = ledgerMessageIDs(path)
+		if err != nil {
+			return "", err
+		}
+	}
+	exported := state.exported
+	native := state.native
 	var lines bytes.Buffer
+	pending := map[string]bool{}
 	for _, message := range native.Messages {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		id := strings.TrimSpace(message.ID)
-		if message.Role != "assistant" || id == "" || exported[id] || !jsonValuePresent(message.TokenUsage) {
+		if message.Role != "assistant" || id == "" || exported[id] || pending[id] || !jsonValuePresent(message.TokenUsage) {
 			continue
 		}
 		line, err := json.Marshal(jcodeLedgerLine{
@@ -120,10 +158,25 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessio
 		}
 		lines.Write(line)
 		lines.WriteByte('\n')
-		exported[id] = true
+		pending[id] = true
+	}
+	remember := func() error {
+		info, err := jcodeFileInfo(ctx, path)
+		if err != nil {
+			return err
+		}
+		state.ledgerInfo, state.synced = info, true
+		if c.jcodeReads == nil {
+			c.jcodeReads = map[string]*jcodeReadState{}
+		}
+		c.jcodeReads[snapshotPath] = state
+		return nil
 	}
 	if lines.Len() == 0 {
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := remember(); err != nil {
+			return "", err
+		}
+		if state.ledgerInfo == nil {
 			// Register the source only once there is usage to read.
 			return "", nil
 		}
@@ -135,12 +188,17 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessio
 	}
 	if _, err := file.Write(lines.Bytes()); err != nil {
 		_ = file.Close()
+		state.exported = nil // a partial write must be reconciled from disk
 		return "", fmt.Errorf("append jcode usage ledger: %w", err)
 	}
 	if err := file.Close(); err != nil {
+		state.exported = nil
 		return "", err
 	}
-	return path, nil
+	for id := range pending {
+		exported[id] = true
+	}
+	return path, remember()
 }
 
 // jcodeHomeForSession mirrors the project override used by the native launch.
@@ -178,45 +236,51 @@ func (c *Collector) jcodeHomeForSession(ctx context.Context, id domain.SessionID
 	return c.roots.JCodeHome, nil
 }
 
-func readJCodeSession(path string) (jcodeNativeSession, error) {
+func readJCodeSession(ctx context.Context, path string) (jcodeNativeSession, error) {
 	file, err := os.Open(path) //nolint:gosec // jcode's own session file for a validated id
 	if err != nil {
 		return jcodeNativeSession{}, err
 	}
 	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(io.LimitReader(file, maxJCodeSessionBytes+1))
-	if err != nil {
-		return jcodeNativeSession{}, err
-	}
-	if len(data) > maxJCodeSessionBytes {
-		return jcodeNativeSession{}, errors.New("jcode session file exceeds the usage read limit")
-	}
-	var session jcodeNativeSession
-	if err := json.Unmarshal(data, &session); err != nil {
+	session, err := decodeJCodeSession(ctx, json.NewDecoder(file))
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, errJCodeSnapshotShape) || errors.As(err, &syntax) || errors.As(err, &shape) {
 		// jcode may be mid-write; the next hook retries.
 		return jcodeNativeSession{}, nil
 	}
-	return session, nil
+	return session, err
 }
 
 // applyJCodeJournal adds the journal's messages to the snapshot's and takes
-// the latest model and provider it records. An unreadable line, such as one
-// jcode is still writing, is skipped; the next hook reads it again.
-func applyJCodeJournal(path string, session *jcodeNativeSession) error {
+// the latest model and provider it records. An incomplete final line keeps its
+// cursor position so the next hook can retry after jcode finishes writing it.
+func applyJCodeJournal(ctx context.Context, path string, session *jcodeNativeSession, offset int64) (int64, error) {
 	file, err := os.Open(path) //nolint:gosec // jcode's own journal for a validated id
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return 0, nil
 	}
 	if err != nil {
-		return err
+		return offset, err
 	}
 	defer func() { _ = file.Close() }()
-	reader := bufio.NewReader(io.LimitReader(file, maxJCodeSessionBytes))
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return offset, err
+	}
+	reader := bufio.NewReader(file)
 	for {
+		if err := ctx.Err(); err != nil {
+			return offset, err
+		}
 		line, readErr := reader.ReadBytes('\n')
 		var entry jcodeJournalEntry
-		if len(bytes.TrimSpace(line)) > 0 && json.Unmarshal(line, &entry) == nil {
-			session.Messages = append(session.Messages, entry.AppendMessages...)
+		valid := len(bytes.TrimSpace(line)) == 0 || json.Unmarshal(line, &entry) == nil
+		if valid {
+			for _, message := range entry.AppendMessages {
+				if message.Role == "assistant" && jsonValuePresent(message.TokenUsage) {
+					session.Messages = append(session.Messages, message)
+				}
+			}
 			if entry.Meta.Model != nil && strings.TrimSpace(*entry.Meta.Model) != "" {
 				session.Model = *entry.Meta.Model
 			}
@@ -224,11 +288,14 @@ func applyJCodeJournal(path string, session *jcodeNativeSession) error {
 				session.ProviderKey = *entry.Meta.ProviderKey
 			}
 		}
+		if valid || readErr == nil {
+			offset += int64(len(line))
+		}
 		if errors.Is(readErr, io.EOF) {
-			return nil
+			return offset, nil
 		}
 		if readErr != nil {
-			return readErr
+			return offset, readErr
 		}
 	}
 }

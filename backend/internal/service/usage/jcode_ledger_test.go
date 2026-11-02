@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -83,7 +84,7 @@ func TestCollectorExportsJCodeMessageUsageOnceAcrossRewrites(t *testing.T) {
 	if got := strings.Join(readLedgerIDs(t, ledger), ","); got != "message_2,message_4,message_6" {
 		t.Fatalf("ledger ids after rewrite = %s", got)
 	}
-	if info, err := os.Stat(ledger); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(ledger); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("ledger mode = %v, %v", info, err)
 	}
 }
@@ -182,9 +183,11 @@ func TestDefaultSourceRootsIncludesJCodeHomeAndLedger(t *testing.T) {
 	dataDir := filepath.Join(home, ".ao", "data")
 	t.Setenv("HOME", home)
 	t.Setenv("JCODE_HOME", "")
+	nativeHome, err := os.UserHomeDir()
+	mustNoError(t, err)
 	got, err := DefaultSourceRoots(context.Background(), dataDir)
 	mustNoError(t, err)
-	if got.JCodeHome != filepath.Join(home, ".jcode") || got.JCodeLedger != filepath.Join(dataDir, "jcode", "usage") {
+	if got.JCodeHome != filepath.Join(nativeHome, ".jcode") || got.JCodeLedger != filepath.Join(dataDir, "jcode", "usage") {
 		t.Fatalf("roots = %+v", got)
 	}
 	t.Setenv("JCODE_HOME", filepath.Join(home, "custom-jcode"))

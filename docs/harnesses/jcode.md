@@ -71,6 +71,18 @@ tokens and its smoke steps send prompts.
 | Restore | `jcode --resume <id>` with the captured id. AO resumes only an exact `session_…` id whose saved `working_dir` is this worktree; a missing, foreign or ambiguous id starts a fresh session instead, because jcode would otherwise reopen a session in its own saved folder |
 | Models | `jcode model list --json` for the active provider, with the provider's selected model as the default. A model ID can also be typed in |
 
+## Usage collection
+
+Usage collection resolves a project's JCODE_HOME for each session, including
+hook collection, startup backfill and finalization. Native title probes accept
+the same override through SessionRef.Env. AO's exported usage ledgers stay under
+its own data directory.
+
+The usage reader streams snapshot messages and retains only usage metadata.
+Unchanged snapshots are cached, journals are read from the last complete entry,
+and checkpoints or truncation reset the journal cursor. There is no 64 MiB
+cutoff on snapshots or journals; long tool output does not disable collection.
+
 ## Permissions
 
 jcode runs tools without asking for approval and has no approval modes, so AO

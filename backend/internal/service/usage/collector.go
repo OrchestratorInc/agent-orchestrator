@@ -141,6 +141,8 @@ type Collector struct {
 	now                     func() time.Time
 	logger                  *slog.Logger
 	mu                      sync.Mutex
+	jcodeMu                 sync.Mutex
+	jcodeReads              map[string]*jcodeReadState
 	// Guarded separately from mu, which RecordHook holds across the whole hook.
 	routeMu sync.RWMutex
 }
