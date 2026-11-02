@@ -45,6 +45,11 @@ describe("Markdown export", () => {
     expect(markdown.split("\n").filter((line) => JSX_TAG.test(line))).toEqual([]);
   });
 
+  it.each(articles().map((path) => [relative(contentDir, path), path]))("%s has no HTML tags", async (_name, path) => {
+    const markdown = withoutCode(await exported(readFileSync(path, "utf8")));
+    expect(markdown.split("\n").filter((line) => /<\/?[a-z][a-z0-9-]*(\s[^>]*)?\/?>/.test(line))).toEqual([]);
+  });
+
   it.each(articles().map((path) => [relative(contentDir, path), path]))("%s has no site-relative links", async (_name, path) => {
     const markdown = withoutCode(await exported(readFileSync(path, "utf8")));
     expect(markdown.match(/\]\(\/[^)]*\)/g) ?? []).toEqual([]);
@@ -71,6 +76,13 @@ describe("Markdown export", () => {
     const markdown = await exported('<Cards>\n  <Card title="A" href="/a" />\n\n  Some note.\n</Cards>\n');
     expect(markdown).toContain("[A](https://docs.orchestrator.inc/a/)");
     expect(markdown).toContain("Some note.");
+  });
+
+  it("drops heading anchors and unwraps HTML", async () => {
+    const markdown = await exported(
+      '<span id="old-id" />\n## Title\n\n<details>\n<summary>\n\t<span className="note"><code>ao</code> is frozen.</span>\n</summary>\n\nBody.\n</details>\n',
+    );
+    expect(markdown).toBe("## Title\n\n`ao` is frozen.\n\nBody.\n");
   });
 
   it("writes the downloads as a table", async () => {

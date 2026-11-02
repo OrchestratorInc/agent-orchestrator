@@ -1,13 +1,15 @@
 import type { BlockContent, DefinitionContent, ListItem, Nodes, Parents, PhrasingContent, RootContent } from "mdast";
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute, MdxJsxFlowElement, MdxJsxTextElement } from "mdast-util-mdx";
 import type { Info, State } from "mdast-util-to-markdown";
+import { toString } from "mdast-util-to-string";
 import { withTrailingSlash } from "../i18n/paths";
 import { COMPANY } from "./constants";
 import { DOWNLOADS } from "./downloads";
 
 // The Markdown copies of the docs (llms.txt, llms-full.txt and each `.md`
-// page) are read by tools that do not run MDX, so the components below are
-// written out as plain Markdown and site links as absolute URLs.
+// page) are read by tools that do not run MDX, so every JSX element is
+// written out as plain Markdown (or dropped when it only holds layout) and
+// site links as absolute URLs.
 
 type JsxElement = MdxJsxFlowElement | MdxJsxTextElement;
 type Block = BlockContent | DefinitionContent;
@@ -46,10 +48,29 @@ function strong(value: string): PhrasingContent {
   return { type: "strong", children: [text(value)] };
 }
 
-/** The element's children as blocks, wrapping loose inline content in a paragraph. */
+const PHRASING = new Set<string>([
+  "text",
+  "inlineCode",
+  "emphasis",
+  "strong",
+  "delete",
+  "link",
+  "linkReference",
+  "image",
+  "imageReference",
+  "break",
+  "footnoteReference",
+  "mdxJsxTextElement",
+  "mdxTextExpression",
+]);
+
+/** The element's children as blocks, wrapping inline content in a paragraph. */
 function blocks(node: JsxElement): Block[] {
-  if (node.type === "mdxJsxTextElement") return [{ type: "paragraph", children: node.children }];
-  return node.children as Block[];
+  const children = node.children as RootContent[];
+  if (children.length && children.every((child) => PHRASING.has(child.type))) {
+    return [{ type: "paragraph", children: children as PhrasingContent[] }];
+  }
+  return children as Block[];
 }
 
 function listItem(children: Block[]): ListItem {
@@ -146,31 +167,34 @@ function replacement(node: JsxElement): RootContent[] {
       if (description) line.push(text(`: ${description}`));
       return [{ type: "list", ordered: false, spread: false, children: [listItem([{ type: "paragraph", children: line }])] }];
     }
+    case "code":
+      return [{ type: "inlineCode", value: toString(node) }];
     default:
-      // Layout-only wrappers such as `Accordions`, `Tabs` and `PluginGrid`.
-      return node.children;
+      // Layout-only wrappers such as `Accordions`, `Tabs`, `PluginGrid`, and
+      // HTML such as `<details>` or a heading anchor `<span id="…" />`.
+      return node.type === "mdxJsxTextElement" ? node.children : blocks(node);
   }
+}
+
+/** The tree with every JSX element replaced by plain Markdown and site links made absolute. */
+function plain(nodes: RootContent[]): RootContent[] {
+  return nodes.flatMap((node): RootContent[] => {
+    if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") return plain(replacement(node));
+    const copy = { ...node };
+    if ("url" in copy) copy.url = absoluteDocsUrl(copy.url);
+    if ("children" in copy) (copy as Parents).children = plain(copy.children as RootContent[]) as Parents["children"];
+    return [copy as RootContent];
+  });
 }
 
 /** The options of the processed Markdown, set in `source.config.ts` and used by the tests. */
 export const PROCESSED_MARKDOWN = { headingIds: false, stringify: stringifyForExport };
 
 /**
- * The `stringify` hook of the processed Markdown: writes docs components as
- * plain Markdown and makes site links absolute. Anything else is left to the
- * default stringifier.
+ * The `stringify` hook of the processed Markdown: writes the whole article
+ * from its plain-Markdown tree. Its nodes are then left to the default
+ * stringifier.
  */
-export function stringifyForExport(node: Nodes, parent: Parents | undefined, state: State, info: Info): string | undefined {
-  switch (node.type) {
-    case "link":
-    case "image":
-    case "definition": {
-      const url = absoluteDocsUrl(node.url);
-      return url === node.url ? undefined : state.handle({ ...node, url }, parent, state, info);
-    }
-    case "mdxJsxTextElement":
-      return state.containerPhrasing({ type: "paragraph", children: replacement(node) as PhrasingContent[] }, info);
-    case "mdxJsxFlowElement":
-      return state.containerFlow({ type: "root", children: replacement(node) }, info);
-  }
+export function stringifyForExport(node: Nodes, _parent: Parents | undefined, state: State, info: Info): string | undefined {
+  if (node.type === "root") return state.containerFlow({ ...node, children: plain(node.children) }, info);
 }
