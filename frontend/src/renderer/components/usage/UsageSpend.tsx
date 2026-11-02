@@ -88,6 +88,8 @@ export function UsageSpend({
 						{harnesses.map((harness) => {
 							const value = unit === "cost" ? harness.costNanos : harness.tokens;
 							const share = total > 0 ? value / total : 0;
+							// An agent with no priced usage is unknown, not free: no $0.00, no 0% share.
+							const unpricedAgent = unit === "cost" && harness.pricedEvents === 0;
 							return (
 								<li key={harness.harness} className="flex min-w-0 items-start gap-2.5">
 									<span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full" style={{ backgroundColor: agentTone(harness.harness) }} />
@@ -98,13 +100,19 @@ export function UsageSpend({
 												{agentLabel(harness.harness)}
 												<span className="ms-1.5 text-xs text-muted-foreground">{t("usage.sessionCount", { count: harness.sessions })}</span>
 											</span>
-											<span className="shrink-0 text-control tabular-nums text-foreground">{format(value)}</span>
+											{unpricedAgent ? (
+												<span className="shrink-0 text-control text-muted-foreground">{t("usage.notPriced")}</span>
+											) : (
+												<span className="shrink-0 text-control tabular-nums text-foreground">{format(value)}</span>
+											)}
 										</div>
 										<ShareBar fraction={share} tone={agentTone(harness.harness)} className="my-1" />
 										<span className="text-xs tabular-nums text-muted-foreground">
-											{unit === "cost"
-												? t("usage.harnessCostLine", { share: formatShare(share, locale), tokens: formatTokens(harness.tokens, locale) })
-												: t("usage.harnessTokenLine", { share: formatShare(share, locale), cost: formatUsd(harness.costNanos, locale) })}
+											{unpricedAgent
+												? t("usage.harnessUnpricedLine", { tokens: formatTokens(harness.tokens, locale) })
+												: unit === "cost"
+													? t("usage.harnessCostLine", { share: formatShare(share, locale), tokens: formatTokens(harness.tokens, locale) })
+													: t("usage.harnessTokenLine", { share: formatShare(share, locale), cost: formatUsd(harness.costNanos, locale) })}
 										</span>
 									</div>
 								</li>

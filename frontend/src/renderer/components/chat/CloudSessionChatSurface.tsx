@@ -1139,7 +1139,8 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
-	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model);
+	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
+	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model, undefined, true, false);
 	// Claude's choices come from the device's own catalog, which marks its own
 	// default: not the session's either until its messages have loaded.
 	const models = useMemo(

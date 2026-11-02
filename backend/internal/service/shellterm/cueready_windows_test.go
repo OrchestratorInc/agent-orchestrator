@@ -68,8 +68,22 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 				}
 			}()
 			defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-			deadline := time.Now().Add(8 * time.Second)
-			for time.Now().Before(deadline) {
+			transcript := func() string {
+				var text string
+				for {
+					select {
+					case part := <-output:
+						text += part
+					default:
+						return text
+					}
+				}
+			}
+			// A shell usually starts in a second or two, but the first one on a
+			// cold CI runner can stall far longer. This test checks the readiness
+			// hook, not how fast the runner starts a process.
+			readyBy := time.Now().Add(30 * time.Second)
+			for time.Now().Before(readyBy) {
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
 					if choice == "cmd" {
 						return
@@ -82,26 +96,20 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 					if _, err := io.WriteString(cp, delivery.input+"\r"); err != nil {
 						t.Fatal(err)
 					}
-					for time.Now().Before(deadline) {
+					// Delivery gets the app's own budget, not whatever startup left.
+					deliveredBy := time.Now().Add(cueCommandConsumeTimeout)
+					for time.Now().Before(deliveredBy) {
 						if data, err := os.ReadFile(filepath.Join(cmd.Dir, "output")); err == nil && string(data) == want {
 							return
 						}
 						time.Sleep(50 * time.Millisecond)
 					}
 					data, err := os.ReadFile(filepath.Join(cmd.Dir, "output"))
-					t.Fatalf("%s command output = %q, err = %v, want %q", choice, data, err, want)
+					t.Fatalf("%s command output = %q, err = %v, want %q; terminal: %q", choice, data, err, want, transcript())
 				}
 				time.Sleep(50 * time.Millisecond)
 			}
-			var transcript string
-			for {
-				select {
-				case part := <-output:
-					transcript += part
-				default:
-					t.Fatalf("%s did not signal readiness at %s: %q", choice, filepath.Base(ready.file), transcript)
-				}
-			}
+			t.Fatalf("%s did not signal readiness at %s: %q", choice, filepath.Base(ready.file), transcript())
 		})
 	}
 }

@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, limit_history FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, limit_history FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -30,6 +30,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.HarnessDefaults,
 		&i.VersionRefresh,
 		&i.ComputerUse,
+		&i.SessionRetentionDays,
 		&i.LimitHistory,
 	)
 	return i, err
@@ -134,6 +135,20 @@ type SetLimitHistoryParams struct {
 
 func (q *Queries) SetLimitHistory(ctx context.Context, arg SetLimitHistoryParams) error {
 	_, err := q.db.ExecContext(ctx, setLimitHistory, arg.LimitHistory, arg.UpdatedAt)
+	return err
+}
+
+const setSessionRetentionDays = `-- name: SetSessionRetentionDays :exec
+UPDATE app_settings SET session_retention_days = ?, updated_at = ? WHERE id = 1
+`
+
+type SetSessionRetentionDaysParams struct {
+	SessionRetentionDays int64
+	UpdatedAt            time.Time
+}
+
+func (q *Queries) SetSessionRetentionDays(ctx context.Context, arg SetSessionRetentionDaysParams) error {
+	_, err := q.db.ExecContext(ctx, setSessionRetentionDays, arg.SessionRetentionDays, arg.UpdatedAt)
 	return err
 }
 

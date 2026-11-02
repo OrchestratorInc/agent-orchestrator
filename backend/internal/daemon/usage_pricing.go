@@ -9,6 +9,7 @@ import (
 
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -40,11 +41,7 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 	}
 	fetcher := config.Fetcher
 	if fetcher == nil {
-		production, err := pricing.NewProductionFetcher(&http.Client{})
-		if err != nil {
-			return nil, err
-		}
-		fetcher = production
+		fetcher = catalogsync.NewFetcher(&http.Client{}, catalogsync.LiteLLMURL)
 	}
 	manager := pricing.NewManager(nil)
 	backfiller := usagesvc.NewCostBackfiller(config.Store, usagesvc.CostBackfillerConfig{

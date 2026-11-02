@@ -1,6 +1,7 @@
-// Package catalogsync builds the reviewed, content-addressed pricing catalog
-// from LiteLLM's model price source. It deliberately has no network dependency
-// so the command and its tests can supply a pinned source file directly.
+// Package catalogsync builds AO's content-addressed pricing catalog from
+// LiteLLM's model price table. The daemon builds it at runtime from the live
+// table (Fetcher); Sync writes the copy in the repository that releases before
+// the runtime build still download.
 package catalogsync
 
 import (
@@ -317,8 +318,7 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(upstream))
-	decoder.UseNumber()
-	var records map[string]upstreamRecord
+	var records map[string]json.RawMessage
 	if err := decoder.Decode(&records); err != nil {
 		return generatedCatalog{}, fmt.Errorf("decode upstream catalog: %w", err)
 	}
@@ -328,37 +328,51 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 	modelsByProvider := map[string]map[string]rates{
 		"anthropic": {}, "openai": {}, "zai": {},
 	}
-	for name, record := range records {
+	// conflicted holds rows two entries price differently. Neither ships: AO
+	// cannot tell which one is right, and an unpriced model beats a guess.
+	conflicted := map[string]map[string]bool{"anthropic": {}, "openai": {}, "zai": {}}
+	for name, data := range records {
+		// The table is live and nobody reviews it first, so an entry AO cannot
+		// read leaves that one model unpriced instead of every model.
+		var record upstreamRecord
+		if json.Unmarshal(data, &record) != nil {
+			continue
+		}
 		providerID, ok := canonicalProvider(record.Provider)
 		if !ok || !supportedMode(record.Mode) {
 			continue
 		}
 		// LiteLLM also carries metadata-only model entries in chat/responses
-		// modes. They are not price records and cannot enter a reviewed catalog.
+		// modes. They are not price records.
 		if record.Input == nil || record.Output == nil {
 			continue
 		}
 		modelID, err := canonicalModel(providerID, name)
 		if err != nil {
-			return generatedCatalog{}, err
+			continue
 		}
 		r, err := normalizeRates(record.upstreamRates)
 		if err != nil {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+			continue
 		}
 		rows, err := serviceTierRows(modelID, record, r)
 		if err != nil {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+			continue
 		}
 		rows[modelID] = r
 		if err := addLongContextRows(rows, modelID, record); err != nil {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+			continue
 		}
 		for rowID, rowRates := range rows {
 			if previous, exists := modelsByProvider[providerID][rowID]; exists && !equalRates(previous, rowRates) {
-				return generatedCatalog{}, fmt.Errorf("%s/%s: conflicting duplicate rates", providerID, rowID)
+				conflicted[providerID][rowID] = true
 			}
 			modelsByProvider[providerID][rowID] = rowRates
+		}
+	}
+	for providerID, rows := range conflicted {
+		for rowID := range rows {
+			delete(modelsByProvider[providerID], rowID)
 		}
 	}
 

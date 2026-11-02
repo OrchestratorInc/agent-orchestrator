@@ -182,7 +182,7 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		pendingPreview:      make(map[domain.SessionID]string),
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
-		executable:          os.Executable,
+		executable:          agentlaunch.Executable,
 		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
 	}
@@ -194,7 +194,15 @@ func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
 		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+	child := map[string]string{"PATH": path}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, s.dataDir)
+	if err != nil {
+		s.log.Warn("shell terminal startup files may put another ao first on PATH", "err", err)
+	}
+	for key, value := range loginEnv {
+		child[key] = value
+	}
+	return agentlaunch.MergeEnv(projectEnv, child)
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -345,6 +353,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
+		cols:            in.Cols,
+		rows:            in.Rows,
 	})
 }
 
@@ -628,6 +638,7 @@ type openTerminalConfig struct {
 	cleanupWorkingDirOnError bool
 	previewVerifier          string
 	startOnAttach            bool
+	cols, rows               int
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -658,6 +669,8 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// Durability across app launches is a separate persistence policy.
 		ExitOnCommandCompletion: true,
 		StartOnAttach:           cfg.startOnAttach,
+		InitialCols:             clampGridDimension(cfg.cols),
+		InitialRows:             clampGridDimension(cfg.rows),
 		// Only agent terminals are probed for their rendered screen.
 		LazyStyledOutput: true,
 	})
@@ -852,8 +865,10 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 }
 
 // ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
-// destroys abandoned trusted auth terminals. Live or unknown user runtimes
-// are preserved with their original associations and attach handles.
+// destroys abandoned trusted auth terminals. Live or unknown session shells
+// are preserved with their original associations and attach handles. A user
+// shell with no session is destroyed even when alive: clients show shells
+// only in a session's tab strip, so nothing could show or close it.
 func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (int64, error) {
 	orphans, err := s.store.SelectShellTerminalsFromPreviousAppRuns(ctx, s.appRunID)
 	if err != nil {
@@ -861,7 +876,7 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 	}
 	var cleared int64
 	for _, rec := range orphans {
-		if !rec.Transient {
+		if !rec.Transient && rec.SessionID != "" {
 			alive, probeErr := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 			if probeErr != nil {
 				s.log.Warn("shell terminal liveness probe failed; keeping row", "handleId", rec.HandleID, "error", probeErr)
@@ -1077,4 +1092,13 @@ func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
 		Title:      rec.Title,
 		CreatedAt:  rec.CreatedAt,
 	}
+}
+
+// clampGridDimension bounds a client-supplied grid dimension to what a PTY
+// accepts; out-of-range values mean "no initial grid".
+func clampGridDimension(n int) uint16 {
+	if n < 2 || n > 1000 {
+		return 0
+	}
+	return uint16(n)
 }
