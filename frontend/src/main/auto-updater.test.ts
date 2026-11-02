@@ -3808,6 +3808,42 @@ describe("quitAndInstallUpdate", () => {
     } finally { restore(); }
   });
 
+  it("gives up on an install stuck behind an updater operation that never settles (#6911)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    vi.useFakeTimers();
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      await flushMicrotasks();
+      const stuck = deferred<{ isUpdateAvailable: boolean; updateInfo: { version: string } }>();
+      autoUpdater.checkForUpdates.mockReturnValueOnce(stuck.promise);
+      const check = module.checkForUpdatesNow(stateDir).catch(() => undefined);
+      await flushMicrotasks();
+
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const assertion = expect(install).rejects.toThrow(/Relaunch AO/);
+      // A second click joins the same request, so it is released at the same time.
+      const duplicate = expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/Relaunch AO/);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+      await duplicate;
+      expect(module.getUpdateStatus().state).toBe("error");
+
+      // When the stuck step finally settles, the abandoned request must not
+      // restart AO on its own, and a fresh confirmation still installs.
+      stuck.resolve({ isUpdateAvailable: false, updateInfo: { version: "2.1.0" } });
+      await check;
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); restore(); }
+  });
+
   it("ignores duplicate downloads during native preparation and accepts a later replacement", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
