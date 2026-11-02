@@ -33,6 +33,10 @@ const h = vi.hoisted(() => ({
 	cloudUserId: "user-1",
 }));
 
+vi.mock("../hooks/useChatPermissionModes", () => ({
+	useChatPermissionModes: (_host: string | undefined, harness: string | undefined) => harness ? new Map([[harness, harness === "kimi" ? ["default"] : ["default", "accept-edits", "auto", "bypass-permissions"]]]) : undefined,
+}));
+
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
 	return {
@@ -3588,5 +3592,39 @@ describe("useTaskLaunch on the new chat page", () => {
 		});
 		// Answered, the send releases it as any send does.
 		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+	});
+});
+
+describe("Chat launch permission capability boundary", () => {
+	it.each(["proj-1", "__standalone__"])("clears stale mode when switching to Kimi in %s", async (projectId) => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex", "kimi"], agent: "codex" } };
+			if (path.includes("/models")) return { data: { models: [], allowCustom: true, selectionMode: "text" } };
+			return { data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "codex", agentConfig: { permissions: "auto" } } } } } };
+		});
+		h.post.mockResolvedValue({ data: { session: { id: "standalone-1" }, workerId: "proj-1-1" } });
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { task = useTaskLaunch({ projectId }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(task.canSubmit).toBe(true));
+		act(() => task.switchAgent("codex"));
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "accept-edits" }));
+		expect(task.turnSettings.approvalMode).toBe("accept-edits");
+		const path = projectId === "__standalone__" ? "/api/v1/sessions" : "/api/v1/orchestrators/delegate";
+		await act(async () => { await task.launch("supported permissions"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "accept-edits" }) }));
+		act(() => task.switchAgent("kimi"));
+		await waitFor(() => expect(task.agent.value).toBe("kimi"));
+		expect(task.approvalModes).toEqual(["default"]);
+		expect(task.turnSettings.approvalMode).toBe("default");
+		expect(task.launchSnapshot().approvalMode).toBe("default");
+		await act(async () => { await task.launch("hello"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "default" }) }));
+		act(() => task.switchAgent("codex"));
+		await waitFor(() => expect(task.agent.value).toBe("codex"));
+		expect(task.approvalModes).toContain("auto");
+		expect(task.turnSettings.approvalMode).toBe("auto");
+		await act(async () => { await task.launch("back on auto"); });
+		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
 	});
 });
