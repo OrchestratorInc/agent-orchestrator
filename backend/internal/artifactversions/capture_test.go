@@ -280,7 +280,7 @@ func TestCaptureSession_SnapshotsAreNotArtifacts(t *testing.T) {
 	h.write("page.html", "x")
 	h.tick()
 	h.tick()
-	files, err := sessionartifacts.List(h.dir)
+	files, err := sessionartifacts.List(context.Background(), h.dir)
 	if err != nil {
 		t.Fatal(err)
 	}

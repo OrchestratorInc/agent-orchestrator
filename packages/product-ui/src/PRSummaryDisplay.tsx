@@ -33,12 +33,15 @@ export function PRSummaryMeta({
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
 	leading,
+	openedViaLabel = "via AO",
 	pr,
 }: {
 	className?: string;
 	countNounLabel?: CountNounLabel;
 	externalLink: ExternalLinkComponent;
 	leading?: string;
+	/** Follows the person's name on a PR AO's GitHub App opened for them. */
+	openedViaLabel?: string;
 	pr: PRSummaryMetadata;
 }) {
 	const branchRange = prBranchRange(pr);
@@ -46,7 +49,39 @@ export function PRSummaryMeta({
 	const authorHandle = pr.author?.replace(/^@/, "") ?? "";
 	const primary: ReactNode[] = [leading, branchRange].filter(Boolean);
 	let author: ReactNode = null;
-	if (authorHandle) {
+	const opener = pr.openedBy;
+	const openerLogin = opener?.githubLogin?.replace(/^@/, "").trim() ?? "";
+	const openerName = openerLogin || opener?.name.trim() || "";
+	if (openerName) {
+		// AO's GitHub App opened this PR, so GitHub lists its bot as the author;
+		// name the person whose session it was instead.
+		const avatar = (
+			<UserAvatar
+				className="size-3"
+				imageUrl={opener?.avatarUrl || (openerLogin ? scmUserAvatarUrl("github", "https://github.com", openerLogin) : undefined)}
+				name={openerName}
+			/>
+		);
+		author = (
+			<span className="inline-flex min-w-0 flex-wrap items-center gap-1">
+				{openerLogin && pr.provider === "github" ? (
+					<ExternalLink
+						className="inline-flex min-w-0 items-center gap-1 text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						href={`https://github.com/${encodeURIComponent(openerLogin)}`}
+					>
+						{avatar}
+						{openerLogin}
+					</ExternalLink>
+				) : (
+					<span className="inline-flex min-w-0 items-center gap-1 text-settings-label">
+						{avatar}
+						{openerName}
+					</span>
+				)}
+				<span className="text-passive">{openedViaLabel}</span>
+			</span>
+		);
+	} else if (authorHandle) {
 		author =
 			pr.provider === "github" ? (
 				<ExternalLink

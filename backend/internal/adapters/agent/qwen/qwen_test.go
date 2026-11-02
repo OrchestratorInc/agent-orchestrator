@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -160,7 +162,7 @@ func TestGetLaunchCommandWorkerStartsInteractive(t *testing.T) {
 
 	want := []string{
 		"sh",
-		"-lc",
+		"-c",
 	}
 	if len(cmd) != 3 || !reflect.DeepEqual(cmd[:2], want) {
 		t.Fatalf("unexpected command prefix\nwant: %#v\n got: %#v", want, cmd)
@@ -903,5 +905,51 @@ func TestGetRestoreCommandAppliesToolRestrictions(t *testing.T) {
 	}
 	if containsSubsequence(cmd, []string{"--allowed-tools"}) {
 		t.Fatalf("restore command %#v used --allowed-tools, which auto-approves instead of restricting", cmd)
+	}
+}
+
+func TestRemoteInputWorkerPreservesPinnedLaunchPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix remote-input wrapper")
+	}
+	home, dir := t.TempDir(), t.TempDir()
+	for _, name := range []string{".profile", ".bash_profile"} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte("PATH=/usr/bin:/bin\nexport PATH\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	want := filepath.Join(dir, "pinned-runtime") + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", want)
+	out := filepath.Join(dir, "observed-path")
+	t.Setenv("QWEN_TEST_PATH_OUT", out)
+	binary := filepath.Join(dir, "qwen")
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in --json-file) output="$2"; shift 2;; *) shift;; esac
+done
+printf '%s\n' '{"type":"session_start"}' > "$output"
+printf '%s' "$PATH" > "$QWEN_TEST_PATH_OUT"
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := qwenWorkerRemoteInputCommand([]string{binary}, ports.LaunchConfig{DataDir: dir, SessionID: "path-test", Prompt: "remember"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The wrapper polls startup for up to ten seconds. Allow that bounded
+	// window plus process scheduling under parallel race-test load.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("worker launch failed: %v: %s", err, output)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("remote-input wrapper replaced the pinned runtime PATH: got %q, want %q", got, want)
 	}
 }

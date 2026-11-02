@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -14,9 +17,33 @@ import (
 const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
+// IdleBeforeHibernate is how long a quiet provider stays parked, prompt
+// cache and all, before idle hibernation may stop it. Most follow-ups arrive
+// within a minute or two; stopping the process after 30 s made each of them
+// pay a full cold start for a few hundred megabytes of memory saved.
+const IdleBeforeHibernate = 90 * time.Second
+
 type wakeRun struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	err     error
+	started time.Time
+}
+
+// wakeCallers names the call chain that started a wake, nearest first. Wakes
+// are rare, so walking the stack costs nothing that matters.
+func wakeCallers() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	var names []string
+	for {
+		frame, more := frames.Next()
+		if frame.Function != "" {
+			names = append(names, path.Base(frame.Function))
+		}
+		if !more {
+			return strings.Join(names, " < ")
+		}
+	}
 }
 
 type hibernationStore interface {
@@ -149,12 +176,76 @@ func (s *Service) liveViewLeasesLocked(id domain.SessionID) map[string]time.Time
 	return views
 }
 
+// hibernateOptions selects why a provider is stopped. Idle hibernation is the
+// developer-mode setting; a version refresh stops a provider still running a
+// replaced harness release so its next start uses the installed one.
+type hibernateOptions struct {
+	versionRefresh bool
+	// forUpdate stops an idle provider so an installer can replace its
+	// executable; the session wakes on its next message or once the update ends.
+	forUpdate bool
+	// minIdle is how long the session must have been quiet.
+	minIdle time.Duration
+	// ignoreViews lets a refresh run under an open view: the user's next
+	// message is about to wake the session anyway.
+	ignoreViews bool
+}
+
+func (o hibernateOptions) enabled(s *Service) bool {
+	if o.versionRefresh || o.forUpdate {
+		return true
+	}
+	return s.hibernationEnabled != nil && s.hibernationEnabled()
+}
+
+// eligible is the durable-fact check, read before and again after the
+// provider confirms it has no background work.
+func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
+	candidate := rec
+	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+		// Idle hibernation keeps orchestrators running. An update or a move to
+		// a new release stops them only to start them again, so they go too,
+		// under the same turn, queue and approval checks.
+		candidate.Kind = ""
+	}
+	if !candidate.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {
+		return false
+	}
+	return !o.versionRefresh || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt == nil)
+}
+
+func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
+	return !o.ignoreViews && s.hasChatView(id)
+}
+
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: IdleBeforeHibernate})
+}
+
+// HibernateChatForVersionRefresh stops an idle provider that still runs a
+// harness release an update replaced, whatever the hibernation setting. It
+// applies the same checks as idle hibernation, so it never stops a provider
+// with a turn, queued message, pending approval or background work, and never
+// one the user is viewing. minIdle keeps a recently used session, whose
+// prompt cache is still warm, on its release until it has been quiet longer.
+func (s *Service) HibernateChatForVersionRefresh(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{versionRefresh: true, minIdle: max(minIdle, chatHibernateGrace)})
+}
+
+// HibernateChatForUpdate stops an idle provider, whatever the hibernation
+// setting and even while the user views it, so an installer that cannot
+// replace a running executable can run. Work in flight, queued messages,
+// pending approvals and background work still keep it running.
+func (s *Service) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.hibernateChat(ctx, id, hibernateOptions{forUpdate: true, ignoreViews: true})
+}
+
+func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts hibernateOptions) (bool, error) {
 	// Skip eligibility and queue reads while the feature is off. Recheck before
 	// stopping the provider in case the setting changes during those reads.
-	if s.hibernationEnabled == nil || !s.hibernationEnabled() {
+	if !opts.enabled(s) {
 		return false, nil
 	}
 	marker, ok := s.sessions.(hibernationStore)
@@ -175,8 +266,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		gate.unlock()
 		return false, err
 	}
-	if !rec.EligibleForChatHibernation() || s.hasChatView(id) ||
-		rec.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now()) {
+	if !opts.eligible(s, rec) || opts.viewed(s, id) {
 		gate.unlock()
 		return false, nil
 	}
@@ -208,7 +298,7 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	}
 	defer gate.unlock()
 	current, err := s.Controller(id)
-	if err != nil || current != controller || s.hasChatView(id) {
+	if err != nil || current != controller || opts.viewed(s, id) {
 		return false, nil
 	}
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
@@ -263,11 +353,11 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 		controller.sendMu.Unlock()
 		return false, err
 	}
-	if !fresh.EligibleForChatHibernation() || fresh.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now()) {
+	if !opts.eligible(s, fresh) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
-	if s.hibernationEnabled == nil || !s.hibernationEnabled() {
+	if !opts.enabled(s) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -313,6 +403,25 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 			return false, fmt.Errorf("wait for hibernated chat controller: %w", recoveryCtx.Err())
 		}
 	}
+	if opts.versionRefresh {
+		// The wake that follows starts the installed release; remember which
+		// one, so a failed start keeps the user's queued messages.
+		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
+		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
+		return true, nil
+	}
+	if opts.forUpdate {
+		// The update starts it again once installed. Until then a wake can
+		// time out on the installer, so what queues meanwhile must not fail.
+		s.wakeMu.Lock()
+		if s.updateStops == nil {
+			s.updateStops = make(map[domain.SessionID]bool)
+		}
+		s.updateStops[id] = true
+		s.wakeMu.Unlock()
+		s.log.Info("chat session stopped for a harness update", "session", id, "harness", fresh.Harness)
+		return true, nil
+	}
 	s.log.Info("chat session hibernated", "session", id, "harness", fresh.Harness)
 	return true, nil
 }
@@ -320,6 +429,9 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 // Explicit controller teardown (kill or interface switch) consumes the cold
 // marker so a later Chat controller cannot inherit a stale sleep state.
 func (s *Service) clearHibernation(ctx context.Context, id domain.SessionID) error {
+	s.wakeMu.Lock()
+	delete(s.updateStops, id)
+	s.wakeMu.Unlock()
 	if s.sessions == nil {
 		return nil
 	}
@@ -369,9 +481,20 @@ func (s *Service) readingController(ctx context.Context, id domain.SessionID) (*
 	return controller, rec, release, nil
 }
 
+// errAsleep tells a caller that must not wake a session inline that the
+// session is hibernated, so it can queue instead.
+var errAsleep = errors.New("chat session is asleep")
+
 // workingController admits provider work under the start/stop gate, then
 // releases that gate so explicit Kill can interrupt a stuck provider call.
 func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*Controller, func(), error) {
+	return s.admitController(ctx, id, true)
+}
+
+// admitController is workingController. With wakeAsleep false, a hibernated
+// session returns errAsleep instead of being woken inline: the caller may hold
+// the session's input lease, which the resume waits to drain.
+func (s *Service) admitController(ctx context.Context, id domain.SessionID, wakeAsleep bool) (*Controller, func(), error) {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	for {
 		if !gate.tryLock() {
@@ -430,6 +553,9 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 			}
 		}
 		gate.unlock()
+		if rec.HibernatedAt != nil && !wakeAsleep {
+			return nil, nil, errAsleep
+		}
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			return nil, nil, err
 		}
@@ -475,8 +601,15 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 	s.wakeMu.Lock()
 	if run := s.wakeRuns[id]; run != nil {
 		s.wakeMu.Unlock()
+		joined := time.Now()
+		s.log.Info("chat wake joined an in-flight wake", "session", id,
+			"wakeRunningFor", joined.Sub(run.started).Round(time.Millisecond))
 		select {
 		case <-run.done:
+			if run.err != nil {
+				s.log.Warn("joined chat wake failed", "session", id,
+					"waited", time.Since(joined).Round(time.Millisecond), "err", run.err)
+			}
 			return run.err
 		case <-ctx.Done():
 			return ctx.Err()
@@ -496,11 +629,20 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		}
 		return ErrNoController
 	}
-	run := &wakeRun{done: make(chan struct{})}
+	run := &wakeRun{done: make(chan struct{}), started: time.Now()}
 	s.wakeRuns[id] = run
 	s.waking[id]++
 	s.wakeMu.Unlock()
+	// The caller chain tells a user's view or send apart from an automated relay.
+	s.log.Info("chat wake started", "session", id, "callers", wakeCallers())
 	finish := func(resultErr error) error {
+		if resultErr != nil {
+			s.log.Warn("chat wake failed", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+		} else {
+			s.log.Info("chat wake finished", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond))
+		}
 		s.wakeMu.Lock()
 		run.err = resultErr
 		delete(s.wakeRuns, id)
@@ -542,10 +684,22 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 		}()
 		ctx := context.Background()
 		if err := s.wakeHibernated(ctx, id); err != nil {
+			if s.stoppedForUpdate(id) {
+				s.log.Warn("chat session could not wake during a harness update; queued messages kept for its resume", "session", id, "err", err)
+				return
+			}
+			if s.versionSwitchFailed(ctx, id, err) {
+				return
+			}
+			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
 		}
+		if version, switched := s.takeVersionSwitch(id); switched {
+			s.observeVersionSwitch(id, version, "succeeded")
+		}
 		if err := s.DrainQueued(ctx, id); err != nil {
+			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()
@@ -570,8 +724,23 @@ func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, mess
 	}
 }
 
+// isWaking also covers a session stopped for an update, so the start that
+// resumes it keeps the messages queued meanwhile, as a wake does. Once a
+// provider runs again, the update's stop is over.
 func (s *Service) isWaking(id domain.SessionID) bool {
+	live := s.HasLiveChatController(id)
 	s.wakeMu.Lock()
 	defer s.wakeMu.Unlock()
-	return s.waking[id] > 0
+	if live {
+		delete(s.updateStops, id)
+	}
+	return s.waking[id] > 0 || s.updateStops[id]
+}
+
+// stoppedForUpdate reports whether an update stopped id and nothing has
+// started it again since.
+func (s *Service) stoppedForUpdate(id domain.SessionID) bool {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	return s.updateStops[id]
 }

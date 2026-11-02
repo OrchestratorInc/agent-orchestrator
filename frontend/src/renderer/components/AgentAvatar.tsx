@@ -40,6 +40,8 @@ import gooseDarkLogo from "../assets/agents/goose-dark.svg";
 import gooseLightLogo from "../assets/agents/goose-light.svg";
 import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
+// NousResearch/hermes-agent: apps/desktop/assets/icon.png.
+import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
 import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
 import kimiDarkLogo from "../assets/agents/kimi-dark.svg";
@@ -48,6 +50,7 @@ import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
+import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
@@ -79,6 +82,7 @@ const LOGOS: AgentLogoSources = {
 	copilot: { light: copilotLightLogo, dark: copilotDarkLogo },
 	aider: aiderLogo,
 	grok: { light: grokLightLogo, dark: grokDarkLogo },
+	hermes: hermesLogo,
 	gemini: geminiLogo,
 	droid: { light: droidLightLogo, dark: droidDarkLogo },
 	fx: { light: fxLightLogo, dark: fxDarkLogo },
@@ -89,6 +93,7 @@ const LOGOS: AgentLogoSources = {
 	devin: { light: devinLightLogo, dark: devinDarkLogo },
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
+	memcode: memcodeLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
 	kiro: kiroLogo,

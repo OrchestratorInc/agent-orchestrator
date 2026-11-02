@@ -1,8 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -12,7 +10,7 @@ import {
 } from "../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
-import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { NativeModePicker } from "./NativeModePicker";
 
 type AgentModelPickerProps = {
 	agentId: string;
@@ -71,50 +69,19 @@ export function AgentModelPicker({
 	}, [onWarningChange, warning]);
 	useEffect(() => () => onWarningChange(undefined), [onWarningChange]);
 
-	const catalogLoading = agentId !== "" && query.isFetching && catalog === undefined;
 	const refreshCatalog = async () => {
 		const refreshed = await refreshAgentModels(agentId, projectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed);
 	};
 
-	if (catalogLoading) {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
-				role="status"
-				aria-label={t("settings.models.loading")}
-				aria-busy="true"
-			>
-				<Loader2 className="size-icon-sm shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-				<span className="truncate text-settings-muted">{t("settings.models.loading")}</span>
-			</span>
-		);
-	}
-
 	if (catalog?.selectionMode === "mode") {
-		const options = offeredModels.filter((item) => isConcreteModelID(item.id)).map((item) => ({
-			value: item.id,
-			label: modelChoiceLabel(item),
-		}));
-		const explicitMode = isConcreteModelID(mode) ? mode : "";
-		const defaultMode = offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id || "";
-		const effectiveMode = explicitMode || defaultMode;
-		const visibleModeLabel = options.find((option) => option.value === effectiveMode)?.label ?? (explicitMode || t("settings.models.modeNotReported"));
 		return (
-			<SettingsOptionMenu
-				aria-label={t("newTask.model")}
-				value={effectiveMode}
-				options={options}
-				action={explicitMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
-				disabled={disabled || agentId === "" || (options.length === 0 && !(explicitMode && !defaultMode))}
+			<NativeModePicker
+				models={offeredModels}
+				mode={mode}
+				onModeChange={onModeChange}
+				disabled={disabled || agentId === ""}
 				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
-				menuAlign="start"
-				renderTrigger={() => (
-					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
-						{visibleModeLabel}
-					</span>
-				)}
-				onChange={(value) => onModeChange(value === defaultMode ? "" : value)}
 			/>
 		);
 	}

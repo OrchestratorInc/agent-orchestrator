@@ -16,17 +16,30 @@ import type { Endpoint } from "./endpoints";
  * stop reporting a bare "can't connect" and say the code needs rescanning,
  * which is the one action that actually works.
  *
- * A stable hostname removes the cause; see the named-tunnel follow-up.
+ * A named tunnel's stable hostname removes the cause, so only an active quick
+ * tunnel counts.
  */
 export function tunnelMayHaveRotated(
 	known: Endpoint[],
-	activeKind: Endpoint["kind"] | undefined,
+	active: { kind?: Endpoint["kind"]; host?: string },
 	anyReachable: boolean,
 ): boolean {
 	if (anyReachable) return false;
 	// A tunnel elsewhere in the saved candidate list says nothing about why the
 	// active LAN or tailnet address failed. This distinction matters when the
 	// phone simply leaves Wi-Fi: the LAN endpoint becomes unreachable, but its
-	// address did not rotate.
-	return activeKind === "tunnel" && known.some((e) => e.kind === "tunnel");
+	// address did not rotate. Nor does a named tunnel's: one that fails is a
+	// machine asleep or offline far more often than one linked to another
+	// account, and telling every sleeping machine's phone to rescan is worse.
+	return active.kind === "tunnel" && isQuickTunnelHost(active.host ?? "") && known.some((e) => e.kind === "tunnel");
+}
+
+/**
+ * A Cloudflare quick tunnel: its hostname rotates on every connector restart,
+ * and it forwards response bodies in ~128 KB chunks, so the event stream cannot
+ * deliver over it. A named tunnel does neither (measured: each 30-byte stream
+ * heartbeat arrived on time).
+ */
+export function isQuickTunnelHost(host: string): boolean {
+	return host.toLowerCase().endsWith(".trycloudflare.com");
 }

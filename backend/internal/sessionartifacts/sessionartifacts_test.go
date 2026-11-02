@@ -1,6 +1,8 @@
 package sessionartifacts
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +37,7 @@ func TestList_ClassifiesByExtensionAndSortsByPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -53,6 +55,42 @@ func TestList_ClassifiesByExtensionAndSortsByPath(t *testing.T) {
 	}
 }
 
+func TestList_SkipsOSMetadataAndToolFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, rel := range []string{
+		"report.md",
+		"site/index.html",
+		".DS_Store",
+		"site/.DS_Store",
+		"._report.md",
+		"Thumbs.db",
+		"site/desktop.ini",
+		".git/HEAD",
+		".versions/blobs/x",
+		"node_modules/pkg/index.js",
+		"site/__pycache__/gen.pyc",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := List(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var paths []string
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	if fmt.Sprint(paths) != "[report.md site/index.html]" {
+		t.Fatalf("paths = %v, want [report.md site/index.html]", paths)
+	}
+}
+
 func TestList_BoundsFileCount(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < MaxFiles+25; i++ {
@@ -60,7 +98,7 @@ func TestList_BoundsFileCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -85,7 +123,7 @@ func TestList_SkipsUnreadableSubdirInsteadOfFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List returned error for unreadable subdir: %v", err)
 	}
@@ -104,7 +142,7 @@ func TestList_BoundsTraversalOfEmptyDirectories(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "zzz.txt"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -127,7 +165,7 @@ func TestList_SkipsTopLevelVersionsDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -138,5 +176,17 @@ func TestList_SkipsTopLevelVersionsDir(t *testing.T) {
 	want := []string{"nested/" + VersionsDir + "/kept.md", "page.html"}
 	if fmt.Sprint(paths) != fmt.Sprint(want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+}
+
+func TestList_StopsOnCancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := List(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("List with a cancelled context = %v, want context.Canceled", err)
 	}
 }

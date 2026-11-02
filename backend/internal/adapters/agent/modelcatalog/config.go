@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -23,7 +25,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes":
 		return true
 	default:
 		return false
@@ -32,6 +34,9 @@ func hasConfigDiscoverySource(agentID string) bool {
 
 func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
+	if agentID == "hermes" {
+		return discoverHermesCatalog(base, modelConfigPaths(agentID, workingDir, env))
+	}
 	parser := configModelParser(agentID)
 	if parser == nil {
 		return base, fmt.Errorf("%s has no configuration model parser", agentID)
@@ -80,6 +85,8 @@ func configModelParser(agentID string) configParser {
 		return parseClineModels
 	case "autohand":
 		return parseAutoHandModels
+	case "hermes":
+		return parseHermesModels
 	default:
 		return nil
 	}
@@ -99,6 +106,10 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	case "continue":
 		if root := continueHomeDir(func(name string) string { return envValue(env, name) }); root != "" {
 			paths = append(paths, filepath.Join(root, "config.yaml"))
+		}
+	case "hermes":
+		if root := hermesConfigHome(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "provider_models_cache.json"))
 		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {
@@ -137,6 +148,147 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 		}
 	}
 	return paths
+}
+
+// hermesConfigHome resolves HERMES_HOME exactly as the adapter and Hermes do.
+func hermesConfigHome(_ string, env map[string]string) string {
+	root, err := hermes.ResolveHome(env)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
+// hermesReasoningLevels are the native --reasoning values Hermes accepts.
+var hermesReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// discoverHermesCatalog lists the models Hermes cached for its configured
+// provider, with the config.yaml default marked. Hermes keeps the provider in
+// its own configuration and AO passes only --model, so models from any other
+// provider would launch against the wrong endpoint and are left out.
+func discoverHermesCatalog(base ports.AgentModelCatalog, paths []string) (ports.AgentModelCatalog, error) {
+	if len(paths) != 2 {
+		return base, fmt.Errorf("hermes model configuration was not found")
+	}
+	raw, err := readModelConfig(paths[0])
+	if err != nil {
+		if os.IsNotExist(err) {
+			return base, fmt.Errorf("hermes model configuration was not found")
+		}
+		return base, fmt.Errorf("hermes model discovery read %s: %w", paths[0], err)
+	}
+	configured, err := parseHermesModels(raw)
+	if err != nil {
+		return base, fmt.Errorf("hermes model discovery parse %s: %w", paths[0], err)
+	}
+	models := configured
+	if provider := hermesConfiguredProvider(raw); provider != "" {
+		if cache, err := readModelConfig(paths[1]); err == nil {
+			cached, err := parseHermesProviderCache(cache, provider)
+			if err != nil {
+				return base, fmt.Errorf("hermes model discovery parse %s: %w", paths[1], err)
+			}
+			models = append(models, cached...)
+		} else if !os.IsNotExist(err) {
+			return base, fmt.Errorf("hermes model discovery read %s: %w", paths[1], err)
+		}
+	}
+	models = normalize(models)
+	if len(models) == 0 {
+		return base, fmt.Errorf("hermes model configuration returned no models")
+	}
+	base.Models = models
+	base.SelectionMode = ports.ModelSelectionCatalog
+	base.Source = "config"
+	return base, nil
+}
+
+// hermesConfiguredProvider returns config.yaml's explicit model.provider.
+// "auto" picks a provider from credentials at run time, so no cache applies.
+func hermesConfiguredProvider(raw []byte) string {
+	var config struct {
+		Model yaml.Node `yaml:"model"`
+	}
+	if yaml.Unmarshal(raw, &config) != nil || config.Model.Kind != yaml.MappingNode {
+		return ""
+	}
+	var model struct {
+		Provider string `yaml:"provider"`
+	}
+	if config.Model.Decode(&model) != nil {
+		return ""
+	}
+	if provider := strings.TrimSpace(model.Provider); provider != "auto" {
+		return provider
+	}
+	return ""
+}
+
+// parseHermesProviderCache reads one provider's models from Hermes's
+// provider_models_cache.json ({provider: {"models": [ids...]}}).
+func parseHermesProviderCache(raw []byte, provider string) ([]ports.AgentModelInfo, error) {
+	var cache map[string]struct {
+		Models []string `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		return nil, err
+	}
+	entry := cache[provider]
+	models := make([]ports.AgentModelInfo, 0, len(entry.Models))
+	for _, id := range entry.Models {
+		if id = strings.TrimSpace(id); id != "" {
+			models = append(models, ports.AgentModelInfo{ID: id, Label: id, Provider: provider, Efforts: append([]string(nil), hermesReasoningLevels...)})
+		}
+	}
+	return models, nil
+}
+
+// parseHermesModels reports the model Hermes's own configuration selects. The
+// provider stays native configuration, so only that provider's default is a
+// reproducible catalog entry; other model IDs can still be typed directly.
+func parseHermesModels(raw []byte) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Model yaml.Node `yaml:"model"`
+		Agent struct {
+			ReasoningEffort string `yaml:"reasoning_effort"`
+		} `yaml:"agent"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	var id, provider string
+	switch config.Model.Kind {
+	case yaml.ScalarNode:
+		id = config.Model.Value
+	case yaml.MappingNode:
+		var model struct {
+			Default  string `yaml:"default"`
+			Model    string `yaml:"model"`
+			Provider string `yaml:"provider"`
+		}
+		if err := config.Model.Decode(&model); err != nil {
+			return nil, err
+		}
+		id, provider = model.Default, model.Provider
+		if strings.TrimSpace(id) == "" {
+			id = model.Model
+		}
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	if provider = strings.TrimSpace(provider); provider == "auto" {
+		provider = ""
+	}
+	effort := strings.TrimSpace(config.Agent.ReasoningEffort)
+	if !slices.Contains(hermesReasoningLevels, effort) {
+		effort = ""
+	}
+	return []ports.AgentModelInfo{{
+		ID: id, Label: id, Provider: provider, IsDefault: true,
+		Efforts: append([]string(nil), hermesReasoningLevels...), DefaultEffort: effort,
+	}}, nil
 }
 
 func qwenConfigHome(home string, env map[string]string) string {

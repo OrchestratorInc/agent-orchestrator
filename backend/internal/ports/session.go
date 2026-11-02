@@ -28,6 +28,11 @@ type SpawnConfig struct {
 	// through `ao spawn`. The daemon validates this reference and derives any
 	// inherited settings itself; callers never supply an inherited policy.
 	ParentSessionID domain.SessionID
+	// CreatedBy names an unattended source the daemon cannot infer from the
+	// other fields (tracker intake sets automation). Empty derives it: an
+	// AutomationRunID is scheduled, a parent orchestrator is orchestrator, any
+	// other parent session is automation, and everything else is user.
+	CreatedBy domain.SessionCreator
 	// TrackerProvider is the issue-tracker provider hint from the CLI's
 	// --tracker-provider flag (defaults to "github"). It is used as a fallback
 	// when the project's SCM origin cannot be classified by the configured
@@ -36,11 +41,12 @@ type SpawnConfig struct {
 	TrackerProvider domain.TrackerProvider
 	// IssueContext is optional pre-fetched tracker context for the task prompt.
 	// Standing rules stay in SystemPrompt; issue facts belong to the user task.
-	IssueContext string
-	Kind         domain.SessionKind
-	Harness      domain.AgentHarness
-	Branch       string
-	Prompt       string
+	IssueContext     string
+	Kind             domain.SessionKind
+	Harness          domain.AgentHarness
+	Branch           string
+	RequireNewBranch bool
+	Prompt           string
 	// AgentConfig overrides the resolved project/role agent config for this
 	// single spawn. Empty fields keep the project defaults.
 	AgentConfig AgentConfig
@@ -50,6 +56,9 @@ type SpawnConfig struct {
 	// AgentConfigResolved means AgentConfig already contains the fully merged
 	// project/role/task settings and may intentionally clear inherited values.
 	AgentConfigResolved bool
+	// AgentAccountID is the provider account the agent runs under. Empty uses
+	// the provider's default account.
+	AgentAccountID string
 
 	// RequestedMode is the caller's explicit session mode, or empty to let the
 	// daemon resolve its default. It is validated and persisted before any
@@ -65,6 +74,10 @@ type SpawnConfig struct {
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string
+	// NameFromPrompt generates task and workspace names before launch.
+	NameFromPrompt bool
+	// KeepDisplayName preserves an explicit CLI/API title while naming its workspace.
+	KeepDisplayName bool
 	// Attachments are files pasted or dropped into the task brief. They are
 	// written into the session worktree and referenced by path in the prompt so
 	// the agent can read them (CLI agents receive the prompt as text and cannot

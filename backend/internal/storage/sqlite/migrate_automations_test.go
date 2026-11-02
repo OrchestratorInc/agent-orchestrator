@@ -212,12 +212,12 @@ INSERT INTO sessions (
 
 func TestAutomationMetadataMigrationPreservesExistingDefinitions(t *testing.T) {
 	dataDir := t.TempDir()
-	db := openMigratedDatabaseCopyAt(t, dataDir, 200, pragmas)
+	db := openMigratedDatabaseCopyAt(t, dataDir, 20261101145613011, pragmas)
 	now := time.Now().UTC()
 	mustExec(t, db, `
 INSERT INTO projects (id, path, display_name, registered_at) VALUES ('scheduled', '/tmp/scheduled', 'Scheduled', ?);
-INSERT INTO automations (id, project_id, display_name, prompt, kind, rrule_text, timezone, enabled, next_run_at, created_at, updated_at)
-VALUES ('old', 'scheduled', 'Old name', 'Old prompt', 'worker', 'FREQ=DAILY', 'UTC', 1, ?, ?, ?);`, now, now, now, now)
+INSERT INTO automations (id, project_id, display_name, prompt, kind, rrule_text, timezone, enabled, next_run_at, created_at, updated_at, model, mode, effort)
+VALUES ('old', 'scheduled', 'Old name', 'Old prompt', 'worker', 'FREQ=DAILY', 'UTC', 1, ?, ?, ?, 'gpt-5', 'smart', 'high');`, now, now, now, now)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -233,12 +233,12 @@ VALUES ('old', 'scheduled', 'Old name', 'Old prompt', 'worker', 'FREQ=DAILY', 'U
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = check.Close() })
-	var template, useCase, prompt string
-	if err := check.QueryRow(`SELECT template_id, use_case, prompt FROM automations WHERE id='old'`).Scan(&template, &useCase, &prompt); err != nil {
+	var template, useCase, prompt, model, mode, effort string
+	if err := check.QueryRow(`SELECT template_id, use_case, prompt, model, mode, effort FROM automations WHERE id='old'`).Scan(&template, &useCase, &prompt, &model, &mode, &effort); err != nil {
 		t.Fatal(err)
 	}
-	if template != "custom" || useCase != "unknown" || prompt != "Old prompt" {
-		t.Fatalf("old definition changed: %q %q %q", template, useCase, prompt)
+	if template != "custom" || useCase != "unknown" || prompt != "Old prompt" || model != "gpt-5" || mode != "smart" || effort != "high" {
+		t.Fatalf("old definition changed: %q %q %q %q %q %q", template, useCase, prompt, model, mode, effort)
 	}
 	for _, query := range []string{`UPDATE automations SET use_case='private prompt'`, `UPDATE automations SET template_id='private prompt'`} {
 		if _, err := check.Exec(query); err == nil {

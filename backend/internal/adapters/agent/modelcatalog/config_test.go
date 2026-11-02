@@ -189,6 +189,73 @@ providers:
 	}
 }
 
+func TestParseHermesModelsReportsNativeDefault(t *testing.T) {
+	levels := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	for _, tt := range []struct {
+		name, config string
+		want         []ports.AgentModelInfo
+	}{
+		{"mapping with provider and effort", "model:\n  default: anthropic/claude-opus-4.6\n  provider: anthropic\nagent:\n  reasoning_effort: high\n",
+			[]ports.AgentModelInfo{{ID: "anthropic/claude-opus-4.6", Label: "anthropic/claude-opus-4.6", Provider: "anthropic", IsDefault: true, Efforts: levels, DefaultEffort: "high"}}},
+		{"model key and auto provider", "model:\n  model: glm-5.3\n  provider: auto\n",
+			[]ports.AgentModelInfo{{ID: "glm-5.3", Label: "glm-5.3", IsDefault: true, Efforts: levels}}},
+		{"scalar model and unknown effort", "model: deepseek-chat\nagent:\n  reasoning_effort: turbo\n",
+			[]ports.AgentModelInfo{{ID: "deepseek-chat", Label: "deepseek-chat", IsDefault: true, Efforts: levels}}},
+		{"no model", "agent:\n  system_prompt: hi\n", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			models, err := parseHermesModels([]byte(tt.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(models, tt.want) {
+				t.Fatalf("models = %#v, want %#v", models, tt.want)
+			}
+		})
+	}
+}
+
+func TestHermesModelConfigFollowsHermesHome(t *testing.T) {
+	home := t.TempDir()
+	paths := modelConfigPaths("hermes", "", map[string]string{"HERMES_HOME": home})
+	if len(paths) != 2 || paths[0] != filepath.Join(home, "config.yaml") || paths[1] != filepath.Join(home, "provider_models_cache.json") {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestDiscoverHermesCatalogListsConfiguredProviderModels(t *testing.T) {
+	home := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("config.yaml", "model:\n  default: glm-5.2\n  provider: zai\n")
+	write("provider_models_cache.json", `{"zai":{"models":["glm-4.6","glm-5.2"]},"anthropic":{"models":["claude-opus-5-5"]}}`)
+	catalog, err := discoverConfigCatalog("hermes", "", map[string]string{"HERMES_HOME": home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, model := range catalog.Models {
+		ids[model.ID] = model.IsDefault
+		if model.Provider != "zai" || len(model.Efforts) == 0 {
+			t.Fatalf("model %+v, want zai with reasoning levels", model)
+		}
+	}
+	if len(ids) != 2 || !ids["glm-5.2"] || ids["glm-4.6"] {
+		t.Fatalf("models = %+v, want glm-4.6 and default glm-5.2 only", catalog.Models)
+	}
+
+	// With provider auto, Hermes chooses at run time, so only the default is listed.
+	write("config.yaml", "model:\n  default: glm-5.2\n  provider: auto\n")
+	catalog, err = discoverConfigCatalog("hermes", "", map[string]string{"HERMES_HOME": home})
+	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "glm-5.2" {
+		t.Fatalf("auto provider catalog = %+v, %v", catalog.Models, err)
+	}
+}
+
 func TestParseVibeModelsUsesAliasesAndActiveModel(t *testing.T) {
 	models, err := parseVibeModels([]byte(`
 active_model = "zai-glm"

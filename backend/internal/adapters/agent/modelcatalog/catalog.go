@@ -3,6 +3,7 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -44,6 +45,9 @@ type commandSpec struct {
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
 	signIn *signInCheck
+	// retryEmpty reruns a listing that exits cleanly with no output once.
+	// OpenCode 2 prints nothing the first time it runs in a new folder.
+	retryEmpty bool
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -110,7 +114,7 @@ var commandSpecs = map[string]commandSpec{
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
 	"opencode":    {args: []string{"models"}, parser: parseProviderIDLines},
-	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines},
+	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines, retryEmpty: true},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
 	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
@@ -163,6 +167,27 @@ func Base(agentID string) ports.AgentModelCatalog {
 			model("muse-spark-1.1", "Muse Spark 1.1", false),
 			model("muse-spark-1.2", "Muse Spark 1.2", false),
 		)
+	case "memcode":
+		// Memcode v0.38.1 embeds these pinnable labels in models.json. The
+		// interactive /model picker accepts the labels, not the provider IDs.
+		return catalog(agentID, "official-catalog", entryMode, now,
+			model("grok-4.7", "Grok 4.7", false),
+			model("gemini-pro", "Gemini 3.1 Pro", false),
+			model("gemini-flash", "Gemini 3.8 Flash", false),
+			model("opus", "Opus 5.5", false),
+			model("fable", "Fable 5.1", false),
+			model("sonnet", "Sonnet 5", false),
+			model("haiku", "Haiku 4.5", false),
+			model("astra", "GPT-6 Astra", false),
+			model("sol", "GPT-5.6 Sol", false),
+			model("terra", "GPT-5.6 Terra", false),
+			model("luna", "GPT-5.6 Luna", false),
+			model("glm-5p3", "GLM-5.3", false),
+			model("glm-5p3-flash", "GLM-5.3 Flash", false),
+			model("qwen3p8-max", "Qwen3.8 Max", false),
+			model("kimi-k3", "Kimi K3", false),
+			model("deepseek-v4-flash", "DeepSeek V4.1 Flash", false),
+		)
 	case "amp":
 		c := catalog(agentID, "official-modes", entryMode, now,
 			model("low", "Low", false),
@@ -212,7 +237,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -267,7 +292,7 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "claude-code" {
 		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
 	}
-	if request.AgentID == "muse" {
+	if request.AgentID == "muse" || request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
 	}
 	if request.AgentID == "codex" {
@@ -403,6 +428,14 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	}
 	if request.CredentialType == "" && (hasLocalProviderCatalog(request.AgentID) || browseProviderCredentials[request.AgentID] != nil) {
 		// Replace older task-only snapshots through the normal background refresh.
+		if listsRunnableModels(request.AgentID) {
+			// Snapshots from before RunnableModels lack it.
+			return fingerprint + ":shared-providers-v1:runnable-v1"
+		}
+		if request.AgentID == "pi" || request.AgentID == "kimchi" {
+			// Snapshots from before Pi's thinking levels were read lack them.
+			return fingerprint + ":shared-providers-v1:thinking-v2"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
@@ -442,6 +475,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
 	output, err := cmd.CombinedOutput()
+	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
+		cancel()
+		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
+		defer cancel()
+		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
 	}
@@ -451,6 +490,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
+		// The model command lists what it can run; the provider cache, every model.
+		if listsRunnableModels(agentID) {
+			for _, model := range normalize(models) {
+				base.RunnableModels = append(base.RunnableModels, model.ID)
+			}
+		}
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)
@@ -574,7 +619,8 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		normalized = append(normalized, ports.AgentModelInfo{
 			ID: id, Label: label, Provider: provider, IsDefault: item.Default,
 			Efforts: append([]string(nil), item.Efforts...), DefaultEffort: item.DefaultEffort,
-			Inputs: modelInputs(item.Inputs),
+			SupportsFast: item.FastTier != "",
+			Inputs:       modelInputs(item.Inputs),
 		})
 	}
 	if len(normalized) == 0 {
@@ -768,7 +814,12 @@ const discoveryErrorDetailMax = 500
 // summary lands after any progress noise; whitespace is collapsed so the result
 // is a single log-friendly line.
 func discoveryErrorDetail(output []byte) string {
-	cleaned := strings.Join(strings.Fields(ansiPattern.ReplaceAllString(string(output), "")), " ")
+	plain := ansiPattern.ReplaceAllString(string(output), "")
+	// A Node CLI that crashed ends on its stack; the error is the line above it.
+	if line := thrownErrorLine(plain); line != "" {
+		plain = line
+	}
+	cleaned := strings.Join(strings.Fields(plain), " ")
 	if cleaned == "" {
 		return ""
 	}
@@ -776,6 +827,25 @@ func discoveryErrorDetail(output []byte) string {
 		cleaned = "…" + string(runes[len(runes)-discoveryErrorDetailMax:])
 	}
 	return cleaned
+}
+
+// thrownErrorPattern is the line a crashed Node or Python CLI names its error on.
+var thrownErrorPattern = regexp.MustCompile(`(?m)^\s*(?:Uncaught )?(?:[A-Z][A-Za-z]*)?(?:Error|Exception): .+$`)
+
+// stackFramePattern is a line of a stack trace.
+var stackFramePattern = regexp.MustCompile(`(?m)^\s+at \S`)
+
+// thrownErrorLine is the last such line of output that ends on a stack trace,
+// or "" when output is not a crash.
+func thrownErrorLine(output string) string {
+	if !stackFramePattern.MatchString(output) {
+		return ""
+	}
+	matches := thrownErrorPattern.FindAllString(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(matches[len(matches)-1])
 }
 
 // BinaryVersion returns a short non-sensitive executable-metadata fingerprint
@@ -805,11 +875,18 @@ func BinaryVersion(ctx context.Context, binary string) string {
 	return fmt.Sprintf("%x", hash.Sum(nil)[:8])
 }
 
+// catalogSchemaVersions invalidates snapshots when an adapter's catalog format
+// changes independently of its installed executable or configuration.
+var catalogSchemaVersions = map[string]string{"memcode": "native-picker-v1"}
+
 // CatalogFingerprint hashes every stable discovery input for an agent: the
 // resolved executable plus the configuration and credentials its discovery
 // reads. Only the digest is returned or persisted.
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
 	binaryVersion := BinaryVersion(ctx, binary)
+	if version := catalogSchemaVersions[agentID]; version != "" {
+		binaryVersion += ";" + version
+	}
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
 	// Refresh pre-provider catalogs after upgrading and when observed credential
 	// presence changes. The fingerprint includes names only, never key material.
@@ -1368,6 +1445,9 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			}
 			if len(previous.Inputs) == 0 {
 				previous.Inputs = item.Inputs
+			}
+			if len(previous.Efforts) == 0 {
+				previous.Efforts = item.Efforts
 			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous

@@ -1,12 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
-import { openSwitchAgentDialog } from "./support/open-switch-agent-menu";
 
 // Focus hand-off between a closing Radix menu and the surface its item opened.
 // A menu traps focus for the commit in which it closes and restores focus to
-// its trigger a tick after it unmounts. Both of those used to land on top of a
-// dialog opened from a menu item, leaving the New task composer with no caret
+// its trigger a tick after it unmounts. Both of those used to land on top of
+// the surface a menu item opened, leaving the New task composer with no caret
 // until the user clicked it (#focus regression, reported 2026-09-03).
 
 const projectId = "task-focus";
@@ -118,18 +117,21 @@ function openProjectMenu(page: Page) {
 		.click({ force: true });
 }
 
+// New task opens the new chat page for the project; its composer takes typing.
 async function expectPromptTakesTyping(page: Page) {
-	const prompt = page.getByRole("dialog").getByLabel("Task");
+	await expect(page).toHaveURL(new RegExp(`#/new\\?project=${projectId}`));
+	const prompt = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(prompt).toBeVisible();
+	await expect(page.getByTestId("chat-conversation-panel").getByRole("button", { name: /^Project: / })).toHaveText(projectId);
+	await expect.poll(async () => (await activeElementInfo(page)).label).toBe("Message the agent");
 	await page.keyboard.type("caret is here");
-	await expect(prompt).toHaveValue("caret is here");
+	await expect(prompt).toHaveText("caret is here");
 }
 
 test("renderer: the board New task button focuses the composer prompt @T0", async ({ page }) => {
 	await setup(page);
 	await page.goto(`/#/projects/${projectId}`);
 	await page.getByRole("button", { name: "New task" }).first().click();
-	await expect(page.getByRole("dialog")).toBeVisible();
 	await expectPromptTakesTyping(page);
 });
 
@@ -144,25 +146,7 @@ for (const animated of [false, true]) {
 		await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 		await openProjectMenu(page);
 		await page.getByRole("menuitem", { name: /New task/ }).click();
-		await expect(page.getByRole("dialog")).toBeVisible();
 		await expectPromptTakesTyping(page);
-	});
-
-	test(`renderer: closing a menu-opened dialog hands focus back to the menu trigger (${motion}) @T0`, async ({
-		page,
-	}) => {
-		await setup(page, { animated });
-		await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
-		await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
-		await openProjectMenu(page);
-		await page.getByRole("menuitem", { name: /New task/ }).click();
-		await expect(page.getByRole("dialog")).toBeVisible();
-		await page.keyboard.press("Escape");
-		await expect(page.getByRole("dialog")).toBeHidden();
-		// Focus has to land somewhere a keyboard user can carry on from, not on body.
-		await expect
-			.poll(async () => (await activeElementInfo(page)).label)
-			.toBe(`Project actions for ${projectId}`);
 	});
 }
 
@@ -175,7 +159,6 @@ test("renderer: New task from the sidebar project context menu focuses the compo
 		.first()
 		.click({ button: "right", force: true });
 	await page.getByRole("menuitem", { name: /New task/ }).click();
-	await expect(page.getByRole("dialog")).toBeVisible();
 	await expectPromptTakesTyping(page);
 });
 
@@ -186,6 +169,31 @@ test("renderer: New task from the command palette focuses the composer prompt @T
 	await page.keyboard.press("ControlOrMeta+k");
 	await page.getByRole("option", { name: /New task/ }).first().click();
 	await expectPromptTakesTyping(page);
+});
+
+test("renderer: switching project with a draft never flashes the sample requests @T0", async ({ page }) => {
+	await setup(page, { animated: true });
+	await page.goto(`/#/new?project=${projectId}`);
+	const prompt = page.getByRole("combobox", { name: "Message the agent" });
+	await expect(page.getByRole("list", { name: "Sample requests" })).toBeVisible();
+	await prompt.click();
+	await page.keyboard.type("keep this");
+	await expect(page.getByRole("list", { name: "Sample requests" })).toHaveCount(0);
+	// Any frame that draws them counts, so watch the DOM rather than poll.
+	await page.evaluate(() => {
+		const seen = { flashed: false };
+		(window as unknown as { __samples: typeof seen }).__samples = seen;
+		new MutationObserver(() => {
+			if (document.querySelector('ul[aria-label="Sample requests"]')) seen.flashed = true;
+		}).observe(document.body, { childList: true, subtree: true });
+	});
+
+	const projectPicker = page.getByTestId("chat-conversation-panel").getByRole("button", { name: /^Project: / });
+	await projectPicker.click();
+	await page.getByRole("menuitem", { name: "Scratchpad" }).click();
+	await expect(projectPicker).toHaveText("Scratchpad");
+	await expect(prompt).toHaveText("keep this");
+	expect(await page.evaluate(() => (window as unknown as { __samples: { flashed: boolean } }).__samples.flashed)).toBe(false);
 });
 
 test("renderer: opening another session focuses its chat composer @T0", async ({ page }) => {
@@ -202,7 +210,7 @@ test("renderer: opening another session focuses its chat composer @T0", async ({
 	await expect(composer).toHaveText("typed after switching");
 });
 
-test("renderer: hovering a Chat session fetches its conversation before opening it @T0", async ({ page }) => {
+test("renderer: hovering a Chat session fetches its conversation once, and opening it reuses that @T0", async ({ page }) => {
 	await setup(page);
 	let requests = 0;
 	await page.route(`http://127.0.0.1:8080/api/v1/sessions/${sessionB}/conversation*`, async (route) => {
@@ -215,105 +223,13 @@ test("renderer: hovering a Chat session fetches its conversation before opening 
 	const row = page.getByRole("button", { name: /Open Session B/ }).first();
 	await row.hover();
 	await expect.poll(() => requests).toBe(1);
+	const viewRegistered = page.waitForResponse((response) =>
+		response.request().method() === "POST" && response.url().endsWith(`/sessions/${sessionB}/chat-view`));
 	await row.click();
 	await expect(page.getByText(`Existing conversation in ${sessionB}`)).toBeVisible();
-	// Opening registers a Chat view and refreshes the prefetched snapshot after a possible wake.
-	// React Query may also refetch the stale prefetched snapshot on mount.
-	await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
-});
-
-async function setupSwitchAgentSession(page: Page) {
-	await page.emulateMedia({ reducedMotion: "reduce" });
-	await installFakeAgent(page, {
-		projectId,
-		projectName: projectId,
-		workers: [{ id: "switch-worker", provider: "claude-code", title: "Switch worker" }],
-	});
-	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
-		const pathname = new URL(route.request().url()).pathname;
-		if (pathname === "/api/v1/agents/readiness" || pathname === "/api/v1/agents/readiness/ensure") {
-			await route.fulfill({
-				json: { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] },
-			});
-			return;
-		}
-		if (pathname === `/api/v1/projects/${projectId}`) {
-			await route.fulfill({
-				json: {
-					status: "ok",
-					project: { id: projectId, agent: "claude-code", config: { worker: { agent: "claude-code" } } },
-				},
-			});
-			return;
-		}
-		await route.fulfill({ json: { status: "ok" } });
-	});
-	await page.goto(`/#/projects/${projectId}/sessions/switch-worker`);
-}
-
-test("renderer: a dialog opened from a session menu keeps focus inside itself @T0", async ({ page }) => {
-	await setupSwitchAgentSession(page);
-	const dialog = await openSwitchAgentDialog(page);
-	// The menu trigger sits behind the dialog: focus landing back on it would put
-	// the next Tab outside the dialog entirely.
-	await expect.poll(async () => (await activeElementInfo(page)).inDialog).toBe(true);
-	await expect(dialog).toBeVisible();
-});
-
-test("renderer: closing that dialog never strands focus on the page body @T0", async ({ page }) => {
-	await setupSwitchAgentSession(page);
-	const dialog = await openSwitchAgentDialog(page);
-	await expect.poll(async () => (await activeElementInfo(page)).inDialog).toBe(true);
-
-	await page.keyboard.press("Escape");
-	await expect(dialog).toBeHidden();
-	// Closing re-enables worker input, so the terminal underneath claims the
-	// caret through its own effect and the menu hand-back stands down. Either
-	// landing spot is fine; `document.body` is not, because Tab would then
-	// restart from the top of the page.
-	await expect
-		.poll(async () => {
-			const { label, inTerminal } = await activeElementInfo(page);
-			return inTerminal || label === "Session actions";
-		})
-		.toBe(true);
-});
-
-test("renderer: a chat session hands focus back to the menu trigger when its dialog closes @T0", async ({
-	page,
-}) => {
-	// No terminal underneath to claim the caret, and the chat composer only
-	// autofocuses when the session changes, so this is the case the hand-back
-	// exists for: without it focus is left on `document.body`.
-	await setup(page);
-	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
-	await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
-	const dialog = await openSwitchAgentDialog(page);
-	await expect.poll(async () => (await activeElementInfo(page)).inDialog).toBe(true);
-
-	await page.keyboard.press("Escape");
-	await expect(dialog).toBeHidden();
-	await expect.poll(async () => (await activeElementInfo(page)).label).toBe("Session actions");
-});
-
-
-test("renderer: a context-menu dialog returns focus to where the menu opened from @T0", async ({
-	page,
-}) => {
-	// A context menu has no trigger to point back at, so the defined fallback is
-	// the element that held focus when the menu opened, which is what Radix itself
-	// restores to. Right-clicking the project row's action button focuses it, so
-	// that button is the expected landing spot, and never `document.body`.
-	await setup(page);
-	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
-	await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
-
-	const openedFrom = `Project actions for ${projectId}`;
-	await page.getByRole("button", { name: new RegExp(openedFrom) }).first().click({ button: "right", force: true });
-	await page.getByRole("menuitem", { name: /New task/ }).click();
-	await expect(page.getByRole("dialog")).toBeVisible();
-	await page.keyboard.press("Escape");
-	await expect(page.getByRole("dialog")).toBeHidden();
-
-	await expect.poll(async () => (await activeElementInfo(page)).label).toBe(openedFrom);
+	// A ready chat changes only through events, so neither mounting it nor
+	// registering its Chat view downloads the prefetched history again.
+	await viewRegistered;
+	await page.waitForTimeout(500);
+	expect(requests).toBe(1);
 });

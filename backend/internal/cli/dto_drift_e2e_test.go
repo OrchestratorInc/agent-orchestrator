@@ -154,6 +154,10 @@ func (f *fakeProjectManager) PrepareClone(_ context.Context, in projectsvc.Clone
 	return projectsvc.ClonePreparationResult{Path: "/tmp/" + in.RemoteURL, RemoteURL: in.RemoteURL}, nil
 }
 
+func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in projectsvc.CloneInput) (projectsvc.CloneDestination, error) {
+	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
+}
+
 func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.ClonePreparationCleanupInput) error {
 	return nil
 }
@@ -312,4 +316,8 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 
 func (f *fakeProjectManager) SetPermissions(_ context.Context, id domain.ProjectID, in projectsvc.SetPermissionsInput) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: in.Permissions}}}, nil
+}
+
+func (f *fakeProjectManager) ForgetPermissions(_ context.Context, id domain.ProjectID) (projectsvc.Project, error) {
+	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{}}, nil
 }

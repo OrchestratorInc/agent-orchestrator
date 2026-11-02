@@ -12,7 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Check, LoaderCircle, Plus, Send as SendIcon } from "lucide-react";
+import { Check, LoaderCircle, Plus, Send as SendIcon, type LucideIcon } from "lucide-react";
 import type { FileAnnotationTarget } from "../../shared/file-annotations";
 import {
 	type WorkspaceCompareMode,
@@ -21,6 +21,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useParsedDiff } from "../hooks/useParsedDiff";
 import { useDiffHighlight } from "../hooks/useDiffHighlight";
+import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import type { DiffRow, DiffRowKind } from "../lib/diff-parser";
@@ -742,6 +743,8 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
+	// The quoted page selection, unless the box has its own text selected.
+	const quoteToCopy = (box: HTMLTextAreaElement) => (box.selectionStart === box.selectionEnd ? target.quote : undefined);
 	const status = annotation.statusFor(target);
 	const sending = status === "sending";
 	const sent = status === "sent";
@@ -777,6 +780,15 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					)}
 					disabled={sending || sent}
 					onBlur={() => annotation.setDraft(target, text)}
+					// Focusing the box clears the page selection it was opened from, so
+					// Cmd/Ctrl+C (or Edit > Copy) with nothing selected in the box copies
+					// the quoted selection.
+					onCopy={(event) => {
+						const quote = quoteToCopy(event.currentTarget);
+						if (quote === undefined) return;
+						event.preventDefault();
+						event.clipboardData.setData("text/plain", quote);
+					}}
 					onChange={(event) => {
 						const next = event.target.value;
 						setText(next);
@@ -791,6 +803,11 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
 							event.preventDefault();
 							submitAll();
+						} else if (event.key.toLowerCase() === "c" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+							const quote = quoteToCopy(event.currentTarget);
+							if (quote === undefined) return;
+							event.preventDefault();
+							void aoBridge.clipboard.writeText(quote);
 						}
 					}}
 					placeholder={t("files.feedbackPlaceholder")}
@@ -897,6 +914,23 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
 				<p>{children}</p>
 				{action ?? null}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * A pane with nothing to show: an icon over a short heading and an optional
+ * way out, a little above the middle of the space it fills (where the eye
+ * lands), so it reads as a state of the pane rather than a stray line at its top.
+ */
+export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; title: ReactNode; action?: ReactNode }) {
+	return (
+		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">
+			<span aria-hidden="true" className="flex size-10 items-center justify-center rounded-lg bg-interactive-hover text-muted-foreground">
+				<Icon className="size-5" />
+			</span>
+			<p className="max-w-xs text-heading-sm font-medium text-foreground">{title}</p>
+			{action ?? null}
 		</div>
 	);
 }

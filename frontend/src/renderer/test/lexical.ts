@@ -1,6 +1,7 @@
 import { act } from "@testing-library/react";
 import {
 	$getRoot,
+	$isElementNode,
 	$isTextNode,
 	CONTROLLED_TEXT_INSERTION_COMMAND,
 	type LexicalEditor,
@@ -52,6 +53,30 @@ export async function placeLexicalCaret(field: HTMLElement, offset: number): Pro
 			},
 			{ discrete: true },
 		);
+	});
+}
+
+/** Put a collapsed caret at `offset` in one line (paragraph) of a multiline draft. */
+export async function placeLexicalCaretInLine(field: HTMLElement, line: number, offset: number): Promise<void> {
+	const editor = lexicalEditor(field);
+	await act(async () => {
+		editor.update(
+			() => {
+				const paragraph = $getRoot().getChildAtIndex(line);
+				const node = $isElementNode(paragraph) ? paragraph.getFirstDescendant() : null;
+				if (!$isTextNode(node)) throw new Error("Expected composer text on that line");
+				node.select(offset, offset);
+			},
+			{ discrete: true },
+		);
+	});
+}
+
+/** Put a collapsed caret after the last character of the whole draft. */
+export async function placeLexicalCaretAtEnd(field: HTMLElement): Promise<void> {
+	const editor = lexicalEditor(field);
+	await act(async () => {
+		editor.update(() => $getRoot().selectEnd(), { discrete: true });
 	});
 }
 

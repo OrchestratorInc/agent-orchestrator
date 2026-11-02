@@ -441,6 +441,7 @@ type transitionRuntime struct {
 	styledOutputCalls          int
 	styledOutputErr            error
 	blockAliveUntilContextDone bool
+	onCreate                   func() // runs as a target terminal starts
 }
 
 // unstyledTransitionRuntime models a legacy runtime that cannot return a
@@ -499,6 +500,9 @@ func (r *transitionRuntime) Destroy(ctx context.Context, handle ports.RuntimeHan
 
 func (r *transitionRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	*r.log = append(*r.log, "start:tui")
+	if r.onCreate != nil {
+		r.onCreate()
+	}
 	if r.runtimeOccupied {
 		return ports.RuntimeHandle{}, fmt.Errorf("session %q already exists", cfg.SessionID)
 	}
@@ -545,6 +549,7 @@ type transitionChat struct {
 	relayMessages    []string
 	relayIDs         []string
 	supportsChat     bool
+	switchMarks      []string // account moves that told the chat why its turn stopped
 }
 
 type historyPolicyTransitionChat struct {
@@ -632,24 +637,6 @@ func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 	return l.store.RestoreSessionControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
-}
-func (l *sqliteTransitionLifecycle) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	return l.store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *sqliteTransitionLifecycle) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	return l.store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *sqliteTransitionLifecycle) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	return l.store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 func (l *sqliteTransitionLifecycle) MarkTerminated(
 	ctx context.Context,
@@ -772,6 +759,10 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 	default:
 	}
 	return c.armErr
+}
+func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
+	c.switchMarks = append(c.switchMarks, accountID)
+	return nil
 }
 func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy

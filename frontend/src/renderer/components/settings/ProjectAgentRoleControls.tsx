@@ -1,20 +1,21 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Info } from "lucide-react";
 import { Switch } from "../ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
 import { LOCAL_HOST } from "../../lib/hosts";
+import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
 
 export function AgentModelField({
 	role,
+	variant = "settings",
 	agentId,
 	projectId,
 	hostId,
@@ -32,6 +33,7 @@ export function AgentModelField({
 	independentMode = false,
 }: {
 	role: "worker" | "orchestrator" | "reviewer";
+	variant?: "settings" | "task";
 	agentId: string;
 	projectId: string;
 	hostId?: string;
@@ -76,14 +78,18 @@ export function AgentModelField({
 		catalog?.warning ??
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
 
-	if (agentId !== "" && query.isFetching && catalog === undefined) {
-		return (
-			<div className="min-w-0">
-				<span className="text-xs text-settings-muted" role="status" aria-label={t("settings.models.loading")}>
-					{t("settings.models.loading")}
-				</span>
-			</div>
-		);
+	if (variant === "task") {
+		return <>
+			<TaskModelSelection id="automation-model" fetching={query.isFetching} agentId={agentId} agentLabel={agentId} projectId={projectId}
+				catalog={catalog ? { ...catalog, models: offeredModels } : undefined}
+				value={model} mode={mode} effort={effort}
+				disabled={agentId === "" || (query.isFetching && !catalog)}
+				onModelChange={onModelChange} onModeChange={onModeChange} onEffortChange={onEffortChange}
+				onValidityChange={onValidityChange}
+				onRefresh={async () => { const refreshed = await refreshAgentModels(agentId, projectId, hostId); queryClient.setQueryData(agentModelsQueryKey(agentId, projectId, hostId), refreshed); }}
+			/>
+			{warning ? <p className="text-xs text-warning">{warning}</p> : null}
+		</>;
 	}
 
 	if (isMode) {
@@ -121,7 +127,8 @@ export function AgentModelField({
 		...item,
 		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
-		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
+		// Cloud runs the worker's own CLI, so this computer's version limits do not apply.
+		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined, requiresVersion: undefined, unavailableReason: undefined } : {}),
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
@@ -194,32 +201,13 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 
 function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: { id: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	return (
-		<div className="settings-row-bar">
-			<div className="flex shrink-0 items-center gap-1.5">
-				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{label}</span>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-							aria-label={description}
-						>
-							<Info className="size-icon-sm" aria-hidden="true" />
-						</button>
-					</TooltipTrigger>
-					<TooltipContent className="max-w-72 leading-normal" side="top">
-						{description}
-					</TooltipContent>
-				</Tooltip>
-			</div>
-			<div className="flex min-w-0 flex-1 items-center justify-end">
-				<Switch
-					aria-label={label}
-					checked={checked}
-					id={id}
-					onCheckedChange={onCheckedChange}
-				/>
-			</div>
-		</div>
+		<SettingsRow label={label} description={description}>
+			<Switch
+				aria-label={label}
+				checked={checked}
+				id={id}
+				onCheckedChange={onCheckedChange}
+			/>
+		</SettingsRow>
 	);
 }

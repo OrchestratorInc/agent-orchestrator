@@ -108,7 +108,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	cmd = []string{binary}
+	cmd = make([]string, 0, 6)
+	cmd = append(cmd, binary)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	appendModelFlag(&cmd, cfg.Config)
 	return cmd, nil
@@ -145,14 +146,9 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 //	kimi --session <agentSessionId>
 //
 // ok is false when no native session id has been captured, so callers fall back
-// to fresh launch behavior. Per Kimi docs, `--yolo` and `--auto` cannot be
-// combined with `--session` (or `--continue`) -- resumed sessions inherit the
-// approval settings of the original session -- so cfg.Permissions is
-// intentionally ignored here.
+// to fresh launch behavior. Model and approval flags reapply the saved AO
+// configuration using the verified Kimi Code 2.2 CLI contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
-	// Deliberately does not forward cfg.Config.Model: --model + --session
-	// composition is unverified against a real kimi install (see #2890 and
-	// appendModelFlag). Pinned by TestGetRestoreCommandDoesNotForwardModelOverride.
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -165,20 +161,18 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd = []string{binary, "--session", agentSessionID}
+	cmd = make([]string, 0, 6)
+	cmd = append(cmd, binary)
+	appendApprovalFlags(&cmd, cfg.Permissions)
+	appendModelFlag(&cmd, cfg.Config)
+	cmd = append(cmd, "--session", agentSessionID)
 	return cmd, true, nil
 }
 
-// appendApprovalFlags maps AO's permission modes onto Kimi's approval flags
-// for interactive launches. Per Kimi docs these flags cannot be combined with
-// `--prompt`, `--session`, or `--continue`, so callers on those paths must
-// skip this mapping.
-//
-//   - Default: no flag, deferring to the user's Kimi config/default behavior.
-//   - AcceptEdits / Auto: `--auto` (auto permission mode; approvals handled
-//     automatically).
-//   - BypassPermissions: `-y` (yolo; auto-approve regular tool calls including
-//     file writes and shell execution).
+// appendApprovalFlags reapplies the pinned policy. Kimi Code 2.2's CLI
+// accepts --auto/--yolo and --model alongside --session (verified --help).
+// The strict native history probe rejects older incompatible CLI contracts
+// before an automatic refresh can stop the existing process.
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch normalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
@@ -193,12 +187,6 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 // appendModelFlag appends `--model <model>` when a role-specific model
 // override is configured. A blank/whitespace-only value means no override was
 // configured, so the flag is omitted and Kimi's own default model applies.
-//
-// Restore-path note: this is intentionally NOT called from
-// GetRestoreCommand. Kimi's docs do not confirm --model composes with
-// --session the way it does on the launch path (see issue #2890); wiring it
-// blind risks silently breaking session resume. Left as a fast-follow pending
-// verification against a real kimi install.
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
@@ -251,4 +239,12 @@ func (p *Plugin) kimiBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

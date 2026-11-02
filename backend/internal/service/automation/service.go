@@ -70,6 +70,9 @@ type CreateInput struct {
 	UseCase     string
 	Kind        domain.SessionKind
 	Harness     domain.AgentHarness
+	Model       string
+	Mode        string
+	Effort      string
 	RRule       string
 	Cron        string
 	Timezone    string
@@ -84,6 +87,9 @@ type UpdateInput struct {
 	UseCase     *string
 	Kind        *domain.SessionKind
 	Harness     *domain.AgentHarness
+	Model       *string
+	Mode        *string
+	Effort      *string
 	RRule       *string
 	Cron        *string
 	Timezone    *string
@@ -148,6 +154,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 		UseCase:     input.UseCase,
 		Kind:        input.Kind,
 		Harness:     input.Harness,
+		Model:       strings.TrimSpace(input.Model),
+		Mode:        strings.TrimSpace(input.Mode),
+		Effort:      strings.TrimSpace(input.Effort),
 		RRuleText:   schedule.RRuleText,
 		Timezone:    schedule.Timezone,
 		Enabled:     enabled,
@@ -252,7 +261,20 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 		if *input.Harness != "" && !input.Harness.IsKnown() {
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 		}
+		if rec.Harness != *input.Harness {
+			// Model capabilities belong to the harness; explicit replacements below survive.
+			rec.Model, rec.Mode, rec.Effort = "", "", ""
+		}
 		rec.Harness = *input.Harness
+	}
+	if input.Model != nil {
+		rec.Model = strings.TrimSpace(*input.Model)
+	}
+	if input.Mode != nil {
+		rec.Mode = strings.TrimSpace(*input.Mode)
+	}
+	if input.Effort != nil {
+		rec.Effort = strings.TrimSpace(*input.Effort)
 	}
 	now := s.clock().UTC()
 	scheduleChanged := input.RRule != nil || input.Cron != nil || input.Timezone != nil

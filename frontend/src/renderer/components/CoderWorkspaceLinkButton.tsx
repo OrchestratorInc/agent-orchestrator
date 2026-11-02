@@ -68,7 +68,7 @@ export function CoderWorkspaceTopbarButton({ url, style }: { url?: string; style
 						className="topbar-control--labeled"
 						data-priority="secondary"
 						data-testid="coder-workspace-topbar-link"
-						variant="accent"
+						variant="action"
 						onClick={() => void openLinkInSystemBrowser(url)}
 					>
 						<SquareArrowOutUpRight className="size-icon-md" aria-hidden="true" />

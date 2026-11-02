@@ -16,9 +16,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-// commandTimeout bounds a mutating daemon call. Spawns do real work (git
-// worktree add, tmux launch, hook install), so it is generous compared to the
-// status probe timeout.
+// commandTimeout bounds a mutating daemon call. Calls do real work (tmux
+// launch, hook install), so it is generous compared to the status probe
+// timeout. A spawn or a restore runs the project's Setup and has no client
+// timeout (postSetupJSON).
 const commandTimeout = 2 * time.Minute
 
 // maxDrainedBodyBytes bounds how much of an unused response body the CLI
@@ -106,6 +107,15 @@ func (c *commandContext) getJSON(ctx context.Context, path string, out any) erro
 // connection-refused dump.
 func (c *commandContext) postJSON(ctx context.Context, path string, body, out any) error {
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
+}
+
+// postSetupJSON is postJSON for a call that runs the project's Setup (a spawn,
+// a restore) with no client timeout. The daemon bounds the call by the Setup
+// steps' own time limits, and any client limit would be a ceiling under them:
+// hanging up cancels the call and its Setup. Interrupting the command closes
+// the connection, which cancels it on the daemon.
+func (c *commandContext) postSetupJSON(ctx context.Context, path string, body, out any) error {
+	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/"+path, body, out, nil, 0)
 }
 
 // patchJSON sends body as JSON to PATCH /api/v1/<path> on the running daemon

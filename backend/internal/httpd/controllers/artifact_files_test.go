@@ -265,6 +265,20 @@ func TestDeleteArtifactFileRemovesAListedFile(t *testing.T) {
 	}
 }
 
+func TestDeleteArtifactFileDeletesItsVersions(t *testing.T) {
+	srv, fake, dir := artifactVersionServer(t)
+
+	if status := deleteArtifactFile(t, srv, "plan.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("plan.md still exists: %v", err)
+	}
+	if len(fake.versions) != 0 {
+		t.Fatalf("versions after delete = %+v, want none", fake.versions)
+	}
+}
+
 func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.md")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {

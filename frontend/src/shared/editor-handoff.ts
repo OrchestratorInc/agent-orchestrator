@@ -48,6 +48,12 @@ export type EditorHandoffState = {
 	unavailableCode?: string;
 };
 
+/** The installed editors and the stored default, independent of any session. */
+export type EditorPreferenceState = {
+	editors: OpenTarget[];
+	preferredEditorId: EditorId;
+};
+
 export type OpenSessionTargetInput = {
 	sessionId: string;
 	targetId?: OpenTargetId;

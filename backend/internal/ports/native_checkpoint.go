@@ -22,4 +22,8 @@ type NativeCheckpointBoundary struct {
 	UserMessageID string
 	UserText      string
 	AssistantText string
+	// Interrupted is a boundary turn the user interrupted (Esc). It has no
+	// answer, so its replayed text is not compared: what was cut short, and
+	// any filler the provider adds after the interrupt, varies with timing.
+	Interrupted bool
 }

@@ -1,10 +1,14 @@
 package systeminstall
 
 import (
+	"context"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 )
 
 var (
@@ -39,6 +43,35 @@ func versionSchemeFor(target Target) versionScheme {
 	default:
 		return versionSemver
 	}
+}
+
+var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v\d[^ \r\n]*)`)
+
+// installedVersionText narrows a version probe's output to the text naming the
+// installed release. Hermes's --version also prints its release date and its
+// Python and SDK versions, and its Homebrew build reports a stale built-in
+// version, so a Homebrew Cellar path's version wins, then the banner's token.
+// A tagless source checkout's `vgit.<sha>` banner names the release tag at
+// that commit.
+func installedVersionText(target Target, resolvedPath, output string) string {
+	if target != TargetHermes {
+		return output
+	}
+	if resolved, err := filepath.EvalSymlinks(resolvedPath); err == nil {
+		parts := strings.Split(filepath.ToSlash(resolved), "/")
+		for i := 0; i+2 < len(parts); i++ {
+			if parts[i] == "Cellar" && parts[i+1] == "hermes-agent" {
+				return parts[i+2]
+			}
+		}
+	}
+	if tag := hermes.SourceReleaseTag(context.Background(), resolvedPath, output); tag != "" {
+		return tag
+	}
+	if m := hermesVersionToken.FindStringSubmatch(output); m != nil {
+		return m[1]
+	}
+	return output
 }
 
 func (scheme versionScheme) find(text string) (updateVersion, bool) {

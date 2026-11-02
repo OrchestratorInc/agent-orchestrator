@@ -9,9 +9,9 @@ import { buildPairingOffer, pairingCodeUrl } from "../../lib/pairing-payload";
  * corner markers and no logo, so the moment the real QR arrived one image was
  * swapped for a visibly different one.
  *
- * Encoding a payload of the same *shape and length* as a genuine offer makes
- * qr-code-styling choose the same QR version, so the placeholder and the real
- * code share a module count, a dot size, corner markers and a logo cutout.
+ * Encoding a payload of the same *shape and length* as a genuine offer gives
+ * the same QR version, so the placeholder and the real code share a module
+ * count, a dot size, corner markers and a logo cutout.
  * They differ only in which modules are dark, which is exactly what lets one
  * dissolve into the other.
  *
@@ -37,30 +37,42 @@ function hex(next: () => number, length: number): string {
 	return out.slice(0, length);
 }
 
+/** Field lengths of the real offer the decoy stands in for. */
+export interface ScrambleShape {
+	/** Length of the daemon's host id (`h_` + uuid on a real machine). */
+	hostIdLength: number;
+	/** Length of the offer's `name` (the advertised host). */
+	nameLength: number;
+	/** Length of the connection password. */
+	tokenLength: number;
+}
+
+/** A real machine: `h_` + uuid, a LAN address, a 16-char password. */
+const DEFAULT_SHAPE: ScrambleShape = { hostIdLength: 38, nameLength: 13, tokenLength: 16 };
+
 /**
- * One decoy offer. The endpoint shapes mirror a real machine — a LAN address,
- * a tailnet address, a tunnel hostname — because their combined length is what
- * sets the QR version.
+ * One decoy offer. A LAN address plus a tunnel hostname is the everyday offer,
+ * and the lengths of its variable fields are taken from the real one, because
+ * the payload length is what sets the QR version.
  */
-function scrambleCode(index: number): string {
+function scrambleCode(index: number, shape: ScrambleShape): string {
 	const next = pseudoRandom(index + 1);
-	const label = hex(next, 12);
 	const offer = buildPairingOffer({
-		// 192.0.2.0/24 and 198.51.100.0/24 are reserved for documentation, so
-		// these cannot collide with anything real on a user's network.
+		// 192.0.2.0/24 is reserved for documentation, so this cannot collide
+		// with anything real on a user's network.
 		endpoints: [
 			{ kind: "lan", host: `192.0.2.${1 + Math.floor(next() * 250)}`, port: 3011, secure: false },
-			{ kind: "tailscale", host: `198.51.100.${1 + Math.floor(next() * 250)}`, port: 3011, secure: false },
-			{ kind: "tunnel", host: `${label}-${hex(next, 10)}.invalid`, port: 443, secure: true },
+			{ kind: "tunnel", host: `${hex(next, 12)}-${hex(next, 10)}-${hex(next, 6)}.invalid`, port: 443, secure: true },
 		],
-		password: hex(next, 16),
-		hostId: `h_${hex(next, 8)}-${hex(next, 4)}-${hex(next, 4)}-${hex(next, 4)}-${hex(next, 12)}`,
-		name: `machine-${hex(next, 6)}`,
-		platform: "darwin",
+		password: hex(next, shape.tokenLength),
+		hostId: `h_${hex(next, Math.max(0, shape.hostIdLength - 2))}`,
+		name: hex(next, shape.nameLength),
+		platform: "",
 	});
 	return pairingCodeUrl(offer, PAIRING_LINK_BASE_FOR_SCRAMBLE);
 }
 
-export function scramblePairingCodes(count: number): string[] {
-	return Array.from({ length: count }, (_, i) => scrambleCode(i));
+export function scramblePairingCodes(count: number, shape: Partial<ScrambleShape> = {}): string[] {
+	const full = { ...DEFAULT_SHAPE, ...shape };
+	return Array.from({ length: count }, (_, i) => scrambleCode(i, full));
 }

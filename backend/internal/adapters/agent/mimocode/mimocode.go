@@ -54,7 +54,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	cmd := []string{binary, "--trust"}
-	appendPermissionFlag(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	if usesAOAgent(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile) {
 		cmd = append(cmd, "--agent", mimoAgentName(cfg.SessionID))
@@ -79,7 +78,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd := []string{binary, "--trust"}
-	appendPermissionFlag(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	if usesAOAgent(cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile) {
 		cmd = append(cmd, "--agent", mimoAgentName(cfg.Session.ID))
@@ -104,15 +102,22 @@ func validNativeSessionID(id string) bool {
 	return strings.HasPrefix(id, "ses_") && len(id) > len("ses_")
 }
 
+// usesAOAgent reports whether the launch selects AO's agent file (instructions
+// and permission rules). Bypass goes through it too: the CLI's bypass flag stops
+// at a consent screen on every launch.
 func usesAOAgent(mode ports.PermissionMode, inlinePrompt, promptFile string) bool {
-	return ports.NormalizePermissionMode(mode) == ports.PermissionModeAcceptEdits || inlinePrompt != "" || promptFile != ""
+	return mimoAgentPermission(mode) != "" || inlinePrompt != "" || promptFile != ""
 }
 
-func appendPermissionFlag(cmd *[]string, mode ports.PermissionMode) {
+// mimoAgentPermission is the permission block AO's agent file carries for mode.
+func mimoAgentPermission(mode ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeAcceptEdits:
+		return "permission:\n  edit: allow\n"
 	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--dangerously-skip-permissions")
+		return "permission:\n  \"*\": allow\n"
 	}
+	return ""
 }
 
 func mimoAgentName(sessionID string) string {

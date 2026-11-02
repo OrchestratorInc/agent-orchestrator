@@ -43,7 +43,11 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 		args = append(args, "--skip-permissions-unsafe")
 	}
 	if strings.TrimSpace(cfg.SystemPrompt) != "" {
-		args = append(args, "--append-system-prompt", cfg.SystemPrompt)
+		file, err := acpdriver.SystemPromptFile(cfg, "droid")
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--append-system-prompt-file", file)
 	}
 	return args, nil, nil
 }

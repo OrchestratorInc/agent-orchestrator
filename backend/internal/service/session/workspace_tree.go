@@ -38,6 +38,7 @@ type WorkspaceTreeEntry struct {
 // WorkspaceTree is the read model for one directory level of a session
 // workspace's file explorer.
 type WorkspaceTree struct {
+	Snapshot  bool
 	SessionID domain.SessionID
 	Path      string
 	Entries   []WorkspaceTreeEntry

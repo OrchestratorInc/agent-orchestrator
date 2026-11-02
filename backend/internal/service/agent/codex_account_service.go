@@ -7,11 +7,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// authenticationWithAccount decides readiness by the saved account new
+// sessions start on, when they start on one, and otherwise by Codex's
+// structured account check.
+func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	if observation, handled := s.savedDefaultAuthentication(ctx, agentID); handled {
+		return observation, true
+	}
+	return s.codexAuthenticationWithAccount(ctx, agentID, purpose)
+}
 
 // codexAuthenticationWithAccount adds the identity of the account a
 // structured Codex verdict checked, when it found that account signed in.
@@ -22,6 +33,36 @@ func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID st
 		observation.Diagnostics = append(observation.Diagnostics, domain.NewAgentAuthDiagnostic("codex_account", "account_context"))
 	}
 	return observation, handled
+}
+
+// SetSavedDefaultSignIn late-binds the per-folder account catalog. When new
+// Claude Code or Codex sessions start on a saved account, that account's
+// sign-in, not the computer's own login, is whether the harness is ready.
+func (s *Service) SetSavedDefaultSignIn(signedIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)) {
+	s.savedDefaultSignIn = signedIn
+}
+
+func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string) (domain.AgentAuthenticationObservation, bool) {
+	harness := domain.AgentHarness(agentID)
+	if _, ok := domain.AgentAccountProviderFor(harness); !ok || s.savedDefaultSignIn == nil {
+		return domain.AgentAuthenticationObservation{}, false
+	}
+	identity, handled := s.savedDefaultSignIn(ctx, harness)
+	if !handled {
+		return domain.AgentAuthenticationObservation{}, false
+	}
+	now := time.Now().UTC()
+	var observation domain.AgentAuthenticationObservation
+	if identity.SignedIn {
+		observation = successfulAuthentication(now, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, "New sessions start on a saved account that is signed in.")
+		observation.Account = domain.AgentAccountIdentity{Email: identity.Email, Plan: identity.Plan, Method: domain.AgentAccountMethodAccount}.Sanitized()
+	} else {
+		observation = successfulAuthentication(now, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "The default account is signed out, and no other account is signed in. Sign one in again in Settings.")
+	}
+	// Marks the verdict as the saved account's: a sign-in or sign-out of the
+	// CLI's own login does not change it, so clients check that login itself.
+	observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("agent_account", "saved_default_account")}
+	return observation, true
 }
 
 func codexAccountIdentity(record codexAccountRecord) *domain.AgentAccountIdentity {
@@ -469,7 +510,7 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	if !errors.As(err, &failure) {
 		return err
 	}
-	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account setup did not complete", map[string]any{
+	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete", map[string]any{
 		"reasonCode": failure.reason, "retryable": failure.retryable,
 	})
 }

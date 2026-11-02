@@ -6,13 +6,13 @@ import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { cn } from "../lib/utils";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
-	DropdownMenuLabel,
-	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -60,7 +60,7 @@ const editorColors: Record<string, string> = {
 	"android-studio": "#3DDC84",
 };
 
-function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
+export function TargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
 	const [failedIcon, setFailedIcon] = useState<string>();
 	if (target?.kind === "file_manager") {
 		const Icon = target.name === "Finder" ? FinderIcon : FolderOpen;
@@ -165,10 +165,11 @@ export function TopbarOpenEditorButton({
 				</TopbarActionError>
 			) : null}
 			<div
-				className="inline-flex items-center gap-0 rounded-md transition-colors hover:bg-interactive-hover data-[state=open]:bg-interactive-hover"
+				className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
 				data-state={menuOpen ? "open" : "closed"}
 				style={style}
 			>
+				<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
@@ -178,7 +179,8 @@ export function TopbarOpenEditorButton({
 										?? (preferred
 											? t("editor.openInAria", { name: preferred.name })
 											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
-								className="hover:bg-transparent"
+								className="bg-transparent hover:bg-transparent"
+								highlight={false}
 								disabled={mainDisabled}
 								onClick={() => launch()}
 								variant="icon"
@@ -199,7 +201,8 @@ export function TopbarOpenEditorButton({
 								<DropdownMenuTrigger asChild>
 									<TopbarButton
 										aria-label={t("editor.openOptionsAria")}
-										className="hover:bg-transparent"
+										className="bg-transparent hover:bg-transparent"
+										highlight={false}
 										disabled={menuDisabled}
 										variant="icon"
 									>
@@ -211,26 +214,16 @@ export function TopbarOpenEditorButton({
 						<TooltipContent side="bottom">{t("editor.openOptionsAria")}</TooltipContent>
 					</Tooltip>
 					<DropdownMenuContent align="end" className="min-w-52">
+						{[...openInTargets, ...editors].map((target) => (
+							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
+								<TargetIcon target={target} className="size-icon-sm" />
+								{target.name}
+							</DropdownMenuItem>
+						))}
 						<DropdownMenuItem onSelect={() => void copyPath()}>
 							<Copy className="size-icon-sm" aria-hidden="true" />
 							{t("editor.copyPath")}
 						</DropdownMenuItem>
-						{openInTargets.length > 0 ? <DropdownMenuSeparator /> : null}
-						{openInTargets.length > 0 ? <DropdownMenuLabel>{t("editor.openIn")}</DropdownMenuLabel> : null}
-						{openInTargets.map((target) => (
-							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-								<TargetIcon target={target} className="size-icon-sm" />
-								{target.name}
-							</DropdownMenuItem>
-						))}
-						{editors.length > 0 ? <DropdownMenuSeparator /> : null}
-						{editors.length > 0 ? <DropdownMenuLabel>{t("editor.openWith")}</DropdownMenuLabel> : null}
-						{editors.map((target) => (
-							<DropdownMenuItem key={target.id} onSelect={() => launch(target.id)}>
-								<TargetIcon target={target} className="size-icon-sm" />
-								{target.name}
-							</DropdownMenuItem>
-						))}
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>

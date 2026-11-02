@@ -36,8 +36,11 @@ const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.
     cloudCpMock: {
       cancelSessionReviews: vi.fn(),
       getSessionReviewState: vi.fn(),
+      // Pending unless a test answers: most suites never read a Cloud files count.
+      getWorkspaceReview: vi.fn(() => new Promise(() => {})),
       inspectSessionReviewerHarnesses: vi.fn(),
       installSessionReviewerHarness: vi.fn(),
+      listChatEvents: vi.fn(),
       listSessionPullRequests: vi.fn(),
       mergePullRequest: vi.fn(),
       sendSessionMessage: vi.fn(),
@@ -375,6 +378,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("SessionInspector tabs", () => {
@@ -700,6 +704,19 @@ describe("SessionInspector PR section", () => {
   });
 
   it("merges a ready pull request directly through the daemon", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/merge" ? {
+      data: {
+        ok: true,
+        prNumber: 7,
+        method: "squash",
+        state: "merged",
+        stateChangedAt: "2026-10-19T11:06:22Z",
+      },
+      error: undefined,
+    } : {
+      data: { ok: true, sessionId: "sess-1" },
+      error: undefined,
+    });
     const readyPR = prSummary(7, "open", {
       url: "https://example.com/pr/7",
       headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -709,7 +726,11 @@ describe("SessionInspector PR section", () => {
         unresolvedBy: [],
       },
     });
-    renderWithQuery(
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [readyPR], linkedPrs: [] } }
+      : respond(path));
+    const { queryClient } = renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
@@ -730,6 +751,13 @@ describe("SessionInspector PR section", () => {
         },
       }),
     );
+    await waitFor(() =>
+      expect(queryClient.getQueryData<{ prs: SessionPRSummary[] }>(sessionScmSummaryQueryKey("sess-1"))?.prs[0]?.state).toBe("merged"),
+    );
+    await waitFor(() =>
+      expect(prSection("Pull request").getByText("merged")).toBeInTheDocument(),
+    );
+    expect(prSection("Pull request").queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -965,7 +993,7 @@ describe("SessionInspector PR section", () => {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toHaveClass("h-4", "w-8", "rounded-full");
       expect(toggle.querySelector("[data-slot='switch-thumb']")).toHaveClass(
-        "size-3",
+        "size-3.5",
         "rounded-full",
       );
     }
@@ -1139,9 +1167,11 @@ describe("SessionInspector Artifacts section", () => {
     expect(screen.getByText("notes.md")).toBeInTheDocument();
   });
 
-  it("opens an html artifact through the Browser preview flow", async () => {
+  it("opens an html artifact in the Artifacts tab", async () => {
+    const onOpenArtifact = vi.fn();
     renderWithQuery(
       <SessionInspector
+        onOpenArtifact={onOpenArtifact}
         session={session([], {
           outputType: "artifact",
           artifactFiles: [
@@ -1158,17 +1188,15 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByText("report.html"));
 
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-        params: { path: { sessionId: "sess-1" } },
-        body: { url: "http://sess-1.localhost:3001/report.html" },
-      }),
-    );
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "report.html" });
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
   });
 
-  it("opens an html artifact through the Browser preview flow even after the session terminates", async () => {
+  it("opens an html artifact in the Artifacts tab even after the session terminates", async () => {
+    const onOpenArtifact = vi.fn();
     renderWithQuery(
       <SessionInspector
+        onOpenArtifact={onOpenArtifact}
         session={session([], {
           outputType: "artifact",
           isTerminated: true,
@@ -1187,12 +1215,8 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByText("report.html"));
 
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-        params: { path: { sessionId: "sess-1" } },
-        body: { url: "http://sess-1.localhost:3001/report.html" },
-      }),
-    );
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "report.html" });
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
   });
 
   it("opens a markdown/file artifact through the artifact viewer flow", () => {
@@ -1216,26 +1240,23 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
-  it("opens the Artifacts view from its own tab", async () => {
-    const onViewChange = vi.fn();
-    renderWithQuery(
-      <SessionInspector
-        onViewChange={onViewChange}
-        session={session([], {
-          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
-        })}
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  it("hides the Artifacts tab until an artifact is opened", () => {
+    renderWithQuery(<SessionInspector session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Artifacts" })).not.toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
-
-    expect(onViewChange).toHaveBeenCalledWith("artifacts");
-    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+  it("shows the contextual Artifacts tab while active and hides it on leaving", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const onViewChange = vi.fn();
+    renderWithQuery(<SessionInspector onViewChange={onViewChange} view="artifacts" session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(onViewChange).toHaveBeenCalledWith("summary");
   });
 
   it("keeps the Artifacts tab for a requested artifact the session does not list yet", () => {
@@ -1500,7 +1521,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
 
     live.unmount();
@@ -1513,28 +1534,6 @@ describe("SessionInspector Activity section", () => {
         })}
       />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Resume agent" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not offer agent resume while an agent switch owns the exited source", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "exited",
-          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
-          activeAgentSwitch: {
-            id: "switch-1",
-            fromHarness: "claude-code",
-            targetHarness: "codex",
-            state: "source_stopped",
-            agentHandoffStatus: "received",
-          },
-        })}
-      />,
-    );
-
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
@@ -1561,7 +1560,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
   });
 
@@ -4271,6 +4270,27 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  it("surfaces the stored reason of a failed manual review", async () => {
+    const failedManualReview = {
+      ...failedReview,
+      triggerSource: "manual",
+      body: "launch reviewer: reviewer replace stale pane: no such session",
+    };
+    mockCommonGets([], "", [
+      {
+        ...reviewState(3, "needs_review", "abc123"),
+        latestRun: failedManualReview,
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+    );
+  });
+
   it("hides Reviews and the review preference when the session has no PR", async () => {
     mockCommonGets();
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
@@ -4312,9 +4332,36 @@ describe("SessionInspector summary reviews", () => {
 describe("SessionInspector Cloud reviews", () => {
   beforeEach(() => {
     cloudCpMockState.enabled = true;
+    cloudCpMock.listChatEvents.mockReset();
+    cloudCpMock.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
   });
   afterEach(() => {
     cloudCpMockState.enabled = false;
+  });
+  it("keeps the latest Setup and Cleanup runs in collapsed Summary sections", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
+    const step = (sequence: number, payload: Record<string, unknown>) => ({
+      sessionId: "sess-1", sequence, type: "workspace.script.step", createdAt: "2026-10-18T10:00:00Z",
+      payload: { phase: "setup", total: 1, step: 1, repository: "", ...payload },
+    });
+    cloudCpMock.listChatEvents.mockResolvedValue({
+      events: [
+        step(1, { runId: "old", status: "failed", command: "make old", exitCode: 1 }),
+        step(2, { runId: "new", status: "succeeded", command: "make setup", exitCode: 0, durationMs: 3000 }),
+        step(3, { runId: "c", phase: "cleanup", status: "succeeded", command: "make teardown", exitCode: 0, durationMs: 1000 }),
+      ],
+      hasMore: false,
+      nextAfter: 3,
+    });
+    renderWithQuery(<SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />);
+    const setup = await screen.findByRole("button", { name: "Setup" });
+    const cleanup = screen.getByRole("button", { name: "Cleanup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(cleanup).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(setup);
+    expect(await screen.findByText("make setup")).toBeInTheDocument();
+    expect(screen.queryByText("make old")).not.toBeInTheDocument();
+    expect(screen.queryByText("make teardown")).not.toBeInTheDocument();
   });
   it("does not report an already-reviewed commit while a cloud review handle is pending", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
@@ -4661,6 +4708,30 @@ describe("SessionInspector Cloud reviews", () => {
       harness: "claude-code",
     });
   });
+  it("does not ask a waking session's absent worker for its files count", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
+    cloudCpMock.getWorkspaceReview.mockResolvedValue({
+      workspaceVersion: "v1", files: [], truncated: false, commits: [],
+      sections: { staged: [], unstaged: [], untracked: [], committed: [] },
+      summary: { files: 2, additions: 3, deletions: 1 },
+    });
+    try {
+      const waking = session([], { cloud: { orgId: "org-1" }, runtimeConnected: false });
+      const view = renderWithQuery(<SessionInspector session={waking} />);
+      await waitFor(() => expect(cloudCpMock.listChatEvents).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(cloudCpMock.getWorkspaceReview).not.toHaveBeenCalled();
+      // Its worker is back: the count is read.
+      view.rerender(
+        <QueryClientProvider client={view.queryClient}>
+          <TooltipProvider><SessionInspector session={{ ...waking, runtimeConnected: true }} /></TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(cloudCpMock.getWorkspaceReview).toHaveBeenCalledWith("org-1", "sess-1"));
+    } finally {
+      cloudCpMock.getWorkspaceReview.mockReset().mockImplementation(() => new Promise(() => {}));
+    }
+  });
 });
 
 describe("SessionInspector branch summary", () => {
@@ -4708,6 +4779,48 @@ describe("SessionInspector branch summary", () => {
 
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
+
+  it.each(["provisioning", "ready"] as const)("shimmers while naming in %s and reveals the final branch when its worktree is ready", (provisionState) => {
+    mockGitState({});
+    const starting = session([], {
+      branch: "ao/sess-1/root",
+      provisionState,
+      provisionSteps: provisionState === "ready" ? [{ id: "worktree", status: "running" }] : [],
+    });
+    const view = renderWithQuery(<SessionInspector session={starting} />);
+    const namingLabel = branch().getByRole("status");
+    const namingText = namingLabel.textContent;
+    expect(namingLabel).toHaveClass("chat-working-shimmer");
+    expect(namingLabel).toHaveTextContent(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/);
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, provisionSteps: [{ id: "worktree", status: "running" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByRole("status").textContent).toBe(namingText);
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider><SessionInspector session={{ ...starting, provisionState: "failed" }} /></TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, branch: "ao/fix-login/root", provisionSteps: [{ id: "worktree", status: "done" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByText("ao/fix-login/root")).toBeInTheDocument();
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+  });
 
   beforeEach(() => {
     useSessionGitActionStore.setState({ pending: {} });

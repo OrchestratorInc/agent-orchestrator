@@ -421,7 +421,7 @@ app/                 expo-router routes
   (tabs)/            Kanban (index), PRs, Orchestrator, Settings
   session/[id].tsx   persisted-mode router (native Chat or Terminal UI)
   shell/[handleId]   session-scoped worktree shell over the existing mux
-  preview/[id]       authenticated session preview browser
+  preview/[id]       unified live browser and generated app preview
   spawn.tsx          spawn flow
   pair.tsx           pairing-QR scanner
 lib/
@@ -440,7 +440,7 @@ scripts/             ao-phone-proxy.js — superseded by Connect Mobile, kept fo
 ## Verify
 
 ```bash
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsgo --noEmit
 npm test             # pure state/API/parser regression suite
 npx expo export --platform ios
 npx expo export --platform android

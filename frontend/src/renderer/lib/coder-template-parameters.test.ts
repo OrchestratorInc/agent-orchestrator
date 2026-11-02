@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { CloudCpCoderTemplateParameter } from "./cloud-cp/types";
-import { changedParameterOverrides, editableTemplateParameters, parameterOverridesUpdate, withParameterValue } from "./coder-template-parameters";
+import {
+	changedParameterOverrides,
+	coderReusesTemplateCheckout,
+	duplicateCloneOptions,
+	editableTemplateParameters,
+	parameterOverridesUpdate,
+	withParameterValue,
+} from "./coder-template-parameters";
 
 const region: CloudCpCoderTemplateParameter = { name: "region", type: "string", mutable: true, required: false, defaultValue: "eu" };
 const docker: CloudCpCoderTemplateParameter = { name: "docker", type: "bool", mutable: true, required: false, defaultValue: "true" };
@@ -39,5 +46,39 @@ describe("coder template parameters", () => {
 		// A saved key already at its default changes nothing; dropping an unknown one does.
 		expect(parameterOverridesUpdate(parameters, { region: "eu" }, {})).toBeUndefined();
 		expect(parameterOverridesUpdate(parameters, { gone: "1" }, {})).toEqual({});
+	});
+});
+
+describe("duplicate template clones", () => {
+	const repos: CloudCpCoderTemplateParameter = {
+		name: "github_repos", type: "list(string)", mutable: false, required: false, defaultValue: "[]",
+		options: [
+			{ name: "Alice", value: "Alice" },
+			{ name: "Bob", value: "git@github.com:11x-ai/bob.git" },
+			{ name: "Alice tools", value: "alice-tools" },
+		],
+	};
+	const urls = ["https://github.com/11x-ai/alice", "https://github.com/11x-ai/bob"];
+
+	it("matches a ticked option by its label or value against a repository name, ignoring case", () => {
+		const overrides = { github_repos: JSON.stringify(["Alice", "git@github.com:11x-ai/bob.git", "alice-tools"]) };
+		expect(duplicateCloneOptions([repos], overrides, urls)).toEqual(new Map([["github_repos", ["Alice", "Bob"]]]));
+	});
+
+	it("matches free-text list values too, and nothing without repositories", () => {
+		const free: CloudCpCoderTemplateParameter = { name: "extra", type: "list(string)", mutable: true, required: false, defaultValue: "[\"11x-ai/Alice\"]" };
+		expect(duplicateCloneOptions([free], {}, urls)).toEqual(new Map([["extra", ["11x-ai/Alice"]]]));
+		expect(duplicateCloneOptions([free], {}, []).size).toBe(0);
+		expect(duplicateCloneOptions([region], { region: "alice" }, urls).size).toBe(0);
+	});
+
+	it("knows when the session works in the template's checkout", () => {
+		expect(coderReusesTemplateCheckout(null)).toBe(false);
+		expect(coderReusesTemplateCheckout({ workerUser: "ao-worker", reuseExistingCheckout: true })).toBe(false);
+		expect(coderReusesTemplateCheckout({ workerUser: "workspace" })).toBe(true);
+		expect(coderReusesTemplateCheckout({ workerUser: "workspace", reuseExistingCheckout: false })).toBe(false);
+		expect(coderReusesTemplateCheckout({ workerUser: "workspace", reuseExistingCheckout: false, workingDirectory: "~/work/{repo}" })).toBe(true);
+		expect(coderReusesTemplateCheckout({ workerUser: "workspace", reuseExistingCheckout: false }, "~/work/{repo}")).toBe(true);
+		expect(coderReusesTemplateCheckout({ workerUser: "ao-worker" }, "~/work/{repo}")).toBe(false);
 	});
 });

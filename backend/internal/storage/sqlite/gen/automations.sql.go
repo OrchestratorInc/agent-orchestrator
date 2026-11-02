@@ -175,7 +175,7 @@ func (q *Queries) FailAutomationRun(ctx context.Context, arg FailAutomationRunPa
 
 const getAutomation = `-- name: GetAutomation :one
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, template_id, use_case
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
 WHERE id = ?
 `
@@ -197,6 +197,9 @@ func (q *Queries) GetAutomation(ctx context.Context, id domain.AutomationID) (Au
 		&i.LastRunAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Model,
+		&i.Mode,
+		&i.Effort,
 		&i.TemplateID,
 		&i.UseCase,
 	)
@@ -307,8 +310,8 @@ func (q *Queries) GetNextClaimableAutomationRun(ctx context.Context) (Automation
 const insertAutomation = `-- name: InsertAutomation :exec
 INSERT INTO automations (
     id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, template_id, use_case
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAutomationParams struct {
@@ -325,6 +328,9 @@ type InsertAutomationParams struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	Model       string
+	Mode        string
+	Effort      string
 	TemplateID  string
 	UseCase     string
 }
@@ -344,6 +350,9 @@ func (q *Queries) InsertAutomation(ctx context.Context, arg InsertAutomationPara
 		arg.LastRunAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.Model,
+		arg.Mode,
+		arg.Effort,
 		arg.TemplateID,
 		arg.UseCase,
 	)
@@ -505,7 +514,7 @@ func (q *Queries) ListAutomationRuns(ctx context.Context, arg ListAutomationRuns
 
 const listAutomations = `-- name: ListAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, template_id, use_case
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
 WHERE (?1 = '' OR project_id = ?1)
   AND (?2 < 0 OR enabled = ?2)
@@ -548,6 +557,9 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 			&i.LastRunAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Model,
+			&i.Mode,
+			&i.Effort,
 			&i.TemplateID,
 			&i.UseCase,
 		); err != nil {
@@ -566,7 +578,7 @@ func (q *Queries) ListAutomations(ctx context.Context, arg ListAutomationsParams
 
 const listDueAutomations = `-- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
-    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, template_id, use_case
+    timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
 WHERE enabled = 1 AND next_run_at <= ?
 ORDER BY next_run_at, id
@@ -601,6 +613,9 @@ func (q *Queries) ListDueAutomations(ctx context.Context, arg ListDueAutomations
 			&i.LastRunAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Model,
+			&i.Mode,
+			&i.Effort,
 			&i.TemplateID,
 			&i.UseCase,
 		); err != nil {
@@ -730,7 +745,7 @@ func (q *Queries) ReleaseAutomationRun(ctx context.Context, arg ReleaseAutomatio
 
 const updateAutomation = `-- name: UpdateAutomation :execrows
 UPDATE automations
-SET display_name = ?, prompt = ?, kind = ?, harness = ?, rrule_text = ?,
+SET display_name = ?, prompt = ?, kind = ?, harness = ?, model = ?, mode = ?, effort = ?, rrule_text = ?,
     timezone = ?, enabled = ?, next_run_at = ?, last_run_at = ?, updated_at = ?, use_case = ?
 WHERE id = ?
 `
@@ -740,6 +755,9 @@ type UpdateAutomationParams struct {
 	Prompt      string
 	Kind        domain.SessionKind
 	Harness     domain.AgentHarness
+	Model       string
+	Mode        string
+	Effort      string
 	RruleText   string
 	Timezone    string
 	Enabled     bool
@@ -756,6 +774,9 @@ func (q *Queries) UpdateAutomation(ctx context.Context, arg UpdateAutomationPara
 		arg.Prompt,
 		arg.Kind,
 		arg.Harness,
+		arg.Model,
+		arg.Mode,
+		arg.Effort,
 		arg.RruleText,
 		arg.Timezone,
 		arg.Enabled,

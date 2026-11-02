@@ -7,6 +7,7 @@ import {
 	type EditorHandoffState,
 	type EditorHandoffStateOptions,
 	type EditorId,
+	type EditorPreferenceState,
 	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
@@ -93,7 +94,7 @@ export type EditorHandoffDeps = {
 	/** Resolves symlinks in an existing path. */
 	realPath: (candidatePath: string) => Promise<string>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
-	copyText?: (text: string) => void;
+	copyText?: (text: string) => void | Promise<void>;
 	/** Reads a native app icon as a data URL; installation paths stay in main. */
 	readIcon?: (appPath: string) => Promise<string>;
 	/** Registered macOS shell apps that accept folder-open events. */
@@ -105,6 +106,8 @@ export type EditorHandoffDeps = {
 
 export type EditorHandoff = {
 	getState(sessionId: string, options?: EditorHandoffStateOptions): Promise<EditorHandoffState>;
+	getEditors(): Promise<EditorPreferenceState>;
+	setPreferredEditor(editorId: unknown): Promise<EditorId>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
@@ -536,6 +539,19 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			}
 		},
 
+		async getEditors() {
+			return { editors: resolveEditors().map(({ target }) => target), preferredEditorId: await deps.readPreference() };
+		},
+
+		async setPreferredEditor(editorId) {
+			if (!isEditorId(editorId)) throw new Error("That editor is not supported.");
+			if (!resolveEditors().some(({ target }) => target.id === editorId)) {
+				throw new Error("That editor is not installed. Choose another option.");
+			}
+			await deps.writePreference(editorId);
+			return editorId;
+		},
+
 		async open(input) {
 			const sessionId = input.sessionId.trim();
 			if (!sessionId) throw new Error("Session is required.");
@@ -577,7 +593,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const id = sessionId.trim();
 			if (!id) throw new Error("Session is required.");
 			if (!deps.copyText) throw new Error("Copying is not available.");
-			deps.copyText(await deps.resolveWorkspace(id));
+			await deps.copyText(await deps.resolveWorkspace(id));
 		},
 	};
 }

@@ -656,6 +656,12 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 		found = append(found, path)
 	}
 
+	// AO's managed copy, when there is one, is tried first.
+	for _, name := range []string{"opencode", "opencode-v2"} {
+		if managed, ok := binaryutil.ManagedBinary(name); ok {
+			add(managed)
+		}
+	}
 	names := []string{"opencode"}
 	if runtime.GOOS == "windows" {
 		names = []string{"opencode.cmd", "opencode.exe", "opencode"}
@@ -715,6 +721,13 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 			candidates = append(candidates, filepath.Join(dir, "opencode"))
 		}
 	}
+	if runtime.GOOS != "windows" {
+		if dir, err := V2InstallerBinDir(); err == nil {
+			candidates = append(candidates, filepath.Join(dir, "opencode"))
+		}
+		candidates = append(candidates, v2HomebrewCandidates()...)
+		candidates = append(candidates, v1HomebrewCandidates()...)
+	}
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {
 			add(candidate)
@@ -741,3 +754,18 @@ func (p *Plugin) opencodeBinary(ctx context.Context) (string, error) {
 	p.resolvedBinary = binary
 	return binary, nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

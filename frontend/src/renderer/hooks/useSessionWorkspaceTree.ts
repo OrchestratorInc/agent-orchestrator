@@ -1,7 +1,7 @@
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import { isChangedWorkspaceFile, type WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
+import { snapshotQuery, WorkspaceRequestError, retryWorkspaceRead, type FilesSource, isChangedWorkspaceFile, type WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
 
 export type WorkspaceTreeEntry = components["schemas"]["WorkspaceTreeEntry"];
 export type WorkspaceTreeResponse = components["schemas"]["ListWorkspaceTreeResponse"];
@@ -9,11 +9,24 @@ export type WorkspaceTreeResponse = components["schemas"]["ListWorkspaceTreeResp
 export const sessionWorkspaceTreeQueryKey = (sessionId: string, dir: string, hostId?: string) =>
 	hostId ? ["session-workspace-tree", hostId, sessionId, dir] as const : ["session-workspace-tree", sessionId, dir] as const;
 
-async function fetchSessionWorkspaceTree(sessionId: string, dir: string, errorMessage: string, hostId?: string): Promise<WorkspaceTreeResponse> {
+async function fetchSessionWorkspaceTree(
+	sessionId: string,
+	dir: string,
+	errorMessage: string,
+	hostId?: string,
+	source?: FilesSource,
+	filter?: string,
+	signal?: AbortSignal,
+): Promise<WorkspaceTreeResponse> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/tree", {
-		params: { path: { sessionId }, query: dir ? { path: dir } : {} },
+		...(source?.kind === "snapshot" ? { signal } : {}),
+		params: {
+			path: { sessionId },
+			query: source?.kind === "snapshot" ? { path: dir || undefined, ...snapshotQuery(source), filter: filter || undefined } : dir ? { path: dir } : {},
+		},
 	});
 	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+ if(source?.kind === "snapshot" && !data?.snapshot) throw new WorkspaceRequestError("This host does not support snapshot tree browsing. Update its daemon to browse this revision.","WORKSPACE_SNAPSHOT_UNSUPPORTED",400);
 	return (data ?? { sessionId, path: dir, entries: [], truncated: false }) as WorkspaceTreeResponse;
 }
 
@@ -22,11 +35,22 @@ async function fetchSessionWorkspaceTree(sessionId: string, dir: string, errorMe
 // coarse "something changed" signal (see workspace-file-events.ts), which
 // invalidates every mounted directory query by key prefix — a directory the
 // user isn't currently looking at just stays stale until they revisit it.
-export function sessionWorkspaceTreeQueryOptions(sessionId: string, dir: string, errorMessage = "Unable to load workspace tree", hostId?: string) {
+export function sessionWorkspaceTreeQueryOptions(
+	sessionId: string,
+	dir: string,
+	errorMessage = "Unable to load workspace tree",
+	hostId?: string,
+	source?: FilesSource,
+	filter?: string,
+) {
 	return {
-		queryKey: sessionWorkspaceTreeQueryKey(sessionId, dir, hostId),
-		queryFn: () => fetchSessionWorkspaceTree(sessionId, dir, errorMessage, hostId),
-		staleTime: 5_000,
+		queryKey:
+			source?.kind === "snapshot"
+				? ["session-snapshot-tree", hostId ?? "local", sessionId, JSON.stringify(source), dir, filter ?? ""]
+				: sessionWorkspaceTreeQueryKey(sessionId, dir, hostId),
+		queryFn: ({ signal }: { signal?: AbortSignal }) => fetchSessionWorkspaceTree(sessionId, dir, errorMessage, hostId, source, filter, signal),
+		staleTime: source?.kind === "snapshot" ? Infinity : 5_000,
+  ...(source?.kind === "snapshot" ? {retry:retryWorkspaceRead}:{}),
 	};
 }
 

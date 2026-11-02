@@ -1,0 +1,43 @@
+name: Harness artifact build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-artifact-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-proof-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOMAXPROCS: "1"
+      GOFLAGS: "-p=1"
+      GOMEMLIMIT: 384MiB
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Build source-pinned daemon for isolated VPS proof
+        working-directory: backend
+        run: |
+          mkdir -p ../harness-proof
+          go build -o ../harness-proof/ao ./cmd/ao
+          git rev-parse HEAD > ../harness-proof/SOURCE_COMMIT
+          go version -m ../harness-proof/ao > ../harness-proof/BUILD_INFO
+          cd ../harness-proof
+          sha256sum ao > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-artifact-linux-${{ github.sha }}
+          path: harness-proof/
+          retention-days: 7
+          if-no-files-found: error

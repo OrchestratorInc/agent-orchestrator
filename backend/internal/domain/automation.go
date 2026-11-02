@@ -35,6 +35,9 @@ type Automation struct {
 	UseCase     string       `json:"useCase"`
 	Kind        SessionKind  `json:"kind"`
 	Harness     AgentHarness `json:"harness,omitempty"`
+	Model       string       `json:"model,omitempty"`
+	Mode        string       `json:"mode,omitempty"`
+	Effort      string       `json:"effort,omitempty"`
 	RRuleText   string       `json:"rrule"`
 	Timezone    string       `json:"timezone"`
 	Enabled     bool         `json:"enabled"`

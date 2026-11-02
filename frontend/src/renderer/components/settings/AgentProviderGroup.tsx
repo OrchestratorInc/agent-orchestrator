@@ -3,8 +3,10 @@ import { useId, type ReactNode } from "react";
 import { AgentAvatar } from "../AgentAvatar";
 
 /**
- * Shared settings container for one agent provider. Provider identity and
- * provider-level actions live in the header; account rows stay below.
+ * Shared settings card for one agent provider. Provider identity and
+ * provider-level actions live in the header row; when expanded, the children
+ * follow as direct card rows (settings-row-bar / settings-content-row) so the
+ * card's own hairline divides them.
  */
 export function AgentProviderGroup({
 	provider,
@@ -28,39 +30,37 @@ export function AgentProviderGroup({
 	children: ReactNode;
 }) {
 	const headingId = useId();
-	const contentId = useId();
 	const identity = <>
-		<AgentAvatar className="size-8 shrink-0" decorative provider={provider} />
+		<AgentAvatar className="size-7 shrink-0" decorative provider={provider} />
 		<div className="min-w-0">
-			<span id={headingId} className="block truncate text-sm font-medium text-foreground">{name}</span>
-			{summary ? <p className="mt-0.5 text-xs text-muted-foreground">{summary}</p> : null}
+			<span id={headingId} className="block truncate text-sm leading-5 text-settings-label">{name}</span>
+			{summary ? <p className="mt-0.5 text-pretty text-control leading-4 text-settings-muted">{summary}</p> : null}
 		</div>
 	</>;
 
 	return (
 		<section
 			aria-labelledby={headingId}
-			className="overflow-hidden rounded-md border border-border bg-[var(--color-bg-settings-row)]"
+			className="settings-grouped-rows flex w-full flex-col"
 			data-agent-provider={provider}
 		>
-			<header className="flex min-h-16 items-center justify-between gap-4 px-4 py-3">
+			<header className="settings-row-bar">
 				{collapsible ? <button
 					type="button"
-					aria-controls={contentId}
 					aria-expanded={expanded}
-					className="flex min-w-0 flex-1 items-center gap-3 rounded-sm text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+					className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap) rounded-sm text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
 					disabled={collapseLocked}
 					onClick={() => onExpandedChange(!expanded)}
 				>
 					{identity}
 					<ChevronDown
 						aria-hidden="true"
-						className={`ml-auto size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "" : "-rotate-90"}`}
+						className={`ml-auto size-4 shrink-0 text-settings-muted transition-transform ${expanded ? "" : "-rotate-90"}`}
 					/>
-				</button> : <div className="flex min-w-0 flex-1 items-center gap-3">{identity}</div>}
+				</button> : <div className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap)">{identity}</div>}
 				{action ? <div className="shrink-0">{action}</div> : null}
 			</header>
-			{expanded ? <div id={contentId} className="border-t border-border">{children}</div> : null}
+			{expanded ? children : null}
 		</section>
 	);
 }

@@ -92,6 +92,10 @@ func ResolveBinary(ctx context.Context, spec BinarySpec) (string, error) {
 	if runtime.GOOS == "windows" {
 		names = spec.WinNames
 	}
+	if managed, ok := ManagedBinary(names...); ok &&
+		(spec.ValidateIdentity == nil || spec.ValidateIdentity(ctx, managed)) {
+		return managed, nil
+	}
 
 	var pathHits map[string]struct{}
 	if spec.ValidateIdentity != nil {

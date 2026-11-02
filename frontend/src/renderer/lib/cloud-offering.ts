@@ -36,6 +36,14 @@ export interface ResolvedCloudOffering {
 	 * list stands in.
 	 */
 	customCoder: boolean;
+	/** Cloud sessions keep artifact files; false for a control plane that does not say. */
+	artifacts: boolean;
+	/**
+	 * An ao-worker Coder session checks out in the project's working folder.
+	 * Off when the control plane does not say so (an older one never does):
+	 * a working folder then applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -107,6 +115,8 @@ export function resolveCloudOffering(
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
+			artifacts: offering.artifacts ?? false,
+			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
 			source: "server",
 		};
 	}
@@ -121,6 +131,8 @@ export function resolveCloudOffering(
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
 		customCoder: providers.includes(CODER_PROVIDER),
+		artifacts: false,
+		coderWorkerWorkingFolder: false,
 		source: "fallback",
 	};
 }

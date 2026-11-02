@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
@@ -12,9 +12,16 @@ export const FOCUS_HIGHLIGHT_MS = 2_000;
 /** True once the element is wide enough to show the harness list beside the open harness. */
 export function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 	const [wide, setWide] = useState(false);
-	useEffect(() => {
+	// Layout effect: the first width is read before paint, so the page never shows
+	// the narrow list for a few frames and then jumps to the split layout.
+	useLayoutEffect(() => {
 		const element = ref.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
+		if (!element) return;
+		// The content box, as the observer reports it: clientWidth less the padding.
+		const style = getComputedStyle(element);
+		const content = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+		setWide(content >= SPLIT_LAYOUT_MIN_WIDTH);
+		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(([entry]) => setWide((entry?.contentRect.width ?? 0) >= SPLIT_LAYOUT_MIN_WIDTH));
 		observer.observe(element);
 		return () => observer.disconnect();
@@ -34,9 +41,12 @@ export function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />;
 }
 
-export function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
+export function HarnessDetailGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
 	return <section className="flex min-w-0 max-w-full flex-col gap-1.5">
-		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+		{action ? <div className="flex min-h-7 items-center justify-between gap-3">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+			{action}
+		</div> : <h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>}
 		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }

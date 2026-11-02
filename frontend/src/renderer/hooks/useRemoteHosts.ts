@@ -28,7 +28,7 @@ export type RemoteHost = {
 };
 
 export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<void> } {
-	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status, session } = useCloudSession();
 	const accountId = session?.user.id ?? "";
 	const { settings } = useSettings();

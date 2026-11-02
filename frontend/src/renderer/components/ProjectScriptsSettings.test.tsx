@@ -96,3 +96,37 @@ it("allows scratch setup without enabling cleanup or changing its stored cleanup
 	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
 	expect(putMock.mock.calls[0][1].body.config).toEqual({ ...config, postCreate: ["echo scratch", "echo second"] });
 });
+
+it("gives local steps the same time limit field, with no limit by default for Cleanup", async () => {
+	getMock.mockResolvedValue({ data: { status: "ok", project: { id: "p", name: "Example", kind: "single_repo", config: {
+		...config, postCreate: ["# ao-timeout: 30m\nnpm ci"], preRemove: ["docker compose down"],
+	} } } });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 1")).toHaveValue("npm ci");
+	expect(screen.getByLabelText("Time limit for step 1, in minutes")).toHaveValue("30");
+	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
+	const cleanup = screen.getByLabelText("Time limit for step 1, in minutes");
+	expect(cleanup).toHaveValue("");
+	// No limit reads as a word, and the hint says what empty means.
+	expect(cleanup).toHaveAttribute("placeholder", "none");
+	expect(cleanup).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for no limit.");
+	fireEvent.change(cleanup, { target: { value: "5" } });
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	expect(putMock.mock.calls[0][1].body.config).toMatchObject({
+		postCreate: ["# ao-timeout: 30m\nnpm ci"], preRemove: ["# ao-timeout: 5m\ndocker compose down"],
+	});
+});
+
+it("shows the next step's time limit tooltip at once when moving from one field to the next", async () => {
+	const user = userEvent.setup();
+	renderScripts();
+	const first = await screen.findByLabelText("Time limit for step 1, in minutes");
+	const second = screen.getByLabelText("Time limit for step 2, in minutes");
+	await user.hover(first);
+	await waitFor(() => expect(first).toHaveAttribute("data-state", "delayed-open"));
+	await user.unhover(first);
+	await user.hover(second);
+	// The fields share one tooltip provider, which skips the open delay.
+	expect(second).toHaveAttribute("data-state", "instant-open");
+});

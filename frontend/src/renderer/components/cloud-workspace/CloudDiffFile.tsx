@@ -6,7 +6,7 @@ import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspace
 import { parseUnifiedDiff } from "../../lib/diff-parser";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "../diffs/pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "../diffs/pierreTheme";
 
 function metadataForPath(patch: string, path: string): FileDiffMetadata | null {
 	if (!patch) return null;
@@ -85,6 +85,7 @@ export function CloudDiffFile({
 				collapsedContextThreshold: 8, diffIndicators: "classic", diffStyle: split ? "split" : "unified",
 				enableGutterUtility: true, expansionLineCount: 20, hunkSeparators: "line-info", lineDiffType: "word-alt",
 				lineHoverHighlight: "line", loadDiffFiles, maxLineDiffLength: 400, overflow: "wrap",
+				preferredHighlighter: PIERRE_HIGHLIGHTER,
 				theme: { dark: "github-dark", light: "github-light" }, themeType: resolvedTheme,
 				tokenizeMaxLength: 200_000, tokenizeMaxLineLength: 2_000, unsafeCSS: AO_PIERRE_SURFACE_CSS,
 			}}

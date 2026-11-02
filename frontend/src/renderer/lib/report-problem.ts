@@ -194,6 +194,25 @@ function valueOrPlaceholder(value: string): string {
 	return safe || "Not provided";
 }
 
+// Reports go to support in another timezone, so pair the reporter's local
+// wall-clock time with an unambiguous UTC reference.
+export function formatReportTimestamp(value: string, timeZone?: string): string {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return value;
+	const local = new Intl.DateTimeFormat("en-US", {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		second: "2-digit",
+		timeZoneName: "short",
+		timeZone,
+	}).format(date);
+	const utc = date.toISOString().slice(0, 19).replace("T", " ");
+	return `${local} (${utc} UTC)`;
+}
+
 function formatDiagnostics(diagnostics: ReportProblemDiagnostics): string {
 	const lines = [
 		`AO version: ${sanitizeReportText(diagnostics.appVersion) || "unknown"}`,
@@ -201,7 +220,7 @@ function formatDiagnostics(diagnostics: ReportProblemDiagnostics): string {
 		`Platform: ${sanitizeReportText(diagnostics.platform) || "unknown"}`,
 		`Route surface: ${sanitizeReportText(diagnostics.routeSurface) || "unknown"}`,
 		`Daemon: ${sanitizeReportText(diagnostics.daemonState) || "unknown"}`,
-		`Generated: ${sanitizeReportText(diagnostics.generatedAt) || "unknown"}`,
+		`Generated: ${sanitizeReportText(formatReportTimestamp(diagnostics.generatedAt)) || "unknown"}`,
 	];
 	if (diagnostics.daemonMessage?.trim()) {
 		lines.push(`Daemon message: ${sanitizeReportText(diagnostics.daemonMessage.trim())}`);

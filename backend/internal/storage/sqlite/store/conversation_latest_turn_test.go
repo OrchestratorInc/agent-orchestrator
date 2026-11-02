@@ -67,3 +67,42 @@ func TestLatestConversationTurnFollowsActiveBranchAndNestedCutoffs(t *testing.T)
 		t.Fatalf("nested cutoff leaked an ancestor turn: %v", err)
 	}
 }
+
+func TestListInterruptedSessionsReadsLatestTurn(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	interrupted := func() bool {
+		t.Helper()
+		got, err := s.ListInterruptedSessions(ctx, []domain.SessionID{session.ID, "missing"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["missing"] {
+			t.Fatal("a session without a conversation reported as interrupted")
+		}
+		return got[session.ID]
+	}
+	if interrupted() {
+		t.Fatal("empty conversation reported as interrupted")
+	}
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "a", "A")
+	if err := s.SettleTurnByID(ctx, "turn-a", domain.TurnStateInterrupted, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if !interrupted() {
+		t.Fatal("interrupted latest turn not reported")
+	}
+	// A prompt the user queued and then withdrew does not end the interruption.
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "b", "B")
+	if err := s.CancelQueuedTurnByID(ctx, conversation.ID, "turn-b", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if !interrupted() {
+		t.Fatal("withdrawn queued turn cleared the interruption")
+	}
+	// The next real turn supersedes it.
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "c", "C")
+	if interrupted() {
+		t.Fatal("a newer turn still reported as interrupted")
+	}
+}

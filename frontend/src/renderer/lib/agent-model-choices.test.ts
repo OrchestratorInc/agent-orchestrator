@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import {
+	claudeChoiceModel,
+	filterDisabledModels,
+	foldClaudeAliasDefault,
+	offeredCatalogModels,
+	splitClaudeModels,
+	withoutLocalAvailability,
+} from "./agent-model-choices";
 
-type TestModel = { id: string; label: string; isDefault?: boolean };
+type TestModel = { id: string; label: string; isDefault?: boolean; requiresVersion?: string; unavailableReason?: string };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
 	id,
 	label,
@@ -58,6 +65,26 @@ describe("foldClaudeAliasDefault", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
 	});
+
+	it("keeps the alias as the default when this CLI cannot run the family's newest model", () => {
+		const alias = model("Opus", "opus", { isDefault: true });
+		const gated = { ...model("Opus 5.5"), unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		// Folding into Opus 4.6 would pin a cloud worker that can run 5.5 to the older model.
+		const models = [model("Opus 4.6"), gated, alias];
+		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+});
+
+describe("withoutLocalAvailability", () => {
+	it("clears the local CLI's availability marks and keeps an unmarked list as is", () => {
+		const plain = [model("Sonnet 5.5")];
+		expect(withoutLocalAvailability(plain)).toBe(plain);
+		const gated = { ...model("Opus 5.5"), requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		const [cleared] = withoutLocalAvailability([gated]);
+		expect(cleared?.unavailableReason).toBeUndefined();
+		expect(cleared?.requiresVersion).toBeUndefined();
+		expect(cleared?.id).toBe("opus-5-5");
+	});
 });
 
 describe("filterDisabledModels", () => {
@@ -95,6 +122,13 @@ describe("claudeChoiceModel", () => {
 		expect(choiceModel("default")).toBeUndefined();
 		expect(claudeChoiceModel([])).toBeUndefined();
 	});
+
+	it("maps an alias by the name Claude gives it, which can be an older model", () => {
+		const choiceModel = claudeChoiceModel([...catalog, model("Claude Haiku 5.5", "claude-haiku-5-5"), model("Claude Haiku 4.5", "claude-haiku-4-5-20251001")])!;
+		expect(choiceModel("haiku", "Haiku 4.5")?.id).toBe("claude-haiku-4-5-20251001");
+		expect(choiceModel("opus", "Opus 5.5")?.id).toBe("claude-opus-5-5");
+		expect(choiceModel("haiku", "Haiku 4.1")).toBeUndefined();
+	});
 });
 
 describe("Claude context variant selection", () => {
@@ -121,5 +155,44 @@ describe("Claude context variant selection", () => {
 		expect(resolve("sonnet")).toBeUndefined();
 		expect(resolve("opus[2m]")).toBeUndefined();
 		expect(resolve("claude-opus-4-9[1m]")?.id).toBe("claude-opus-4-9[1m]");
+	});
+});
+
+describe("offeredCatalogModels", () => {
+	const pi = {
+		configuredProviders: ["openai-codex"],
+		models: [
+			{ id: "openai-codex/gpt-5.5", provider: "openai-codex" },
+			{ id: "openai-codex/gpt-6-sol", provider: "openai-codex" },
+			{ id: "openrouter/aion-labs/aion-3.5", provider: "openrouter" },
+		],
+	};
+
+	it("offers only the providers the agent has credentials for, as its own session does", () => {
+		expect(offeredCatalogModels(pi, undefined).map((m) => m.id)).toEqual(["openai-codex/gpt-5.5", "openai-codex/gpt-6-sol"]);
+	});
+
+	it("leaves out the models switched off in Settings", () => {
+		expect(offeredCatalogModels(pi, ["openai-codex/gpt-5.5"]).map((m) => m.id)).toEqual(["openai-codex/gpt-6-sol"]);
+	});
+
+	it("offers only what OpenCode lists it can run, not every model it knows of", () => {
+		const opencode = {
+			models: [
+				{ id: "opencode/big-pickle", provider: "opencode" },
+				{ id: "opencode/claude-opus", provider: "opencode" },
+				{ id: "openrouter/anthropic/claude-haiku", provider: "openrouter" },
+			],
+			runnableModels: ["opencode/big-pickle"],
+		};
+		expect(offeredCatalogModels(opencode, undefined).map((m) => m.id)).toEqual(["opencode/big-pickle"]);
+		// A model already picked stays, so the picker still names it.
+		expect(offeredCatalogModels(opencode, undefined, ["opencode/claude-opus"]).map((m) => m.id))
+			.toEqual(["opencode/big-pickle", "opencode/claude-opus"]);
+	});
+
+	it("offers the whole catalog when no configured provider has a model", () => {
+		expect(offeredCatalogModels({ ...pi, configuredProviders: [] }, undefined)).toHaveLength(3);
+		expect(offeredCatalogModels({ ...pi, configuredProviders: ["anthropic"] }, undefined)).toHaveLength(3);
 	});
 });

@@ -254,3 +254,43 @@ func TestPersistentACPReceivedPromptReceiptSurvivesDisconnect(t *testing.T) {
 		})
 	}
 }
+
+// A daemon stopped mid-start can leave a persistent host that never got a
+// session. It holds no conversation, so it is replaced rather than blocking
+// every later start as an inconclusive recovery.
+func TestResumeReplacesAHostThatNeverFinishedStarting(t *testing.T) {
+	agent := &fakeAgent{capabilities: &acpsdk.AgentCapabilities{LoadSession: true}}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	spawns, terminated := 0, false
+	fresh := fakeSpawn(agent)
+	driver.useTestProcess(func(launch Launch, workdir string) (*process, error) {
+		spawns++
+		if spawns > 1 {
+			return fresh(launch, workdir)
+		}
+		stdinR, stdinW := io.Pipe()
+		stdoutR, stdoutW := io.Pipe()
+		t.Cleanup(func() { _ = stdinR.Close(); _ = stdoutW.Close() })
+		stop := func() error { _ = stdinW.Close(); _ = stdoutR.Close(); return nil }
+		return &process{
+			stdin: stdinW, stdout: stdoutR, reconnected: true, acpState: &persistenthost.ACPState{},
+			stop: stop, terminate: func() error { terminated = true; return stop() },
+		}, nil
+	})
+
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		ProviderConversationID: "provider-session-1", WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+	if !terminated || spawns != 2 {
+		t.Fatalf("host terminated=%v spawns=%d, want the empty host stopped and the agent started again", terminated, spawns)
+	}
+}

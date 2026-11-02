@@ -87,45 +87,107 @@ export function patchClaudeRetryDetails(adapterPath) {
  * context occupancy. The SDK's getContextUsage returns its current retained
  * context estimate. Publish that snapshot after each result so AO's existing
  * usage_update projection receives the provider's own estimate.
+ *
+ * The snapshot can take a second or more on a large conversation, so it is
+ * published after the result instead of before it: the turn settles at once
+ * and the usage update follows.
  */
 export function patchClaudeContextUsage(adapterPath) {
 	const source = readFileSync(adapterPath, "utf8");
+	if (source.includes(CLAUDE_CONTEXT_USAGE_MARKER)) return false;
 	const start = source.indexOf("// Send usage_update notification");
 	const end = source.indexOf("if (session.cancelled) {", start);
-	if (start < 0 || end < 0 || source.indexOf("// Send usage_update notification", start + 1) >= 0) {
+	if (
+		start < 0 ||
+		end < 0 ||
+		source.indexOf("// Send usage_update notification", start + 1) >= 0 ||
+		collapseWhitespace(source.slice(start, end)) !== collapseWhitespace(CLAUDE_RESULT_USAGE_BLOCK)
+	) {
 		throw new Error("claude-agent-acp result usage block no longer matches AO's context patch");
 	}
-	const block = source.slice(start, end);
-	if (source.includes("// AO: use the SDK's context snapshot.")) return false;
-	if (!block.includes("used: lastAssistantTotalUsage,") || !block.includes("size: session.contextWindowSize,")) {
-		throw new Error("claude-agent-acp result usage block no longer matches AO's context patch");
-	}
-
-	const snapshot = [
-		"// AO: use the SDK's context snapshot.",
-		"                            let contextUsageTimer;",
-		"                            try {",
-		"                                const contextUsage = await Promise.race([",
-		"                                    session.query.getContextUsage(),",
-		"                                    new Promise((_, reject) => {",
-		"                                        contextUsageTimer = setTimeout(() => reject(new Error('Claude SDK context usage timed out')), 2000);",
-		"                                    }),",
-		"                                ]);",
-		"                                if (Number.isFinite(contextUsage.totalTokens) && contextUsage.totalTokens > 0 &&",
-		"                                    Number.isFinite(contextUsage.rawMaxTokens) && contextUsage.rawMaxTokens > 0) {",
-		"                                    lastAssistantTotalUsage = contextUsage.totalTokens;",
-		"                                    session.contextWindowSize = contextUsage.rawMaxTokens;",
-		"                                    session.contextWindowAuthoritative = true;",
-		"                                }",
-		"                            } catch (error) {",
-		"                                this.logger.error('Failed to fetch Claude SDK context usage:', error);",
-		"                            } finally {",
-		"                                clearTimeout(contextUsageTimer);",
-		"                            }",
-		"                            ",
-	].join("\n");
-	writeFileSync(adapterPath, source.slice(0, start) + snapshot + source.slice(start));
+	writeFileSync(adapterPath, source.slice(0, start) + CLAUDE_CONTEXT_USAGE_BLOCK + source.slice(end));
 	return true;
+}
+
+const CLAUDE_CONTEXT_USAGE_MARKER = "// AO: publish the SDK's context snapshot without holding the turn open.";
+
+const CLAUDE_RESULT_USAGE_BLOCK = `// Send usage_update notification
+if (lastAssistantTotalUsage !== null) {
+    await sendUpdate({
+        sessionId: params.sessionId,
+        update: {
+            sessionUpdate: "usage_update",
+            used: lastAssistantTotalUsage,
+            size: session.contextWindowSize,
+            cost: {
+                amount: message.total_cost_usd,
+                currency: "USD",
+            },
+            ...(message.origin && {
+                _meta: { "_claude/origin": message.origin },
+            }),
+        },
+    });
+}
+`;
+
+const CLAUDE_CONTEXT_USAGE_BLOCK = `${CLAUDE_CONTEXT_USAGE_MARKER}
+                            if (lastAssistantTotalUsage !== null) {
+                                const messageUsage = lastAssistantTotalUsage;
+                                const resultModelId = session.models.currentModelId;
+                                void (async () => {
+                                    let used = messageUsage;
+                                    let contextUsageTimer;
+                                    try {
+                                        const contextUsage = await Promise.race([
+                                            session.query.getContextUsage(),
+                                            new Promise((_, reject) => {
+                                                contextUsageTimer = setTimeout(() => reject(new Error('Claude SDK context usage timed out')), 2000);
+                                            }),
+                                        ]);
+                                        if (Number.isFinite(contextUsage.totalTokens) && contextUsage.totalTokens > 0 &&
+                                            Number.isFinite(contextUsage.rawMaxTokens) && contextUsage.rawMaxTokens > 0) {
+                                            used = contextUsage.totalTokens;
+                                            // Only while the turn's usage is still current; a newer turn resets it.
+                                            if (lastAssistantTotalUsage === messageUsage) {
+                                                lastAssistantTotalUsage = used;
+                                            }
+                                            // A model switch since this result already seeded its own window.
+                                            if (session.models.currentModelId === resultModelId) {
+                                                session.contextWindowSize = contextUsage.rawMaxTokens;
+                                                session.contextWindowAuthoritative = true;
+                                            }
+                                        }
+                                    } catch (error) {
+                                        this.logger.error('Failed to fetch Claude SDK context usage:', error);
+                                    } finally {
+                                        clearTimeout(contextUsageTimer);
+                                    }
+                                    try {
+                                        await sendUpdate({
+                                            sessionId: params.sessionId,
+                                            update: {
+                                                sessionUpdate: "usage_update",
+                                                used,
+                                                size: session.contextWindowSize,
+                                                cost: {
+                                                    amount: message.total_cost_usd,
+                                                    currency: "USD",
+                                                },
+                                                ...(message.origin && {
+                                                    _meta: { "_claude/origin": message.origin },
+                                                }),
+                                            },
+                                        });
+                                    } catch (error) {
+                                        this.logger.error('Failed to publish Claude context usage:', error);
+                                    }
+                                })();
+                            }
+                            `;
+
+function collapseWhitespace(text) {
+	return text.replace(/\s+/g, " ").trim();
 }
 
 // Reuse the pinned bridge's native task registry. Ending its process loses the

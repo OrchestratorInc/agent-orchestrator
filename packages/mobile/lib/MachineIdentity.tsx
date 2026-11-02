@@ -29,7 +29,7 @@ const lucideSymbol: Partial<Record<MachineSymbol, "server" | "cloud" | "terminal
 	laptop: "laptop",
 };
 
-function MachineGlyph({ symbol, size, color }: { symbol: MachineSymbol; size: number; color: string }) {
+export function MachineGlyph({ symbol, size, color }: { symbol: MachineSymbol; size: number; color: string }) {
 	const lucide = lucideSymbol[symbol];
 	if (lucide) return <Feather name={lucide} size={size} color={color} />;
 	return (

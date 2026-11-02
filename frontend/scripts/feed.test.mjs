@@ -12,7 +12,7 @@ vi.mock("./blockmap.mjs", () => ({
 	}),
 }));
 
-import { selectInstallers, feedFilename, buildYml, hashFile, generateFeeds } from "./feed.mjs";
+import { selectInstallers, feedFilename, buildYml, hashFile, generateFeeds, MAC_MINIMUM_DARWIN_VERSION } from "./feed.mjs";
 import { writeBlockmap } from "./blockmap.mjs";
 const V = "0.10.4";
 const NAMES = [
@@ -189,6 +189,9 @@ describe("generateFeeds macOS sidecar suppression", () => {
 
 		const yml = readFileSync(join(dir, "nightly-mac.yml"), "utf8");
 		expect(yml).not.toContain("blockMapSize");
+		// Darwin 22 is macOS 13, the Electron 44 floor; electron-updater compares os.release().
+		expect(yml).toContain(`minimumSystemVersion: ${MAC_MINIMUM_DARWIN_VERSION}\n`);
+		expect(MAC_MINIMUM_DARWIN_VERSION).toBe("22.0.0");
 		for (const macZip of macZips) {
 			expect(yml).toContain(`url: ${macZip}`);
 			const bytes = readFileSync(join(dir, macZip));
@@ -223,6 +226,9 @@ describe("generateFeeds macOS sidecar suppression", () => {
 		expect(writeBlockmap).toHaveBeenCalledTimes(2);
 		expect(writeBlockmap).toHaveBeenCalledWith(join(dir, winExe));
 		expect(writeBlockmap).toHaveBeenCalledWith(join(dir, linuxAppImage));
+		// os.release() is not a macOS version on Windows or Linux, so only the mac feed carries a floor.
+		expect(readFileSync(join(dir, "nightly.yml"), "utf8")).not.toContain("minimumSystemVersion");
+		expect(readFileSync(join(dir, "nightly-linux.yml"), "utf8")).not.toContain("minimumSystemVersion");
 
 		rmSync(dir, { recursive: true, force: true });
 	});
