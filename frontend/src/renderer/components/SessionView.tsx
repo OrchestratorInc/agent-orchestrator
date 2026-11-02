@@ -493,9 +493,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
+	const [sideChatSession, setSideChatSession] = useState<string>();
+	const onSideChatsChange = useCallback((hasSides: boolean) => setSideChatSession(hasSides ? uiSessionId : undefined), [uiSessionId]);
+	const sideChatVisible = sideChatsAvailable && (!browserOnly || sideChatSession === uiSessionId);
 	const inspectorView = useUiStore((state) => {
 		const view = state.inspectorSessions[uiSessionId]?.view ?? "summary";
-		return browserOnly && !(sideChatsAvailable && view === "sideChat") ? "browser" : view;
+		return browserOnly && !(sideChatVisible && view === "sideChat") ? "browser" : view;
 	});
 	const showBrowserToggle = browserOnly && inspectorView === "browser";
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
@@ -2040,6 +2043,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									onSideChatsChange={onSideChatsChange}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -2212,7 +2216,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
-							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							sideChatView={sideChatVisible ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							browserOnly={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}

@@ -288,6 +288,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 	const { memo } = await vi.importActual<typeof import("react")>("react");
 	return { SessionChatSurface: memo(({
 		session,
+		onSideChatsChange,
 		onOpenShell,
 		onOpenFile,
 		onOpenFileAnnotation,
@@ -313,6 +314,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onAuxiliaryTabOrderChange,
 	}: {
 		session: WorkspaceSession;
+		onSideChatsChange?: (hasSides: boolean) => void;
 		onOpenShell?: () => void;
 		onOpenFile?: (path: string, line?: number) => void;
 		onOpenFileAnnotation?: import("../../shared/chat-file-reference").OpenFileAnnotation;
@@ -347,6 +349,8 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			data-new-work-disabled={newWorkDisabled ? "true" : "false"}
 		>
 			chat surface
+			<button type="button" onClick={() => onSideChatsChange?.(true)}>create side chat</button>
+			<button type="button" onClick={() => onSideChatsChange?.(false)}>close side chats</button>
 			<div data-testid={`auxiliary-tab-order-${session.id}`}>
 				{auxiliaryTabOrder?.join("|") ?? ""}
 			</div>
@@ -5375,7 +5379,7 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
 	});
 
-	it("preserves the orchestrator side chat selection while side chats are enabled", () => {
+	it("preserves the orchestrator side chat selection only while a side exists and side chats are enabled", () => {
 		workerSession("sess-orch").mode = "chat";
 		useUiStore.setState({ developerMode: true, sideChats: true });
 		render(<SessionView sessionId="sess-orch" />);
@@ -5385,8 +5389,13 @@ describe("SessionView", () => {
 			useUiStore.getState().setInspectorOpen("sess-orch", true);
 		});
 
+		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "browser");
+		fireEvent.click(screen.getByRole("button", { name: "create side chat" }));
 		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "sideChat");
 		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+		fireEvent.click(screen.getByRole("button", { name: "close side chats" }));
+		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "browser");
+		fireEvent.click(screen.getByRole("button", { name: "create side chat" }));
 		act(() => useUiStore.getState().setSideChats(false));
 		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "browser");
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
