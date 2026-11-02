@@ -4,7 +4,8 @@
 // activity events:
 //   session.created                       -> `ao hooks opencode session-start`
 //   message.updated / message.part.updated -> `ao hooks opencode user-prompt-submit`
-//   tool.execute.before / tool.execute.after -> `ao hooks opencode active`
+//   tool.execute.before                  -> `ao hooks opencode pre-tool-use`
+//   tool.execute.after                   -> `ao hooks opencode post-tool-use`
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
 //                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
@@ -298,14 +299,35 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     "tool.execute.before": async (input) => {
       const sessionID = reportSessionID(input.sessionID)
       if (!sessionID) return
-      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+      // Subagent (child) tool traffic is folded to plain activity: its call id
+      // must never enter the parent's in-flight tool bookkeeping.
+      if (isChildSession(input.sessionID)) {
+        callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+        return
+      }
+      // Never forward the tool arguments; only the identity AO correlates on.
+      callHookSync("pre-tool-use", {
+        session_id: sessionID,
+        model: currentModel ?? "",
+        tool_name: input.tool ?? "",
+        tool_use_id: input.callID ?? "",
+      })
     },
     "tool.execute.after": async (input) => {
-      // Tool completion is still activity; session.status(idle) owns the
-      // transition back to idle after the turn finishes.
+      // OpenCode 1 fires this only after a successful execution and exposes no
+      // failure hook, so a failed tool's step stays open to the turn boundary.
       const sessionID = reportSessionID(input.sessionID)
       if (!sessionID) return
-      callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+      if (isChildSession(input.sessionID)) {
+        callHookSync("active", { session_id: sessionID, model: currentModel ?? "" })
+        return
+      }
+      callHookSync("post-tool-use", {
+        session_id: sessionID,
+        model: currentModel ?? "",
+        tool_name: input.tool ?? "",
+        tool_use_id: input.callID ?? "",
+      })
     },
   }
 }
