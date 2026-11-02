@@ -9,13 +9,16 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 
 	ipcMain.handle("dictation:start", (event) => {
 		if (process.platform !== "darwin" || event.sender !== shellWebContents()) return;
-		helper?.kill();
 		const sender = event.sender;
-		const send = (message: DictationEvent) => {
-			if (!sender.isDestroyed()) sender.send("dictation:event", message);
-		};
+		const previous = helper;
 		const child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "ignore"] });
 		helper = child;
+		// A helper that was replaced or cancelled is still shutting down; its
+		// events, exit included, belong to a dictation that already ended.
+		const send = (message: DictationEvent) => {
+			if (helper === child && !sender.isDestroyed()) sender.send("dictation:event", message);
+		};
+		previous?.kill();
 		createInterface({ input: child.stdout! }).on("line", (line) => {
 			try {
 				send(JSON.parse(line) as DictationEvent);
@@ -25,8 +28,8 @@ export function registerDictationIpc(helperPath: string, shellWebContents: () =>
 		});
 		child.on("error", () => send({ type: "error", message: "Dictation is not available." }));
 		child.on("exit", () => {
-			if (helper === child) helper = null;
 			send({ type: "exit" });
+			if (helper === child) helper = null;
 		});
 	});
 
