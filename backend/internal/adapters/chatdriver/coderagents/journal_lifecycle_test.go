@@ -83,6 +83,22 @@ func TestActiveDetachKeepsTheResultNeededByResume(t *testing.T) {
 	}
 }
 
+func TestTerminateAfterDetachStillStopsTheNativeRun(t *testing.T) {
+	f, c := pendingOutputConversation(t)
+	_ = c.Close()
+	waitForClosedConversation(t, c)
+	if err := c.Terminate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, interrupts := f.snapshot(); interrupts != 1 {
+		t.Fatalf("Terminate after Close sent %d native interrupts, want 1", interrupts)
+	}
+	record, known, err := c.journal.load("pending-call")
+	if err != nil || !known || record.State != callRetired || record.Outcome != nil {
+		t.Fatalf("post-detach termination retained output: %+v, %v, %v", record, known, err)
+	}
+}
+
 func TestNativeCompletionDiscardsUnneededToolOutput(t *testing.T) {
 	f, c := pendingOutputConversation(t)
 	f.push <- []coderapi.StreamEvent{status(coderapi.ChatStatusWaiting)}

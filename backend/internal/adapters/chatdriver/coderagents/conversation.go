@@ -518,10 +518,10 @@ func (c *conversation) Close() error {
 // Terminate stops Coder's in-flight run before detaching, so killing an AO
 // session does not leave the agent working on.
 func (c *conversation) Terminate() error {
-	if !c.enter() {
-		return nil
+	entered := c.enter()
+	if entered {
+		defer c.wg.Done()
 	}
-	defer c.wg.Done()
 	c.mu.Lock()
 	chatID, t := c.chatID, c.turn
 	c.mu.Unlock()
@@ -532,7 +532,14 @@ func (c *conversation) Terminate() error {
 		cancel()
 	}
 	if err == nil {
-		c.retireAfterTools(t)
+		if entered {
+			c.retireAfterTools(t)
+		} else {
+			// Close only detaches. A later explicit termination must still
+			// stop the native run and finish discarding its unneeded output.
+			c.wg.Wait()
+			c.retireToolOutputs(t)
+		}
 	}
 	return errors.Join(err, c.Close())
 }

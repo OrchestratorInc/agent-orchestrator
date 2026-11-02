@@ -204,33 +204,37 @@ func (c *conversation) executeCall(t *turnState, call coderapi.ToolCall) (toolOu
 }
 
 // retireAfterTools waits for any local batch to finish writing its last record
-// before dropping this ended turn's outputs. The calling operation still owns
-// a wait-group reference, so Close waits for this cleanup before closing Events.
+// before dropping this ended turn's outputs. Live callers own a wait-group
+// reference, so Close waits for the cleanup; post-detach Terminate waits itself.
+// Cleanup never emits events after a detached conversation's channel closes.
 func (c *conversation) retireAfterTools(t *turnState) {
 	if t == nil {
 		return
 	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.retireToolOutputs(t)
+	}()
+}
+
+func (c *conversation) retireToolOutputs(t *turnState) {
+	if t == nil {
+		return
+	}
+	c.toolMu.Lock()
+	defer c.toolMu.Unlock()
 	c.mu.Lock()
 	ids := make([]string, 0, len(t.started))
 	for id := range t.started {
 		ids = append(ids, id)
 	}
-	if len(ids) == 0 {
-		c.mu.Unlock()
-		return
-	}
-	c.wg.Add(1)
 	c.mu.Unlock()
-	go func() {
-		defer c.wg.Done()
-		c.toolMu.Lock()
-		defer c.toolMu.Unlock()
-		for _, id := range ids {
-			if err := c.journal.retire(id); err != nil {
-				c.log.Warn("coder agents: discard ended tool output", "error", err)
-			}
+	for _, id := range ids {
+		if err := c.journal.retire(id); err != nil {
+			c.log.Warn("coder agents: discard ended tool output", "error", err)
 		}
-	}()
+	}
 }
 
 func (c *conversation) toolCompleted(t *turnState, call coderapi.ToolCall, outcome toolOutcome, status domain.ActivityStatus) {
