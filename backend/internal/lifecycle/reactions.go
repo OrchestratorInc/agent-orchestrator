@@ -33,10 +33,27 @@ type reactionState struct {
 	// retry the store — leaving the stale "conflicting" signature on disk to
 	// suppress the nudge after a restart. Cleared once the write lands.
 	pendingRearm map[string]bool
+	// sending holds one lock per dedup key, taken across a key's whole
+	// check-send-record span, so mu is free while a nudge is written and a
+	// send wedged on one session's pane does not hold up other sessions'.
+	sending map[string]*sync.Mutex
 }
 
 func newReactionState() reactionState {
-	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}}
+	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}, sending: map[string]*sync.Mutex{}}
+}
+
+// lockKey takes key's send lock and returns its unlock.
+func (r *reactionState) lockKey(key string) func() {
+	r.mu.Lock()
+	l, ok := r.sending[key]
+	if !ok {
+		l = &sync.Mutex{}
+		r.sending[key] = l
+	}
+	r.mu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 // reactionPayload is the JSON document persisted in pr.last_nudge_signature.
@@ -62,6 +79,9 @@ type pendingNudge struct {
 	// merge-conflict nudge (see ApplyPRObservation) — every other nudge type
 	// keeps the ordinary Nudge gate.
 	urgent bool
+	// threadID is the review thread a review-comment nudge relays; it is
+	// re-checked against the provider right before sending.
+	threadID string
 }
 
 // ApplyPRObservation reacts to a fetched PR observation after the PR service has
@@ -69,6 +89,13 @@ type pendingNudge struct {
 // and sends actionable agent nudges such as rebase, fix-CI, and
 // address-review-feedback prompts.
 func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation) error {
+	return m.applyPRObservation(ctx, id, o, nil)
+}
+
+// applyPRObservation is ApplyPRObservation given the SCM observation o was
+// projected from, when there is one, so review feedback can be re-checked
+// against the provider before it is relayed.
+func (m *Manager) applyPRObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation, scm *ports.SCMObservation) error {
 	if !o.Fetched {
 		return nil
 	}
@@ -220,7 +247,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 				}
 				// Per comment, like the review loop below: a shared key is a
 				// shared signature slot and a shared attempt budget.
-				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
+				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge, threadID: comment.ThreadID})
 			}
 		}
 
@@ -272,6 +299,10 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// signature; rearmErr is surfaced at the end of this function alongside the
 	// other deferred read errors.
 
+	nudges, err = m.dropResolvedThreads(ctx, scm, o.URL, nudges)
+	if err != nil {
+		return err
+	}
 	for _, n := range nudges {
 		if _, err := m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent); err != nil {
 			return err
@@ -286,6 +317,54 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		return blockedCheckErr
 	}
 	return rearmErr
+}
+
+// dropResolvedThreads re-reads the PR's review threads from the provider when
+// a review-comment nudge is still due, and drops the nudges whose thread was
+// resolved after the poll that stored it. A failed read keeps the stored
+// threads the nudges were built from.
+func (m *Manager) dropResolvedThreads(ctx context.Context, scm *ports.SCMObservation, prURL string, nudges []pendingNudge) ([]pendingNudge, error) {
+	m.mu.Lock()
+	reader := m.reviewThreads
+	m.mu.Unlock()
+	if reader == nil || scm == nil || m.guard == nil {
+		return nudges, nil
+	}
+	due := false
+	for _, n := range nudges {
+		if n.threadID == "" {
+			continue
+		}
+		ok, _, err := m.nudgeDue(ctx, prURL, n.key, n.sig, n.maxAttempts)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			due = true
+			break
+		}
+	}
+	if !due {
+		return nudges, nil
+	}
+	review, err := reader.ReviewThreads(ctx, *scm)
+	if err != nil {
+		slog.Default().Warn("lifecycle: re-read review threads before relaying feedback", "pr", prURL, "err", err)
+		return nudges, nil
+	}
+	resolved := map[string]bool{}
+	for _, th := range review.Threads {
+		if th.Resolved {
+			resolved[th.ID] = true
+		}
+	}
+	kept := make([]pendingNudge, 0, len(nudges))
+	for _, n := range nudges {
+		if n.threadID == "" || !resolved[n.threadID] {
+			kept = append(kept, n)
+		}
+	}
+	return kept, nil
 }
 
 func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.SessionID) error {
@@ -381,6 +460,8 @@ func (m *Manager) rearmMergeConflict(ctx context.Context, prURL string) error {
 	if m.guard == nil || prURL == "" {
 		return nil
 	}
+	key := mergeConflictKey(prURL)
+	defer m.react.lockKey(key)()
 	m.react.mu.Lock()
 	defer m.react.mu.Unlock()
 
@@ -390,7 +471,6 @@ func (m *Manager) rearmMergeConflict(ctx context.Context, prURL string) error {
 		}
 		m.react.loaded[prURL] = true
 	}
-	key := mergeConflictKey(prURL)
 	_, seen := m.react.seen[key]
 	_, attempted := m.react.attempts[key]
 	if !seen && !attempted && !m.react.pendingRearm[prURL] {
@@ -447,7 +527,7 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 	if !o.Fetched {
 		return nil
 	}
-	if err := m.ApplyPRObservation(ctx, id, scmToPRObservation(o)); err != nil {
+	if err := m.applyPRObservation(ctx, id, scmToPRObservation(o), &o); err != nil {
 		return err
 	}
 	ready, err := m.scmObservationReadyToMerge(ctx, o)
@@ -939,22 +1019,10 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 	if m.guard == nil {
 		return sendOnceAccounted, nil
 	}
-	m.react.mu.Lock()
-	defer m.react.mu.Unlock()
-
-	if prURL != "" && !m.react.loaded[prURL] {
-		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
-			return sendOnceAccounted, err
-		}
-		m.react.loaded[prURL] = true
-	}
-
-	if m.react.seen[key] == sig {
-		return sendOnceAccounted, nil
-	}
-	attempts := m.react.attempts[key]
-	if maxAttempts > 0 && attempts >= maxAttempts {
-		return sendOnceAccounted, nil
+	defer m.react.lockKey(key)()
+	due, attempts, err := m.nudgeDue(ctx, prURL, key, sig, maxAttempts)
+	if err != nil || !due {
+		return sendOnceAccounted, err
 	}
 	// The guard re-reads the session immediately before pasting: the caller's
 	// NeedsInput() entry check ran before this function's dedup/persist I/O, so
@@ -993,6 +1061,8 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 	// in-memory dedup). A persist failure that survives until a daemon restart
 	// degrades to one extra nudge — preferred over the inverse (persist before
 	// send, then crash mid-call) which would silently lose a real nudge.
+	m.react.mu.Lock()
+	defer m.react.mu.Unlock()
 	m.react.seen[key] = sig
 	m.react.attempts[key] = attempts + 1
 	if prURL != "" {
@@ -1001,6 +1071,22 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		}
 	}
 	return sendOnceAccounted, nil
+}
+
+// nudgeDue reports whether key still owes a send of sig, and the attempts
+// already spent on it, after loading prURL's persisted dedup state.
+func (m *Manager) nudgeDue(ctx context.Context, prURL, key, sig string, maxAttempts int) (bool, int, error) {
+	m.react.mu.Lock()
+	defer m.react.mu.Unlock()
+	if prURL != "" && !m.react.loaded[prURL] {
+		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
+			return false, 0, err
+		}
+		m.react.loaded[prURL] = true
+	}
+	attempts := m.react.attempts[key]
+	due := m.react.seen[key] != sig && (maxAttempts <= 0 || attempts < maxAttempts)
+	return due, attempts, nil
 }
 
 // loadPRSignaturesLocked merges any previously persisted reaction-dedup state

@@ -42,13 +42,14 @@ const (
 	DefaultPRMaxAge = 5 * time.Minute
 	// BatchSize is the maximum number of PRs in one provider batch fetch.
 	BatchSize = 25
-	// DefaultLifecycleTimeout bounds one open PR's lifecycle reaction.
-	// Reactions write into agent panes and chat hosts, and Poll runs them one
-	// after another, so a single wedged session would otherwise stall every
-	// later session's PR status, indefinitely. A timed-out reaction takes the
-	// ordinary lifecycle-failure path: its hashes stay unacknowledged and the
-	// next poll retries it. It only cuts work that honors cancellation; a wake
-	// or a teardown runs on its own budget. Merged and closed PRs are exempt.
+	// DefaultLifecycleTimeout bounds a poll's open-PR lifecycle reactions.
+	// Reactions write into agent panes and chat hosts. Poll runs each session's
+	// reactions on its own goroutine and gives them all this one budget, so
+	// wedged sessions cost a poll one budget however many there are. A
+	// timed-out reaction takes the ordinary lifecycle-failure path: its hashes
+	// stay unacknowledged and the next poll retries it. It only cuts work that
+	// honors cancellation; a wake or a teardown runs on its own budget. Merged
+	// and closed PRs are exempt.
 	DefaultLifecycleTimeout = 30 * time.Second
 )
 
@@ -272,7 +273,7 @@ type Observer struct {
 	forcedReviews map[string]bool
 	// trigger wakes the poll loop for a forced refresh.
 	trigger chan struct{}
-	// lifecycleTimeout bounds each lifecycle notification.
+	// lifecycleTimeout bounds a poll's open-PR lifecycle notifications.
 	lifecycleTimeout time.Duration
 }
 
@@ -382,6 +383,17 @@ func (o *Observer) RequestReviewRefresh(prURL string) {
 	case o.trigger <- struct{}{}:
 	default:
 	}
+}
+
+// ReviewThreads re-reads obs's review threads from its provider. Lifecycle
+// calls it right before relaying review feedback, so a thread resolved after
+// the poll's snapshot is not relayed as unresolved.
+func (o *Observer) ReviewThreads(ctx context.Context, obs ports.SCMObservation) (ports.SCMReviewObservation, error) {
+	repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
+	started := time.Now()
+	review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: repo, Number: obs.PR.Number, URL: obs.PR.URL})
+	o.logProviderRequest("fetch_review_threads", repoFullName(repo), started, err)
+	return review, err
 }
 
 // takeForcedReviews returns and clears the pending forced refreshes.
@@ -625,10 +637,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		return err
 	}
 
-	for _, key := range dispatchOrder(observations, selection.subjectsByPR) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	apply := func(lifecycleCtx context.Context, key string, subj *subject) dispatchOutcome {
 		obs := observations[key]
 		// Nil out transient per-observation failure metadata before persistence.
 		// obs.Error is routing-only metadata (review Item 7): it carries a
@@ -636,11 +645,6 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		// must never reach the storage layer or lifecycle so durable state is
 		// not corrupted by transient failures (cross-cutting rule, finding 1).
 		obs.Error = nil
-		observations[key] = obs
-		subj, ok := selection.subjectsByPR[key]
-		if !ok {
-			continue
-		}
 		local := subj.known
 		reviewMode := reviewModes[key]
 		opts := persistenceOptions{
@@ -652,8 +656,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		prepared := o.prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
-			prRefreshOK[key] = true
-			continue
+			return dispatchUnchanged
 		}
 		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
 		pr, checks, reviews, threads, comments := finalPR, finalChecks, finalReviews, finalThreads, finalComments
@@ -677,38 +680,48 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
-			markRepoRefreshFailed(subj.repo)
-			continue
+			return dispatchFailed
 		}
 		if o.lifecycle != nil {
 			// A merged or closed PR is not selected again after a failed
 			// reaction, so its one reaction (teardown, final notifications)
 			// runs unbounded. An open PR is retried on the next poll.
-			lifecycleCtx, cancel := ctx, context.CancelFunc(func() {})
+			reactionCtx := ctx
 			if !prepared.PR.Merged && !prepared.PR.Closed {
-				lifecycleCtx, cancel = context.WithTimeout(ctx, o.lifecycleTimeout)
+				reactionCtx = lifecycleCtx
 			}
-			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
-			cancel()
-			if err != nil {
+			if err := o.lifecycle.ApplySCMObservation(reactionCtx, subj.session.ID, prepared); err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
-				markRepoRefreshFailed(subj.repo)
-				continue
+				return dispatchFailed
 			}
 			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
-				markRepoRefreshFailed(subj.repo)
-				continue
+				return dispatchFailed
 			}
 		}
-		// If this observation came from terminal reconciliation, a successful
-		// terminal persistence (merged/closed transition observed and
-		// persisted) un-marks the repo refresh-incomplete so the repo
-		// ETag/cursor may advance. A "still open" no-op result never reaches
-		// this branch (it returns at the unchanged-hashes check above), so
-		// its repo stays refresh-incomplete and the ETag/cursor stay pinned.
-		markRepoRefreshOK(subj.repo)
-		prRefreshOK[key] = true
+		return dispatchApplied
+	}
+	keys := dispatchOrder(observations, selection.subjectsByPR)
+	outcomes := o.dispatchObservations(ctx, keys, selection.subjectsByPR, apply)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for i, key := range keys {
+		switch outcomes[i] {
+		case dispatchUnchanged:
+			prRefreshOK[key] = true
+		case dispatchFailed:
+			markRepoRefreshFailed(selection.subjectsByPR[key].repo)
+		case dispatchApplied:
+			// If this observation came from terminal reconciliation, a
+			// successful terminal persistence (merged/closed transition
+			// observed and persisted) un-marks the repo refresh-incomplete so
+			// the repo ETag/cursor may advance. A "still open" no-op result
+			// never reaches this branch (it ends dispatchUnchanged), so its
+			// repo stays refresh-incomplete and the ETag/cursor stay pinned.
+			markRepoRefreshOK(selection.subjectsByPR[key].repo)
+			prRefreshOK[key] = true
+		}
 	}
 	for key, ok := range prRefreshOK {
 		if !ok {
@@ -793,6 +806,52 @@ func dispatchOrder(observations map[string]ports.SCMObservation, subjectsByPR ma
 	})
 	return keys
 }
+
+// dispatchOutcome is how one observation left the persist → lifecycle →
+// acknowledge pipeline. The zero value means it never entered: no subject owns
+// the key, or the poll was cancelled first.
+type dispatchOutcome int
+
+const (
+	// dispatchUnchanged: the observation matched the local hashes.
+	dispatchUnchanged dispatchOutcome = iota + 1
+	// dispatchFailed: a write or the lifecycle reaction failed, so the next
+	// poll must fetch and deliver it again.
+	dispatchFailed
+	// dispatchApplied: persisted and, with a lifecycle, delivered and
+	// acknowledged.
+	dispatchApplied
+)
+
+// dispatchObservations runs apply for each key and returns the outcomes
+// aligned with keys. Each session's keys run in order on their own goroutine,
+// so a session wedged in a reaction delays only its own later PRs. All open-PR
+// reactions share one lifecycleCtx budget.
+func (o *Observer) dispatchObservations(ctx context.Context, keys []string, subjectsByPR map[string]*subject, apply func(lifecycleCtx context.Context, key string, subj *subject) dispatchOutcome) []dispatchOutcome {
+	lifecycleCtx, cancel := context.WithTimeout(ctx, o.lifecycleTimeout)
+	defer cancel()
+	bySession := map[domain.SessionID][]int{}
+	for i, key := range keys {
+		if subj, ok := subjectsByPR[key]; ok {
+			bySession[subj.session.ID] = append(bySession[subj.session.ID], i)
+		}
+	}
+	outcomes := make([]dispatchOutcome, len(keys))
+	var wg sync.WaitGroup
+	for _, indexes := range bySession {
+		wg.Go(func() {
+			for _, i := range indexes {
+				if ctx.Err() != nil {
+					return
+				}
+				outcomes[i] = apply(lifecycleCtx, keys[i], subjectsByPR[keys[i]])
+			}
+		})
+	}
+	wg.Wait()
+	return outcomes
+}
+
 func (o *Observer) checkCredentials(ctx context.Context) (bool, error) {
 	var probe observe.CredentialProbe
 	if checker, ok := o.provider.(credentialChecker); ok {

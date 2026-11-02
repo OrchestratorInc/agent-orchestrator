@@ -132,7 +132,10 @@ Stage notes:
   (replace/merge/preserve) because thread pagination is expensive and
   intentionally bounded.
 - **Dispatch** persists first, notifies lifecycle second, then re-persists the
-  acknowledged hashes (see invariants below).
+  acknowledged hashes (see invariants below). Each session's observations run
+  in order on their own goroutine, and a poll's open-PR reactions share one
+  `DefaultLifecycleTimeout` budget, so wedged sessions cost a poll one budget,
+  not one each.
 
 ### The lifecycle boundary
 
@@ -140,7 +143,9 @@ Stage notes:
 is the only LCM entrypoint. It projects the observation into reaction logic
 (CI-failure injection, review-comment injection, merge-driven teardown) and
 emits/resolves notifications (PR merged, ready-to-merge). It ignores
-`Fetched=false` observations entirely. LCM never reads provider APIs.
+`Fetched=false` observations entirely. LCM reads the provider only through the
+observer: right before relaying review-comment feedback it re-reads the PR's
+threads (`Observer.ReviewThreads`) and drops any resolved since the poll.
 
 ## Durable-State Invariants
 

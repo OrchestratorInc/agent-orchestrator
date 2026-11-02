@@ -144,6 +144,7 @@ type fakeProvider struct {
 	fetchBatches     [][]ports.SCMPRRef
 	logCalls         int
 	reviewCalls      int
+	reviewRefs       []ports.SCMPRRef
 	identity         ports.SCMIdentity
 	identityErr      error
 	identityCalls    int
@@ -253,6 +254,7 @@ func (p *fakeProvider) FetchReviewThreads(_ context.Context, ref ports.SCMPRRef)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.reviewCalls++
+	p.reviewRefs = append(p.reviewRefs, ref)
 	if p.reviewErr != nil {
 		return ports.SCMReviewObservation{}, p.reviewErr
 	}
@@ -260,6 +262,7 @@ func (p *fakeProvider) FetchReviewThreads(_ context.Context, ref ports.SCMPRRef)
 }
 
 type fakeLifecycle struct {
+	mu       sync.Mutex
 	observed []ports.SCMObservation
 	err      error
 }
@@ -268,6 +271,8 @@ func (l *fakeLifecycle) ApplySCMObservation(_ context.Context, _ domain.SessionI
 	if l.err != nil {
 		return l.err
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.observed = append(l.observed, obs)
 	return nil
 }
@@ -309,6 +314,24 @@ func TestDispatchOrderIsDeterministic(t *testing.T) {
 				t.Fatalf("run %d: order[%d]=%q, want %q (full %v)", run, i, got[i], want[i], got)
 			}
 		}
+	}
+}
+
+// Lifecycle's send-time re-read asks the provider for exactly the observed PR.
+func TestReviewThreadsRereadsTheObservedPR(t *testing.T) {
+	provider := &fakeProvider{reviews: map[string]ports.SCMReviewObservation{prKey(testRepo, 1): {Threads: []ports.SCMReviewThreadObservation{{ID: "T1", Resolved: true}}}}}
+	obs := newTestObserver(testStoreWithSession(), provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+
+	got, err := obs.ReviewThreads(context.Background(), testObs(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Threads) != 1 || got.Threads[0].ID != "T1" || !got.Threads[0].Resolved {
+		t.Fatalf("threads = %+v, want the provider's resolved T1", got.Threads)
+	}
+	want := ports.SCMPRRef{Repo: testRepo, Number: 1, URL: "https://github.com/o/r/pull/1"}
+	if len(provider.reviewRefs) != 1 || provider.reviewRefs[0] != want {
+		t.Fatalf("provider asked for %+v, want %+v", provider.reviewRefs, want)
 	}
 }
 
@@ -1260,18 +1283,22 @@ func TestPoll_CIETagChangeRefreshesWhenRepoUnchanged(t *testing.T) {
 	}
 }
 
-// stallingLifecycle hangs on one session's reaction until its context ends,
-// like a merge-conflict nudge stuck on a wedged agent pane or chat host.
+// stallingLifecycle hangs on the stalled sessions' reactions until their
+// context ends, like a merge-conflict nudge stuck on a wedged agent pane or
+// chat host. Any other reaction completes unless its context already ended.
 type stallingLifecycle struct {
 	mu       sync.Mutex
-	stall    domain.SessionID
+	stall    map[domain.SessionID]bool
 	observed []domain.SessionID
 }
 
 func (l *stallingLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
-	if id == l.stall {
+	if l.stall[id] {
 		<-ctx.Done()
 		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1294,7 +1321,7 @@ func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
 	conflicted := testObs(1)
 	conflicted.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeConflicting), Conflict: true}
 	provider.observations[prKey(testRepo, 1)] = conflicted
-	lc := &stallingLifecycle{stall: "p-1"}
+	lc := &stallingLifecycle{stall: map[domain.SessionID]bool{"p-1": true}}
 	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
 	obs.lifecycleTimeout = 20 * time.Millisecond
 
@@ -1312,6 +1339,52 @@ func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
 	}
 	if len(lc.observed) != 1 || lc.observed[0] != "p-2" {
 		t.Fatalf("lifecycle observed %v, want [p-2]", lc.observed)
+	}
+}
+
+// A fleet with a few wedged sessions, one of them owning two PRs: the wedged
+// reactions share one lifecycle budget instead of costing one budget each, and
+// every healthy session's reaction still lands in the same poll.
+func TestPoll_WedgedSessionsShareOneLifecycleBudget(t *testing.T) {
+	const sessions = 40
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	stall := map[domain.SessionID]bool{}
+	for i := 1; i <= sessions; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+		if i%10 == 0 {
+			stall[id] = true
+		}
+	}
+	second := knownPR(sessions + 1)
+	second.SessionID = "p-10"
+	second.MetadataHash = ""
+	store.prs["p-10"] = append(store.prs["p-10"], second)
+	provider.observations[prKey(testRepo, sessions+1)] = testObs(sessions + 1)
+	lc := &stallingLifecycle{stall: stall}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 250 * time.Millisecond
+
+	started := time.Now()
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*obs.lifecycleTimeout {
+		t.Fatalf("poll took %v with %d wedged sessions, want within one %v lifecycle budget", elapsed, len(stall), obs.lifecycleTimeout)
+	}
+	if len(lc.observed) != sessions-len(stall) {
+		t.Fatalf("lifecycle completed %d reactions, want %d healthy sessions", len(lc.observed), sessions-len(stall))
+	}
+	for _, id := range lc.observed {
+		if stall[id] {
+			t.Fatalf("wedged session %s completed its reaction", id)
+		}
 	}
 }
 
