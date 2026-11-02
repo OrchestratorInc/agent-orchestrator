@@ -8,10 +8,9 @@ import { TooltipProvider } from "./ui/tooltip";
 import { readLastRunCue, rememberLastRunCue } from "../lib/last-run-cue";
 import * as cues from "../lib/cues";
 
-const { toast, navigate, navigateTerminals, openProjectSettings, setActiveShellTerminal, loadShellPreference } = vi.hoisted(() => ({
+const { toast, navigate, openProjectSettings, setActiveShellTerminal, loadShellPreference } = vi.hoisted(() => ({
 	toast: vi.fn(),
 	navigate: vi.fn(),
-	navigateTerminals: vi.fn(),
 	openProjectSettings: vi.fn(),
 	setActiveShellTerminal: vi.fn(),
 	loadShellPreference: vi.fn().mockResolvedValue(undefined),
@@ -19,7 +18,7 @@ const { toast, navigate, navigateTerminals, openProjectSettings, setActiveShellT
 vi.mock("../stores/ui-store", () => ({
 	useUiStore: (select: (s: unknown) => unknown) => select({ showGlobalToast: toast, openProjectSettings, setActiveShellTerminal }),
 }));
-vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate, useNavigateToTerminals: () => navigateTerminals }));
+vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate }));
 vi.mock("../stores/terminal-shell-store", () => ({
 	terminalShellRequestValue: () => "auto",
 	useTerminalShellStore: { getState: () => ({ load: loadShellPreference, preference: { kind: "auto" } }) },
