@@ -2,7 +2,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
-import { PRDescriptionImage } from "./PRDescriptionImage";
+import { linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
 
 // The review summary's typography, for PR comments and their preview.
 const bodyClass = cn(
@@ -19,7 +19,7 @@ const bodyClass = cn(
 
 // Outside the component, so a re-render keeps an open image lightbox open.
 const markdownComponents: Components = {
-	a: ({ href, children }) => <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
+	a: ({ node, href, children }) => linksOnlyImages(node) ? <>{children}</> : <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
 	img: ({ alt, src }) => <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
 };
 

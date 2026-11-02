@@ -75,6 +75,32 @@ func TestMarkPRStateUpdatesStateOnlyAndEmitsCDC(t *testing.T) {
 	}
 }
 
+func TestMarkPRStateKeepsADraftADraftWhenClosed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{
+		URL: "https://github.com/acme/repo/pull/9", SessionID: r.ID, Number: 9, Draft: true,
+		Provider: "github", Host: "github.com", Repo: "acme/repo", HeadSHA: "head",
+		UpdatedAt: now, StateChangedAt: now, ObservedAt: now,
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkPRState(ctx, pr.URL, domain.PRStateClosed, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.GetPR(ctx, pr.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Closed || !got.Draft {
+		t.Fatalf("closed draft: closed=%v draft=%v, want both", got.Closed, got.Draft)
+	}
+}
+
 func TestPRDetailsConversationRoundTripAndAppend(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

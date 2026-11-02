@@ -1,16 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { insertLink, prefixLines, PRCommentComposer, PR_ATTACHMENT_MAX_BYTES, wrapSelection } from "./PRCommentComposer";
-import { TooltipProvider } from "./ui/tooltip";
+import { insertLink, PRCommentComposer, PR_ATTACHMENT_MAX_BYTES, wrapSelection } from "./PRCommentComposer";
 
 const renderComposer = (props: Partial<Parameters<typeof PRCommentComposer>[0]> = {}) => {
 	const onSubmit = vi.fn(async () => {});
-	render(
-		<TooltipProvider>
-			<PRCommentComposer busy={false} onSubmit={onSubmit} placeholder="Add a comment…" submitLabel="Comment" {...props} />
-		</TooltipProvider>,
-	);
+	render(<PRCommentComposer busy={false} onSubmit={onSubmit} placeholder="Add a comment…" submitLabel="Comment" {...props} />);
 	return { onSubmit, box: screen.getByRole("textbox", { name: "Add a comment…" }) as HTMLTextAreaElement };
 };
 
@@ -18,11 +13,6 @@ describe("markdown edits", () => {
 	it("wraps the selection, or a placeholder it then selects", () => {
 		expect(wrapSelection("make it fast", 8, 12, "**", "bold")).toEqual({ text: "make it **fast**", selectionStart: 10, selectionEnd: 14 });
 		expect(wrapSelection("x ", 2, 2, "_", "italic")).toEqual({ text: "x _italic_", selectionStart: 3, selectionEnd: 9 });
-	});
-
-	it("prefixes every selected line, counting a numbered list", () => {
-		expect(prefixLines("one\ntwo\nthree", 0, 7, () => "> ").text).toBe("> one\n> two\nthree");
-		expect(prefixLines("a\nb", 0, 3, (index) => `${index + 1}. `).text).toBe("1. a\n2. b");
 	});
 
 	it("links the selection and selects the URL to type over", () => {
@@ -33,25 +23,21 @@ describe("markdown edits", () => {
 });
 
 describe("PRCommentComposer", () => {
-	it("formats from the toolbar and shortcuts, and previews the markdown before posting", async () => {
-		const { box, onSubmit } = renderComposer();
+	it("formats the selection from the keyboard, posts on ⌘↵, and cancels on Escape", async () => {
+		const onCancel = vi.fn();
+		const { box, onSubmit } = renderComposer({ onCancel });
 		await userEvent.type(box, "ship it");
 		box.setSelectionRange(5, 7);
-		await userEvent.click(screen.getByRole("button", { name: "Bold (⌘B)" }));
+		fireEvent.keyDown(box, { key: "b", metaKey: true });
 		await waitFor(() => expect(box.value).toBe("ship **it**"));
-
 		box.setSelectionRange(0, 4);
 		fireEvent.keyDown(box, { key: "i", metaKey: true });
 		await waitFor(() => expect(box.value).toBe("_ship_ **it**"));
 
-		await userEvent.click(screen.getByRole("button", { name: "Preview" }));
-		const preview = screen.getByTestId("pr-comment-preview");
-		expect(preview.querySelector("em")).toHaveTextContent("ship");
-		expect(preview.querySelector("strong")).toHaveTextContent("it");
-		expect(screen.getByRole("button", { name: "Bold (⌘B)" })).toBeDisabled();
-
-		await userEvent.click(screen.getByRole("button", { name: "Comment" }));
-		expect(onSubmit).toHaveBeenCalledWith("_ship_ **it**");
+		fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("_ship_ **it**"));
+		fireEvent.keyDown(box, { key: "Escape" });
+		expect(onCancel).toHaveBeenCalled();
 	});
 
 	it("uploads an attached image while a placeholder holds its place, then writes its markdown", async () => {
@@ -90,9 +76,8 @@ describe("PRCommentComposer", () => {
 		expect(upload).not.toHaveBeenCalled();
 	});
 
-	it("has no Attach without an upload", async () => {
-		const { box } = renderComposer();
-		await userEvent.click(box);
-		expect(screen.queryByRole("button", { name: "Attach files" })).not.toBeInTheDocument();
+	it("has no Attach without an upload", () => {
+		renderComposer();
+		expect(screen.queryByRole("button", { name: /Attach/ })).not.toBeInTheDocument();
 	});
 });

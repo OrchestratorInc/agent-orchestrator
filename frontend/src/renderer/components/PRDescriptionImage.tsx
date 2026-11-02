@@ -17,6 +17,22 @@ export function isWebImageUrl(src: string | undefined): src is string {
 	}
 }
 
+/** The hast node react-markdown hands a link renderer, as far as this check reads it. */
+type LinkNode = { children?: Array<{ type: string; tagName?: string; value?: string }> } | undefined;
+
+/**
+ * Whether a link only wraps images ([![shot](src)](href)). Such a link renders
+ * as just its image: the image is a button, which cannot sit inside a link,
+ * and one click should not both open the image and follow the link.
+ */
+export function linksOnlyImages(node: LinkNode): boolean {
+	const children = node?.children ?? [];
+	const elements = children.filter((child) => child.type === "element");
+	return elements.length > 0
+		&& elements.every((child) => child.tagName === "img")
+		&& children.every((child) => child.type === "element" || (child.type === "text" && !child.value?.trim()));
+}
+
 /**
  * An image in the PR body as a small placeholder in the text. It loads nothing
  * until it is opened; then the picture shows centred over the app, with a

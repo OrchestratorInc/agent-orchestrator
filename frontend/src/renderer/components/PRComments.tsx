@@ -87,7 +87,10 @@ function ownWords(body: string, author: string): string {
  */
 function replyQuote(author: string, body: string): string {
 	let excerpt = body.trim().split(/\n\s*\n/)[0] ?? "";
-	if (excerpt.length > 240) excerpt = excerpt.slice(0, excerpt.lastIndexOf(" ", 240) > 0 ? excerpt.lastIndexOf(" ", 240) : 240);
+	if (excerpt.length > 240) {
+		const space = excerpt.lastIndexOf(" ", 240);
+		excerpt = excerpt.slice(0, space > 0 ? space : 240);
+	}
 	const quoted = excerpt.split("\n").map((line) => `> ${line}`.trimEnd()).join("\n");
 	return `${quoted}\n\n@${author} `;
 }
@@ -180,7 +183,7 @@ function Card({ author, at, bot, children, foot, label, location, menu, muted, n
 	verb: string;
 }) {
 	const { t } = useTranslation();
-	const card = (
+	return (
 		<article aria-label={label} className={cn("flex min-w-0 flex-col gap-2 rounded-lg border px-3 py-2.5 text-xs", muted ? "border-(--color-border-settings-input) bg-(--color-bg-settings-input)" : "border-border bg-background")}>
 			<div className="flex min-w-0 items-center gap-1.5">
 				<Avatar bot={bot} name={author} />
@@ -230,13 +233,12 @@ function Card({ author, at, bot, children, foot, label, location, menu, muted, n
 			{note}
 		</article>
 	);
-	return card;
 }
 
 /**
  * The PR's conversation as cards, newest first: reviews,
- * top-level comments and open review threads, with what came from bots and
- * what is resolved folded at the end. Each card's text is there to read; its
+ * top-level comments and open review threads (bots among them), with
+ * resolved threads folded at the end. Each card's text is there to read; its
  * Reply (on other people's comments, as on GitHub) opens the comment box at
  * the card, and its menu holds Add to chat (the comment quoted in the
  * session's chat, with room for your own words), View in diff, Send to agent
@@ -255,6 +257,12 @@ export function PRComments({ hostId, onViewInDiff, pr, session }: {
 	const [replying, setReplying] = useState<string | null>(null);
 	// Threads resolved from here, shown as resolved at once rather than after the next summary.
 	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
+	// Once the summary says so itself, the provider owns the state again (a thread
+	// unresolved on GitHub later shows open).
+	useEffect(() => {
+		const confirmed = new Set((pr.threads ?? []).filter((thread) => thread.resolved).map((thread) => thread.id));
+		setResolvedHere((current) => [...current].some((id) => confirmed.has(id)) ? new Set([...current].filter((id) => !confirmed.has(id))) : current);
+	}, [pr.threads]);
 	// The new-comment box stays out of the way until "＋ Comment" asks for it.
 	const [composing, setComposing] = useState(false);
 	const [sent, setSent] = useState<Set<string>>(() => new Set());
@@ -375,13 +383,18 @@ export function PRComments({ hostId, onViewInDiff, pr, session }: {
 	// read in order, and the pair sorts by the reply.
 	const quoteReplies = new Map<string, Comment[]>();
 	const nested = new Set<string>();
-	for (const item of items) {
+	// Oldest first, so a reply to a reply files under the card its chain started
+	// at (only top-level cards draw their replies), in the order they were written.
+	const parentOf = new Map<string, Item>();
+	for (const item of [...items].reverse()) {
 		if (item.kind !== "comment") continue;
 		const quote = leadingQuote(item.comment.body);
 		if (quote.length < 8) continue;
-		const parent = items.find((other) => other !== item && other.kind !== "thread" && other.at <= item.at
+		let parent = items.find((other) => other !== item && other.kind !== "thread" && other.at <= item.at
 			&& squash(other.kind === "comment" ? other.comment.body : other.review.body ?? "").startsWith(quote.slice(0, 120)));
 		if (!parent) continue;
+		for (let root = parentOf.get(parent.key); root; root = parentOf.get(root.key)) parent = root;
+		parentOf.set(item.key, parent);
 		quoteReplies.set(parent.key, [...(quoteReplies.get(parent.key) ?? []), item.comment]);
 		nested.add(item.key);
 		parent.at = Math.max(parent.at, item.at);
@@ -402,7 +415,6 @@ export function PRComments({ hostId, onViewInDiff, pr, session }: {
 			onCancel={closeReply}
 			onSubmit={(body) => post.mutateAsync({ body, threadId })}
 			placeholder={t("pr.comments.replyPlaceholder")}
-			simple
 			submitLabel={t("pr.comments.reply")}
 			upload={upload}
 		/>
@@ -568,7 +580,6 @@ export function PRComments({ hostId, onViewInDiff, pr, session }: {
 					onCancel={() => { post.reset(); setComposing(false); }}
 					onSubmit={async (body) => { await post.mutateAsync({ body }); setComposing(false); }}
 					placeholder={t("pr.comments.writeComment")}
-					simple
 					submitLabel={t("pr.comments.comment")}
 					upload={upload}
 				/>

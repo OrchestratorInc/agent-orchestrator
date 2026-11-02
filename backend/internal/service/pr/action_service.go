@@ -573,7 +573,12 @@ func (s *ActionService) notifyStateChange(ctx context.Context, tracked domain.Pu
 	fresh := observations[0]
 	// The provider may answer the read before the mutation is visible; the
 	// mutation's confirmed result is authoritative for the state fields.
-	fresh.PR.Draft = target == domain.PRStateDraft
+	// Closing leaves a draft a draft; the other actions decide it.
+	if target == domain.PRStateClosed {
+		fresh.PR.Draft = tracked.Draft
+	} else {
+		fresh.PR.Draft = target == domain.PRStateDraft
+	}
 	fresh.PR.Closed = target == domain.PRStateClosed
 	fresh.PR.Merged = false
 	fresh.PR.State = string(target)
@@ -753,10 +758,7 @@ func (s *ActionService) storePostedComment(ctx context.Context, tracked domain.P
 		}
 		return
 	}
-	body := posted.Body
-	if len(body) > domain.MaxPullRequestCommentBodyBytes {
-		body = truncateUTF8(body, domain.MaxPullRequestCommentBodyBytes)
-	}
+	body := truncateUTF8(posted.Body, domain.MaxPullRequestCommentBodyBytes)
 	if _, err := s.commentWriter.AppendPRConversationComment(ctx, tracked.URL, domain.PullRequestConversationComment{
 		ID:        posted.ID,
 		Author:    posted.Author,

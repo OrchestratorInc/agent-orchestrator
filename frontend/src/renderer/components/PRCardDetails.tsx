@@ -8,7 +8,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 type Check = SessionPRSummary["ci"]["checks"][number];
 
 /** Checks listed under the Checks row; the rest are a link to the provider's checks page. */
-export const PR_CHECKS_SHOWN = 3;
+const PR_CHECKS_SHOWN = 3;
 
 // Only what needs a look: a passing or skipped check adds nothing to "Checks passing".
 const needsAttention = new Set<Check["status"]>(["failed", "cancelled", "in_progress", "queued"]);
@@ -34,7 +34,7 @@ const checkTone: Record<Check["status"], { className: string; key: "failed" | "r
 	skipped: { className: "text-passive", key: "skipped" },
 };
 
-export function sortedChecks(checks: Check[]): Check[] {
+function sortedChecks(checks: Check[]): Check[] {
 	return [...checks].sort((a, b) => checkOrder[a.status] - checkOrder[b.status] || a.name.localeCompare(b.name));
 }
 

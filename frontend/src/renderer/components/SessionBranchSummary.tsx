@@ -54,8 +54,8 @@ type GitFacts = {
 
 type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind[] };
 
-/** The branch rows and git action, handed to the PR they land on; `note` stands in for them while it is folded. */
-export type GitStep = { kind: SessionGitActionKind; label: string };
+/** One git step the branch can take, as a button or menu item labels it. */
+type GitStep = { kind: SessionGitActionKind; label: string };
 
 /**
  * The branch's git step, handed to the PR card so its one action button can
@@ -70,7 +70,8 @@ export type BranchGitStep = {
 	error?: string | null;
 };
 
-export type BranchWork = { content: ReactNode; hasRows: boolean; note?: string; git?: BranchGitStep };
+/** The branch rows and git step, handed to the PR card new commits land on. */
+export type BranchWork = { content: ReactNode; hasRows: boolean; git?: BranchGitStep };
 
 export function SessionBranchSummary({
 	conflictFiles,
@@ -193,7 +194,6 @@ export function SessionBranchSummary({
 				menu={plan.menu.map((kind) => ({ kind, label: menuLabel(kind, behindBase, t) }))}
 				onRun={(kind) => send.mutate(kind)}
 				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, openPRNumber, behindBase, t) }}
-				variant={openPRNumber === undefined ? "primary" : "secondary"}
 			/>
 		);
 	}
@@ -252,19 +252,15 @@ export function SessionBranchSummary({
 		pending: pending ? pendingLabel(pending.kind, behindBase, t) : undefined,
 		error: sendError,
 	};
-	// The rows go inside the open PR new commits update, so that PR's section
-	// holds its work; folded, its header keeps the work in sight.
+	// The rows go inside the card of the open PR new commits update; its one
+	// action button takes the git step.
 	const workInPR = typeof pullRequests === "function" && openPRNumber !== undefined && (hasWork || action !== null || sendError !== null);
-	const unpushed = facts.branch?.unpushed ?? 0;
-	const workNote = facts.uncommitted.length > 0
-		? t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })
-		: unpushed > 0 ? t("inspector.git.someNotPushed", { count: unpushed }) : undefined;
 
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{renderCards(workInPR ? { content: rows, hasRows: hasWork, note: workNote, git: gitStep } : undefined)}
+				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep } : undefined)}
 				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>
@@ -354,12 +350,10 @@ function GitActionButton({
 	menu,
 	onRun,
 	primary,
-	variant,
 }: {
-	menu: { kind: SessionGitActionKind; label: string }[];
+	menu: GitStep[];
 	onRun: (kind: SessionGitActionKind) => void;
-	primary: { kind: SessionGitActionKind; label: string };
-	variant: "primary" | "secondary";
+	primary: GitStep;
 }) {
 	const { t } = useTranslation();
 	const icon = primary.kind === "push" || primary.kind === "commitPush"
@@ -374,7 +368,7 @@ function GitActionButton({
 				onClick={() => onRun(primary.kind)}
 				size="sm"
 				type="button"
-				variant={variant}
+				variant="primary"
 			>
 				{icon}
 				<span className="truncate">{primary.label}</span>
@@ -384,12 +378,10 @@ function GitActionButton({
 					<DropdownMenuTrigger asChild>
 						<Button
 							aria-label={t("inspector.git.moreActions")}
-							className={variant === "primary"
-								? "w-control-md rounded-l-none border-l-primary-foreground/20 px-0"
-								: "w-control-md rounded-l-none border-l-border px-0"}
+							className="w-control-md rounded-l-none border-l-primary-foreground/20 px-0"
 							size="sm"
 							type="button"
-							variant={variant}
+							variant="primary"
 						>
 							<ChevronDown aria-hidden="true" className="size-icon-sm" />
 						</Button>
@@ -431,7 +423,7 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = []): GitActionPlan | null {
+function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = []): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
@@ -451,7 +443,7 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined,
 	return update.length ? { primary: update[0], menu: [] } : null;
 }
 
-export function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined): boolean {
+function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined): boolean {
 	switch (kind) {
 		case "createPR":
 		case "createDraftPR":

@@ -1,15 +1,13 @@
-import { Bold, Code, Italic, Link, List, ListOrdered, Loader2, Paperclip, TextQuote } from "lucide-react";
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Loader2, Paperclip } from "lucide-react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
-import { PRMarkdown } from "./PRMarkdown";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /** Largest file the daemon takes for a comment attachment. */
 export const PR_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 /** What the file picker offers; the daemon checks the bytes again. */
-export const PR_ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,application/pdf,text/plain,application/json,text/csv,application/zip,.log,.txt,.csv,.json,.zip,.mov";
+const PR_ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,application/pdf,text/plain,application/json,text/csv,application/zip,.log,.txt,.csv,.json,.zip,.mov";
 
 type Edit = { text: string; selectionStart: number; selectionEnd: number };
 
@@ -18,15 +16,6 @@ export function wrapSelection(value: string, start: number, end: number, marker:
 	const selected = value.slice(start, end) || placeholder;
 	const text = value.slice(0, start) + marker + selected + marker + value.slice(end);
 	return { text, selectionStart: start + marker.length, selectionEnd: start + marker.length + selected.length };
-}
-
-/** Starts each selected line with a prefix, like "> " or "- "; a numbered list counts up. */
-export function prefixLines(value: string, start: number, end: number, prefix: (index: number) => string): Edit {
-	const lineStart = value.lastIndexOf("\n", start - 1) + 1;
-	const lineEnd = value.indexOf("\n", end) === -1 ? value.length : value.indexOf("\n", end);
-	const lines = value.slice(lineStart, lineEnd).split("\n").map((line, index) => prefix(index) + line);
-	const block = lines.join("\n");
-	return { text: value.slice(0, lineStart) + block + value.slice(lineEnd), selectionStart: lineStart, selectionEnd: lineStart + block.length };
 }
 
 /** A link around the selection, with the URL selected to type over. */
@@ -49,56 +38,27 @@ function readAsBase64(file: File): Promise<string> {
 
 export type PRAttachmentUpload = (file: { name: string; contentType: string; data: string }) => Promise<string>;
 
-function ToolButton({ children, label, onClick, disabled }: { children: ReactNode; label: string; onClick: () => void; disabled?: boolean }) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<button
-					aria-label={label}
-					className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50"
-					disabled={disabled}
-					onClick={onClick}
-					// Keeps the textarea's selection for the edit.
-					onMouseDown={(event) => event.preventDefault()}
-					type="button"
-				>
-					{children}
-				</button>
-			</TooltipTrigger>
-			<TooltipContent side="top">{label}</TooltipContent>
-		</Tooltip>
-	);
-}
-
 /**
- * The box a PR comment or reply is written in, with what a comment on GitHub
- * needs and no more: bold, italic, code, a link, a quote, lists, attachments
- * (picked, pasted or dropped; uploaded to the PR's repository while a
- * placeholder holds their place), and a preview before posting.
+ * The box a PR comment or reply is written in: text that grows as it is
+ * written, and attachments (picked, pasted or dropped; uploaded to the PR's
+ * repository while a placeholder holds their place). ⌘B, ⌘I, ⌘K and ⌘E
+ * format the selection; ⌘↵ posts and Escape cancels.
  */
-export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "", onCancel, onSubmit, placeholder, simple, submitLabel, upload }: {
+export function PRCommentComposer({ autoFocus, busy, error, initial = "", onCancel, onSubmit, placeholder, submitLabel, upload }: {
+	/** Takes focus as it opens, with the caret after any text it starts with. */
 	autoFocus?: boolean;
 	busy: boolean;
-	/** One line until focused or typed in. */
-	compact?: boolean;
 	error?: string | null;
 	initial?: string;
 	onCancel?: () => void;
 	onSubmit: (body: string) => Promise<unknown>;
 	placeholder: string;
-	/**
-	 * Just text and media: no formatting toolbar or preview, one rounded line
-	 * at rest that grows in place, with Attach and the post button inside it.
-	 */
-	simple?: boolean;
 	submitLabel: string;
 	/** Uploads a file and returns its markdown; without it there is no Attach. */
 	upload?: PRAttachmentUpload;
 }) {
 	const { t } = useTranslation();
 	const [value, setValue] = useState(initial);
-	const [focused, setFocused] = useState(false);
-	const [previewing, setPreviewing] = useState(false);
 	const [uploading, setUploading] = useState(0);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [dragging, setDragging] = useState(false);
@@ -107,7 +67,6 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 	// The latest text, for uploads that finish after more typing.
 	const valueRef = useRef(value);
 	valueRef.current = value;
-	const roomy = !compact || focused || value.length > 0 || previewing || uploading > 0;
 	// Opened to write, with the caret after any text it starts with (a quote and @mention).
 	useEffect(() => {
 		if (!autoFocus) return;
@@ -122,7 +81,6 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 		if (!element) return;
 		const next = edit(element.value, element.selectionStart, element.selectionEnd);
 		setValue(next.text);
-		setPreviewing(false);
 		requestAnimationFrame(() => {
 			element.focus();
 			element.setSelectionRange(next.selectionStart, next.selectionEnd);
@@ -132,14 +90,10 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 	const italic = () => apply((v, s, e) => wrapSelection(v, s, e, "_", t("pr.comments.format.italicPlaceholder")));
 	const code = () => apply((v, s, e) => (v.slice(s, e).includes("\n") ? wrapSelection(v, s, e, "\n```\n", "") : wrapSelection(v, s, e, "`", t("pr.comments.format.codePlaceholder"))));
 	const link = () => apply((v, s, e) => insertLink(v, s, e, t("pr.comments.format.linkPlaceholder")));
-	const quote = () => apply((v, s, e) => prefixLines(v, s, e, () => "> "));
-	const bullets = () => apply((v, s, e) => prefixLines(v, s, e, () => "- "));
-	const numbers = () => apply((v, s, e) => prefixLines(v, s, e, (index) => `${index + 1}. `));
 
 	const attach = async (files: File[]) => {
 		if (!upload || files.length === 0) return;
 		setUploadError(null);
-		setPreviewing(false);
 		for (const file of files) {
 			if (file.size > PR_ATTACHMENT_MAX_BYTES) {
 				setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
@@ -171,7 +125,6 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 		try {
 			await onSubmit(value.trim());
 			setValue("");
-			setPreviewing(false);
 		} catch {
 			// The mutation shows the error; the draft stays so nothing typed is lost.
 		}
@@ -217,139 +170,52 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 			type="file"
 		/>
 	) : null;
-	const attachIcon = uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />;
-	if (simple) {
-		const clear = () => { setValue(""); setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
-		return (
-			<div
-				className="flex min-w-0 flex-col gap-1.5 text-xs"
-				data-testid="pr-comment-composer"
-				onDragLeave={() => setDragging(false)}
-				onDragOver={(event) => { if (upload && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
-				onDrop={onDrop}
-			>
-				<div
-					className={cn(
-						"flex min-w-0 flex-col rounded-xl border border-border bg-background shadow-xs transition-[border-color,box-shadow]",
-						"focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25",
-						dragging && "border-ring ring-3 ring-ring/25",
-					)}
-				>
-					<div className="flex min-w-0 items-start">
-						<textarea
-							aria-label={placeholder}
-							autoFocus={autoFocus}
-							className={cn(
-								"min-w-0 flex-1 border-0 bg-transparent px-3 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none",
-								// Grows with what is written, up to a cap, then scrolls.
-								roomy ? "max-h-64 min-h-20 resize-none py-2.5 [field-sizing:content]" : "h-9 resize-none py-2",
-							)}
-							disabled={busy}
-							onBlur={() => setFocused(false)}
-							onChange={(event) => setValue(event.target.value)}
-							onFocus={() => setFocused(true)}
-							onKeyDown={onKeyDown}
-							onPaste={onPaste}
-							placeholder={placeholder}
-							ref={textareaRef}
-							value={value}
-						/>
-						{!roomy && upload ? (
-							<button aria-label={t("pr.comments.attach.label")} className="m-1 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
-								{attachIcon}
-							</button>
-						) : null}
-					</div>
-					{roomy ? (
-						<div className="flex min-w-0 items-center gap-1.5 border-t border-border/60 px-2 py-1.5">
-							{upload ? (
-								<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
-									{attachIcon}
-									{t("pr.comments.attach.short")}
-								</button>
-							) : null}
-							<span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{upload ? t("pr.comments.simpleHint") : t("pr.comments.postHint")}</span>
-							<Button className="h-7 px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button>
-							<Button className="h-7 gap-1 rounded-lg px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
-								{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
-								{submitLabel}
-							</Button>
-						</div>
-					) : null}
-				</div>
-				{fileInput}
-				{uploadError ? <p className="m-0 text-xs text-error" role="status">{uploadError}</p> : null}
-				{error ? <p className="m-0 text-xs text-error" role="status">{error}</p> : null}
-			</div>
-		);
-	}
-
+	const clear = () => { setValue(""); setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
 	return (
 		<div
-			className={cn("flex min-w-0 flex-col gap-1.5 text-xs", dragging && "rounded-md ring-2 ring-ring/50")}
+			className="flex min-w-0 flex-col gap-1.5 text-xs"
 			data-testid="pr-comment-composer"
 			onDragLeave={() => setDragging(false)}
 			onDragOver={(event) => { if (upload && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
 			onDrop={onDrop}
 		>
-			<div className={cn("flex min-w-0 flex-col rounded-md border border-border bg-background", "focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40")}>
-				{roomy ? (
-					<div className="flex min-w-0 items-center gap-0.5 border-b border-border/60 px-1 py-0.5" role="toolbar" aria-label={t("pr.comments.format.toolbar")}>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.bold")} onClick={bold}><Bold aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.italic")} onClick={italic}><Italic aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.code")} onClick={code}><Code aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.link")} onClick={link}><Link aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.quote")} onClick={quote}><TextQuote aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.bullets")} onClick={bullets}><List aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						<ToolButton disabled={previewing} label={t("pr.comments.format.numbers")} onClick={numbers}><ListOrdered aria-hidden="true" className="size-icon-xs" /></ToolButton>
-						{upload ? (
-							<ToolButton disabled={previewing} label={t("pr.comments.attach.label")} onClick={() => fileRef.current?.click()}>
-								{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
-							</ToolButton>
-						) : null}
-						<span className="ml-auto inline-flex items-center gap-0.5 text-micro">
-							<button aria-pressed={!previewing} className={cn("rounded-sm px-1.5 py-0.5 font-medium transition-colors", previewing ? "text-passive hover:text-foreground" : "text-foreground")} onClick={() => setPreviewing(false)} type="button">{t("pr.comments.write")}</button>
-							<button aria-pressed={previewing} className={cn("rounded-sm px-1.5 py-0.5 font-medium transition-colors", previewing ? "text-foreground" : "text-passive hover:text-foreground")} onClick={() => setPreviewing(true)} type="button">{t("pr.comments.preview")}</button>
-						</span>
-					</div>
-				) : null}
-				{previewing ? (
-					<div className="min-h-16 px-2 py-1.5" data-testid="pr-comment-preview">
-						{value.trim() ? <PRMarkdown body={value} /> : <p className="m-0 text-passive">{t("pr.comments.nothingToPreview")}</p>}
-					</div>
-				) : (
-					<textarea
-						aria-label={placeholder}
-						autoFocus={autoFocus}
-						className={cn(
-							"w-full border-0 bg-transparent px-2 py-1.5 text-xs leading-relaxed text-foreground placeholder:text-passive focus-visible:outline-none",
-							roomy ? "min-h-16 resize-y" : "h-8 resize-none",
-						)}
-						disabled={busy}
-						onBlur={() => setFocused(false)}
-						onChange={(event) => setValue(event.target.value)}
-						onFocus={() => setFocused(true)}
-						onKeyDown={onKeyDown}
-						onPaste={onPaste}
-						placeholder={placeholder}
-						ref={textareaRef}
-						value={value}
-					/>
+			<div
+				className={cn(
+					"flex min-w-0 flex-col rounded-xl border border-border bg-background shadow-xs transition-[border-color,box-shadow]",
+					"focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25",
+					dragging && "border-ring ring-3 ring-ring/25",
 				)}
-			</div>
-			{fileInput}
-			{uploadError ? <p className="m-0 text-xs text-error" role="status">{uploadError}</p> : null}
-			{error ? <p className="m-0 text-xs text-error" role="status">{error}</p> : null}
-			{roomy ? (
-				<div className="flex items-center justify-end gap-1.5">
-					<span className="mr-auto min-w-0 truncate text-micro text-passive">{upload ? t("pr.comments.markdownAttachHint") : t("pr.comments.markdownHint")}</span>
-					{onCancel ? <Button className="px-2 text-xs" onClick={onCancel} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button> : null}
-					<Button className="gap-1 px-2 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button" variant="secondary">
+			>
+				<textarea
+					aria-label={placeholder}
+					// Grows with what is written, up to a cap, then scrolls.
+					className="max-h-64 min-h-20 min-w-0 resize-none border-0 bg-transparent px-3 py-2.5 text-xs leading-relaxed text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
+					disabled={busy}
+					onChange={(event) => setValue(event.target.value)}
+					onKeyDown={onKeyDown}
+					onPaste={onPaste}
+					placeholder={placeholder}
+					ref={textareaRef}
+					value={value}
+				/>
+				<div className="flex min-w-0 items-center gap-1.5 border-t border-border/60 px-2 py-1.5">
+					{upload ? (
+						<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
+							{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
+							{t("pr.comments.attach.short")}
+						</button>
+					) : null}
+					<span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{upload ? t("pr.comments.simpleHint") : null}</span>
+					<Button className="h-7 px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button>
+					<Button className="h-7 gap-1 rounded-lg px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
 						{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
 						{submitLabel}
 					</Button>
 				</div>
-			) : null}
+			</div>
+			{fileInput}
+			{uploadError ? <p className="m-0 text-xs text-error" role="status">{uploadError}</p> : null}
+			{error ? <p className="m-0 text-xs text-error" role="status">{error}</p> : null}
 		</div>
 	);
 }

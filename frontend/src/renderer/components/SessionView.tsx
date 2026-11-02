@@ -555,8 +555,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
 	// A PR's full description, opened from its card, sits over the chat and file tabs.
 	const prDescription = usePRDescriptionPane(uiSessionId);
-	// Turning to a file tab puts the description away.
-	useEffect(() => { if (fileTabs.activePath) closePRDescription(uiSessionId); }, [fileTabs.activePath, uiSessionId]);
+	// A PR that left the session (closed out, moved to another session) takes its description with it.
+	const prDescriptionGone = Boolean(prDescription && session && !session.prs.some((facts) => facts.url === prDescription.url));
+	useEffect(() => { if (prDescriptionGone) closePRDescription(uiSessionId); }, [prDescriptionGone, uiSessionId]);
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const [centerFileRequestsBySession, setCenterFileRequestsBySession] = useState<
@@ -961,6 +962,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(handleId: string) => {
 			const shell = shellTerminals.find((s) => s.handleId === handleId);
 			if (!shell) return;
+			closePRDescription(uiSessionId);
 			setReviewerChatId(null);
 			setActiveShellTerminal(shell.handleId);
 			setFileTabsBySession((current) => ({
@@ -1007,6 +1009,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Selecting the session's own pane also drops the active shell, so the effect
 	// above does not immediately pull the view back to that shell.
 	const selectSessionTerminal = useCallback(() => {
+		// Bringing any tab forward puts an open PR description away.
+		closePRDescription(uiSessionId);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
 		setReviewerChatId(null);
@@ -1018,6 +1022,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// "Ask in chat" from a file tab brings the session's Chat surface forward.
 	useEffect(() => subscribeChatReveal(uiSessionId, selectSessionTerminal), [selectSessionTerminal, uiSessionId]);
 	const selectReviewerTerminal = useCallback((target: ReviewerTerminalTarget) => {
+		closePRDescription(uiSessionId);
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "reviewer", handleId: target.handleId, harness: target.harness, sessionId });
@@ -1027,6 +1032,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}));
 	}, [sessionId, setActiveShellTerminal, uiSessionId]);
 	const selectReviewerChat = useCallback((reviewId: string) => {
+		closePRDescription(uiSessionId);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
 		setReviewerChatId(reviewId);
@@ -1049,6 +1055,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const filePath = path;
 			// Live paths retain their existing identities; snapshots coexist with them.
 			path = sessionFileTabKey(path, options?.source);
+			closePRDescription(uiSessionId);
 			setReviewerChatId(null);
 			setActiveShellTerminal(null);
 			setTerminalTarget({ kind: "worker" });
@@ -1103,6 +1110,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		});
 	}, [uiSessionId]);
 	const activateCenterFile = useCallback((path: string) => {
+		closePRDescription(uiSessionId);
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });

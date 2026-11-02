@@ -5,7 +5,8 @@ import { prCanMerge } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-const stateIcon: Record<SessionPRSummary["state"], { icon: LucideIcon; className: string }> = {
+/** A PR state's icon and colour, shared by the pills and the PR card. */
+export const prStateIcon: Record<SessionPRSummary["state"], { icon: LucideIcon; className: string }> = {
 	open: { icon: GitPullRequest, className: "text-success" },
 	draft: { icon: GitPullRequestDraft, className: "text-passive" },
 	merged: { icon: GitMerge, className: "text-status-merged" },
@@ -105,7 +106,7 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)]">
 						{folded.map((pr) => {
-							const state = stateIcon[pr.state];
+							const state = prStateIcon[pr.state];
 							return (
 								<DropdownMenuItem className="min-w-0 gap-2" key={prFocusKey(pr)} onSelect={() => onFocus(pr)}>
 									<state.icon aria-hidden="true" className={cn("size-icon-sm shrink-0", state.className)} />

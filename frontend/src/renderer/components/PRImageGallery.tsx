@@ -30,6 +30,8 @@ export function PRImageGallery({ images, index, onIndexChange }: {
 	const [last, setLast] = useState(0);
 	const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
 	useEffect(() => { if (index !== null) setLast(index); }, [index]);
+	// Images can change under an open gallery (fresh details); past the end it closes.
+	useEffect(() => { if (index !== null && index >= images.length) onIndexChange(null); }, [images.length, index, onIndexChange]);
 	const shown = index ?? last;
 	const image = images[shown];
 	const count = images.length;

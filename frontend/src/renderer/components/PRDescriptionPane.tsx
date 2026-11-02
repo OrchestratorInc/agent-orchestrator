@@ -1,4 +1,4 @@
-import { ArrowUpRight, GitPullRequest, X } from "lucide-react";
+import { ArrowUpRight, GitPullRequest, ImageIcon, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -7,10 +7,10 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { prBrowserUrl } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
-import { isWebImageUrl, PRDescriptionImage } from "./PRDescriptionImage";
+import { isWebImageUrl, linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
 import { PRImageGallery } from "./PRImageGallery";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { descriptionImages, descriptionMarkdown } from "./PullRequestDescription";
+import { descriptionMarkdown, descriptionMedia } from "./PullRequestDescription";
 
 // Reading width and type for the whole body; the card keeps the compact review-summary type.
 const readingClass = cn(
@@ -27,14 +27,17 @@ const readingClass = cn(
 	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
 );
 
-/** An image in the body at its own size; one that can't load falls back to the card's placeholder. */
+/**
+ * An image in the body at its own size, opening the gallery. One that can't
+ * load shrinks to its name; the gallery says why and links to the original.
+ */
 function InlineImage({ alt, onOpen, src }: { alt?: string; onOpen: () => void; src: string }) {
 	const { t } = useTranslation();
 	const [failed, setFailed] = useState(false);
-	if (failed) return <PRDescriptionImage alt={alt} src={src} />;
+	const name = alt?.trim() || t("pr.description.image");
 	return (
-		<button aria-label={t("pr.description.openImage", { name: alt?.trim() || t("pr.description.image") })} className="my-1 inline-block max-w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={onOpen} type="button">
-			<img alt={alt ?? ""} className="max-w-full rounded-md border border-border" onError={() => setFailed(true)} src={src} />
+		<button aria-label={t("pr.description.openImage", { name })} className={cn("my-1 max-w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60", failed ? "inline-flex items-center gap-1 border border-border bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground hover:text-foreground" : "inline-block")} onClick={onOpen} type="button">
+			{failed ? <><ImageIcon aria-hidden="true" className="size-icon-2xs shrink-0" />{name}</> : <img alt={alt ?? ""} className="max-w-full rounded-md border border-border" onError={() => setFailed(true)} src={src} />}
 		</button>
 	);
 }
@@ -49,7 +52,7 @@ export function PRDescriptionPane({ onClose, pr }: { onClose: () => void; pr: Se
 	const [imageIndex, setImageIndex] = useState<number | null>(null);
 	const closeRef = useRef<HTMLButtonElement>(null);
 	const markdown = descriptionMarkdown(pr);
-	const images = useMemo(() => descriptionImages(markdown), [markdown]);
+	const { images } = useMemo(() => descriptionMedia(markdown), [markdown]);
 	useEffect(() => { closeRef.current?.focus({ preventScroll: true }); }, []);
 	useEffect(() => {
 		const onKey = (event: KeyboardEvent) => {
@@ -60,11 +63,13 @@ export function PRDescriptionPane({ onClose, pr }: { onClose: () => void; pr: Se
 		return () => window.removeEventListener("keydown", onKey);
 	}, [imageIndex, onClose]);
 	const components = useMemo<Components>(() => ({
-		a: ({ href, children }) => <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
+		a: ({ node, href, children }) => linksOnlyImages(node) ? <>{children}</> : <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
 		img: ({ alt, src }) => {
 			const url = typeof src === "string" ? src : undefined;
-			if (!isWebImageUrl(url)) return <PRDescriptionImage alt={alt} src={url} />;
-			return <InlineImage alt={alt} onOpen={() => setImageIndex(Math.max(0, images.findIndex((image) => image.src === url)))} src={url} />;
+			const index = images.findIndex((image) => image.src === url);
+			// A non-web source, or one the gallery doesn't hold, stays a label.
+			if (!isWebImageUrl(url) || index < 0) return <PRDescriptionImage alt={alt} src={url} />;
+			return <InlineImage alt={alt} onOpen={() => setImageIndex(index)} src={url} />;
 		},
 	}), [images]);
 

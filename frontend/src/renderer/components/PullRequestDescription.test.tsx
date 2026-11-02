@@ -5,7 +5,7 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { noPRDetails } from "../lib/pr-display";
 import { closePRDescription, resetPRDescriptionPanes, usePRDescriptionPane } from "../lib/pr-description-pane";
 import { PRDescriptionPane } from "./PRDescriptionPane";
-import { descriptionImages, descriptionTableCount, PullRequestDescription } from "./PullRequestDescription";
+import { descriptionMedia, PullRequestDescription } from "./PullRequestDescription";
 
 const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
   ...noPRDetails(),
@@ -132,12 +132,12 @@ describe("PullRequestDescription", () => {
     expect(gallery.getByText("2 of 2")).toBeInTheDocument();
   });
 
-  it("keeps the gallery open when the card re-renders with fresh details", async () => {
-    const description = "![shot](https://example.com/shot.png)";
-    const view = renderDescription(loaded({ description }));
-    await userEvent.click(screen.getByRole("button", { name: "1 image" }));
-    view.rerender(<><PullRequestDescription cloud={false} pr={loaded({ description, updatedAt: "2026-10-23T00:00:00Z" })} sessionKey={KEY} /><OpenPane /></>);
-    expect(screen.getByTestId("pr-image-gallery")).toBeInTheDocument();
+  it("keeps the open full description current when the PR's details change", async () => {
+    const view = renderDescription(loaded({ description: "First take.\n\n![shot](https://example.com/shot.png)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    expect(within(screen.getByTestId("pr-description-pane")).getByText("First take.")).toBeInTheDocument();
+    view.rerender(<><PullRequestDescription cloud={false} pr={loaded({ description: "Second take.\n\n![shot](https://example.com/shot.png)", updatedAt: "2026-10-23T00:00:00Z" })} sessionKey={KEY} /><OpenPane /></>);
+    expect(within(screen.getByTestId("pr-description-pane")).getByText("Second take.")).toBeInTheDocument();
   });
 
   it("says when an image cannot load, and keeps the link to the original", async () => {
@@ -159,10 +159,33 @@ describe("PullRequestDescription", () => {
     expect(screen.getByTestId("pr-description-pane")).toBeInTheDocument();
   });
 
-  it("only offers web images, and never counts what sits in code", () => {
-    const markdown = "[![demo](https://example.com/demo.png)](https://example.com/video)\n\n![local](file:///etc/passwd)\n\n```\n![code](https://example.com/c.png)\n| a | b |\n| --- | --- |\n```";
-    expect(descriptionImages(markdown).map((image) => image.alt)).toEqual(["demo"]);
-    expect(descriptionTableCount(markdown)).toBe(0);
+  it("reads images and tables the way the renderer does, and never counts what sits in code", () => {
+    const markdown = [
+      "[![demo](https://example.com/demo.png)](https://example.com/video)",
+      "![paren](https://example.com/shot_(1).png 'a title')",
+      "![ref][shot]",
+      "![local](file:///etc/passwd)",
+      "```\n![code](https://example.com/c.png)\n| a | b |\n| --- | --- |\n```",
+      "    ![indented](https://example.com/i.png)",
+      "| a | b |\n| --- | --- |\n| 1 | 2 |",
+      "[shot]: https://example.com/ref.png",
+    ].join("\n\n");
+    const { images, tables } = descriptionMedia(markdown);
+    expect(images).toEqual([
+      { alt: "demo", src: "https://example.com/demo.png" },
+      { alt: "paren", src: "https://example.com/shot_(1).png" },
+      { alt: "ref", src: "https://example.com/ref.png" },
+    ]);
+    expect(tables).toBe(1);
+  });
+
+  it("opens a linked image in the full view as the image alone, not the link too", async () => {
+    renderDescription(loaded({ description: "Demo:\n\n[![demo](https://example.com/demo.png)](https://example.com/video)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    const pane = within(screen.getByTestId("pr-description-pane"));
+    expect(pane.getByRole("button", { name: "Open image: demo" }).closest("a")).toBeNull();
+    await userEvent.click(pane.getByRole("button", { name: "Open image: demo" }));
+    expect(screen.getByTestId("pr-image-gallery")).toBeInTheDocument();
   });
 
   it("keeps a body that is only a heading", () => {

@@ -43,7 +43,6 @@ import {
 	Loader2,
 	SearchCheck,
 	X,
-	type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { InfoRow, InfoRowLink } from "./InspectorInfoRow";
@@ -72,7 +71,7 @@ import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { PRActionButton } from "./PRActions";
 import { prCommentCount, PRComments } from "./PRComments";
-import { PRPills, prFocusKey, sortSessionPRs } from "./PRPills";
+import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
@@ -507,7 +506,7 @@ const SummaryView = memo(function SummaryView({
 									<PRSummaryCard
 										canOpenReviews={canOpenReviews}
 										cloudOrgId={session.cloud?.orgId}
-										elsewhere={branchPR && focusedPR.number !== openPRNumber ? (
+										elsewhere={branchPR && prFocusKey(focusedPR) !== prFocusKey(branchPR) ? (
 											<BranchWorkElsewhere branchPR={branchPR} />
 										) : undefined}
 										guest={session.cloud?.shared === true}
@@ -519,7 +518,7 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										work={focusedPR.number === openPRNumber ? work : undefined}
+										work={branchPR && prFocusKey(focusedPR) === prFocusKey(branchPR) ? work : undefined}
 									/>
 								</div>
 								</div>
@@ -977,12 +976,6 @@ function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
 	);
 }
 
-const prStateIcon: Record<InspectorPullRequest["state"], { icon: LucideIcon; className: string }> = {
-	open: { icon: GitPullRequest, className: "text-success" },
-	draft: { icon: GitPullRequestDraft, className: "text-passive" },
-	merged: { icon: GitMerge, className: "text-status-merged" },
-	closed: { icon: GitPullRequestClosed, className: "text-error" },
-};
 
 export function PRSummaryCard({
 	canOpenReviews,
@@ -1027,41 +1020,15 @@ export function PRSummaryCard({
 	const presentation = prCardPresentation(pr);
 	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
+		// Cloud sessions merge from here; a local session merges from its action button.
 		mutationFn: async () => {
-			if (usePreviewData) return;
-			if (cloudOrgId) {
-				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
-				return;
-			}
-			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
-				params: { path: { id: String(pr.number) } },
-				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
-			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
-			return data;
+			if (usePreviewData || !cloudOrgId) return;
+			await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
 		},
-		onSuccess: async (result) => {
-			if (!cloudOrgId && result?.state === "merged") {
-				queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: SessionPRReference[] }>(
-					sessionScmSummaryQueryKey(sessionId, hostId),
-					(current) => current ? {
-						...current,
-						prs: current.prs.map((cached) => cached.url === pr.url ? {
-							...cached,
-							state: result.state,
-							stateChangedAt: result.stateChangedAt,
-							updatedAt: result.stateChangedAt,
-						} : cached),
-					} : current,
-				);
-				await queryClient.invalidateQueries({ queryKey: workspaceKey });
-				return;
-			}
-			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId, hostId) }),
-				queryClient.invalidateQueries({ queryKey: workspaceKey }),
-			]);
-		},
+		onSuccess: () => Promise.all([
+			queryClient.invalidateQueries({ queryKey: ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] }),
+			queryClient.invalidateQueries({ queryKey: workspaceKey }),
+		]),
 	});
 	const asksToMerge = guest && Boolean(cloudOrgId);
 	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
@@ -1109,8 +1076,8 @@ export function PRSummaryCard({
 						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
 					</Button>
 				) : !cloudOrgId && !guest ? (
-					// In the inspector the one action button sits at the card's foot instead.
-					layout === "focus" ? undefined : <PRActionButton canMerge={canMerge} hostId={hostId} pr={pr} sessionId={sessionId} />
+					// A local session acts from the one action button at the card's foot.
+					undefined
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
@@ -1143,11 +1110,7 @@ export function PRSummaryCard({
 	return (
 		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
 			<InfoRow
-				action={
-					<>
-						<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />
-					</>
-				}
+				action={<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />}
 				icon={state.icon}
 				iconClassName={state.className}
 				label={
@@ -1167,7 +1130,7 @@ export function PRSummaryCard({
 			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
 			{!cloudOrgId && !guest && pr.state !== "merged" ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
-					<PRActionButton canMerge={canMerge} fullWidth git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
 				</div>
 			) : null}
 		</section>

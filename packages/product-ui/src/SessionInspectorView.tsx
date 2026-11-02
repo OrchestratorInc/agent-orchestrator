@@ -376,7 +376,7 @@ export function InspectorPullRequestCardView({
 	externalLink: ExternalLinkComponent;
 	/**
 	 * Drop the card frame, title and number: the host shows them in its own
-	 * header row, as when several PRs share one card as collapsible sections.
+	 * header row, as the inspector's PR card does with its own state row.
 	 */
 	headerless?: boolean;
 	mergeAction?: ReactNode;

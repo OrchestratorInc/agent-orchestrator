@@ -108,8 +108,8 @@ func (p *Provider) pullRequestNodeID(ctx context.Context, ref ports.SCMPRRef) (s
 	return id, nil
 }
 
-// mapMutationStatus classifies a failed REST mutation: 404 is an unknown PR
-// and 422 (or 403 that is not an auth failure) is GitHub refusing it.
+// mapMutationStatus classifies a failed REST mutation: 404 is an unknown PR,
+// and 405, 409 or 422 is GitHub refusing it.
 func mapMutationStatus(status int, err error) error {
 	switch status {
 	case http.StatusNotFound:

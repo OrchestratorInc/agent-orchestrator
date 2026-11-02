@@ -83,9 +83,22 @@ func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRSt
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	// Closing keeps a draft a draft, as the providers do, so reopening it brings
+	// back a draft; the other states say outright whether the PR is one.
+	draft := state == domain.PRStateDraft
+	if state == domain.PRStateClosed {
+		current, err := s.qw.GetPR(ctx, prURL)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("mark pr state %s: updated 0 rows", prURL)
+		}
+		if err != nil {
+			return fmt.Errorf("mark pr state %s: %w", prURL, err)
+		}
+		draft = current.IsDraft != 0
+	}
 	rows, err := s.qw.MarkPRState(ctx, gen.MarkPRStateParams{
 		PRState:        state,
-		IsDraft:        boolInt(state == domain.PRStateDraft),
+		IsDraft:        boolInt(draft),
 		IsClosed:       boolInt(state == domain.PRStateClosed),
 		StateChangedAt: sql.NullTime{Time: changedAt, Valid: true},
 		UpdatedAt:      changedAt,
@@ -586,17 +599,6 @@ func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]domain.Pull
 		out = append(out, commentFromGen(c))
 	}
 	return out, nil
-}
-
-// MarkPRCommentResolved records a provider-resolved review comment locally.
-func (s *Store) MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	affected, err := s.qw.MarkPRCommentResolved(ctx, gen.MarkPRCommentResolvedParams{PRURL: prURL, CommentID: commentID})
-	if err != nil {
-		return false, fmt.Errorf("mark pr comment resolved %s/%s: %w", prURL, commentID, err)
-	}
-	return affected > 0, nil
 }
 
 // MarkPRReviewThreadResolved records a provider-resolved review thread and

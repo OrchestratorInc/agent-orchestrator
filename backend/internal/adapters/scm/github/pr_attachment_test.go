@@ -129,7 +129,6 @@ func onExistingBranch(t *testing.T, f *fakeGH, heads func() string, parents *[]s
 		_ = json.NewEncoder(w).Encode(map[string]any{"ref": "refs/heads/ao-attachments", "object": map[string]string{"sha": heads(), "type": "commit"}})
 	})
 	for _, head := range []string{"head-1", "head-2", "head-3"} {
-		head := head
 		f.on(http.MethodGet, "/repos/octocat/hello/git/commits/"+head, func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"sha": head, "tree": map[string]string{"sha": "tree-of-" + head}})
 		})

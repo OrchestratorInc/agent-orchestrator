@@ -146,7 +146,7 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 }
 
 // prDetailsReader is the optional store read for a PR's description, labels,
-// requested reviewers and commits.
+// requested reviewers, commits and conversation comments.
 type prDetailsReader interface {
 	GetPRDetails(ctx context.Context, prURL string) (domain.PullRequestDetails, bool, error)
 }
@@ -305,13 +305,20 @@ func summarizePRStateChangedAt(pr domain.PullRequest) time.Time {
 
 // summarizeChecks lists the head commit's checks by name, failing first, then
 // unfinished, then passed or skipped, each group by name. Checks recorded for
-// an older head are history, not the PR's current state.
+// an older head are history, not the PR's current state. A check repeated
+// across the PR's URL aliases appears once, as its latest record.
 func summarizeChecks(pr domain.PullRequest, checks []domain.PullRequestCheck) []contract.PullRequestCheckEntry {
-	out := []contract.PullRequestCheckEntry{}
+	latest := map[string]domain.PullRequestCheck{}
 	for _, ch := range checks {
 		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {
 			continue
 		}
+		if seen, ok := latest[ch.Name]; !ok || ch.CreatedAt.After(seen.CreatedAt) {
+			latest[ch.Name] = ch
+		}
+	}
+	out := make([]contract.PullRequestCheckEntry, 0, len(latest))
+	for _, ch := range latest {
 		out = append(out, contract.PullRequestCheckEntry{Name: ch.Name, Status: ch.Status, URL: ch.URL})
 	}
 	sort.SliceStable(out, func(i, j int) bool {

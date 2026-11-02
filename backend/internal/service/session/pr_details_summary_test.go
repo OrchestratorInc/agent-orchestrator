@@ -170,3 +170,19 @@ func TestSummarizeReviewKeepsSubmittedReviewsForAFinishedPR(t *testing.T) {
 		t.Fatalf("open PR: reviews = %+v, unresolved = %+v, want both", open.Reviews, open.UnresolvedBy)
 	}
 }
+
+func TestSummarizeChecksListsACheckRepeatedAcrossAliasesOnce(t *testing.T) {
+	pr := domain.PullRequest{HeadSHA: "head"}
+	older, newer := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 9, 5, 0, 0, time.UTC)
+	checks := []domain.PullRequestCheck{
+		{Name: "test", CommitHash: "head", Status: domain.PRCheckInProgress, CreatedAt: older},
+		{Name: "lint", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: older},
+		// The same checks again, from the PR's other URL alias; "test" has since finished.
+		{Name: "test", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: newer},
+		{Name: "lint", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: older},
+	}
+	got := summarizeChecks(pr, checks)
+	if len(got) != 2 || got[0].Name != "lint" || got[1].Name != "test" || got[1].Status != domain.PRCheckPassed {
+		t.Fatalf("checks = %+v, want lint and test once each, test passed", got)
+	}
+}

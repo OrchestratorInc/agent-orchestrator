@@ -104,15 +104,18 @@ func openPRFixture() domain.PullRequest {
 func TestActionServiceChangeState_TransitionsPersistAndNotifyLifecycle(t *testing.T) {
 	changedAt := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		action string
-		modify func(*domain.PullRequest)
-		want   domain.PRState
+		action    string
+		modify    func(*domain.PullRequest)
+		want      domain.PRState
+		wantDraft bool
 	}{
 		{action: "close", want: domain.PRStateClosed},
-		{action: "close", modify: func(pr *domain.PullRequest) { pr.Draft = true }, want: domain.PRStateClosed},
+		// A closed draft stays a draft, and reopens as one.
+		{action: "close", modify: func(pr *domain.PullRequest) { pr.Draft = true }, want: domain.PRStateClosed, wantDraft: true},
 		{action: "reopen", modify: func(pr *domain.PullRequest) { pr.Closed = true }, want: domain.PRStateOpen},
+		{action: "reopen", modify: func(pr *domain.PullRequest) { pr.Closed = true; pr.Draft = true }, want: domain.PRStateDraft, wantDraft: true},
 		{action: "ready", modify: func(pr *domain.PullRequest) { pr.Draft = true }, want: domain.PRStateOpen},
-		{action: "draft", want: domain.PRStateDraft},
+		{action: "draft", want: domain.PRStateDraft, wantDraft: true},
 	} {
 		t.Run(tc.action+"->"+string(tc.want), func(t *testing.T) {
 			pr := openPRFixture()
@@ -142,7 +145,7 @@ func TestActionServiceChangeState_TransitionsPersistAndNotifyLifecycle(t *testin
 			}
 			obs := lifecycle.obs.PR
 			if lifecycle.calls != 1 || lifecycle.sessionID != pr.SessionID || obs.State != string(tc.want) ||
-				obs.Closed != (tc.want == domain.PRStateClosed) || obs.Draft != (tc.want == domain.PRStateDraft) || !lifecycle.obs.ObservedAt.Equal(changedAt) {
+				obs.Closed != (tc.want == domain.PRStateClosed) || obs.Draft != tc.wantDraft || !lifecycle.obs.ObservedAt.Equal(changedAt) {
 				t.Fatalf("lifecycle calls=%d obs=%+v", lifecycle.calls, lifecycle.obs)
 			}
 		})

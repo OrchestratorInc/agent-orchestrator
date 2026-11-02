@@ -1,17 +1,19 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import { AlignLeft, Images, PanelRightOpen } from "lucide-react";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
 import { openPRDescription, refreshPRDescription, usePRDescriptionPane } from "../lib/pr-description-pane";
-import { isWebImageUrl, PRDescriptionImage } from "./PRDescriptionImage";
+import { isWebImageUrl, linksOnlyImages } from "./PRDescriptionImage";
 import { type DescriptionImage, PRImageGallery } from "./PRImageGallery";
 
 // The Reviews tab's review summary typography, so the two read as one family.
-export const bodyClass = cn(
+const bodyClass = cn(
 	"min-w-0 select-text break-words text-xs leading-relaxed text-muted-foreground",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
 	"[&_code]:rounded [&_code]:bg-muted/55 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-foreground",
@@ -32,7 +34,7 @@ export const bodyClass = cn(
  * pasted screenshot) becomes a markdown image, and other tags drop to their
  * text. Code spans and fenced blocks are left exactly as written.
  */
-export function withoutRawHtml(markdown: string): string {
+function withoutRawHtml(markdown: string): string {
 	return markdown
 		.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/)
 		.map((part, index) => index % 2 === 1 ? part : part
@@ -57,23 +59,15 @@ function imageAsMarkdown(tag: string): string {
 }
 
 // Kept outside the component: a new renderer each render would remount every
-// image placeholder and close an open lightbox on the next re-render.
-export const markdownComponents: Components = {
-	a: ({ node, href, children }) => {
-		// A linked image ([![shot](src)](href)) is just the image: its
-		// placeholder is a button, which cannot sit inside a link.
-		const elements = node?.children.filter((child) => child.type === "element") ?? [];
-		const onlyImages = elements.length > 0
-			&& elements.every((child) => child.tagName === "img")
-			&& (node?.children ?? []).every((child) => child.type === "element" || (child.type === "text" && !child.value.trim()));
-		if (onlyImages) return <>{children}</>;
-		return (
-			<AppLink href={href} rel="noopener noreferrer" target="_blank">
-				{children}
-			</AppLink>
-		);
-	},
-	img: ({ alt, src }) => <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
+// image placeholder and close an open lightbox on the next re-render. The
+// card's preview leaves images out: the line under it counts them.
+const previewComponents: Components = {
+	a: ({ node, href, children }) => linksOnlyImages(node) ? null : (
+		<AppLink href={href} rel="noopener noreferrer" target="_blank">
+			{children}
+		</AppLink>
+	),
+	img: () => null,
 };
 
 const footerLinkClass = "inline-flex items-center gap-1 font-medium transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
@@ -89,24 +83,33 @@ export function descriptionMarkdown(pr: SessionPRSummary): string {
 	return withoutHeading || body;
 }
 
-/** Splits markdown into prose and code parts, so code is never read as images or tables. */
-const proseParts = (markdown: string) => markdown.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/).filter((_, index) => index % 2 === 0);
-const IMAGE = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
+type MarkdownNode = { type: string; url?: string; alt?: string | null; identifier?: string; children?: MarkdownNode[] };
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
 
-/** The web images in the description, in order (others stay labels in the text). */
-export function descriptionImages(markdown: string): DescriptionImage[] {
-	return proseParts(markdown).flatMap((part) => [...part.matchAll(IMAGE)].map((match) => ({ alt: match[1] ?? "", src: match[2] ?? "" })))
-		.filter((image) => isWebImageUrl(image.src));
-}
-
-/** How many tables the description holds, counted by their header separator rows. */
-export function descriptionTableCount(markdown: string): number {
-	return proseParts(markdown).reduce((total, part) => total + (part.match(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm) ?? []).length, 0);
-}
-
-/** The text without its images (a linked image goes with its link), for the short preview. */
-function withoutImages(markdown: string): string {
-	return markdown.replace(/\[\s*!\[[^\]]*\]\([^)]*\)\s*\]\([^)]*\)/g, "").replace(IMAGE, "").replace(/\n{3,}/g, "\n\n").trim();
+/**
+ * The description's web images, in order, and how many tables it holds, read
+ * from the same markdown tree the renderer draws: code never counts, and an
+ * image's URL is exactly the one the renderer loads (titles, parentheses,
+ * escapes and reference images included). Other images stay labels in the text.
+ */
+export function descriptionMedia(markdown: string): { images: DescriptionImage[]; tables: number } {
+	const tree = markdownParser.parse(markdown) as MarkdownNode;
+	const definitions = new Map<string, string>();
+	const nodes: MarkdownNode[] = [];
+	const walk = (node: MarkdownNode) => {
+		nodes.push(node);
+		if (node.type === "definition" && node.identifier && node.url) definitions.set(node.identifier, node.url);
+		node.children?.forEach(walk);
+	};
+	walk(tree);
+	const images: DescriptionImage[] = [];
+	let tables = 0;
+	for (const node of nodes) {
+		if (node.type === "table") tables += 1;
+		const src = node.type === "image" ? node.url : node.type === "imageReference" && node.identifier ? definitions.get(node.identifier) : undefined;
+		if (isWebImageUrl(src)) images.push({ alt: node.alt ?? "", src });
+	}
+	return { images, tables };
 }
 
 /**
@@ -122,9 +125,7 @@ export function PullRequestDescription({ cloud, pr, sessionKey }: { cloud: boole
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const bodyId = useId();
 	const description = descriptionMarkdown(pr);
-	const preview = withoutImages(description);
-	const images = descriptionImages(description);
-	const tables = descriptionTableCount(description);
+	const { images, tables } = useMemo(() => descriptionMedia(description), [description]);
 	const openPane = usePRDescriptionPane(sessionKey);
 	const isOpen = openPane?.url === pr.url;
 	// Fresh details reach the open full view while the card is on screen.
@@ -138,7 +139,7 @@ export function PullRequestDescription({ cloud, pr, sessionKey }: { cloud: boole
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [preview]);
+	}, [description]);
 
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
@@ -148,7 +149,7 @@ export function PullRequestDescription({ cloud, pr, sessionKey }: { cloud: boole
 		empty = t("pr.description.none");
 	}
 	// The full view is worth opening when the card shows only part of the body.
-	const hasMore = !empty && (overflows || images.length > 0 || tables > 0 || pr.descriptionTruncated === true || preview !== description);
+	const hasMore = !empty && (overflows || images.length > 0 || tables > 0 || pr.descriptionTruncated === true);
 
 	return (
 		// The PR card is already a filled surface, so the description keeps its own
@@ -160,13 +161,14 @@ export function PullRequestDescription({ cloud, pr, sessionKey }: { cloud: boole
 			</h4>
 			{empty ? (
 				<p className="text-xs leading-relaxed text-passive">{empty}</p>
-			) : preview ? (
-				<div className={cn(bodyClass, "line-clamp-3 max-h-[3lh] overflow-hidden")} id={bodyId} ref={bodyRef}>
+			) : (
+				// Paragraphs that only held images render empty and take no room.
+				<div className={cn(bodyClass, "line-clamp-3 max-h-[3lh] overflow-hidden [&_p:empty]:hidden")} id={bodyId} ref={bodyRef}>
 					{/* The PR body is provider content: react-markdown never renders raw HTML.
 					    line-clamp only folds text; the height cap folds tables, lists and code too. */}
-					<ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>{preview}</ReactMarkdown>
+					<ReactMarkdown components={previewComponents} remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
 				</div>
-			) : null}
+			)}
 			{!empty && (images.length > 0 || tables > 0) ? (
 				<p className="m-0 inline-flex min-w-0 items-center gap-1 text-micro text-passive" data-testid="pr-description-media">
 					<Images aria-hidden="true" className="size-icon-2xs shrink-0" />

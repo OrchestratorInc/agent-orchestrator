@@ -182,7 +182,8 @@ type SCMPRObservation struct {
 	// ClosedAtProvider is the provider's close timestamp when closed.
 	ClosedAtProvider time.Time
 
-	// Details is the PR's description, labels, requested reviewers and commits.
+	// Details is the PR's description, labels, requested reviewers, commits and
+	// conversation comments.
 	// Nil when the provider did not return them, so the stored ones are kept.
 	Details *domain.PullRequestDetails
 }

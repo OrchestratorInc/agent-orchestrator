@@ -3,10 +3,11 @@ import type { FileCodeReference } from "../../shared/file-annotations";
 import { captureFileReference, isSupportedFileReference, type ChatFileReference } from "../../shared/chat-file-reference";
 import { sessionUiKey } from "./hosts";
 
-// Lets a file or diff view hand a code reference to the session's Chat
-// composer without threading callbacks through the inspector and centre-pane
-// trees. A composer registers while it can accept a new draft; the session
-// view registers to bring the Chat surface forward when a reference arrives.
+// Lets a file or diff view hand a code reference, or the PR card a quoted
+// comment, to the session's Chat composer without threading callbacks through
+// the inspector and centre-pane trees. A composer registers while it can
+// accept a new draft; the session view registers to bring the Chat surface
+// forward when something arrives.
 type ReferenceListener = (reference: ChatFileReference) => boolean | void;
 type TextListener = (text: string) => boolean | void;
 type RevealListener = () => void;
@@ -35,34 +36,39 @@ function notifyAvailability(): void {
 	for (const listener of availabilityListeners) listener();
 }
 
-/** Registers the session's Chat composer as the destination for references. */
-export function subscribeChatComposerReferences(sessionId: string, listener: ReferenceListener): () => void {
-	const remove = add(composers, sessionId, listener);
+/** Registers a composer listener, telling availability hooks as it comes and goes. */
+function addComposer<T>(registry: Map<string, Set<T>>, sessionId: string, listener: T): () => void {
+	const remove = add(registry, sessionId, listener);
 	notifyAvailability();
 	return () => {
 		remove();
 		notifyAvailability();
 	};
+}
+
+/** Hands a value to the session's composers; accepted when one takes it, which brings Chat forward. */
+function deliver<T>(registry: Map<string, Set<(value: T) => boolean | void>>, sessionId: string, value: T): boolean {
+	const listeners = registry.get(sessionId);
+	if (!listeners?.size) return false;
+	let accepted = false;
+	for (const listener of listeners) accepted = listener(value) !== false || accepted;
+	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
+	return accepted;
+}
+
+/** Registers the session's Chat composer as the destination for references. */
+export function subscribeChatComposerReferences(sessionId: string, listener: ReferenceListener): () => void {
+	return addComposer(composers, sessionId, listener);
 }
 
 /** Registers the session's Chat composer as the destination for quoted text (a PR comment). */
 export function subscribeChatComposerText(sessionId: string, listener: TextListener): () => void {
-	const remove = add(textComposers, sessionId, listener);
-	notifyAvailability();
-	return () => {
-		remove();
-		notifyAvailability();
-	};
+	return addComposer(textComposers, sessionId, listener);
 }
 
 /** Text is accepted only when a listening composer adds it to its draft. */
 export function sendTextToChat(sessionId: string, text: string): boolean {
-	const listeners = textComposers.get(sessionId);
-	if (!listeners?.size) return false;
-	let accepted = false;
-	for (const listener of listeners) accepted = listener(text) !== false || accepted;
-	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
-	return accepted;
+	return deliver(textComposers, sessionId, text);
 }
 
 /**
@@ -88,12 +94,7 @@ export function hasChatComposer(sessionId: string): boolean {
 
 /** A reference is accepted only when a listening composer acknowledges it. */
 export function sendReferenceToChat(sessionId: string, reference: ChatFileReference): boolean {
-	const listeners = composers.get(sessionId);
-	if (!listeners?.size) return false;
-	let accepted = false;
-	for (const listener of listeners) accepted = listener(reference) !== false || accepted;
-	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
-	return accepted;
+	return deliver(composers, sessionId, reference);
 }
 
 function subscribeAvailability(listener: () => void): () => void {

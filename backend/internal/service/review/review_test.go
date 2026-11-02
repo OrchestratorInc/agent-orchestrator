@@ -27,9 +27,9 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 
-	updateCalls        int
-	activityUpdates    int
-	resolvedThreadIDs  []string
+	updateCalls       int
+	activityUpdates   int
+	resolvedThreadIDs []string
 }
 
 type fakeNotificationSink struct {

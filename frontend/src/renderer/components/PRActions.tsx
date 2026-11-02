@@ -24,8 +24,8 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
-export type PRMergeMethod = "squash" | "merge" | "rebase";
-export type PRStateAction = "close" | "reopen" | "ready" | "draft";
+type PRMergeMethod = "squash" | "merge" | "rebase";
+type PRStateAction = "close" | "reopen" | "ready" | "draft";
 
 const MERGE_METHODS: PRMergeMethod[] = ["squash", "merge", "rebase"];
 
@@ -64,11 +64,9 @@ function useRefreshPR(sessionId: string, hostId?: string) {
  * draft sits under it as small text. Merge stays visible while the PR isn't
  * ready, greyed out with the reason.
  */
-export function PRActionButton({ canMerge, fullWidth = false, git, hostId, pr, sessionId }: {
+export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	/** Readiness allows merging, fenced to the head commit the card shows. */
 	canMerge: boolean;
-	/** At the card's foot, the button spans it. */
-	fullWidth?: boolean;
 	/** The branch's git step, when this is the PR the branch updates. */
 	git?: BranchGitStep;
 	hostId?: string;
@@ -154,23 +152,23 @@ export function PRActionButton({ canMerge, fullWidth = false, git, hostId, pr, s
 	const errorText = [merge.error, change.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
 
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-1", fullWidth ? "items-stretch" : "items-end")} data-testid="pr-action-button">
-			<div className={cn("items-stretch", fullWidth ? "flex w-full" : "inline-flex shrink-0")}>
+		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-action-button">
+			<div className="flex w-full items-stretch">
 				<Button
 					aria-label={primary.aria}
 					className={cn(
 						"gap-1 rounded-r-none px-2 text-xs",
-						fullWidth && "min-w-0 flex-1",
+						"min-w-0 flex-1",
 						primary.tone === "go" ? "bg-success text-on-foreground hover:bg-success/80" : "",
 					)}
 					disabled={primary.disabled}
 					onClick={primary.run}
 					size="sm"
-					title={pr.state === "open" && blocker ? blocker : undefined}
+					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
 				>
-					{primary.spinning || (busy && (merge.isPending || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
+					{primary.spinning || (!gitPrimary && busy && (merge.isPending || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
 					<span className="truncate">{primary.label}</span>
 				</Button>
 				<DropdownMenu>
@@ -179,7 +177,7 @@ export function PRActionButton({ canMerge, fullWidth = false, git, hostId, pr, s
 							aria-label={t("pr.actions.menu", { number: pr.number })}
 							className={cn(
 								"rounded-l-none border-l px-1",
-								fullWidth && "w-control-md px-0",
+								"w-control-md px-0",
 								primary.tone === "go" ? "border-on-foreground/25 bg-success text-on-foreground hover:bg-success/80" : "border-border",
 							)}
 							disabled={busy || Boolean(git?.pending)}

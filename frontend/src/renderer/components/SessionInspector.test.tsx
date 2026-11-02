@@ -903,10 +903,9 @@ describe("SessionInspector PR section", () => {
   it("converts an open PR to a draft from the small text under the button, and asks before closing it", async () => {
     servePR(prSummary(7, "open", { url: "https://example.com/pr/7" }));
 
-    // Draft and Ready for review aren't in the menu any more.
+    // Draft and Ready for review live under the button, not in its menu.
     await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
-    expect(screen.queryByRole("menuitemradio", { name: /Draft|Ready for review/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Fix findings/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Draft|Ready for review/ })).not.toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await userEvent.click(within(screen.getByTestId("pr-quiet-actions")).getByRole("button", { name: "Convert to draft" }));
     await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["draft"]));
@@ -924,7 +923,7 @@ describe("SessionInspector PR section", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Reopen PR" }));
     await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["reopen"]));
-    expect(screen.queryByTestId("pr-merge-button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /and merge/ })).not.toBeInTheDocument();
   });
 
   it("shows a failed state change under the PR's action button", async () => {
@@ -937,7 +936,7 @@ describe("SessionInspector PR section", () => {
     expect(await within(screen.getByTestId("pr-action-button")).findByRole("status")).toHaveTextContent(/GitHub refused the change|Could not convert PR #7/);
   });
 
-  it("keeps Merge visible but greyed out with the reason, with no Fix findings anywhere", async () => {
+  it("keeps Merge visible but greyed out with the reason", async () => {
     servePR(prSummary(7, "open", {
       url: "https://example.com/pr/7",
       ci: { autoInjectCI: true, state: "failing", failingChecks: [{ name: "lint", status: "failed", conclusion: "failure" }], checks: [] },
@@ -945,13 +944,10 @@ describe("SessionInspector PR section", () => {
     const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
     expect(merge).toBeDisabled();
     expect(merge).toHaveAttribute("title", "Merging opens once the failing checks pass.");
-    expect(screen.queryByRole("button", { name: /Fix findings/ })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
     // Menu items are labels only; the reason lives on the greyed button.
-    expect(screen.queryByTestId("pr-merge-blocker")).not.toBeInTheDocument();
     expect(screen.getByRole("menuitemradio", { name: "Squash and merge" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Fix findings/ })).not.toBeInTheDocument();
   });
 
   const conversationPR = () => prSummary(7, "open", {
@@ -995,8 +991,6 @@ describe("SessionInspector PR section", () => {
     expect(within(cards[1]).getByText("Preview deployed.")).toBeInTheDocument();
     expect(within(cards[1]).getByText("bot")).toBeInTheDocument();
     expect(within(cards[2]).getByText("Can we keep the old flag?")).toBeInTheDocument();
-    expect(comments.queryByRole("button", { name: "Add all to chat" })).not.toBeInTheDocument();
-    expect(comments.queryByTestId("pr-comments-bots")).not.toBeInTheDocument();
     expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -1053,6 +1047,44 @@ describe("SessionInspector PR section", () => {
     expect(cards.map((card) => card.getAttribute("aria-label"))).not.toContain("ada");
   });
 
+  it("keeps a reply to a reply under the comment its chain started at", async () => {
+    const summary = conversationPR();
+    summary.conversation = [...(summary.conversation ?? []), {
+      id: "IC_3", author: "ada", isBot: false, createdAt: "2026-06-15T12:00:00Z",
+      body: "> Can we keep the old flag?\n\n@grace Yes, it stays behind a setting.",
+    }, {
+      id: "IC_4", author: "linus", isBot: false, createdAt: "2026-06-15T13:00:00Z",
+      body: "> > Can we keep the old flag?\n> \n> @grace Yes, it stays behind a setting.\n\n@ada Which setting?",
+    }];
+    servePR(summary);
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const grace = within(within(comments.getByTestId("pr-comments-main")).getByRole("article", { name: "grace" }));
+    expect(grace.getByText("Yes, it stays behind a setting.")).toBeInTheDocument();
+    expect(grace.getByText(/Which setting\?/)).toBeInTheDocument();
+  });
+
+  it("lets the provider's state back in once it confirms a thread resolved here", async () => {
+    let current = conversationPR();
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [current], linkedPrs: [] } }
+      : respond(path));
+    let client: QueryClient | undefined;
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: current.url })])} />, undefined, (seeded) => { client = seeded; seedPRSummaries(seeded, [current]); });
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = () => within(comments.getByTestId("pr-comments-main")).queryByRole("article", { name: "src/search.ts:12" });
+
+    const withThread = (resolved: boolean) => ({ ...current, threads: current.threads!.map((t) => t.id === "PRRT_1" ? { ...t, resolved } : t) });
+    // GitHub agrees by the refetch that follows Resolve...
+    current = withThread(true);
+    await userEvent.click(within(thread()!).getByRole("button", { name: "Resolve" }));
+    await waitFor(() => expect(thread()).not.toBeInTheDocument());
+    // ...and later someone unresolves it there: the next summary brings the card back.
+    current = withThread(false);
+    await act(async () => { await client!.invalidateQueries(); });
+    await waitFor(() => expect(thread()).toBeInTheDocument());
+  });
+
   it("offers Reply on other people's comments, as on GitHub, and not on your own", async () => {
     const summary = conversationPR();
     summary.threads = [...(summary.threads ?? []), {
@@ -1087,7 +1119,6 @@ describe("SessionInspector PR section", () => {
     const composer = comments.getAllByTestId("pr-comment-composer")[0];
     // It opens in place before the cards, not in a popover over them, ready to type.
     expect(composer.compareDocumentPosition(comments.getByTestId("pr-comments-main")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByTestId("pr-comment-popover")).not.toBeInTheDocument();
     const box = within(composer).getByRole("textbox", { name: "Write a comment…" });
     await waitFor(() => expect(box).toHaveFocus());
     expect(within(composer).queryByRole("toolbar")).not.toBeInTheDocument();
@@ -5435,12 +5466,22 @@ describe("SessionInspector branch summary", () => {
     expect(card.queryByRole("button", { name: "Convert to draft" })).not.toBeInTheDocument();
   });
 
-  it("puts merging on the one button once the branch has nothing left to push", async () => {
+  it("puts merging on the one button once the PR has every commit, with no git step left", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [prSummary(7, "open")] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
     const card = within(await screen.findByTestId("pr-card"));
     expect(await card.findByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
     expect(card.getAllByTestId("pr-action-button")).toHaveLength(1);
+    expect(screen.getByText("3 commits")).toBeInTheDocument();
+    expect(screen.getByText("pushed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^(Push|Commit & push)( to #7)?$/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps merge's blocked reason off the button while a git step holds it", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 1, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open", { ci: "failing" })], { branchState: pushed(2) })} />);
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByRole("button", { name: "Commit & push to #7" })).not.toHaveAttribute("title");
   });
 
   it("shows no behind row while the branch is up to date", async () => {
@@ -5520,16 +5561,6 @@ describe("SessionInspector branch summary", () => {
 
     expect(await branch().findByText("1 uncommitted file")).toBeInTheDocument();
     expect(within(screen.getByTestId("pr-card")).queryByText("1 uncommitted file")).not.toBeInTheDocument();
-  });
-
-  it("shows no git action when the PR already has every commit", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
-    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
-
-    expect(await screen.findByText("3 commits")).toBeInTheDocument();
-    expect(screen.getByText("pushed")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^(Push|Commit & push) to #7$/ })).not.toBeInTheDocument();
   });
 
   it("shows the PR's labels and the people asked to review it", async () => {
