@@ -1,4 +1,4 @@
-import { Building2, Check, ChevronDown, ChevronUp, Copy, ExternalLink, KeyRound, LoaderCircle, Smartphone, Terminal, UserRound } from "lucide-react";
+import { Building2, Check, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, KeyRound, LoaderCircle, Smartphone, Terminal, UserRound } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
@@ -345,6 +345,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	};
 	const secretLabel = (id: string) => t(id === "setup_token" ? "settings.harness.loginUi.setupToken" : id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey");
 	const fieldLabelClass = "block text-xs leading-4 font-medium text-settings-label";
+	// Pickers take the same surface, height and inset as the shared Input so
+	// the provider, key and model fields read as one form.
+	const fieldTriggerClass = "h-control-form w-full justify-between rounded-md bg-input/50 px-3 text-sm hover:bg-input/70 data-[state=open]:bg-input/70";
 	// The chosen catalog provider, so its key variable can show beside the key field.
 	const chosenProvider = catalog?.find((provider) => provider.id === catalogProvider);
 	// While a key form is open its errors show inside it, next to the field.
@@ -353,7 +356,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-4 p-4" data-settings-inline-edit="">
 		<div className="space-y-1">
 			<h4 id={titleId} className="text-[15px] leading-5 font-semibold tracking-tight text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
-			{!connected && !locked && <p className="text-xs leading-4 text-settings-muted">{availableMethods.length ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
+			{!connected && !locked && (availableMethods.length === 0 || methodGroups.length < 2) && <p className="text-xs leading-4 text-settings-muted">{availableMethods.length ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
 			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
 		{availableMethods.length > 0 && !connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-4" onSubmit={(event) => { event.preventDefault(); void start(); }}>
@@ -361,14 +364,14 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{methodGroups.map((group) => <div key={group.id} className="space-y-1.5">
 				{methodGroups.length > 1 && <p className="px-1 text-xs leading-4 font-medium text-settings-muted">{group.title}</p>}
-				<div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
+				<div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
 				{group.items.map((item) => {
 					const key = methodKey(item.id);
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.id === "native" ? Terminal : item.secret ? KeyRound : item.id.startsWith("device_code") ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
 					const selected = selectedMethodId === item.id;
 					const open = item.secret && selected;
-					return <div key={item.id} className={open ? "bg-(--color-interactive-active)" : undefined}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-0.5">
 							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
@@ -376,6 +379,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
+							: item.id === "native" ? <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />
 							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
 					</button>
 					{open && <div ref={secretRowRef} className="scroll-mb-4 space-y-3 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
@@ -399,7 +403,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 									</span>;
 								}}
 								disabled={locked || !catalog}
-								triggerClassName="h-8 w-full justify-between"
+								triggerClassName={fieldTriggerClass}
+								// Open under the field at its width instead of over the panel.
+								menuAlign="start"
+								menuClassName="w-(--radix-dropdown-menu-trigger-width)"
 							/>
 						</div>}
 						<div className="space-y-1.5">
@@ -407,14 +414,14 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 								<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
 								{item.id === CATALOG_METHOD && chosenProvider?.env ? <code className="truncate font-mono text-xs text-settings-muted">{chosenProvider.env}</code> : null}
 							</div>
-							<Input id={titleId + "-secret"} className="border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); setError(""); }} />
+							<Input id={titleId + "-secret"} className="font-mono text-[13px] placeholder:font-sans focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); setError(""); }} />
 						</div>
 						{needsModel && <div className="space-y-1.5">
 							<span id={titleId + "-model"} className={fieldLabelClass}>{t("settings.apiKeys.model")}</span>
 							<div className="flex items-center gap-2">
 								{models.length > 0
-									? <SettingsOptionMenu aria-label={t("settings.apiKeys.model")} value={model} options={models.map((id) => ({ value: id, label: id }))} onChange={setModel} searchable searchPlaceholder={t("settings.apiKeys.searchModels")} disabled={locked} triggerClassName="h-8 min-w-0 flex-1 justify-between font-mono" />
-									: <Input aria-labelledby={titleId + "-model"} className="min-w-0 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
+									? <SettingsOptionMenu aria-label={t("settings.apiKeys.model")} value={model} options={models.map((id) => ({ value: id, label: id }))} onChange={setModel} searchable searchPlaceholder={t("settings.apiKeys.searchModels")} disabled={locked} triggerClassName={`${fieldTriggerClass} min-w-0 flex-1 font-mono`} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width)" />
+									: <Input aria-labelledby={titleId + "-model"} className="min-w-0 flex-1 font-mono text-[13px] placeholder:font-sans focus-visible:ring-2 focus-visible:ring-ring/30" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
 								{selectedKey?.checkable && models.length === 0 && <Button type="button" size="sm" variant="secondary" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
 									{loadingModels && <LoaderCircle className="animate-spin" aria-hidden="true" />}{t("settings.apiKeys.loadModels")}
 								</Button>}
@@ -482,16 +489,18 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		</form>}
 		{status && !running && !verifying && !connected && <p role="status" className="text-[13px] leading-5 text-settings-muted">{status}</p>}
 		{error && !errorInForm && <p role="alert" className="text-[13px] leading-5 text-error">{error}</p>}
-		<div className="flex flex-wrap items-center gap-2">
-			{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
-			{running && operation?.method === "native" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
-			{running && operation?.nativePrompt === "terminal_required" && <Button variant="outline" size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-			<Button variant={connected ? "primary" : "ghost"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
+		<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-t border-border pt-3">
+			{!connected && availableMethods.length === 0 && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+			{!connected && availableMethods.length > 0 && operation?.nativePrompt !== "terminal_required" && <details className="group min-w-0 pt-1.5">
+				<summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-settings-muted outline-none hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"><ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />{t("settings.harness.loginUi.otherOptions")}</summary>
+				<Button className="mt-2 -ml-2" variant="ghost" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>
+			</details>}
+			<div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
+				{running && operation?.method === "native" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
+				{running && operation?.nativePrompt === "terminal_required" && <Button variant="outline" size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+				<Button variant={connected ? "primary" : "ghost"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
+			</div>
 		</div>
-		{!connected && availableMethods.length === 0 && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-		{!connected && availableMethods.length > 0 && operation?.nativePrompt !== "terminal_required" && <details className="group border-t border-border pt-3">
-			<summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-xs text-settings-muted outline-none hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"><ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />{t("settings.harness.loginUi.otherOptions")}</summary>
-			<Button className="mt-2 -ml-2" variant="ghost" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>
-		</details>}
 	</section>;
 }

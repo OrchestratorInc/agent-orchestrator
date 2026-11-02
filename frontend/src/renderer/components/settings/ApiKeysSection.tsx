@@ -56,8 +56,9 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 		{visible.length === 0 ? <p role="status" className="settings-content-row text-control text-settings-muted">{t("settings.apiKeys.noMatches")}</p> : null}
 		{visible.map((key) => {
 			const open = editing === key.name;
-			// The open editor shares the row's tint so the two read as one block.
-			return <div key={key.name} data-editing={open ? "" : undefined} className={open ? "bg-(--color-interactive-active)" : undefined}>
+			// Row and editor share one block (no divider between them), so the
+			// editor reads as part of its row without an extra surface tint.
+			return <div key={key.name} data-editing={open ? "" : undefined}>
 				<ProviderKeyRow
 					providerKey={key}
 					editing={open}
