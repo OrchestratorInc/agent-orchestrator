@@ -1,9 +1,10 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
 import { Gauge, Image, Text } from "@expo/ui/swift-ui";
-import { accessibilityAddTraits, accessibilityHidden, background, buttonStyle, disabled as disabledModifier, font, foregroundStyle, gaugeStyle, listRowBackground, scaleEffect, scrollContentBackground, tint } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityAddTraits, accessibilityHidden, background, buttonStyle, disabled as disabledModifier, font, foregroundStyle, frame, gaugeStyle, listRowBackground, scaleEffect, scrollContentBackground, tint } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet } from "react-native";
 import { appFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
+import { rowIconWidth } from "../tokens";
 import type { ConversationMenuItem } from "./conversationMenuModel";
 import type { ConversationActionsPageProps } from "./ConversationActionsPage.types";
 
@@ -44,7 +45,7 @@ function ActionRow({ item, onSelect }: { item: ConversationMenuItem; onSelect: C
 			testID={`conversation-action-${item.action}`}
 			// The list's own button style, for the row highlight a plain button lacks.
 			modifiers={[buttonStyle("automatic"), listRowBackground(t.bgElevated), ...(item.disabled ? [disabledModifier(true)] : [])]}
-			leading={<Image systemName={item.icon.ios} color={item.destructive ? t.red : t.textSecondary} modifiers={[font({ textStyle: "body" }), accessibilityHidden(true)]} />}
+			leading={<Image systemName={item.icon.ios} color={item.destructive ? t.red : t.textSecondary} modifiers={[font({ textStyle: "body" }), frame({ width: rowIconWidth }), accessibilityHidden(true)]} />}
 			supportingText={item.subtitle ? <Text modifiers={[appFont("footnote"), foregroundStyle(t.textSecondary)]}>{item.subtitle}</Text> : undefined}
 			trailing={item.meter === undefined ? undefined : (
 				// The system's capacity ring, the percentage inside it; the subtitle

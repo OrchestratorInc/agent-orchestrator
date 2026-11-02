@@ -782,12 +782,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		};
 	}, []);
 
-	// The title is just the short id; everything else the bar holds is a toolbar item.
+	// The session's name, as the chat and the board call it; the short id only
+	// when it has none. Everything else the bar holds is a toolbar item.
+	const named = sessions.find((session) => session.id === id);
+	const sessionName = named?.displayName || named?.issueTitle || params.title;
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			title: shellOnly ? (params.title || "Worktree shell") : id.length > 22 ? `${id.slice(0, 20)}...` : id,
+			title: shellOnly ? (params.title || "Worktree shell") : sessionName || (id.length > 22 ? `${id.slice(0, 20)}...` : id),
 		});
-	}, [navigation, id, params.title, shellOnly]);
+	}, [navigation, id, params.title, sessionName, shellOnly]);
 
 	// Load config, then connect the mux socket.
 	// Rebuilt whenever the active endpoint changes, not only when the session
@@ -1547,7 +1550,9 @@ const makeStyles = (t: Theme) =>
 	transitionNoticeText: { flex: 1, paddingVertical: space.sm, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	transitionNoticeTextFailed: { color: t.red },
 	transitionNoticeActions: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: space.lg, paddingBottom: space.sm },
-	termWrap: { flex: 1, backgroundColor: t.bgBase },
+	// iOS draws the grid's first column against the screen's rounded edge,
+	// which cut it off; a few points in keeps every cell whole.
+	termWrap: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: Platform.OS === "ios" ? space.xs : 0 },
 	// The page's own surface, as under the chat composer: the composer's
 	// elevated fill and the keys' tonal fill both need it to stand apart from.
 	dock: {

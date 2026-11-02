@@ -183,17 +183,23 @@ describe("iOS spawn selectors", () => {
 	});
 
 	// Each agent opens onto its own models, so picking a model picks its agent.
-	it("nests each agent's models under it, checking the current agent and model", async () => {
+	// The task's own agent's models sit at the menu's top level, the current one
+	// checked, so changing just the model is one tap; other agents open below.
+	it("lists the current agent's models at the top, checked, and nests the other agents", async () => {
 		const props = baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5" });
 		const root = await render(props);
-		const codex = identified(root, "spawn-model-codex");
-		// Each agent keeps its mark in the menu: an asset-catalog image, which keeps
-		// its size in an open submenu's header where a framed image did not.
-		expect(codex.props.label.props.title).toBe("Codex");
-		expect(await markOf(codex.props.label.props.icon)).toBe("HarnessLogo-codex");
-		expect(choices(codex).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false], ["GPT-5", true]]);
-		// An agent without a list yet still offers its default model.
+		const sections = identified(root, "spawn-harness").findAll((node) => hostType(node) === "Section");
+		expect(sections.map((section) => section.props.title)).toEqual(["Codex", "Other agents"]);
+		expect(choices(sections[0]).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false], ["GPT-5", true]]);
+		await act(async () => choices(sections[0])[0].props.onIsOnChange(true));
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
+		expect(root.findAll((node) => modifier(node, "accessibilityIdentifier")?.args[0] === "spawn-model-codex")).toHaveLength(0);
+		// Each other agent keeps its mark in the menu: an asset-catalog image, which
+		// keeps its size in an open submenu's header where a framed image did not.
 		const aider = identified(root, "spawn-model-aider");
+		expect(aider.props.label.props.title).toBe("Aider");
+		expect(await markOf(aider.props.label.props.icon)).toBe("HarnessLogo-aider");
+		// An agent without a list yet still offers its default model.
 		expect(choices(aider).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false]]);
 		await act(async () => choices(aider)[0].props.onIsOnChange(true));
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("aider", "__auto__");
@@ -228,7 +234,7 @@ describe("iOS spawn selectors", () => {
 	it("names the default row by the catalog's default and opens a long catalog whole", async () => {
 		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
 		const root = await render(props);
-		const codex = identified(root, "spawn-model-codex");
+		const codex = identified(root, "spawn-harness").findAll((node) => hostType(node) === "Section" && node.props.title === "Codex")[0];
 		expect(choiceLabel(choices(codex)[0])).toBe("Default · GPT-6.1-Sol");
 		const all = codex.findAll((node) => hostType(node) === "Button" && String(node.props.label).startsWith("All models"))[0];
 		expect(all.props.label).toBe(`All models (${(8929).toLocaleString()})`);

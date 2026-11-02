@@ -25,7 +25,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "disabled", "font", "foregroundStyle", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "disabled", "font", "foregroundStyle", "frame", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
@@ -126,6 +126,8 @@ describe("the iOS settings form", () => {
 		const icon = render(label.props.icon).findByType("Image" as never);
 		expect(icon.props).toMatchObject({ systemName: "laptopcomputer", color: "#secondary" });
 		expect(has(icon, "font", { textStyle: "body" })).toBe(true);
+		// One fixed column, so the titles line up whatever the glyph's width.
+		expect(has(icon, "frame", { width: 28 })).toBe(true);
 	});
 
 	it.each([

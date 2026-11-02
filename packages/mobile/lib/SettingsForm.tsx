@@ -7,6 +7,7 @@ import {
 	buttonStyle,
 	disabled as disabledModifier,
 	font,
+	frame,
 	foregroundStyle,
 	imageScale,
 	labelsHidden,
@@ -36,7 +37,7 @@ import {
 } from "./SettingsForm.types";
 import { appFont } from "./swiftUIFont";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { space } from "./tokens";
+import { rowIconWidth, space } from "./tokens";
 
 export { settingsIcons, type SettingsIconName, type SettingsOption, type SettingsTone } from "./SettingsForm.types";
 
@@ -107,7 +108,7 @@ function SectionText({ children, header = false }: { children: string; header?: 
  */
 function RowIcon({ icon, color }: { icon: SettingsIconName; color?: string }) {
 	const t = useTheme();
-	return <Image systemName={settingsIcons[icon].ios} color={color ?? t.textSecondary} modifiers={[font({ textStyle: "body" }), accessibilityHidden(true)]} />;
+	return <Image systemName={settingsIcons[icon].ios} color={color ?? t.textSecondary} modifiers={[font({ textStyle: "body" }), frame({ width: rowIconWidth }), accessibilityHidden(true)]} />;
 }
 
 /** Icon and title as one Label, so the Form lines separators up with the title. */

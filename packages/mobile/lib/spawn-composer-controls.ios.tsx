@@ -84,6 +84,23 @@ export function SpawnComposerControls({
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
+	// An agent's models as menu choices: the default first, named when the
+	// catalog says which it is; then the first few models; then the whole catalog.
+	const modelChoices = (agentId: string) => (
+		<>
+			{[{ id: "__auto__", label: defaultModelChoice(agentModels[agentId]?.defaultLabel) }, ...(agentModels[agentId]?.models ?? [])].map((model) => (
+				<Choice
+					key={model.id}
+					label={model.label}
+					selected={agentId === harness && model.id === modelSelection}
+					onChoose={() => onSelectAgentModel(agentId, model.id)}
+				/>
+			))}
+			{(agentModels[agentId]?.total ?? 0) > (agentModels[agentId]?.models.length ?? 0) ? (
+				<Button label={`All models (${agentModels[agentId]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agentId)} />
+			) : null}
+		</>
+	);
 
 	return (
 		<View style={styles.stack}>
@@ -152,29 +169,25 @@ export function SpawnComposerControls({
 									label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
 									modifiers={useTriggerModifiers({ label: agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}`, id: "spawn-harness", disabled: busy })}
 								>
-									{agents.map((agent) => (
-										<Menu
-											key={agent.id}
-											label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
-											modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
-										>
-											{/* The default first, named when the catalog says which it
-											    is; then the first few models; then the whole catalog. */}
-											{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
-												<Choice
-													key={model.id}
-													label={model.label}
-													selected={agent.id === harness && model.id === modelSelection}
-													onChoose={() => onSelectAgentModel(agent.id, model.id)}
-												/>
+									{/* The task's own agent's models at the top, the current one
+									    checked, so changing just the model is one tap; the other
+									    agents below, each opening one level down. */}
+									<Section title={harnessLabel}>
+										{modelChoices(harness)}
+									</Section>
+									{agents.some((agent) => agent.id !== harness) ? (
+										<Section title="Other agents">
+											{agents.filter((agent) => agent.id !== harness).map((agent) => (
+												<Menu
+													key={agent.id}
+													label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
+													modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
+												>
+													{modelChoices(agent.id)}
+												</Menu>
 											))}
-											{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
-												<Section>
-													<Button label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agent.id)} />
-												</Section>
-											) : null}
-										</Menu>
-									))}
+										</Section>
+									) : null}
 								</Menu>
 								{/* The effort as a speedometer lit to the chosen level; a tap
 								    opens the effort slider above the composer. */}

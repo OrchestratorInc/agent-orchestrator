@@ -155,6 +155,12 @@ export const iconSize = {
 export { touchTarget } from "./platformTokens";
 
 /**
+ * iOS grouped lists' icon column: each row's glyph centred in this width, so
+ * the titles beside them line up whatever the symbol's own width.
+ */
+export const rowIconWidth = 28;
+
+/**
  * A form sheet's `sheetCornerRadius`: the system's own shape on iOS (unset) and
  * Material 3's bottom-sheet corner on Android. Pass this rather than a number,
  * so a sheet keeps the platform's shape.
