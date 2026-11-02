@@ -89,7 +89,7 @@ func geminiPrompt(text string) string {
 	return text
 }
 
-func geminiCWD(ctx context.Context, root *os.Root, path, hash string) string {
+func geminiCWD(ctx context.Context, root *os.Root, path, hash string, projects []string) string {
 	if ctx.Err() != nil {
 		return ""
 	}
@@ -98,18 +98,23 @@ func geminiCWD(ctx context.Context, root *os.Root, path, hash string) string {
 		return strings.TrimSpace(string(body))
 	}
 	body, err := root.ReadFile("projects.json")
-	if err != nil || len(body) > 4<<20 {
-		return ""
-	}
 	var registry struct {
 		Projects map[string]string `json:"projects"`
 	}
-	if json.Unmarshal(body, &registry) != nil {
-		return ""
+	if err == nil && len(body) <= 4<<20 && json.Unmarshal(body, &registry) == nil {
+		for cwd, slug := range registry.Projects {
+			sum := sha256.Sum256([]byte(cwd))
+			if slug == filepath.Base(projectDir) || hex.EncodeToString(sum[:]) == hash {
+				return cwd
+			}
+		}
 	}
-	for cwd, slug := range registry.Projects {
+	// Older releases stored only sha256(cwd). Match explicit AO project paths;
+	// never search the filesystem or write a registry/marker into provider state.
+	for _, cwd := range projects {
 		sum := sha256.Sum256([]byte(cwd))
-		if slug == filepath.Base(projectDir) || hex.EncodeToString(sum[:]) == hash {
+		expected := hex.EncodeToString(sum[:])
+		if filepath.Base(projectDir) == expected && (hash == "" || hash == expected) {
 			return cwd
 		}
 	}
@@ -117,6 +122,10 @@ func geminiCWD(ctx context.Context, root *os.Root, path, hash string) string {
 }
 
 func readGeminiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	return readGeminiTranscriptWithProjects(ctx, root, nil, paths...)
+}
+
+func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects []string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessGemini, root: canonical(root)}
 	if len(paths) != 1 {
 		return t, errors.New("no gemini transcript")
@@ -265,7 +274,7 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, errors.New("invalid gemini conversation")
 	}
 	t.nativeID = metadata.SessionID
-	t.cwd = geminiCWD(ctx, provider, rel, metadata.ProjectHash)
+	t.cwd = geminiCWD(ctx, provider, rel, metadata.ProjectHash, projects)
 	if t.cwd == "" {
 		return t, errors.New("gemini source folder is unknown")
 	}
@@ -303,6 +312,10 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 }
 
 func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
+	return discoverGeminiWithProjects(ctx, root, nil)
+}
+
+func discoverGeminiWithProjects(ctx context.Context, root string, projects []string) ([]sourceFiles, error) {
 	byID := map[string]sourceFiles{}
 	activity := map[string]time.Time{}
 	err := filepath.WalkDir(filepath.Join(root, "tmp"), func(path string, entry fs.DirEntry, walkErr error) error {
@@ -312,7 +325,7 @@ func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 		if walkErr != nil || !entry.Type().IsRegular() || filepath.Base(filepath.Dir(path)) != "chats" || !strings.HasPrefix(entry.Name(), "session-") || (!strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, ".jsonl")) {
 			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
-		t, err := readGeminiTranscript(ctx, root, path)
+		t, err := readGeminiTranscriptWithProjects(ctx, root, projects, path)
 		if err != nil {
 			return nil //nolint:nilerr // One malformed or unreadable conversation does not hide its neighbors.
 		}

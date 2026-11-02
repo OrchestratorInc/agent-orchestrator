@@ -3,6 +3,8 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -141,20 +143,19 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	}
 }
 
-func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
-	const replacement = "replaces the default OpenCode 1"
+func TestOpenCodeV2RecipesNeverReplaceV1(t *testing.T) {
 	for _, tc := range []struct {
 		goos string
 		want map[string]string
 	}{
 		{goos: "darwin", want: map[string]string{
-			"homebrew":           "brew install anomalyco/tap/opencode-v2",
+			"homebrew":           "brew install anomalyco/tap/opencode-v2; brew unlink opencode-v2",
 			"npm":                "npm install -g --prefix",
-			"official-installer": "https://opencode.ai/v2/install",
+			"official-installer": "https://opencode.ai/v2/install> --no-modify-path",
 		}},
 		{goos: "linux", want: map[string]string{
 			"npm":                "npm install -g --prefix",
-			"official-installer": "https://opencode.ai/v2/install",
+			"official-installer": "https://opencode.ai/v2/install> --no-modify-path",
 		}},
 		{goos: "windows", want: map[string]string{
 			"npm": "npm install -g --prefix",
@@ -162,7 +163,7 @@ func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
 			s := newTestService(tc.goos, "brew", "npm", "bash")
-			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", homebrewPrefix: t.TempDir(), writable: true}
 			plans, err := s.AgentPlans(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -191,15 +192,119 @@ func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
 				if !strings.Contains(method.Command, want) {
 					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
 				}
-				if method.ID == "npm" {
-					if method.Notice != "" || !strings.Contains(method.Command, "opencode-v2-home") {
-						t.Errorf("npm method must install into the private prefix without a replacement warning: %+v", method)
-					}
-				} else if !strings.Contains(method.Notice, replacement) {
-					t.Errorf("%s notice = %q, want replacement warning", method.ID, method.Notice)
+				if method.Notice != "" {
+					t.Errorf("%s notice = %q, want none: no method replaces OpenCode 1", method.ID, method.Notice)
+				}
+				if method.ID == "npm" && !strings.Contains(method.Command, "opencode-v2-home") {
+					t.Errorf("npm method must install into the private prefix: %+v", method)
 				}
 			}
 		})
+	}
+}
+
+func TestOpenCodeV2OfficialInstallerRunsWithPrivateHome(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan Plan
+	for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, AgentOperationInstall) {
+		if candidate.Method == "official-installer" {
+			plan = candidate
+		}
+	}
+	if plan.Unsupported || plan.Script == nil {
+		t.Fatalf("official installer plan = %+v, want an available script", plan)
+	}
+	wantHome := "HOME=" + s.privateInstallerHomes[TargetOpencodeV2]
+	if !slices.Contains(plan.Script.Env, wantHome) || !slices.Contains(plan.Script.Args, "--no-modify-path") {
+		t.Fatalf("installer env/args = %v / %v, want %q and --no-modify-path", plan.Script.Env, plan.Script.Args, wantHome)
+	}
+
+	s.privateInstallerHomes = nil
+	planner, err = s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, AgentOperationInstall) {
+		if candidate.Method == "official-installer" && (!candidate.Unsupported || candidate.Script != nil) {
+			t.Fatalf("installer without a private home = %+v, want unsupported rather than the default location", candidate)
+		}
+	}
+}
+
+func TestOpenCodeV2HomebrewUnlinksItselfAndRestoresLinkedV1(t *testing.T) {
+	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationUpdate} {
+		t.Run(string(operation), func(t *testing.T) {
+			prefix := t.TempDir()
+			linked := filepath.Join(prefix, "var", "homebrew", "linked")
+			if err := os.MkdirAll(linked, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Homebrew's marker is a symlink; any entry counts, and a plain file
+			// needs no symlink privilege on Windows runners.
+			if err := os.WriteFile(filepath.Join(linked, "opencode"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			s := newTestService("darwin", "brew")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", homebrewPrefix: prefix, writable: true}
+			planner, err := s.newRequestPlanner(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plan Plan
+			for _, candidate := range planner.agentMethodPlans(TargetOpencodeV2, operation) {
+				if candidate.Method == "homebrew" {
+					plan = candidate
+				}
+			}
+			if plan.Unsupported {
+				t.Fatalf("homebrew plan = %+v, want available", plan)
+			}
+			if plan.homebrewV1Prefix != prefix {
+				t.Fatalf("Homebrew prefix = %q, want %q", plan.homebrewV1Prefix, prefix)
+			}
+			plan = plan.withLinkedOpenCodeV1()
+			if len(plan.Prepare) == 0 || strings.Join(plan.Prepare[len(plan.Prepare)-1], " ") != "brew unlink opencode" {
+				t.Fatalf("Prepare = %v, want OpenCode 1 unlinked last", plan.Prepare)
+			}
+			wantCleanup := [][]string{{"brew", "unlink", "opencode-v2"}, {"brew", "link", "opencode"}}
+			if !slices.EqualFunc(plan.Cleanup, wantCleanup, slices.Equal[[]string]) {
+				t.Fatalf("Cleanup = %v, want %v", plan.Cleanup, wantCleanup)
+			}
+			if !slices.Equal(plan.alsoChanges, []Target{TargetOpencode}) {
+				t.Fatalf("alsoChanges = %v, want OpenCode 1 held while unlinked", plan.alsoChanges)
+			}
+		})
+	}
+}
+
+func TestPlanCleanupRunsAfterFailedCommand(t *testing.T) {
+	s := newTestService("darwin")
+	var ran []string
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		ran = append(ran, strings.Join(command.Argv, " "))
+		if command.Argv[1] == "install" {
+			return errors.New("conflict")
+		}
+		return nil
+	})
+	plan := Plan{
+		Target: TargetOpencodeV2, Method: "homebrew",
+		Prepare: [][]string{{"brew", "unlink", "opencode"}},
+		Command: []string{"brew", "install", "anomalyco/tap/opencode-v2"},
+		Cleanup: [][]string{{"brew", "unlink", "opencode-v2"}, {"brew", "link", "opencode"}},
+	}
+	job := &Job{Target: TargetOpencodeV2, Method: "homebrew", Status: StatusInstalling}
+	s.runAgentOperation(context.Background(), plan, AgentOperationInstall, job, nil)
+	want := []string{"brew unlink opencode", "brew install anomalyco/tap/opencode-v2", "brew unlink opencode-v2", "brew link opencode"}
+	if !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+	if job.Status != StatusFailed || !strings.Contains(job.Error, "conflict") {
+		t.Fatalf("job = %+v, want the install's own failure", job)
 	}
 }
 

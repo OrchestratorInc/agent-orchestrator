@@ -62,8 +62,10 @@ export function SessionContextMenuItems({
 	const canResume = useCanResumeAgent(session.hostId || isOrchestratorSession(session) ? undefined : session);
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = !session.hostId && !session.cloud;
-	// Rename and pin go to the daemon that owns the session; a Cloud session has none.
-	const isCloud = Boolean(session.cloud);
+	// Rename and pin go to whoever owns the session: its daemon, or the control
+	// plane for a Cloud session. A session shared from another organization is
+	// the sharer's to name and lists outside this sidebar's pins.
+	const canRenameAndPin = !session.cloud?.shared;
 
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -75,7 +77,7 @@ export function SessionContextMenuItems({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
-	const hasManageItems = !isCloud || canResume;
+	const hasManageItems = canRenameAndPin || canResume;
 	const hasLinkItems = Boolean(pr) || showBranch;
 	const openPullRequest = (url: string, title: string) => {
 		aoBridge.app.openExternal(url).catch((error: unknown) => {
@@ -86,7 +88,7 @@ export function SessionContextMenuItems({
 	return (
 		<>
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
-			{isCloud ? null : (
+			{canRenameAndPin ? (
 				<>
 					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
 						<Pencil aria-hidden="true" />
@@ -97,7 +99,7 @@ export function SessionContextMenuItems({
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 					</ContextMenuItem>
 				</>
-			)}
+			) : null}
 			{canResume ? (
 				<ContextMenuItem onSelect={resume}>
 					<Play aria-hidden="true" />

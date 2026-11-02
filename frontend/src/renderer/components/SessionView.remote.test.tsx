@@ -27,7 +27,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
-vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => <div data-testid="shared-shell-topbar" /> }));
+vi.mock("./SessionTopbarActions", () => ({ SessionTopbarActions: () => <div data-testid="shared-shell-topbar" /> }));
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-label="Notifications" type="button" /> }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: ({ session, terminalTarget, inputDisabled, createMux }: { session?: { hostId?: string; terminalHandleId?: string }; terminalTarget?: { kind: string; handleId?: string }; inputDisabled?: boolean; createMux?: () => unknown }) => <div data-testid="remote-terminal-base" data-host-id={session?.hostId ?? ""} data-terminal-handle={terminalTarget?.handleId ?? session?.terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"} data-remote-mux={createMux ? "true" : "false"}>{session?.hostId ? baseUrlForHost(session.hostId) : "local"}</div> }));
 
@@ -39,11 +39,12 @@ import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { SessionView } from "./SessionView";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
+import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderRemoteSession(queryClient: QueryClient, hostId = "box-a") {
 	return render(<QueryClientProvider client={queryClient}>
-		<TooltipProvider><SessionTopbarProvider><SessionView hostId={hostId} sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+		<TooltipProvider><SessionTopbarProvider><PageTopbarSurface notifications><SessionView hostId={hostId} sessionId="session-1" /></PageTopbarSurface></SessionTopbarProvider></TooltipProvider>
 	</QueryClientProvider>);
 }
 
@@ -389,7 +390,7 @@ it("baselines previews separately when the same session ID is viewed on another 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-a")]?.view).toBe("summary");
 	view.rerender(<QueryClientProvider client={client}>
-		<TooltipProvider><SessionTopbarProvider><SessionView hostId="box-b" sessionId="session-1" /></SessionTopbarProvider></TooltipProvider>
+		<TooltipProvider><SessionTopbarProvider><PageTopbarSurface notifications><SessionView hostId="box-b" sessionId="session-1" /></PageTopbarSurface></SessionTopbarProvider></TooltipProvider>
 	</QueryClientProvider>);
 	await waitFor(() => expect(client.getQueryData(remoteWorkspaceQueryKey("box-b"))).toBeDefined());
 	expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-1", "box-b")]?.view).toBe("summary");
