@@ -8,6 +8,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -426,6 +427,14 @@ describe("render activity", () => {
 		} finally {
 			open.mockRestore();
 		}
+	});
+
+	it("opens the page in the session's Browser panel straight from the inline frame", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
+		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
 	});
 });
 

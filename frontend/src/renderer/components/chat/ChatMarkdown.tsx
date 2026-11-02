@@ -101,6 +101,8 @@ const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
+// Files the Browser panel shows rendered: the daemon turns Markdown into HTML.
+const BROWSER_PAGE = /\.(?:html?|md|markdown|pdf|svg|png|jpe?g|gif|webp|avif)$/i;
 const OpenChatLink = createContext<{
 	open?: (url: string) => void;
 	openFile?: (path: string, line?: number) => void;
@@ -355,7 +357,13 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
-	const openInFiles = filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined;
+	// A page a browser renders opens in the Browser panel; source files and a
+	// reference to a line open in Files. A remote host's Browser cannot reach
+	// its workspace files, so there only HTML takes the Browser route.
+	const browserPage = Boolean(filePath && href && workspaceFileReferenceLine(href) == null &&
+		(remoteHost ? /\.html?$/i : BROWSER_PAGE).test(filePath));
+	const fileTarget = filePath && href ? workspaceFileOpenTarget(href, filePath) : undefined;
+	const openInFiles = browserPage ? undefined : fileTarget;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
@@ -365,9 +373,10 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 	return (
 		<AppLink
 			href={href}
-			onBrowserOpen={onLinkOpen}
+			// The matched file, not the link as written: `plan.md` may be `docs/plan.md`.
+			onBrowserOpen={browserPage && fileTarget && onLinkOpen ? () => onLinkOpen(fileTarget) : onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
-			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
+			filePath={fileTarget ?? filePath}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -509,6 +518,11 @@ export function FileReference({ path, line, className, children }: { path: strin
 			{children}
 		</button>
 	);
+}
+
+/** Opens a URL in this chat session's Browser panel; undefined when the chat cannot. */
+export function useChatBrowserOpen() {
+	return useContext(OpenChatLink).open;
 }
 
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
