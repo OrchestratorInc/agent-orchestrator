@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -93,6 +93,60 @@ describe("CloudSessionChatSurface", () => {
 		expect(second[2]).not.toHaveProperty("content");
 		expect(second[2].text).toBe(first[2].text);
 		expect(second[3]).toEqual({ idempotencyKey: "quote-1" });
+	});
+
+	it("sends text that holds the typed message with its quotes and captures inlined", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Why?", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "Because of the cache.", turnId: "turn-1", itemId: "reply" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const excerpt = { id: "ex-1", order: 0, conversationId: `cloud:${session.id}`, messageId: "cloud-assistant-turn-1:reply", revision: 1, text: "the cache", role: "assistant" as const };
+		const capture = captureFileReference({ path: "cache.ts", side: "file", line: 3, endLine: 3, lines: [{ kind: "context", oldNo: 3, newNo: 3, text: "const ttl = 60;" }] }, session.id);
+		// The composer inlines the captures into the text and hands over the message as typed.
+		await props.onSend("Is this right?\n\nUser-supplied captured code ...", undefined, "both-1", [excerpt], [capture], "Is this right?");
+		// A caller that hands the captures over separately gets them inlined here.
+		await props.onSend("And this?", undefined, "both-2", [excerpt], [capture]);
+		for (const [, , body] of cloudMocks.sendSessionMessage.mock.calls) {
+			expect(body.text).toContain(body.displayText);
+			expect(body.text).toContain("Selected text:\n---\nthe cache");
+			expect(body.content).toHaveLength(2);
+		}
+		expect(cloudMocks.sendSessionMessage.mock.calls[1][2].displayText).toBe("And this?");
+		expect(cloudMocks.sendSessionMessage.mock.calls[1][2].text).toContain("const ttl = 60;");
+	});
+
+	it("goes as text alone when the control plane refuses its display text", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset()
+			.mockRejectedValueOnce(new CloudCpError("displayText must be part of text.", { status: 400, code: "validation_error" }))
+			.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const capture = captureFileReference({ path: "a.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "x" }] }, session.id);
+		await props.onSend("Check", undefined, "refused-1", undefined, [capture]);
+		const [first, second] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first[2]).toMatchObject({ displayText: "Check" });
+		expect(second[2]).not.toHaveProperty("displayText");
+		expect(second[2]).not.toHaveProperty("content");
+		expect(second[2].text).toBe(first[2].text);
+		expect(second[3]).toEqual({ idempotencyKey: "refused-1" });
+	});
+
+	it("never sends a display text its text does not hold", () => {
+		const content = [{ type: "excerpt", text: "q" }];
+		expect(cloudMessageBody("Explain this\n\nquote", { text: "Explain this", content })).toEqual({ text: "Explain this\n\nquote", displayText: "Explain this", content });
+		// Only captures, nothing typed: the transcript shows the captures alone.
+		expect(cloudMessageBody("captured", { text: "", content })).toEqual({ text: "captured", content });
+		expect(cloudMessageBody("Explain\u00a0this", { text: "Explain this", content })).toEqual({ text: "Explain\u00a0this" });
+		expect(cloudMessageBody("plain")).toEqual({ text: "plain" });
 	});
 
 	it("shows a message with recorded quotes as typed, with its quotes beside it", () => {

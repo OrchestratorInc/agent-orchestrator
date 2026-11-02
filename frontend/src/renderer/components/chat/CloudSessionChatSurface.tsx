@@ -572,6 +572,19 @@ export function cloudExcerptText(excerpts: readonly ChatDraftExcerptReference[],
 	}).join("");
 }
 
+/**
+ * A Cloud message's text for the agent, with, when it attaches quotes or
+ * captures, how the transcript shows it: the message as typed beside its
+ * quotes and captures. `text` is the typed message with the quotes and
+ * captures inlined, so it contains the typed message; the control plane
+ * refuses a display text that `text` does not contain (400), so a message
+ * whose display text is not in its text goes as text alone.
+ */
+export function cloudMessageBody(text: string, display?: { text: string; content: ConversationContentSummary[] }): { text: string; displayText?: string; content?: ConversationContentSummary[] } {
+	if (!display?.content.length || (display.text !== "" && !text.includes(display.text))) return { text };
+	return { text, ...(display.text ? { displayText: display.text } : {}), content: display.content };
+}
+
 /** The quoted messages and file captures a Cloud message attaches, as the content blocks a local message keeps for them. */
 export function cloudAnnotationContent(excerpts: readonly ChatDraftExcerptReference[] = [], fileReferences: readonly ChatFileReference[] = []): ConversationContentSummary[] {
 	return [
@@ -1312,14 +1325,15 @@ export function CloudSessionChatSurface({
 				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
-			if (!display?.content.length) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+			const message = cloudMessageBody(text, display);
+			if (!message.content) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
 			try {
-				return await client.sendSessionMessage(cloud.orgId, session.id, {
-					...request, ...(display.text ? { displayText: display.text } : {}), content: display.content,
-				}, { idempotencyKey: clientMessageId });
+				return await client.sendSessionMessage(cloud.orgId, session.id, { ...request, ...message }, { idempotencyKey: clientMessageId });
 			} catch (error) {
-				// A control plane from before message displays refuses the fields;
-				// the text already carries the captures, so it goes as text alone.
+				// A control plane from before message displays refuses the fields,
+				// and one that finds the display text missing from the text refuses
+				// it (both 400). The text already carries the quotes and captures,
+				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
 				return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
 			}
