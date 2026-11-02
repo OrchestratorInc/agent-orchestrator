@@ -4671,7 +4671,9 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            requiresVersion?: string;
             supportsFast?: boolean;
+            unavailableReason?: string;
         };
         AgentModelsResponse: {
             agentId: string;
@@ -5823,6 +5825,8 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            /** @enum {string} */
+            failureCode?: "provider_key_missing";
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
@@ -5941,6 +5945,7 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            branch?: string;
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
@@ -6493,8 +6498,12 @@ export interface components {
             shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         OpenShellTerminalRequest: {
+            /** @description Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored). */
+            cols?: number;
             /** @description Project whose root the shell starts in. Omitted opens the shell in the daemon data dir. */
             projectId?: string;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
             /** @description Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell. */
             sessionId?: string;
             /** @description Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux. */

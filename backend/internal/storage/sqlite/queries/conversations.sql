@@ -724,7 +724,7 @@ WHERE id = ?;
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+SET state = ?, error_message = ?, failure_code = ?, completed_at = COALESCE(completed_at, ?)
 WHERE id = ?;
 
 -- A streamed assistant item may not receive item/completed when steering causes

@@ -332,8 +332,8 @@ test("does not tell LAN users to join the same Wi-Fi", async () => {
 test("offers both store links without a platform choice", async () => {
 	renderMobileSettings();
 
-	expect(await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" })).toBeInTheDocument();
-	expect(screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" })).toBeInTheDocument();
+	expect(await screen.findByRole("button", { name: "Open Orchestrator on the App Store" })).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Open Orchestrator on Google Play" })).toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Get the app" })).not.toBeInTheDocument();
 });
 
@@ -342,8 +342,8 @@ test("offers both store links without a platform choice", async () => {
 test("shows the store links as one segmented control beside Get the app", async () => {
 	renderMobileSettings();
 
-	const ios = await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" });
-	const android = screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" });
+	const ios = await screen.findByRole("button", { name: "Open Orchestrator on the App Store" });
+	const android = screen.getByRole("button", { name: "Open Orchestrator on Google Play" });
 	expect(ios.parentElement).toBe(android.parentElement);
 	expect(ios.parentElement).toHaveClass("bg-(--color-bg-settings-input)");
 	expect(ios.parentElement?.parentElement).toHaveTextContent("Get the app");
@@ -351,14 +351,14 @@ test("shows the store links as one segmented control beside Get the app", async 
 
 test("shows a square Google Play QR tooltip for Android", async () => {
 	renderMobileSettings();
-	await userEvent.hover(await screen.findByRole("button", { name: "Open Agent Orchestrator on Google Play" }));
+	await userEvent.hover(await screen.findByRole("button", { name: "Open Orchestrator on Google Play" }));
 
 	expect(await screen.findByTestId("android-play-qr")).toHaveClass("p-2");
 });
 
 test("shows a QR-only App Store tooltip", async () => {
 	renderMobileSettings();
-	await userEvent.hover(await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" }));
+	await userEvent.hover(await screen.findByRole("button", { name: "Open Orchestrator on the App Store" }));
 
 	const tooltip = await screen.findByTestId("ios-store-qr");
 	expect(tooltip).not.toHaveTextContent("App Store");

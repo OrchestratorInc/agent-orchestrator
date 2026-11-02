@@ -116,6 +116,15 @@ var _ interface {
 	sessionmanager.TerminalInputFencer
 } = (*terminal.Manager)(nil)
 
+// daemonShutdownContext separates worker cancellation from signal cleanup.
+// Keep stopSignals deferred until restoration and all shutdown stages finish:
+// a second SIGTERM must not restore the default process-termination behavior.
+func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals context.CancelFunc) {
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancelWorkers = context.WithCancel(signalCtx)
+	return ctx, cancelWorkers, stopSignals
+}
+
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {
@@ -181,19 +190,20 @@ func Run(buildVersion string) error {
 	// a successor reclaims it with no stale-lock bookkeeping.
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
-	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout,
-	// the old daemon's capped shutdown (end of Run) then takes at most 8T+18s:
-	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
-	//     harness installer, background workers, agent-switch workers, Codex
-	//     account-switch workers, chat StopAll, LAN listener;
+	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
+	// and I = installerShutdownTimeout, capped shutdown takes at most 7T+I+18s:
+	//   - the HTTP drain and six stages capped at T each: failure dispatcher,
+	//     background workers, agent-switch workers, Codex account-switch workers,
+	//     chat StopAll, LAN listener; the harness installer gets I;
 	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
 	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
 	//     a 2s Sentry flush.
-	// Wait 9T+18s (108s by default), one stage of margin. Run's uncapped waits
+	// Wait 8T+I+18s (382s by default), one stage of margin. Run's uncapped waits
 	// (startup reconcile, preview servers, chat side stops, usage, pricing,
 	// lifecycle stack) are not covered: a predecessor stuck in one past the
 	// wait still makes this daemon exit 75.
-	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 9*cfg.ShutdownTimeout+18*time.Second, log)
+	installerShutdownTimeout := max(cfg.ShutdownTimeout, systeminstall.DefaultShutdownTimeout())
+	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
 		return err
 	}
@@ -263,7 +273,8 @@ func Run(buildVersion string) error {
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop, stopSignals := daemonShutdownContext()
+	defer stopSignals()
 	defer stop()
 	var usage *usageTelemetryFlusher
 	if remoteTelemetryActive && telemetryIdentity != nil {
@@ -540,7 +551,12 @@ func Run(buildVersion string) error {
 			return codexagent.New().ResolveBinary(resolveCtx)
 		}, log),
 		CodexOperationGate: codexOperationGate,
+		ModelGate:          claudeModelGate,
 	}
+	// Minimum Claude Code versions the API has reported per model persist
+	// across restarts so a model stays marked unavailable until the CLI updates.
+	claudecodeagent.ConfigureModelVersionRequirements(
+		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 	agentSvc.WarmModelCatalogs(ctx)
 
@@ -695,6 +711,10 @@ func Run(buildVersion string) error {
 	if prefix, err := opencode.V2NPMPrefix(); err == nil {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
+	privateInstallerHomes := map[systeminstall.Target]string{}
+	if home, err := opencode.V2InstallerHome(); err == nil {
+		privateInstallerHomes[systeminstall.TargetOpencodeV2] = home
+	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
 		JobStore:                  store,
 		Verifier:                  systeminstall.NewVerifier(agents, hostCommands),
@@ -706,6 +726,7 @@ func Run(buildVersion string) error {
 		ManagedRoot:               managedHarnessRoot(cfg),
 		Releases:                  store,
 		PrivateNPMPrefixes:        privateNPMPrefixes,
+		PrivateInstallerHomes:     privateInstallerHomes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -1304,11 +1325,13 @@ func Run(buildVersion string) error {
 	// their loops exit, then wait for them to drain. Doing this explicitly (not
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
+	// stop only cancels workers; deferred stopSignals keeps a second automatic
+	// SIGTERM from terminating the process while installer restoration runs.
 	stop()
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
 	}
-	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), installerShutdownTimeout)
 	if err := systemInstall.Close(installStopCtx); err != nil {
 		log.Error("harness installer shutdown", "err", err)
 	}
@@ -1503,6 +1526,12 @@ func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
+// stage of margin. Installer draining can outlast an ordinary shutdown stage.
+func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
+	return 8*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
+}
+
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a
 // predecessor still shutting down during a takeover does, it logs and waits up
 // to wait for that process to exit, then refuses to start. On a file system
@@ -1563,4 +1592,21 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+}
+
+// claudeModelGate marks Claude models the installed Claude Code is too old to
+// use. Other agents' catalogs pass through unchanged.
+func claudeModelGate(ctx context.Context, agentID string, catalog ports.AgentModelCatalog) ports.AgentModelCatalog {
+	if agentID != string(domain.HarnessClaudeCode) {
+		return catalog
+	}
+	binary := catalog.Metadata["binary"]
+	if binary == "" {
+		resolved, err := claudecodeagent.New().ResolveBinary(ctx)
+		if err != nil {
+			return catalog
+		}
+		binary = resolved
+	}
+	return claudecodeagent.GateModelCatalog(ctx, binary, catalog)
 }

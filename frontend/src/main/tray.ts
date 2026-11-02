@@ -92,7 +92,7 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 		tray.setImage(lastAwake ? awakeIcon : icon);
 		tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
 		const awakeLabel = awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";
-		tray.setToolTip([count > 0 ? tPlural("tray.attentionTooltip", count) : "Agent Orchestrator", awakeLabel].filter(Boolean).join(" — "));
+		tray.setToolTip([count > 0 ? tPlural("tray.attentionTooltip", count) : "Orchestrator", awakeLabel].filter(Boolean).join(" — "));
 
 		const items: MenuItemConstructorOptions[] = [];
 		if (awakeLabel) {

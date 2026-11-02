@@ -66,6 +66,26 @@ describe("AgentModelCombobox", () => {
 		expect(picker).toHaveTextContent("Low");
 	});
 
+	it("disables a model the installed CLI is too old for and explains the fix", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+			{
+				id: "claude-opus-5-5",
+				label: "Opus 5.5",
+				requiresVersion: "2.1.280",
+				unavailableReason: "Requires Claude Code 2.1.280 or newer (installed: 2.1.239). Run `claude update`, then try again.",
+			},
+		], { compact: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const gated = screen.getByRole("menuitem", { name: /Opus 5\.5/ });
+		expect(gated).toHaveAttribute("aria-disabled", "true");
+		expect(gated).toHaveTextContent("Requires Claude Code 2.1.280 or newer");
+		await userEvent.click(gated);
+		expect(onChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Sonnet 5.5" }));
+		expect(onChange).toHaveBeenCalledWith("claude-sonnet-5-5");
+	});
+
 	it("closes only the effort submenu on Escape", async () => {
 		renderCombobox(
 			[{ id: "capable", label: "Capable", efforts: ["low", "high"] }],

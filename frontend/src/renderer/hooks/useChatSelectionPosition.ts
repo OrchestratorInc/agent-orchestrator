@@ -1,3 +1,4 @@
+import { selectionToolbarPosition } from "../lib/selection-toolbar";
 import { useLayoutEffect, useState, type RefObject } from "react";
 
 /** Follow the selection's first line without changing the reader's scroll. */
@@ -51,16 +52,10 @@ export function useChatSelectionPosition(
 			}
 			const parent = button.offsetParent?.getBoundingClientRect() ?? bounds;
 			const size = button.getBoundingClientRect();
-			const left = Math.max(bounds.left + 8, Math.min(
-				rect.left + rect.width / 2 - size.width / 2, bounds.right - size.width - 8,
-			)) - parent.left;
-			const above = rect.top - size.height - 6;
-			const preferredTop = rect.top >= bounds.top && above < bounds.top + 8 ? rect.bottom + 6 : above;
-			const top = Math.max(bounds.top + 8, Math.min(preferredTop,
-				Math.max(bounds.top + 8, bounds.bottom - size.height - 8))) - parent.top;
-			const visible = bounds.bottom > bounds.top && bounds.right > bounds.left &&
-				extent.bottom > bounds.top && extent.top < bounds.bottom &&
-				extent.right > bounds.left && extent.left < bounds.right;
+			const placed = selectionToolbarPosition(rect, bounds, size, extent);
+			const left = placed.left - parent.left;
+			const top = placed.top - parent.top;
+			const visible = placed.visible;
 			setPosition((previous) => previous?.left === left && previous.top === top && previous.visible === visible
 				? previous : { left, top, visible });
 		};

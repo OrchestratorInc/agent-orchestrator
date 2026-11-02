@@ -13714,8 +13714,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label
@@ -16768,6 +16772,10 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failureCode:
+          enum:
+          - provider_key_missing
+          type: string
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
@@ -17103,6 +17111,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        branch:
+          maxLength: 255
+          type: string
         brief:
           maxLength: 16384
           type: string
@@ -18561,10 +18572,18 @@ components:
       type: object
     OpenShellTerminalRequest:
       properties:
+        cols:
+          description: Initial terminal columns. With rows, the shell starts immediately
+            at this grid instead of waiting for the client to attach (startOnAttach
+            is then ignored).
+          type: integer
         projectId:
           description: Project whose root the shell starts in. Omitted opens the shell
             in the daemon data dir.
           type: string
+        rows:
+          description: Initial terminal rows. See cols.
+          type: integer
         sessionId:
           description: Agent session the shell is scoped to, so it appears only in
             that session's tab strip. Omitted makes it a standalone shell.
