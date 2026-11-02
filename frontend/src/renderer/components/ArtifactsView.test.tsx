@@ -8,6 +8,9 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
+
 // Share is offered only where the control plane serves share links.
 vi.mock("../hooks/useSettings", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -278,7 +281,7 @@ describe("ArtifactsView", () => {
 	it.each(["html", "markdown"] as const)("previews a cloud %s artifact using cloud access", async (kind) => {
 		const name = kind === "html" ? "report.html" : "notes.md";
 		const cloud = session("cloud-1", "Cloud notes", [{ name, kind, updatedAt: "2026-10-11T10:00:00Z" }]);
-		cloud.cloud = { orgId: "org-1" };
+		cloud.cloud = { orgId: "org-1", createdByUserId: "me-1" };
 		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
@@ -293,6 +296,17 @@ describe("ArtifactsView", () => {
 			expect(preview).toHaveAttribute("data-read-only", "true");
 			expect(preview).toHaveAttribute("data-raw-url", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		}
+	});
+
+	it("offers no Share on another member's cloud session file", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", kind: "markdown", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const dialog = await screen.findByRole("dialog", { name: "notes.md" });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {

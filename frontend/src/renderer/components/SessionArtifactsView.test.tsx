@@ -9,6 +9,9 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
+
 // Share is offered only where the control plane serves share links.
 vi.mock("../hooks/useSettings", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -539,7 +542,9 @@ describe("SessionArtifactsView", () => {
 	it.each([
 		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
 		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: false },
-		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: true },
+		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "me-1" }, shown: true },
+		{ location: "another member's cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "someone-else" }, shown: false },
+		{ location: "creatorless cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: false },
 		{ location: "shared project's", hostId: undefined, cloud: { orgId: "org-1", shared: true }, shown: false },
 	])("puts Share beside Edit for a $location artifact: $shown", async ({ hostId, cloud, shown }) => {
 		const currentSession = { ...session(), ...(cloud ? { cloud } : {}) } as WorkspaceSession;

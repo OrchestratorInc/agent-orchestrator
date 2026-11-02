@@ -3424,6 +3424,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /**
+             * Format: uuid
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact). Omitted when none is on record.
+             */
+            createdByUserId?: string;
             /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
             requestedBy?: {
                 userId: string;
@@ -3494,6 +3499,7 @@ export interface components {
             contentType: string;
             /** Format: int64 */
             size: number;
+            /** @description The file's SHA-256 as declared when it was published. For a local file it is the uploader's claim, not checked against the bytes (each part is checked against its own declared SHA-256); for a cloud session's file it is the committed file's. It names no link and no version: ETags come from the link and its stored version. */
             sha256: string;
             /** Format: date-time */
             createdAt: string;
@@ -3524,7 +3530,7 @@ export interface components {
             name: string;
             /** Format: int64 */
             size: number;
-            /** @description The whole file's SHA-256. */
+            /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
             sha256: string;
             project?: string;
             feature?: string;

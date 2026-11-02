@@ -9,6 +9,7 @@ import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -366,6 +367,9 @@ export function SessionArtifactsView({
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
 	const { client: cloudClient } = useCloudCp(cloud);
+	// Only the person who started a cloud session shares its files.
+	const cloudUserId = useCloudMeUserId(cloud);
+	const cloudOwner = Boolean(cloudUserId) && session.cloud?.createdByUserId === cloudUserId;
 	const cloudOrgId = session.cloud?.orgId;
 	// A cloud session's worker gets feedback from the control plane, not the daemon.
 	const sendCloudFeedback = useCallback(async (message: string) => {
@@ -451,14 +455,14 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
-						{/* Beside the viewer's Edit button: the artifact's public link. A
-						    guest of a shared project does not publish its files. */}
-						{editingFile || session.cloud?.shared ? null : session.cloud ? (
+						{/* Beside the viewer's Edit button: the artifact's public link. Only
+						    the person who started a cloud session publishes its files. */}
+						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
 								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
 								name={selected.name}
 							/>
-						) : !hostId ? (
+						)) : !hostId ? (
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
 								name={selected.name}

@@ -6185,6 +6185,13 @@ components:
           type: boolean
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
+        createdByUserId:
+          type: string
+          format: uuid
+          description: >-
+            The person who started the session (for a spawned worker, its
+            orchestrator's). Only they share its files as public links
+            (shareSessionArtifact). Omitted when none is on record.
         requestedBy:
           type: object
           additionalProperties: false
@@ -6321,6 +6328,12 @@ components:
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
+          description: >-
+            The file's SHA-256 as declared when it was published. For a local
+            file it is the uploader's claim, not checked against the bytes
+            (each part is checked against its own declared SHA-256); for a
+            cloud session's file it is the committed file's. It names no link
+            and no version: ETags come from the link and its stored version.
         createdAt:
           type: string
           format: date-time
@@ -6378,7 +6391,10 @@ components:
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
-          description: The whole file's SHA-256.
+          description: >-
+            The whole file's SHA-256, as the uploader computed it. The
+            control plane records it on the link but does not check it against
+            the bytes; each part is checked against its own SHA-256.
         project:
           type: string
         feature:

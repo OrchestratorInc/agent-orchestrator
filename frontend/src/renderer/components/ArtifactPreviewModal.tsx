@@ -5,6 +5,7 @@ import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -33,6 +34,9 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const id = artifact ? artifactKey(artifact) : "";
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	// Only the person who started a cloud session shares its files.
+	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	const cloudOwner = Boolean(cloudUserId) && artifact?.cloud?.createdByUserId === cloudUserId;
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
@@ -58,9 +62,9 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
 							{/* A local file's project names its document: without one, sharing
-							    it here would make a second link for the same file. A guest of a
-							    shared project does not publish its files. */}
-							{artifact.cloud?.shared || (!artifact.cloud && !artifact.projectId) ? null : (
+							    it here would make a second link for the same file. Only the
+							    person who started a cloud session publishes its files. */}
+							{(artifact.cloud && (artifact.cloud.shared || !cloudOwner)) || (!artifact.cloud && !artifact.projectId) ? null : (
 								<ShareArtifactButton
 									className="transition-none"
 									file={artifact.cloud
