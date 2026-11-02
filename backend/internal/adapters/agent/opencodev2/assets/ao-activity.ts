@@ -20,6 +20,12 @@ export default {
     const seenSessions = new Set()
     const childSessions = new Set()
     let rootSessionID = null
+    // An inbox item can be re-delivered or reconciled, and a replayed prompt
+    // does not clear AO's unsettled checkpoint. Emit each inbox item once.
+    const seenInboxItems = new Set()
+    // A turn can end with both session.execution.* and session.status(idle).
+    // Report one stop per turn; the next user prompt starts a new turn.
+    const stoppedSessions = new Set()
     const controller = new AbortController()
 
     let queue = Promise.resolve()
@@ -59,6 +65,14 @@ export default {
       report("session-start", sessionID)
     }
 
+    // A second stop in the same turn would mark the completed conversation
+    // checkpoint unsettled, so the turn boundary is emitted at most once.
+    function reportStop(sessionID) {
+      if (!sessionID || stoppedSessions.has(sessionID)) return
+      stoppedSessions.add(sessionID)
+      report("stop", sessionID)
+    }
+
     function isChildSession(sessionID) {
       return !!sessionID && childSessions.has(sessionID)
     }
@@ -92,6 +106,9 @@ export default {
         case "session.execution.started": {
           const root = resolveSessionID(sessionID)
           ensureSession(root)
+          // A new execution segment starts a new turn even if the plugin missed
+          // the prompt event (for example when it subscribed mid-turn).
+          if (!isChildSession(sessionID)) stoppedSessions.delete(root)
           report("active", root)
           break
         }
@@ -102,15 +119,38 @@ export default {
           if (!sessionID || isChildSession(sessionID)) break
           rootSessionID = sessionID
           ensureSession(sessionID)
-          report("stop", sessionID)
+          reportStop(sessionID)
           break
         case "session.status":
           if (!sessionID || isChildSession(sessionID)) break
           rootSessionID = sessionID
           ensureSession(sessionID)
-          if (data?.status?.type === "idle") report("stop", sessionID)
-          else if (data?.status?.type === "busy") report("active", sessionID)
+          if (data?.status?.type === "idle") reportStop(sessionID)
+          else if (data?.status?.type === "busy") {
+            stoppedSessions.delete(sessionID)
+            report("active", sessionID)
+          }
           break
+        case "session.inbox.enqueued": {
+          // Only real user input is a prompt boundary. Synthetic, compaction,
+          // and move items would otherwise mark the session active with no
+          // prompt of their own.
+          if (!sessionID || isChildSession(sessionID)) break
+          const item = data?.item
+          if (item?.type !== "user") break
+          const inboxID = data?.inboxID || item?.id || ""
+          if (inboxID) {
+            if (seenInboxItems.has(inboxID)) break
+            seenInboxItems.add(inboxID)
+          }
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          stoppedSessions.delete(root)
+          // Forward only the prompt text; files and metadata stay native.
+          const text = typeof item.payload?.text === "string" ? item.payload.text : ""
+          report("user-prompt-submit", root, { prompt: text })
+          break
+        }
         case "permission.asked": {
           // A child dialog still blocks the tree; surface it on the root id.
           const root = resolveSessionID(sessionID)
