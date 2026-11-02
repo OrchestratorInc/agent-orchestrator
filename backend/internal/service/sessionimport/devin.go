@@ -131,7 +131,7 @@ func readDevinTranscript(ctx context.Context, root string, paths ...string) (tra
 			}
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(m.Role), Text: text, At: time.UnixMilli(at)}})
-		if len(items) > 2 && len(items)%100 == 0 {
+		if len(items) > 2 {
 			before := len(items)
 			items = trimVisible(items)
 			t.shortened = t.shortened || len(items) < before
