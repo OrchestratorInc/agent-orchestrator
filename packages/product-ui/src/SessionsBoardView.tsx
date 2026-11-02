@@ -69,6 +69,11 @@ export type BoardSessionPresentation = {
 	statusPresentation?: BoardSessionStatusPresentation;
 	title: string;
 	trackerIssueId?: string;
+	/**
+	 * The agent's one-line summary, printed verbatim beneath the branch.
+	 * Absent until the agent sets one, and from daemons too old to send it.
+	 */
+	summary?: string;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -371,6 +376,14 @@ export function SessionCardView({
 						{branchAction}
 					</div>
 				)}
+				{session.summary ? (
+					<div
+						className="mt-1 line-clamp-3 overflow-hidden text-xs leading-snug text-muted-foreground"
+						data-testid="board-session-summary"
+					>
+						{session.summary}
+					</div>
+				) : null}
 			</div>
 			{prs.length > 0 && (
 				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">

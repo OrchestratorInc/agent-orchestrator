@@ -203,7 +203,10 @@ vi.mock("../lib/host-clients", () => ({
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
 }));
-vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }),
+	useUpdateCardSummaries: () => ({ update: vi.fn() }),
+}));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,

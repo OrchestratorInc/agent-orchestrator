@@ -29,6 +29,7 @@ import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
+import { useSettings } from "../hooks/useSettings";
 import {
 	clearTerminateSessionState,
 	useTerminateSessionState,
@@ -82,6 +83,7 @@ export function toBoardSessionPresentation(
 		statusPresentation: provisioningStatus ?? failedStartStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
+		summary: session.summary,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt,
 	};
@@ -218,6 +220,8 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
+	const showSummary = useSettings(session.hostId).settings?.cardSummaries === true;
+	const presentation = { ...toBoardSessionPresentation(session), summary: showSummary ? session.summary : undefined };
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
@@ -325,8 +329,8 @@ function DesktopSessionCard({
 			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
-					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
-					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
+					? hideTerminatedCardStatus(presentation)
+					: withSharedWorkStatus(presentation, participants, me, t)
 			}
 			translate={translate}
 		/>

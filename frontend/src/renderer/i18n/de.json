@@ -2647,6 +2647,8 @@
 	"settings.harness.waitReason.resume": "kann nach dem Update nicht fortgesetzt werden",
 	"settings.versionRefresh.label": "Offene Sitzungen automatisch auf neue Versionen umstellen",
 	"settings.versionRefresh.description": "Nach einem Agent-Update starten inaktive Sitzungen mit der neuen Version neu, statt auf deinen Neustart zu warten.",
+	"settings.cardSummaries.label": "Kartenzusammenfassungen",
+	"settings.cardSummaries.description": "Worker zeigen Live-Updates zu ihrer Aktivität.",
 	"chat.versionSwitch.pending": "Wechsel zu {{version}} …",
 	"chat.versionSwitch.pendingHint": "Erfolgt, wenn der Agent untätig ist, oder mit deiner nächsten Nachricht.",
 	"chat.versionSwitch.installed": "{{version}} installiert",

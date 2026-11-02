@@ -73,6 +73,7 @@ import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
+import { useCardSummariesDeveloperDefault } from "../hooks/useCardSummariesDeveloperDefault";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
@@ -312,6 +313,7 @@ function ShellLayout() {
 	useAgentInventoryTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
+	useCardSummariesDeveloperDefault();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();

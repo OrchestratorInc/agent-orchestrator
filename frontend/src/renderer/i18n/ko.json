@@ -2647,6 +2647,8 @@
 	"settings.harness.waitReason.resume": "업데이트 후 이어서 실행할 수 없음",
 	"settings.versionRefresh.label": "열린 세션을 새 버전으로 자동 전환",
 	"settings.versionRefresh.description": "에이전트 업데이트 후 유휴 세션은 직접 다시 시작할 때까지 기다리지 않고 새 버전으로 다시 시작됩니다.",
+	"settings.cardSummaries.label": "카드 요약",
+	"settings.cardSummaries.description": "워커가 작업 상황을 실시간으로 보여 줍니다.",
 	"chat.versionSwitch.pending": "{{version}}(으)로 전환 중…",
 	"chat.versionSwitch.pendingHint": "에이전트가 유휴 상태가 되거나 다음 메시지를 보낼 때 전환됩니다.",
 	"chat.versionSwitch.installed": "{{version}} 설치됨",

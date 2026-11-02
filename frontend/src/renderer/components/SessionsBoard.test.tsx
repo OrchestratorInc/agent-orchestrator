@@ -29,6 +29,7 @@ const {
 	boardActionsInPanelMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
+	cardSummariesMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -40,9 +41,15 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 	spawnCloudOrchestratorMock: vi.fn(),
+	cardSummariesMock: vi.fn(() => true),
 }));
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
+
+vi.mock("../hooks/useSettings", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSettings")>()),
+	useSettings: () => ({ settings: { cardSummaries: cardSummariesMock() }, isLoading: false }),
+}));
 
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
 
@@ -159,6 +166,7 @@ beforeEach(() => {
 	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
 	useUiStore.setState({ developerMode: true, diagnostics: true });
 	navigateMock.mockReset();
+	cardSummariesMock.mockReset().mockReturnValue(true);
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	patchMock.mockReset().mockResolvedValue({ data: {}, response: { status: 200 } });
@@ -557,6 +565,59 @@ describe("SessionsBoard", () => {
 		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
+	});
+
+	it("renders the summary below the branch", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-order", title: "order worker", status: "working", branch: "feat/login-redirect", summary: "Fixing the login redirect" }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("order worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const branch = within(card).getByText("feat/login-redirect");
+		const summary = within(card).getByTestId("board-session-summary");
+		expect(branch.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("hides the summary while card summaries are off", () => {
+		cardSummariesMock.mockReturnValue(false);
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s-off", title: "off worker", status: "working", summary: "Fixing the login redirect" })])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("off worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).queryByTestId("board-session-summary")).not.toBeInTheDocument();
+	});
+
+	it("renders a summary without a hover tooltip", async () => {
+		const summary =
+			"Implemented robust filename sanitization across export formats and added coverage for reserved names and unicode input";
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "s-summary", title: "summary worker", status: "mergeable", summary }),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("summary worker").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const summaryPreview = within(card).getByTestId("board-session-summary");
+
+		await userEvent.hover(summaryPreview);
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(summaryPreview).not.toHaveAttribute("title");
 	});
 
 	it("styles a working card from its building lane without inferring from runtime activity", () => {

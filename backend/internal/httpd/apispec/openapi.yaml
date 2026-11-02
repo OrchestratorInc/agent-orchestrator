@@ -12273,6 +12273,44 @@ paths:
       summary: Read the daemon-owned user preferences
       tags:
       - settings
+  /api/v1/settings/card-summaries:
+    patch:
+      operationId: updateCardSummaries
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCardSummariesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether new workers keep a one-line summary on their kanban
+        card
+      tags:
+      - settings
   /api/v1/settings/chat-hibernation:
     patch:
       operationId: updateChatHibernation
@@ -12755,6 +12793,37 @@ paths:
       summary: ""
       tags:
       - conversations
+  /api/v1/summary:
+    post:
+      operationId: updateCardSummary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSummaryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateSummaryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Update the kanban card summary for a session
+      tags:
+      - sessions
   /api/v1/system/github-auth:
     get:
       operationId: getGitHubAuthRequirement
@@ -15955,6 +16024,8 @@ components:
           - checking
           - ready
           - unavailable
+          type: string
+        summary:
           type: string
         terminalGeneration:
           type: string
@@ -20638,6 +20709,11 @@ components:
       type: object
     SettingsResponse:
       properties:
+        cardSummaries:
+          description: New workers keep a one-line summary on their kanban card with
+            ao summary, and the board shows it. The desktop app turns it on with Developer
+            mode.
+          type: boolean
         chatHarnesses:
           items:
             type: string
@@ -20682,6 +20758,7 @@ components:
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
+      - cardSummaries
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -21886,6 +21963,15 @@ components:
           - "null"
           - string
       type: object
+    UpdateCardSummariesRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
     UpdateChatHibernationRequest:
       properties:
         enabled:
@@ -21945,6 +22031,32 @@ components:
           type: string
       required:
       - title
+      type: object
+    UpdateSummaryRequest:
+      properties:
+        done:
+          type: boolean
+        sessionId:
+          type: string
+        summary:
+          maxLength: 200
+          minLength: 1
+          type: string
+      required:
+      - sessionId
+      - summary
+      type: object
+    UpdateSummaryResponse:
+      properties:
+        ok:
+          type: boolean
+        retryAfterSeconds:
+          type: integer
+        updated:
+          type: boolean
+      required:
+      - ok
+      - updated
       type: object
     UpdateVersionRefreshRequest:
       properties:

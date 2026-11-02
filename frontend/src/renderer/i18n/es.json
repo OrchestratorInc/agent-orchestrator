@@ -2691,6 +2691,8 @@
 	"settings.harness.waitReason.resume": "no se puede reanudar tras la actualización",
 	"settings.versionRefresh.label": "Pasar las sesiones abiertas a las nuevas versiones automáticamente",
 	"settings.versionRefresh.description": "Tras actualizar un agente, las sesiones inactivas se reinician con la nueva versión en lugar de esperar a que las reinicies.",
+	"settings.cardSummaries.label": "Resúmenes en tarjetas",
+	"settings.cardSummaries.description": "Los workers muestran actualizaciones en vivo de su actividad.",
 	"chat.versionSwitch.pending": "Cambiando a {{version}}…",
 	"chat.versionSwitch.pendingHint": "Ocurre cuando el agente está inactivo o con tu próximo mensaje.",
 	"chat.versionSwitch.installed": "{{version}} instalada",

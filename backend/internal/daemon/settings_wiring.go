@@ -28,6 +28,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
 		ComputerUse:        row.ComputerUse,
+		CardSummaries:      row.CardSummaries,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -50,6 +51,10 @@ func (s settingsStore) SetVersionRefresh(ctx context.Context, enabled bool, now 
 
 func (s settingsStore) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetComputerUse(ctx, enabled, now)
+}
+
+func (s settingsStore) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	return s.store.SetCardSummaries(ctx, enabled, now)
 }
 
 func (s settingsStore) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {

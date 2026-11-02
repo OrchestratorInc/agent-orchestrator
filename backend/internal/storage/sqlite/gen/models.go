@@ -172,6 +172,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	CardSummaries      bool
 }
 
 type Automation struct {
@@ -743,6 +744,7 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+	CardSummary                      string
 }
 
 type SessionAgentAccount struct {

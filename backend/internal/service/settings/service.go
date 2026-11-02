@@ -29,6 +29,7 @@ type Store interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
+	SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -44,7 +45,11 @@ type Snapshot struct {
 	// ComputerUse gives new chat sessions the computer-use tools and their
 	// standing instruction (Settings, Computer use agents). Off by default.
 	ComputerUse bool
-	UpdatedAt   time.Time
+	// CardSummaries asks new workers to keep a one-line summary on their
+	// kanban card, and shows it on the board. Off by default; the desktop app
+	// turns it on with Developer mode.
+	CardSummaries bool
+	UpdatedAt     time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -195,6 +200,22 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 		}
 	}
 	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
+// CardSummariesEnabled reports whether new workers are asked to keep a kanban
+// card summary. It is read once per worker spawn; an unreadable store counts
+// as off.
+func (s *Service) CardSummariesEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.CardSummaries
+}
+
+// SetCardSummaries changes whether new workers keep a kanban card summary.
+func (s *Service) SetCardSummaries(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetCardSummaries(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)

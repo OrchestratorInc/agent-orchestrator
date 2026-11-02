@@ -208,6 +208,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
+	"ControllersUpdateCardSummariesRequest":                "UpdateCardSummariesRequest",
+	"ControllersUpdateSummaryRequest":                      "UpdateSummaryRequest",
+	"ControllersUpdateSummaryResponse":                     "UpdateSummaryResponse",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -755,6 +758,7 @@ func operations() []operation {
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
 	ops = append(ops, reportOperations()...)
+	ops = append(ops, summaryOperations()...)
 	ops = append(ops, usageOperations()...)
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)
@@ -882,6 +886,19 @@ func reportOperations() []operation {
 			{http.StatusNotFound, envelope.APIError{}},
 			{http.StatusInternalServerError, envelope.APIError{}},
 			{http.StatusNotImplemented, envelope.APIError{}},
+		},
+	}}
+}
+
+func summaryOperations() []operation {
+	return []operation{{
+		method: http.MethodPost, path: "/api/v1/summary", id: "updateCardSummary", tag: "sessions",
+		summary: "Update the kanban card summary for a session",
+		reqBody: controllers.UpdateSummaryRequest{},
+		resps: []respUnit{
+			{http.StatusOK, controllers.UpdateSummaryResponse{}},
+			{http.StatusBadRequest, envelope.APIError{}},
+			{http.StatusNotFound, envelope.APIError{}},
 		},
 	}}
 }
@@ -1210,6 +1227,17 @@ func shellTerminalOperations() []operation {
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/card-summaries", id: "updateCardSummaries", tag: "settings",
+			summary: "Choose whether new workers keep a one-line summary on their kanban card",
+			reqBody: controllers.UpdateCardSummariesRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
