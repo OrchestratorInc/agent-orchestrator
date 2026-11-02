@@ -44,7 +44,22 @@ type AgentFreshNativeSessionIDProvider interface {
 type NativeSessionRef struct {
 	NativeSessionID string
 	ConfigDir       string
+	// TranscriptPath optionally identifies the private prepared native history.
+	// AO retains the source archive and uses this path for the resumed binding.
+	TranscriptPath string
 }
+
+// MetadataKeyImportSourceNativeID identifies the immutable source conversation
+// during strict interactive import initialization.
+const MetadataKeyImportSourceNativeID = "importSourceNativeId"
+
+// MetadataKeyImportResumeNativeID identifies an already prepared/forked native
+// conversation, so retries resume that identity instead of forking again.
+const MetadataKeyImportResumeNativeID = "importResumeNativeId"
+
+// MetadataKeyImportConfigDir identifies the selected native state root during
+// imported restore initialization, including a private prepared copy.
+const MetadataKeyImportConfigDir = "importConfigDir"
 
 // AgentNativeSessionConfigProvider resolves the provider state root used for
 // a launch. AO stores the returned path with the native-session binding so a
@@ -112,4 +127,24 @@ type ImportedSessionRelocation struct {
 // resumed, that copy holds AO's later turns.
 type AgentImportedSessionRelocator interface {
 	RelocateImportedSession(ctx context.Context, r ImportedSessionRelocation) error
+}
+
+// AgentImportedSessionPreparer imports native history into the AO worktree
+// before its first launch and returns the exact resumable identity. The source
+// must remain untouched. Implementations must reuse their private prepared copy
+// on retries, identify it authoritatively, and fail rather than create an empty
+// conversation. An empty ConfigDir retains the original provider state root.
+// AO checkpoints the returned ref before launch; providers using the same id
+// without a new state root can keep AgentImportedSessionRelocator instead.
+type AgentImportedSessionPreparer interface {
+	PrepareImportedSession(context.Context, ImportedSessionRelocation) (NativeSessionRef, error)
+}
+
+// NativeRestoreIdentityTakeover opts an interactive first-open plan into a
+// provider-generated native fork. SourceNativeSessionID must match the exact
+// resume target supplied by AO. Restored must prove the fork's history and
+// worktree execution before TargetID returns its nonempty, observed new id.
+// Ordinary restores and plans without this capability cannot change identity.
+type NativeRestoreIdentityTakeover interface {
+	SourceNativeSessionID() string
 }

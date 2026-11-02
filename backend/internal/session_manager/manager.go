@@ -3730,7 +3730,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
-			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
 				argv = initialization.Argv()
 				for key, value := range initialization.LaunchEnv() {
@@ -3921,7 +3921,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if rec.NeedsImportResume() {
 		// Terminal providers redraw native history themselves. There is no Chat
 		// replay boundary, and adoption follows successful native initialization.
-		adopted := *rec.Metadata.ImportSource
+		adopted := *updated.Metadata.ImportSource
 		adopted.Adopted = true
 		updated.Metadata.ImportSource = &adopted
 		if err := m.store.UpdateSession(ctx, updated); err != nil {
