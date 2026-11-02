@@ -111,7 +111,11 @@ agent as having an unknown effect instead of being re-run.
   owner, the session label and that no workspace is bound. A missing,
   archived, foreign or workspace-bound chat is a typed resume failure, never a
   silent new chat. A run that continued in Coder while AO was away is adopted
-  as a turn.
+  as a turn. Every native history page is captured before the live stream
+  cursor advances, and AO imports user messages, assistant replies, reasoning,
+  tool results and usage through its typed history boundary. Stable native
+  message identities make repeated imports idempotent. Output completed while
+  AO was detached is recovered; importing history never executes its tools.
 
 ## Limitations
 

@@ -19,6 +19,32 @@ import (
 
 const testToken = "test-session-token-value"
 
+func TestChatHistoryDoesNotReturnPartialHistoryOnPageFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("before_id") == "" {
+			_, _ = w.Write([]byte(`{"messages":[{"id":200,"role":"assistant"}],"has_more":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	messages, err := testClient(t, server).ChatHistory(context.Background(), "chat")
+	if len(messages) != 0 || StatusCode(err) != http.StatusServiceUnavailable {
+		t.Fatalf("ChatHistory = %v, %v; must not publish an incomplete snapshot", messages, err)
+	}
+}
+
+func TestChatHistoryRejectsPaginationWithoutProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"messages":[{"id":200,"role":"assistant"}],"has_more":true}`))
+	}))
+	defer server.Close()
+	messages, err := testClient(t, server).ChatHistory(context.Background(), "chat")
+	if len(messages) != 0 || err == nil || !strings.Contains(err.Error(), "pagination did not advance") {
+		t.Fatalf("ChatHistory = %v, %v; want a failed snapshot", messages, err)
+	}
+}
+
 func testClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	base, err := ParseDeploymentURL(server.URL)

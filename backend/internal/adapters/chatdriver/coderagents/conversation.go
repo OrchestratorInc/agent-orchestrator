@@ -47,6 +47,7 @@ type conversationConfig struct {
 
 type turnState struct {
 	id          string
+	itemScope   string
 	approval    ports.PermissionMode
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -97,11 +98,13 @@ type conversation struct {
 	approvals     map[string]*pendingApproval
 	inflight      map[string]bool
 	submitted     map[string]bool
+	history       []ports.ChatEvent
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatProviderTerminator = (*conversation)(nil)
 var _ ports.ChatModelLister = (*conversation)(nil)
+var _ ports.ChatHistoryReader = (*conversation)(nil)
 
 func newConversation(log *slog.Logger, s session, cfg conversationConfig) (*conversation, error) {
 	cfg.permissions = ports.NormalizePermissionMode(cfg.permissions)
@@ -123,28 +126,29 @@ func newConversation(log *slog.Logger, s session, cfg conversationConfig) (*conv
 	var pending []coderapi.ToolCall
 	if cfg.chat != nil {
 		requestCtx, cancel := coderapi.WithRequestTimeout(c.ctx)
-		page, err := c.client.ChatMessages(requestCtx, cfg.chat.ID, 0)
+		messages, err := c.client.ChatHistory(requestCtx, cfg.chat.ID)
 		cancel()
 		if err != nil {
 			c.cancel()
 			return nil, fmt.Errorf("%w: read Coder chat messages: %w", ports.ErrChatResumeFailed, classify(err))
 		}
-		// Without after_id the page is the newest messages, newest first.
-		for _, message := range page.Messages {
+		for _, message := range messages {
 			c.lastMessageID = max(c.lastMessageID, message.ID)
 		}
+		var activeTurnID string
+		c.history, activeTurnID = replayHistory(cfg.key, *cfg.chat, messages)
 		c.chatID = cfg.chat.ID
 		close(c.chatReady)
 		switch cfg.chat.Status {
 		case coderapi.ChatStatusRunning, coderapi.ChatStatusRequiresAction, coderapi.ChatStatusInterrupting:
 			// Coder kept working while AO was away. Adopt that run as a turn so
 			// its output and completion are projected instead of dropped.
-			c.turn = c.newTurn("coder-agents-adopted:"+uuid.NewString(), cfg.permissions)
+			c.turn = c.newTurn(activeTurnID, cfg.permissions)
 			c.turn.sawRunning = true
 			c.events <- ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderConversationID: cfg.key, ProviderTurnID: c.turn.id}
 			c.events <- ports.ChatEvent{Kind: ports.ChatEventControllerState, ProviderConversationID: cfg.key, ProviderTurnID: c.turn.id, ControllerState: ports.ChatControllerBusy}
 			if cfg.chat.Status == coderapi.ChatStatusRequiresAction {
-				pending = pendingCalls(page.Messages)
+				pending = pendingCalls(messages)
 			}
 		}
 	}
@@ -164,7 +168,7 @@ func newConversation(log *slog.Logger, s session, cfg conversationConfig) (*conv
 func (c *conversation) newTurn(id string, approval ports.PermissionMode) *turnState {
 	ctx, cancel := context.WithCancel(c.ctx)
 	return &turnState{
-		id: id, approval: approval, ctx: ctx, cancel: cancel,
+		id: id, itemScope: id + ":stream:" + uuid.NewString(), approval: approval, ctx: ctx, cancel: cancel,
 		started: map[string]bool{}, completed: map[string]bool{},
 	}
 }
@@ -878,7 +882,7 @@ func usage(u *coderapi.ChatMessageUsage) *ports.ChatUsage {
 func (t *turnState) text() string {
 	if t.textItem == "" {
 		t.seq++
-		t.textItem = fmt.Sprintf("%s:text:%d", t.id, t.seq)
+		t.textItem = fmt.Sprintf("%s:text:%d", t.itemScope, t.seq)
 	}
 	return t.textItem
 }
@@ -888,7 +892,7 @@ func (t *turnState) reasoningStart() []ports.ChatEvent {
 		return nil
 	}
 	t.seq++
-	t.reasonItem = fmt.Sprintf("%s:reasoning:%d", t.id, t.seq)
+	t.reasonItem = fmt.Sprintf("%s:reasoning:%d", t.itemScope, t.seq)
 	return []ports.ChatEvent{{
 		Kind: ports.ChatEventActivityStarted, ProviderTurnID: t.id, ProviderItemID: t.reasonItem,
 		ActivityKind: domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusRunning, Summary: "Reasoning",

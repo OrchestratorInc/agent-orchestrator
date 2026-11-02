@@ -266,6 +266,37 @@ func (c *Client) ChatMessages(ctx context.Context, chatID string, afterID int64)
 	return res, err
 }
 
+// ChatHistory reads every history page, newest first. A resume cannot use just
+// the default newest 50 messages: older output may never have reached AO.
+func (c *Client) ChatHistory(ctx context.Context, chatID string) ([]ChatMessage, error) {
+	var messages []ChatMessage
+	var before int64
+	for {
+		query := url.Values{"limit": {"200"}}
+		if before > 0 {
+			query.Set("before_id", strconv.FormatInt(before, 10))
+		}
+		var page ChatMessagesResponse
+		if err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", query, nil, &page, http.StatusOK); err != nil {
+			return nil, err
+		}
+		messages = append(messages, page.Messages...)
+		if !page.HasMore {
+			return messages, nil
+		}
+		next := before
+		for _, message := range page.Messages {
+			if next == 0 || message.ID < next {
+				next = message.ID
+			}
+		}
+		if next <= 0 || before > 0 && next >= before {
+			return nil, errors.New("coder history pagination did not advance")
+		}
+		before = next
+	}
+}
+
 // InterruptChat cancels the chat's in-flight run.
 func (c *Client) InterruptChat(ctx context.Context, chatID string) (Chat, error) {
 	var chat Chat

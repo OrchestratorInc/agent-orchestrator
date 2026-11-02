@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -157,7 +159,23 @@ func (f *fakeCoder) serveChat(w http.ResponseWriter, r *http.Request, parts []st
 		f.mu.Lock()
 		history := append([]coderapi.ChatMessage(nil), f.history...)
 		f.mu.Unlock()
-		f.writeJSON(w, http.StatusOK, map[string]any{"messages": history})
+		before, _ := strconv.ParseInt(r.URL.Query().Get("before_id"), 10, 64)
+		filtered := history[:0]
+		for _, message := range history {
+			if before == 0 || message.ID < before {
+				filtered = append(filtered, message)
+			}
+		}
+		sort.Slice(filtered, func(i, j int) bool { return filtered[i].ID > filtered[j].ID })
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		hasMore := len(filtered) > limit
+		if hasMore {
+			filtered = filtered[:limit]
+		}
+		f.writeJSON(w, http.StatusOK, map[string]any{"messages": filtered, "has_more": hasMore})
 	case "interrupt":
 		f.mu.Lock()
 		f.interrupts++
