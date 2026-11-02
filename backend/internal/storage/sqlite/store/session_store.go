@@ -942,19 +942,21 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
 	}
-	// Retries and edit branches point at earlier turns with ON DELETE RESTRICT,
-	// which SQLite enforces even when the cascade below removes the pointing row
-	// too. Those links stay inside one conversation, and every conversation the
-	// session owns goes with it, so unlink them first.
+	// Retries and branches point at earlier turns and branches with ON DELETE
+	// RESTRICT, which SQLite enforces even when the cascade below removes the
+	// pointing row too. Those links stay inside one conversation, and the
+	// session's own conversations and its reviewers' all go with it, so unlink
+	// them first.
+	const cascaded = `SELECT id FROM conversations WHERE session_id = ?1
+UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_turns SET retry_of_turn_id = NULL
-WHERE retry_of_turn_id IS NOT NULL
-  AND conversation_id IN (SELECT id FROM conversations WHERE session_id = ?)`, id); err != nil {
+WHERE retry_of_turn_id IS NOT NULL AND conversation_id IN (`+cascaded+`)`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: unlink retried turns: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_branches SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
-WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?)`, id); err != nil {
+WHERE conversation_id IN (`+cascaded+`)`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: unlink conversation branches: %w", id, err)
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND is_terminated = 1`, id)

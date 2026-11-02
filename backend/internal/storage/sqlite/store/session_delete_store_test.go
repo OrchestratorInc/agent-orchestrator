@@ -180,10 +180,11 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 }
 
-// A retry and an edit branch point at earlier turns with ON DELETE RESTRICT,
-// which SQLite checks even when the same cascade removes the pointing row.
-// Deleting the session must still remove its whole conversation.
-func TestDeleteTerminatedSessionRemovesRetriedAndEditedConversation(t *testing.T) {
+// A retry, an edit branch and a reviewer's fresh thread point at earlier rows
+// with ON DELETE RESTRICT, which SQLite checks even when the same cascade
+// removes the pointing row. Deleting the session must still remove its own
+// conversation and its reviewer's.
+func TestDeleteTerminatedSessionRemovesLinkedConversationHistory(t *testing.T) {
 	for name, link := range map[string]func(*testing.T, *sqlite.Store, domain.SessionRecord, domain.ConversationRecord){
 		"retry": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, conversation domain.ConversationRecord) {
 			created, err := s.AppendRetryUserMessage(context.Background(), conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
@@ -202,6 +203,20 @@ func TestDeleteTerminatedSessionRemovesRetriedAndEditedConversation(t *testing.T
 			}, testNow.Add(2*time.Minute)); err != nil {
 				t.Fatalf("CreateConversationBranch: %v", err)
 			}
+		},
+		// A reviewer that cannot resume its thread starts a branch under its root.
+		"reviewer": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, _ domain.ConversationRecord) {
+			ctx := context.Background()
+			review := domain.Review{ID: "review-delete", SessionID: session.ID, ProjectID: session.ProjectID,
+				Harness: domain.ReviewerCodex, CreatedAt: testNow, UpdatedAt: testNow}
+			mustNoError(t, s.UpsertReview(ctx, review))
+			reviewer, err := s.CreateReviewConversation(ctx, "review-delete-conversation", review.ID, session.ProjectID, session.ID, testNow)
+			mustNoError(t, err)
+			mustNoError(t, s.CreateAndActivateReviewConversationBranch(ctx, review.ID, domain.ConversationBranch{
+				ID: "review-fresh", ConversationID: reviewer.ID, SessionID: session.ID,
+				ParentBranchID: reviewer.ActiveBranchID, ProviderConversationID: "fresh-provider",
+				ProviderScopeID: "review-fresh", ProviderIDsScoped: true, CreatedAt: testNow,
+			}, "review-generation", testNow.Add(time.Second)))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
