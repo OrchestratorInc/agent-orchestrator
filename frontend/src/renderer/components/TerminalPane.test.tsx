@@ -72,6 +72,8 @@ const dropSetup = vi.hoisted(() => ({
 	maxAttachmentBytes: undefined as number | undefined,
 	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
 }));
+// Read through a function: an assignment in a test would otherwise narrow it for the checks that follow.
+const droppedFileProps = () => dropSetup.props;
 vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
 }));
@@ -284,9 +286,9 @@ describe("TerminalPane dropped files", () => {
 		dropSetup.maxAttachmentBytes = undefined;
 		const without = renderPane(cloudSession);
 		try {
-			await waitFor(() => expect(dropSetup.props).toBeDefined());
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
 			// A path on this machine means nothing in the sandbox: no drops at all.
-			expect(dropSetup.props?.saveDroppedFile).toBeNull();
+			expect(droppedFileProps()?.saveDroppedFile).toBeNull();
 		} finally {
 			without.restore();
 			without.unmount();
@@ -295,8 +297,8 @@ describe("TerminalPane dropped files", () => {
 		dropSetup.props = undefined;
 		const withFiles = renderPane(cloudSession);
 		try {
-			await waitFor(() => expect(dropSetup.props?.saveDroppedFile).toBeTypeOf("function"));
-			expect(dropSetup.props?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
+			await waitFor(() => expect(droppedFileProps()?.saveDroppedFile).toBeTypeOf("function"));
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
 		} finally {
 			withFiles.restore();
 			withFiles.unmount();
@@ -308,9 +310,9 @@ describe("TerminalPane dropped files", () => {
 		dropSetup.props = undefined;
 		const view = renderPane(worker);
 		try {
-			await waitFor(() => expect(dropSetup.props).toBeDefined());
-			expect(dropSetup.props?.saveDroppedFile).toBeUndefined();
-			expect(dropSetup.props?.droppedFileMaxBytes).toBeUndefined();
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			expect(droppedFileProps()?.saveDroppedFile).toBeUndefined();
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBeUndefined();
 		} finally {
 			view.restore();
 		}
