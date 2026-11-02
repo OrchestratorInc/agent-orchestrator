@@ -141,6 +141,9 @@ describe("native runtime resources", () => {
 		mkdirSync(join(resources, "wake-helper"), { recursive: true });
 		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
 		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
+		mkdirSync(dictationHelper, { recursive: true });
+		writeFileSync(join(dictationHelper, "Orchestrator"), "");
 		const hook = config.hooks?.postPackage;
 		if (typeof hook !== "function") throw new Error("postPackage hook missing");
 		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged cloudflared missing");
