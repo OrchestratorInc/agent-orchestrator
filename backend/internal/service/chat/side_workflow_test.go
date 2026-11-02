@@ -347,6 +347,7 @@ func TestSideFreshAndReconstructedContext(t *testing.T) {
 }
 
 func TestSideOrchestratorReconstructedContextKeepsNewestHistoryPastLimit(t *testing.T) {
+	const omissionNote = "[Earlier main-chat history omitted: it exceeds the side-chat reconstruction limit.]\n"
 	for _, harnessType := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessOpenCode} {
 		t.Run(string(harnessType), func(t *testing.T) {
 			h := newSideWorkflow(t, "", harnessType)
@@ -371,6 +372,9 @@ func TestSideOrchestratorReconstructedContextKeepsNewestHistoryPastLimit(t *test
 			side := h.side(t, "long", true)
 			if side.ContextMode != "reconstructed" {
 				t.Fatalf("mode=%s", side.ContextMode)
+			}
+			if got, limit := len(side.SeedHistory), len(omissionNote)+512*1024; got > limit {
+				t.Fatalf("seed history is %d bytes, exceeds %d-byte budget including omission note", got, limit)
 			}
 			if _, err := h.svc.SendSideQuestion(context.Background(), testSession, side.ID, ports.ChatUserMessage{Text: "Explain it.", ClientMessageID: "question"}); err != nil {
 				t.Fatal(err)
