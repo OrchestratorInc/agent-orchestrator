@@ -77,7 +77,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type CloudReviewUiState = {
 	showChanges?: boolean;
@@ -97,6 +97,8 @@ export type InspectorSessionState = {
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
 	browserUnseen?: boolean;
+	/** The session's chat has subagents, so the inspector offers its Subagents tab. */
+	subagentsAvailable?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
@@ -264,6 +266,7 @@ export type UiState = {
 	initializeInspectorSession: (sessionId: string, hasBrowserContent: boolean, hasInspector: boolean) => void;
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
+	setSubagentsAvailable: (sessionId: string, available: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
@@ -603,6 +606,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, browserUnseen },
+				},
+			};
+		}),
+	setSubagentsAvailable: (sessionId, subagentsAvailable) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (Boolean(current.subagentsAvailable) === subagentsAvailable) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, subagentsAvailable },
 				},
 			};
 		}),

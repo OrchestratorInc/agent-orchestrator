@@ -10,7 +10,17 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
-vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
+vi.mock("pdfjs-dist", () => ({
+	GlobalWorkerOptions: {},
+	getDocument: vi.fn(),
+	// What PdfPreview calls on a text layer: it draws one, and cancels it when the page unmounts.
+	TextLayer: class {
+		render() {
+			return Promise.resolve();
+		}
+		cancel() {}
+	},
+}));
 
 describe("FileMediaPreview", () => {
 	afterEach(() => {
@@ -122,6 +132,9 @@ describe("FileMediaPreview", () => {
 		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={source} version={1} />);
 
 		await waitFor(() => expect(document.querySelectorAll("[data-page-number]")).toHaveLength(2));
+		// Both pages finish their text layers, so unmounting cancels them every run
+		// rather than only when the test happens to end after they were built.
+		await waitFor(() => expect(document.querySelectorAll(".endOfContent")).toHaveLength(2));
 		expect(fetchFile).toHaveBeenCalledWith(source.rawUrl);
 		expect(getDocument).toHaveBeenCalledWith({ data: bytes });
 		expect(browserFetch).not.toHaveBeenCalled();
