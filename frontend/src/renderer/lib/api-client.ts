@@ -27,13 +27,20 @@ export function getApiBaseUrl(): string {
 // so one slow request queued the rest (Settings among them). A *.localhost name
 // resolves to loopback in Chromium but is a separate host, so streams opened on
 // it get their own connections. Only the loopback daemon address is remapped.
+//
+// Chromium resolves a *.localhost name to ::1 first, and the daemon's main
+// listener is 127.0.0.1, so another process on [::1] at the daemon's port (or
+// on a dual-stack ::) would receive these streams. The name is used only while
+// the daemon reports that it serves [::1] at its port too (ipv6Loopback in its
+// status); otherwise streams stay on 127.0.0.1.
 const eventStreamHostname = "ao-events.localhost";
+let daemonServesIPv6Loopback = false;
 
 /** The base URL a daemon EventSource connects to; see eventStreamHostname. */
-export function eventStreamBaseUrl(baseUrl: string): string {
+export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
 	try {
 		const url = new URL(baseUrl);
-		if (url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
+		if (!ipv6Loopback || url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
 		url.hostname = eventStreamHostname;
 		return url.href.replace(/\/+$/, "");
 	} catch {
@@ -69,6 +76,7 @@ export function setApiBaseUrl(nextBaseUrl: string | null): void {
 // availability message.
 export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 	daemonStatus = nextStatus;
+	daemonServesIPv6Loopback = nextStatus.state === "ready" && nextStatus.ipv6Loopback === true;
 }
 
 // Route templates from the generated OpenAPI schema (frontend/src/api/schema.ts).

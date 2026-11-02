@@ -188,14 +188,35 @@ describe("apiClient runtime base URL", () => {
 // Event streams hold their connection for life, so they open on a separate
 // loopback host and leave the daemon's six connections to ordinary requests.
 describe("eventStreamBaseUrl", () => {
-	it("moves the loopback daemon to the event-stream host on the same port", () => {
+	afterEach(() => setApiDaemonStatus({ state: "stopped" }));
+
+	it("moves the loopback daemon to the event-stream host on the same port while it serves [::1]", () => {
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001", true)).toBe("http://ao-events.localhost:3001");
+		expect(eventStreamBaseUrl("http://127.0.0.1:3002/", true)).toBe("http://ao-events.localhost:3002");
+	});
+
+	it("keeps streams on 127.0.0.1 unless the daemon serves [::1] too", () => {
+		// The name resolves to ::1 first: without the daemon there, another process would get the streams.
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001", false)).toBe("http://127.0.0.1:3001");
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001/")).toBe("http://127.0.0.1:3001");
+	});
+
+	it("follows the daemon status", () => {
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 1, ipv6Loopback: true });
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://ao-events.localhost:3001");
-		expect(eventStreamBaseUrl("http://127.0.0.1:3002/")).toBe("http://ao-events.localhost:3002");
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 2 });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 3, ipv6Loopback: false });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
+		// A stopped daemon's last flag does not carry over.
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 4, ipv6Loopback: true });
+		setApiDaemonStatus({ state: "stopped", ipv6Loopback: true });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
 	});
 
 	it("leaves other bases alone", () => {
-		expect(eventStreamBaseUrl("https://box-a.example.ts.net:8443/")).toBe("https://box-a.example.ts.net:8443");
-		expect(eventStreamBaseUrl("")).toBe("");
+		expect(eventStreamBaseUrl("https://box-a.example.ts.net:8443/", true)).toBe("https://box-a.example.ts.net:8443");
+		expect(eventStreamBaseUrl("", true)).toBe("");
 	});
 });
 

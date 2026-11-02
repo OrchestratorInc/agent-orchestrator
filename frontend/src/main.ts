@@ -2381,6 +2381,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		portConfirmed = true;
 		stopDiscovery();
 		setDaemonStatus({ state: "ready", port, pid: child.pid });
+		// The renderer opens event streams on a *.localhost name only while the
+		// daemon also serves [::1] at this port; its probe says whether it does.
+		void readDaemonProbe(port, "healthz").then((probe) => {
+			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
+			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
+			// The same attachment, so only the renderer's copy changes.
+			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
+			getShellWebContents()?.send("daemon:status", daemonStatus);
+		});
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
