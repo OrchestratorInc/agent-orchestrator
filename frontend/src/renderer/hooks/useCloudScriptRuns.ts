@@ -15,7 +15,7 @@ export function cloudScriptStepsQueryKey(orgId: string, sessionId: string) {
 }
 
 /** The chat surface's own event list (CloudSessionChatSurface); read, never fetched, here. */
-function cloudChatEventsQueryKey(orgId: string, sessionId: string) {
+export function cloudChatEventsQueryKey(orgId: string, sessionId: string) {
 	return ["cloud-chat-events", orgId, sessionId] as const;
 }
 
@@ -30,7 +30,7 @@ export function recordCloudScriptStepEvents(queryClient: QueryClient, orgId: str
 }
 
 /** Subscribes to a query's cached data without becoming an observer that could fetch it. */
-function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): T | undefined {
+export function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): T | undefined {
 	const queryClient = useQueryClient();
 	const hash = hashKey(queryKey);
 	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe((event) => {
