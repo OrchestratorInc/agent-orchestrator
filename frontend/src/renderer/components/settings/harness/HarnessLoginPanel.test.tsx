@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
 import { isAgentLoginPending } from "../../../lib/agent-login-lifecycle";
+import { checkProviderKey } from "../../../hooks/useProviderKeys";
 import { aoBridge } from "../../../lib/bridge";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 
+vi.mock("../../../hooks/useProviderKeys", async (importOriginal) => ({ ...(await importOriginal<typeof import("../../../hooks/useProviderKeys")>()), checkProviderKey: vi.fn() }));
 vi.mock("../../../hooks/useAgentAuth", () => ({ startAgentUILogin: vi.fn(), startCatalogKeyLogin: vi.fn(), fetchCatalogProviders: vi.fn(), getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), actOnAgentUILogin: vi.fn(), submitAgentUILoginCode: vi.fn() }));
 
 const methods = [
@@ -29,6 +31,7 @@ beforeEach(() => {
 	vi.mocked(cancelAgentUILogin).mockResolvedValue(undefined);
 	vi.mocked(actOnAgentUILogin).mockResolvedValue(snapshot);
 	vi.mocked(submitAgentUILoginCode).mockResolvedValue(snapshot);
+	vi.mocked(checkProviderKey).mockResolvedValue({ status: "unverified" } as Awaited<ReturnType<typeof checkProviderKey>>);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
@@ -86,6 +89,21 @@ describe("HarnessLoginPanel", () => {
 		await user.type(screen.getByLabelText("API key"), "zeta-secret");
 		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
 		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
+	});
+	it("drops a model list that arrives after switching to another provider", async () => {
+		const user = userEvent.setup();
+		let answer: (value: Awaited<ReturnType<typeof checkProviderKey>>) => void = () => undefined;
+		vi.mocked(checkProviderKey).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const saved = (name: string, label: string) => ({ name, label, configured: true, hint: "abcd", device: false, checkable: true, agents: ["qwen"] });
+		render(<HarnessLoginPanel agentId="qwen" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }, { id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[saved("OPENAI_API_KEY", "OpenAI API key"), saved("ANTHROPIC_API_KEY", "Anthropic API key")]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		// OpenAI's form is open first; ask it for models, then switch away.
+		await user.click(screen.getByRole("button", { name: "Load models" }));
+		expect(checkProviderKey).toHaveBeenCalledWith("OPENAI_API_KEY", "", undefined);
+		await user.click(screen.getByRole("button", { name: "Anthropic API key" }));
+		await act(async () => answer({ status: "valid", models: ["gpt-4o"] } as Awaited<ReturnType<typeof checkProviderKey>>));
+		expect(screen.queryByText("gpt-4o")).toBeNull();
+		expect(screen.getByLabelText("Model")).toHaveValue("");
+		expect(screen.getByRole("button", { name: "Load models" })).toBeEnabled();
 	});
 	it("lists API keys before native sign-in, and keeps a real account sign-in first", () => {
 		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));

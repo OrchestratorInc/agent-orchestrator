@@ -41,6 +41,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const [device, setDevice] = useState(false);
 	const [models, setModels] = useState<string[]>([]);
 	const [loadingModels, setLoadingModels] = useState(false);
+	// Numbers each model-list request; changing the method or the typed key
+	// moves it on, so a late answer for an earlier provider is dropped.
+	const modelRequest = useRef(0);
+	const discardModelRequest = () => {
+		modelRequest.current += 1;
+		setLoadingModels(false);
+	};
 	// The harness's own provider catalog, for its provider_key method.
 	const [catalog, setCatalog] = useState<CatalogProvider[]>();
 	const [catalogError, setCatalogError] = useState("");
@@ -287,6 +294,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		setSecret("");
 		setModel("");
 		setModels([]);
+		discardModelRequest();
 		setCatalogProvider("");
 		setDevice(providerKeyFor(item.id)?.device ?? false);
 		setLoginCode("");
@@ -298,11 +306,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	// Fills the model picker from the provider, using the typed or saved key.
 	const loadModels = async () => {
 		if (!selectedKey || loadingModels || (!secret.trim() && !savedKey)) return;
+		const request = ++modelRequest.current;
+		const current = () => mounted.current && modelRequest.current === request;
 		setLoadingModels(true);
 		setError("");
 		try {
 			const result = await checkProviderKey(selectedKey.name, secret.trim(), hostId);
-			if (!mounted.current) return;
+			if (!current()) return;
 			if (result.status === "valid" && result.models?.length) {
 				setModels(result.models);
 				if (!model) setModel(result.models[0]);
@@ -310,8 +320,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 				setError(t(result.status === "invalid" ? "settings.apiKeys.rejected" : result.status === "unreachable" ? "settings.apiKeys.unreachable" : "settings.apiKeys.noModels"));
 			}
 		} catch (err) {
-			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.apiKeys.checkFailed"));
-		} finally { if (mounted.current) setLoadingModels(false); }
+			if (current()) setError(err instanceof Error ? err.message : t("settings.apiKeys.checkFailed"));
+		} finally { if (current()) setLoadingModels(false); }
 	};
 	const menuAction = async (action: MenuAction) => {
 		if (!operation || busy || !running) return;
@@ -428,7 +438,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 								<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
 								{item.id === CATALOG_METHOD && chosenProvider?.env ? <code className="truncate font-mono text-xs text-settings-muted">{chosenProvider.env}</code> : null}
 							</div>
-							<Input id={titleId + "-secret"} className="font-mono text-[13px] placeholder:font-sans focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); setError(""); }} />
+							<Input id={titleId + "-secret"} className="font-mono text-[13px] placeholder:font-sans focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); discardModelRequest(); setError(""); }} />
 						</div>
 						{needsModel && <div className="space-y-1.5">
 							<span id={titleId + "-model"} className={fieldLabelClass}>{t("settings.apiKeys.model")}</span>
