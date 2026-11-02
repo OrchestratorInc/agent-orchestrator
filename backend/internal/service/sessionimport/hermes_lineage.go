@@ -17,7 +17,7 @@ type hermesSegment struct {
 
 // Only a compression-ended parent and an unmarked continuation form one
 // conversation. Reset/branch/delegate children remain separate native chats.
-func hermesLineages(ctx context.Context, db *sql.DB) (map[string][]hermesSegment, error) {
+func hermesLineages(ctx context.Context, db *sql.DB, requested string) (map[string][]hermesSegment, error) {
 	columns := map[string]bool{}
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info(sessions)")
 	if err != nil {
@@ -42,12 +42,35 @@ func hermesLineages(ctx context.Context, db *sql.DB) (map[string][]hermesSegment
 		}
 		return fallback
 	}
-	query := `SELECT s.id,COALESCE(` + optional("parent_session_id", "NULL") + `,''),
+	prefix, from := "", "FROM sessions s LEFT JOIN messages m ON m.session_id=s.id GROUP BY s.id"
+	activity, count := "COALESCE(MAX(m.timestamp),s.started_at)", "COUNT(m.id)"
+	var args []any
+	if requested != "" {
+		// Fresh validation reads only this connected compression component. A
+		// branch/reset marker is resolved below; unrelated chats and gateway
+		// messages never enter the per-candidate aggregation or graph walk.
+		from = "FROM sessions s WHERE s.id=?"
+		args = []any{requested}
+		if columns["parent_session_id"] && columns["end_reason"] {
+			prefix = `WITH RECURSIVE component(id) AS (
+				SELECT id FROM sessions WHERE id=?
+				UNION SELECT child.parent_session_id FROM sessions child
+				JOIN component c ON c.id=child.id JOIN sessions parent ON parent.id=child.parent_session_id
+				WHERE parent.end_reason='compression'
+				UNION SELECT child.id FROM sessions child JOIN component c ON c.id=child.parent_session_id
+				JOIN sessions parent ON parent.id=c.id WHERE parent.end_reason='compression'
+			) `
+			from = "FROM sessions s WHERE s.id IN (SELECT id FROM component)"
+		}
+		activity = "COALESCE((SELECT MAX(timestamp) FROM messages WHERE session_id=s.id),s.started_at)"
+		count = "(SELECT COUNT(*) FROM messages WHERE session_id=s.id)"
+	}
+	query := prefix + `SELECT s.id,COALESCE(` + optional("parent_session_id", "NULL") + `,''),
 		COALESCE(` + optional("end_reason", "NULL") + `,''),s.source,COALESCE(s.cwd,''),COALESCE(s.title,''),
-		s.started_at,COALESCE(MAX(m.timestamp),s.started_at),COUNT(m.id),COALESCE(s.hidden,0),
+		s.started_at,` + activity + `,` + count + `,COALESCE(s.hidden,0),
 		` + optional("ended_at", "NULL") + `,COALESCE(` + optional("model_config", "NULL") + `,'{}')
-		FROM sessions s LEFT JOIN messages m ON m.session_id=s.id GROUP BY s.id`
-	rows, err = db.QueryContext(ctx, query)
+		` + from
+	rows, err = db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -86,4 +86,20 @@ func TestHermesCompressionLineageIsOneNativeConversation(t *testing.T) {
 	if _, err := readHermesTranscript(context.Background(), root, "tip"); err == nil {
 		t.Fatal("accepted a duplicate continuation handle")
 	}
+	// A fresh read must not aggregate or decode any unrelated conversation.
+	// This malformed gateway timestamp deliberately cannot scan into float64.
+	if _, err := db.Exec(`INSERT INTO sessions VALUES('gateway','telegram','/gateway',NULL,1790000000,0,NULL,NULL,NULL,'{}');
+		INSERT INTO messages VALUES(8,'gateway','user','unrelated','not-a-timestamp',0)`); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := hermesLineages(context.Background(), db, "root")
+	if err != nil || len(groups["root"]) != 2 {
+		t.Fatalf("scoped compression graph=%+v err=%v", groups, err)
+	}
+	if _, included := groups["gateway"]; included {
+		t.Fatal("unrelated conversation entered per-candidate lookup")
+	}
+	if _, err := readHermesTranscript(context.Background(), root, "root"); err != nil {
+		t.Fatalf("unrelated gateway history blocked fresh import validation: %v", err)
+	}
 }

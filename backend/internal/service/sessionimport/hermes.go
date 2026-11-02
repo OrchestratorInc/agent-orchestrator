@@ -41,7 +41,7 @@ func discoverHermes(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
-	groups, err := hermesLineages(ctx, db)
+	groups, err := hermesLineages(ctx, db, "")
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, errors.New("no readable native conversation")
 	}
 	defer func() { _ = db.Close() }()
-	groups, err := hermesLineages(ctx, db)
+	groups, err := hermesLineages(ctx, db, t.nativeID)
 	if err != nil {
 		return t, err
 	}
