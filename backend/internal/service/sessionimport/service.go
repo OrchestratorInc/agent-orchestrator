@@ -76,6 +76,9 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
+	// fingerprint covers additional native inputs (for example SQLite WAL and
+	// manifest stats) without changing the existing size/mtime contract.
+	fingerprint string
 }
 
 type parsed struct {
@@ -539,7 +542,7 @@ func (f sourceFiles) nativeID() string {
 }
 
 func (f sourceFiles) cacheKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
 }
 
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
