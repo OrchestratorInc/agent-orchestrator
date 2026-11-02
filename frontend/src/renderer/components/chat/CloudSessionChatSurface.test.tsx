@@ -243,6 +243,30 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
 	});
 
+	it("shows a message of only files, with its files and no text", () => {
+		const files = [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615, sha256: "0".repeat(64) },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		];
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1", attachments: files }, createdAt: session.updatedAt },
+			// A malformed entry is dropped, not shown.
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "   ", turnId: "turn-2", attachments: [{ id: "bad" }, null] }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message", payload: { text: "And this one", turnId: "turn-3", attachments: [files[1]] }, createdAt: session.updatedAt },
+		]);
+		const messages = snapshot.items.filter((item) => item.kind === "message");
+		expect(messages).toHaveLength(2);
+		expect(messages[0]).toMatchObject({ role: "user", text: "", turnId: "turn-1", cloudAttachments: [
+			{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 6615 },
+			{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 },
+		] });
+		expect(messages[1]).toMatchObject({ text: "And this one", cloudAttachments: [{ id: "a2", fileName: "spec.pdf" }] });
+		// A message with neither text nor files is still not shown.
+		expect(toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1" }, createdAt: session.updatedAt },
+		]).items.filter((item) => item.kind === "message")).toEqual([]);
+	});
+
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
