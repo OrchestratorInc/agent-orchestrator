@@ -2424,24 +2424,25 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	const latestAutoFailure = reviewStates
+	// A failed run stores its reason in body. Show it for manual triggers too:
+	// the trigger request itself only returns a generic "Review operation failed".
+	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
 			(run): run is ReviewRunFacts =>
 				Boolean(
-					autoReviewEnabled &&
-						run?.triggerSource === "auto" &&
-						run.status === "failed" &&
-						run.body?.trim(),
+					run?.status === "failed" &&
+						run.body?.trim() &&
+						(run.triggerSource !== "auto" || autoReviewEnabled),
 				),
 		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string | null>(null);
+	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
 	useEffect(() => {
-		if (!latestAutoFailure || latestAutoFailure.id === dismissedAutoFailureId) return;
-		const timer = window.setTimeout(() => setDismissedAutoFailureId(latestAutoFailure.id), 10_000);
+		if (!latestFailure || latestFailure.id === dismissedFailureId) return;
+		const timer = window.setTimeout(() => setDismissedFailureId(latestFailure.id), 10_000);
 		return () => window.clearTimeout(timer);
-	}, [dismissedAutoFailureId, latestAutoFailure]);
+	}, [dismissedFailureId, latestFailure]);
 	if (sortedPRs(session).length === 0) {
 		return <Section surface={false} title={t("inspector.review.controls")}><p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p></Section>;
 	}
@@ -2463,8 +2464,8 @@ function ReviewPanel({
 	const resolvedDefaultHarness = resolveDefaultReviewerHarness(config, session.provider);
 	const effectiveReviewerHarness = reviewerOverride || resolvedDefaultHarness;
 	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
-	const autoReviewFailure =
-		latestAutoFailure && latestAutoFailure.id !== dismissedAutoFailureId ? latestAutoFailure.body.trim() : null;
+	const reviewFailure =
+		latestFailure && latestFailure.id !== dismissedFailureId ? latestFailure : null;
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
@@ -2488,12 +2489,13 @@ function ReviewPanel({
 							{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
 					</p>
 				) : null}
-				{autoReviewFailure ? (
+				{reviewFailure ? (
 					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
 						<span className="font-semibold">
-							{t("inspector.autoReview")} {t("inspector.review.failed")}:
+							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}{" "}
+							{t("inspector.review.failed")}:
 						</span>{" "}
-						{autoReviewFailure}
+						{reviewFailure.body.trim()}
 					</p>
 				) : null}
 				{notice ? (
