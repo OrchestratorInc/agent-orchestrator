@@ -2,7 +2,7 @@
   "name": "@agent-orchestrator/mobile",
   "version": "0.0.0",
   "private": true,
-  "description": "Expo mobile supervisor for Agent Orchestrator",
+  "description": "Expo mobile supervisor for Orchestrator",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",

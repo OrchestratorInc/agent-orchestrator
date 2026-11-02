@@ -80,16 +80,18 @@ test('running executable and updater checks reject AO narrowly without matching 
   }
   await f.set('ps', '/Applications/Other.app/Contents/MacOS/ShipIt\n/bin/bash\n/usr/bin/node'); assert.equal(f.check().status, 0);
 });
-test('guard messages use Orchestrator while keeping the AO updater name', async (t) => {
+test('guard messages use Orchestrator for the app and updater', async (t) => {
   const f = await guardFixture(t);
   await f.set('ps', '/Applications/Agent Orchestrator.app/Contents/MacOS/agent-orchestrator');
   const app = f.check();
   assert.notEqual(app.status, 0);
   assert.match(app.stderr, /^Orchestrator repair: Quit Orchestrator\./);
+  assert.match(app.stderr, /before opening Orchestrator\./);
   await f.set('ps', '/Applications/Renamed.app/Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt');
   const updater = f.check();
   assert.notEqual(updater.status, 0);
-  assert.match(updater.stderr, /^Orchestrator repair: AO updater is running\./);
+  assert.match(updater.stderr, /^Orchestrator repair: Orchestrator updater is running\./);
+  assert.match(updater.stderr, /before opening Orchestrator\./);
 });
 async function buildFixture(t, failAt) {
   const dir = await fixture(t), app = path.join(dir, 'Agent Orchestrator.app');
@@ -124,6 +126,8 @@ test('repair labels use Orchestrator while bundle paths and package identity sta
   assert.match(gui, /Quit Orchestrator before continuing\./);
   assert.match(welcome, /<h1>Repair Orchestrator /);
   assert.match(welcome, /Quit Orchestrator\./);
+  assert.match(welcome, /Your Orchestrator data and caches are preserved\./);
+  assert.doesNotMatch([gui, welcome, conclusion].join(''), /\bAO\b/);
   assert.match(welcome, /\/Applications\/Agent Orchestrator\.app/);
   assert.match(conclusion, /Open Orchestrator from Applications/);
   const args = f.calls.find(([command]) => command.endsWith('pkgbuild'))[1];

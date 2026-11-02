@@ -5,6 +5,7 @@ import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import { rebuild } from "@electron/rebuild";
 import electronPackage from "electron/package.json";
+import appPackage from "./package.json";
 import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
@@ -166,6 +167,7 @@ const config: ForgeConfig = {
 		// Match the Windows installer without changing the executable name.
 		win32metadata: {
 			FileDescription: WINDOWS_DISPLAY_NAME,
+			InternalName: WINDOWS_DISPLAY_NAME,
 			ProductName: WINDOWS_DISPLAY_NAME,
 		},
 		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
@@ -400,7 +402,7 @@ const config: ForgeConfig = {
 					// the Electron app binary". (Both are "agent-orchestrator".)
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
-					maintainer: "Agent Orchestrator",
+					maintainer: appPackage.author,
 					homepage: "https://github.com/aoagents/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},

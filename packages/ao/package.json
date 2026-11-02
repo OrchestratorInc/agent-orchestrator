@@ -1,7 +1,7 @@
 {
 	"name": "@aoagents/ao",
 	"version": "0.10.0",
-	"description": "Agent Orchestrator CLI. Resolves and runs the prebuilt Go binary for your platform.",
+	"description": "Orchestrator CLI. Resolves and runs the prebuilt Go binary for your platform.",
 	"license": "MIT",
 	"bin": {
 		"ao": "./bin/ao.js"

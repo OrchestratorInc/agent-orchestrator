@@ -23,7 +23,7 @@ if printf '%s\n' "$processes" | /usr/bin/awk '
   /\/dev[.]agent-orchestrator[.]desktop[.]ShipIt\/.*\/ShipIt$/ { found=1 }
   /\/dev[.]agent-orchestrator[.]desktop[.]ShipIt\/ShipIt$/ { found=1 }
   END { exit !found }'; then
-  fail 'Quit Orchestrator. If its updater is still running, restart your Mac and run this installer before opening AO.'
+  fail 'Quit Orchestrator. If its updater is still running, restart your Mac and run this installer before opening Orchestrator.'
 fi
 # A renamed AO bundle can still host ShipIt after its main process exits.
 # Resolve the enclosing bundle identity without running any code from it.
@@ -32,7 +32,7 @@ while IFS= read -r process; do
     *.app/Contents/*/ShipIt)
       owner="${process%%.app/Contents/*}.app/Contents/Info.plist"
       owner_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$owner" 2>/dev/null || true)
-      [ "$owner_id" != dev.agent-orchestrator.desktop ] || fail 'AO updater is running. Restart your Mac and run this installer before opening AO.'
+      [ "$owner_id" != dev.agent-orchestrator.desktop ] || fail 'Orchestrator updater is running. Restart your Mac and run this installer before opening Orchestrator.'
       ;;
   esac
 done <<< "$processes"
