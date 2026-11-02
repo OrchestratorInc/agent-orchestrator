@@ -12,6 +12,7 @@ import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
+import { CatalogProviderPicker } from "./CatalogProviderPicker";
 import { DeviceEnvToggle, KeyWarning, providerKeyNeedsModel, savedKeySummary } from "../providerKeyUi";
 
 const CATALOG_METHOD = "provider_key";
@@ -385,29 +386,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 					{open && <div ref={secretRowRef} className="scroll-mb-4 space-y-3 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
 						{item.id === CATALOG_METHOD && <div className="space-y-1.5">
 							<span id={titleId + "-provider"} className={fieldLabelClass}>{t("settings.harness.loginUi.catalogProvider")}</span>
-							<SettingsOptionMenu
-								aria-label={t("settings.harness.loginUi.catalogProvider")}
-								value={catalogProvider}
-								placeholder={t("settings.harness.loginUi.catalogChoose")}
-								options={(catalog ?? []).map((provider) => ({ value: provider.id, label: provider.name }))}
-								onChange={setCatalogProvider}
-								searchable
-								searchPlaceholder={t("settings.harness.loginUi.catalogSearch")}
-								emptyLabel={t("settings.harness.loginUi.catalogEmpty")}
-								// The model count tells look-alike providers apart ("Z.AI" and "Z.AI Coding Plan").
-								renderMenuItem={(option) => {
-									const models = catalog?.find((provider) => provider.id === option.value)?.models ?? 0;
-									return <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-										<span className="truncate">{option.label}</span>
-										{models > 0 ? <span className="shrink-0 text-xs tabular-nums text-settings-muted">{t("settings.harness.loginUi.catalogModels", { count: models })}</span> : null}
-									</span>;
-								}}
-								disabled={locked || !catalog}
-								triggerClassName={fieldTriggerClass}
-								// Open under the field at its width instead of over the panel.
-								menuAlign="start"
-								menuClassName="w-(--radix-dropdown-menu-trigger-width)"
-							/>
+							{catalog
+								? <CatalogProviderPicker providers={catalog} value={catalogProvider} onChange={setCatalogProvider} disabled={locked} labelledBy={titleId + "-provider"} />
+								: <p className="text-xs leading-4 text-settings-muted">{catalogError || t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) })}</p>}
 						</div>}
 						<div className="space-y-1.5">
 							<div className="flex items-baseline justify-between gap-2">

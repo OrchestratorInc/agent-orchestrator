@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
@@ -86,6 +86,29 @@ describe("HarnessLoginPanel", () => {
 		await user.type(screen.getByLabelText("API key"), "zeta-secret");
 		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
 		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
+	});
+	it("picks a catalog provider from the inline list and saves its key", async () => {
+		const user = userEvent.setup();
+		vi.mocked(fetchCatalogProviders).mockResolvedValue([
+			{ id: "zai", name: "Z.AI", env: "ZAI_API_KEY", models: 14 },
+			{ id: "zai-coding-plan", name: "Z.AI Coding Plan", env: "ZAI_API_KEY", models: 9 },
+			{ id: "groq", name: "Groq", env: "GROQ_API_KEY", models: 1 },
+		]);
+		vi.mocked(startCatalogKeyLogin).mockResolvedValue({ ...snapshot, agentId: "opencode", method: "provider_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
+		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		const list = await screen.findByRole("listbox", { name: "Provider" });
+		expect(within(list).getAllByRole("option")).toHaveLength(3);
+		expect(within(list).getByRole("option", { name: /Groq/ })).toHaveTextContent("1 model");
+		await user.type(screen.getByRole("combobox", { name: "Provider" }), "coding");
+		expect(within(list).getAllByRole("option")).toHaveLength(1);
+		await user.keyboard("{Enter}");
+		expect(within(list).getByRole("option", { name: /Z.AI Coding Plan/ })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByText("ZAI_API_KEY")).toBeVisible();
+		await user.clear(screen.getByRole("combobox", { name: "Provider" }));
+		await user.click(within(list).getByRole("option", { name: /^Groq/ }));
+		await user.type(screen.getByLabelText("API key"), "groq-secret");
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(startCatalogKeyLogin).toHaveBeenCalledWith("opencode", "groq", "groq-secret", undefined);
 	});
 	it("runs a native login invisibly and presents reviewed menu controls", async () => {
 		const user = userEvent.setup();
