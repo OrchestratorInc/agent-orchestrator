@@ -166,19 +166,6 @@ Orchestrator.inc(이전 이름 Agent Orchestrator)는 오픈 소스(Apache-2.0) 
 
 Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
 
-## 비교
-
-코딩 에이전트를 병렬로 실행하는 다른 방법과 Orchestrator.inc 비교:
-
-- [Orchestrator.inc vs Conductor](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
-- [Orchestrator.inc vs Superset](https://orchestrator.inc/compare/orchestrator-vs-superset/)
-- [Orchestrator.inc vs Claude Squad](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
-- [Orchestrator.inc vs Vibe Kanban](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
-- [최고의 AI 코딩 에이전트 오케스트레이터](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
-- [AI 코딩 에이전트를 위한 Git worktree](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
-
-[모든 비교](https://orchestrator.inc/compare/)도 확인하세요.
-
 ## 문서
 
 | 문서 | 다음 정보가 필요할 때 |

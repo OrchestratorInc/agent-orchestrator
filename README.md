@@ -166,19 +166,6 @@ Download from [orchestrator.inc/download](https://orchestrator.inc/download/) or
 
 Open Orchestrator.inc and point it at the repository you want it to manage. The desktop app runs the daemon for you, so no CLI is required. See the [installation guide](https://docs.orchestrator.inc/installation) for agent CLI setup and troubleshooting.
 
-## Compare
-
-How Orchestrator.inc compares with other ways to run coding agents in parallel:
-
-- [Orchestrator.inc vs Conductor](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
-- [Orchestrator.inc vs Superset](https://orchestrator.inc/compare/orchestrator-vs-superset/)
-- [Orchestrator.inc vs Claude Squad](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
-- [Orchestrator.inc vs Vibe Kanban](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
-- [Best AI coding agent orchestrators](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
-- [Git worktrees for AI coding agents](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
-
-See [all comparisons](https://orchestrator.inc/compare/).
-
 ## Documentation
 
 | Document | Start here when you need |

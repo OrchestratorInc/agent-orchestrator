@@ -166,19 +166,6 @@ Orchestrator.inc（原名 Agent Orchestrator）是一款开源（Apache-2.0）�
 
 打开 Orchestrator.inc，并选择你希望它管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.orchestrator.inc/installation)。
 
-## 对比
-
-Orchestrator.inc 与其他并行运行编程智能体的方式对比：
-
-- [Orchestrator.inc 与 Conductor 对比](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
-- [Orchestrator.inc 与 Superset 对比](https://orchestrator.inc/compare/orchestrator-vs-superset/)
-- [Orchestrator.inc 与 Claude Squad 对比](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
-- [Orchestrator.inc 与 Vibe Kanban 对比](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
-- [最佳 AI 编程智能体编排工具](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
-- [面向 AI 编程智能体的 Git worktree](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
-
-查看[全部对比](https://orchestrator.inc/compare/)。
-
 ## 文档
 
 | 文档 | 需要以下内容时从这里开始 |

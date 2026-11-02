@@ -166,19 +166,6 @@ Orchestrator.inc（旧称 Agent Orchestrator）は、オープンソース（Apa
 
 Orchestrator.inc を開き、管理させたいリポジトリを指定します。デスクトップアプリがデーモンを実行するため、CLI は不要です。エージェント CLI のセットアップとトラブルシューティングは[インストールガイド](https://docs.orchestrator.inc/installation)を参照してください。
 
-## 比較
-
-コーディングエージェントを並列で動かすほかの方法と Orchestrator.inc の比較:
-
-- [Orchestrator.inc と Conductor の比較](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
-- [Orchestrator.inc と Superset の比較](https://orchestrator.inc/compare/orchestrator-vs-superset/)
-- [Orchestrator.inc と Claude Squad の比較](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
-- [Orchestrator.inc と Vibe Kanban の比較](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
-- [おすすめの AI コーディングエージェント・オーケストレーター](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
-- [AI コーディングエージェントのための Git worktree](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
-
-[すべての比較](https://orchestrator.inc/compare/)もご覧ください。
-
 ## ドキュメント
 
 | ドキュメント | 次の情報が必要な場合 |
