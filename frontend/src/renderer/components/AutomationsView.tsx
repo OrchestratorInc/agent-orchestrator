@@ -340,6 +340,7 @@ function AutomationFormDialog({
 		setSchedule(starter ? scheduleFieldsFromRRule(starter.rrule) : nextSchedule);
 		setValidationErrors({});
 	// Language changes must not discard edits to an open form.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, initialTemplateId]);
 
 	const projectOptions = workspaces.map((item) => ({ value: item.id, label: item.name }));

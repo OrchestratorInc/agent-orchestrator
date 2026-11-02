@@ -717,11 +717,16 @@ describe("automation starters", () => {
 		expect(within(dialog).getByText(/Requires GitHub read access/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
 		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
+		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		fireEvent.change(within(dialog).getByRole("textbox", { name: "Prompt" }), { target: { value: "My revised instructions" } });
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
 			templateId: AUTOMATION_TEMPLATES[index].id, useCase: AUTOMATION_TEMPLATES[index].useCase,
 			prompt: "My revised instructions", rrule: AUTOMATION_TEMPLATES[index].rrule,
+			model: "capable", effort: "low",
 		}));
 	});
 

@@ -347,6 +347,14 @@ definitions use `unknown`. CLI/API clients may optionally supply or update a
 category, including `other`. Older definitions and clients default to
 `custom` / `unknown`.
 
+Template origin is client-declared, not verified. The desktop sets `templateId`
+from the selected starter, but CLI/API callers can supply any allowed template
+ID with an arbitrary prompt, even when they did not use that starter. Scripted
+or agent-driven creates can therefore inflate template counts. Treat
+`template_id` as a declared starting point, not proof of a template selection
+or prompt contents; it cannot reliably measure desktop starter adoption across
+all clients.
+
 For intent analysis, count `ao.automation.created` grouped by these two fields.
 Do not add renderer success events to this count: they describe the same desktop
 creations and exclude CLI/API creations. Updates, runs, and startup migration do
