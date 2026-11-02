@@ -19,6 +19,12 @@ const { captureRendererEvent, mobileStatus, post } = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent }));
+// An app with no AO sign-in pairs signed out; signing in to pair is covered in
+// settings/ConnectMobileContent.signin.test.tsx.
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ session: null, status: "unauthenticated", configured: false, signIn: () => undefined }),
+}));
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		GET: async (path: string) =>

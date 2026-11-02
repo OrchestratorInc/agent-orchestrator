@@ -47,6 +47,7 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 	{ name: "sheets/model", detents: [0.5, 0.95] },
 	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
+	{ name: "sheets/artifact-history", detents: [0.6, 0.95] },
 	{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "sheets/conversation-rename", detents: [0.35, 0.65] },
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
@@ -216,12 +217,15 @@ function Shell() {
 					}}
 				/>
 				<Stack.Screen name="session/[id]" options={{ title: "Session", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="review/[sessionId]" options={{ title: "Review", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="review/[sessionId]" options={{ title: "Pull request", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen
 					name="spawn"
 					options={{

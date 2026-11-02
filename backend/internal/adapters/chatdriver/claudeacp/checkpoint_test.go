@@ -216,6 +216,10 @@ func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
 		"[Request interrupted by user for tool use]": true,
 		"[Request interrupted by user] keep going":   false,
 		"what does <task-notification> mean?":        false,
+		// Both summary forms Claude Code 2.1 writes when it compacts.
+		"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent:": true,
+		"This session is being continued from a previous conversation that ran out of context. The summary of that conversation is not included here: it was withheld from Remote Control.":                   true,
+		`why did I get "This session is being continued from a previous conversation that ran out of context."?`:                                                                                              false,
 	} {
 		if claudeTranscriptNotice(text) != want {
 			t.Errorf("claudeTranscriptNotice(%q) = %v", text, !want)

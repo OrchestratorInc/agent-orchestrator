@@ -27,6 +27,8 @@
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
 import { PLAN_REFUSAL_CODES } from "./cloud-cp/client";
 import { publishCloudNotificationHint } from "./cloud-notification-hints";
+import { appI18n } from "../i18n";
+import { useUiStore } from "../stores/ui-store";
 
 export interface CloudTerminalMuxOptions {
 	/** WebSocket base including the API mount, e.g. "wss://host/api/cloud/v1". */
@@ -165,6 +167,13 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 					typeof message.occurredAt === "string" && message.payload !== null && typeof message.payload === "object" && !Array.isArray(message.payload)) {
 					publishCloudNotificationHint({ source: "cloud", eventId: message.eventId, type: message.eventType, occurredAt: message.occurredAt, payload: message.payload as Record<string, unknown> });
 				}
+				break;
+			case "input_refused":
+				// A shared session's agent terminal dropped this keystroke: someone
+				// else is writing to the agent. Said once, not per keystroke.
+				useUiStore.getState().showGlobalToast(appI18n.t("chat.shared.terminalRefused"), undefined, {
+					placement: "top-center", dedupeKey: "composer-terminal-refused",
+				});
 				break;
 			// starting / replay_complete / input_ack carry no terminal output the
 			// pane must render.

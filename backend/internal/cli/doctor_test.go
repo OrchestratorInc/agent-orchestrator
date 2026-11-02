@@ -147,6 +147,32 @@ func TestDoctorWarnsWhenTmuxMissing(t *testing.T) {
 	}
 }
 
+// A headless daemon's PATH can lack Homebrew's bin directory; doctor must find
+// the same Homebrew tmux the spawn gate accepts instead of reporting it missing.
+func TestDoctorFindsHomebrewTmuxMissingFromPATH(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("only macOS probes package-manager tmux outside PATH")
+	}
+	setConfigEnv(t)
+	const homebrewTmux = "/opt/homebrew/bin/tmux"
+	c := doctorContext(t, map[string]string{"git": "/bin/git", homebrewTmux: homebrewTmux}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/bin/git":
+			return []byte("git version 2.43.0\n"), nil
+		case homebrewTmux:
+			return []byte("tmux 3.5a\n"), nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return nil, nil
+		}
+	})
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "tmux")
+	if check.Level != doctorPass || !strings.Contains(check.Message, homebrewTmux) || !strings.Contains(check.Message, "system for this ao process") {
+		t.Fatalf("tmux check = %+v, want PASS with Homebrew tmux as system", check)
+	}
+}
+
 func TestDoctorChecksHarnessVersions(t *testing.T) {
 	setConfigEnv(t)
 	cmdPath := map[string]string{

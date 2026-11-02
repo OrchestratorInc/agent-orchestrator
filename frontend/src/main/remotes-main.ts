@@ -222,9 +222,11 @@ export function registerRemotesIpc(
 			signal: AbortSignal.timeout(8_000),
 		});
 		if (!response.ok) throw new Error("The host did not accept account linking. Check its password and version.");
-		const result = await response.json() as { hostId?: string; token?: string };
+		const result = await response.json() as { hostId?: string; token?: string; hostKey?: string };
 		if (result.hostId !== entry.hostId || !/^[0-9a-f]{64}$/.test(result.token ?? "")) throw new Error("The host returned an invalid account credential.");
-		return result.token;
+		// The machine's host key, for an AO Cloud that then needs its signature; an older machine sends none.
+		const hostKey = /^[A-Za-z0-9_-]{43}$/.test(result.hostKey ?? "") ? result.hostKey : undefined;
+		return { token: result.token!, hostKey };
 	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:computerName", () => computerName());

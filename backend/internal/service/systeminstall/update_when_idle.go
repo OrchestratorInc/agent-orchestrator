@@ -193,6 +193,8 @@ func (s *Service) runIdleBatch(ctx context.Context, coordinator IdleUpdateCoordi
 	stopped, err := coordinator.StopHarnessSessions(ctx, domain.AgentHarness(target))
 	if err == nil {
 		// Nothing may still run the binary the installer is about to replace.
+		// A stopped session is recorded as such (a Chat hibernated, a terminal
+		// exited), so only one still running is counted.
 		if sessions, reviewers, inUseErr := s.harnessInUse(ctx, target); inUseErr != nil || len(sessions)+len(reviewers) != 0 {
 			err = errors.Join(inUseErr, errors.New("sessions are still running"))
 		}

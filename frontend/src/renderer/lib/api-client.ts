@@ -260,7 +260,9 @@ function reportApiError(
 		error_category: category,
 		status,
 	});
-	captureApiErrorToSentry(operation, category, status, code, requestId);
+	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
+		captureApiErrorToSentry(operation, category, status, code, requestId);
+	}
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {

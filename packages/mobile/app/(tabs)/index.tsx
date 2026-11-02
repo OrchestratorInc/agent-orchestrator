@@ -19,6 +19,7 @@ import { hostedProjectKey } from "../../lib/hostedRows";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
+import { classifyLink, EMPTY_LINK_TRACKER } from "../../lib/linkHealth";
 import { WorkerMachineState } from "../../lib/worker-machine-state";
 import { WorkerEnvironmentFilter } from "../../lib/worker-environment-filter";
 import {
@@ -43,7 +44,7 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
+	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread, phoneNetwork } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -203,7 +204,7 @@ export default function FleetScreen() {
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -231,6 +232,7 @@ export default function FleetScreen() {
 						selectedHost && selectedHost.connection !== "open" ? (
 							<WorkerMachineState
 								host={selectedHost}
+								linkHealth={classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())}
 								environments={environments}
 								onSelectEnvironment={selectEnvironment}
 								onRetry={onRefresh}

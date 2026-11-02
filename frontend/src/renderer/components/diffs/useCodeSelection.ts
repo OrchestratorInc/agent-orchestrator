@@ -1,20 +1,26 @@
+import { normalizeCodeRowText } from "../../../shared/file-annotations";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { FileCodeReference } from "../../../shared/file-annotations";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { DiffRow } from "../../lib/diff-parser";
+import { selectionRangesEqual } from "../../lib/selection-toolbar";
 
 /** Code highlighted with the mouse, read back as the rows it covers. */
 export type CodeSelection = {
 	/** The Pierre surface (one per file) the selection is in. */
 	host: HTMLElement;
 	/** Every selected row, top to bottom, in diff-row form. */
-	rows: DiffRow[];
+	rows: Array<DiffRow & { side?: "old" | "new" }>;
 	/** The selection as a Pierre range, for surfaces that resolve their own rows. */
 	range: SelectedLineRange;
 	/** Just past the end of the selected text on its last line, for the Ask button. */
 	point: { x: number; y: number };
 	/** True while the mouse button is still down: the selection is still being made. */
 	dragging: boolean;
+	/** Retained geometry only; scrolling never rebuilds captured rows. */
+	textRange?: Range;
+	viewport?: Element;
+	toolbarHeader?: Element;
 };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
@@ -34,7 +40,7 @@ function inDeletionsColumn(element: Element): boolean {
 function diffRow(element: Element): DiffRow {
 	const line = Number(element.getAttribute("data-line"));
 	const type = element.getAttribute("data-line-type") ?? "";
-	const text = element.textContent ?? "";
+	const text = normalizeCodeRowText(element.textContent ?? "");
 	if (type === "change-addition") return { kind: "add", oldNo: null, newNo: line, text };
 	if (type === "change-deletion") return { kind: "del", oldNo: line, newNo: null, text };
 	// Context rows carry their column's number, and the other side's as data-alt-line.
@@ -72,8 +78,16 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 		side: diff ? (selection.range.side === "deletions" ? "old" : "new") : "file",
 		line: selection.range.start,
 		endLine: selection.range.end,
-		lines: selection.rows.map(({ kind, oldNo, newNo, text }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text })),
+		endSide: diff ? (selection.range.endSide === "deletions" ? "old" : "new") : "file",
+		lines: selection.rows.map(({ kind, oldNo, newNo, text, side }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text, side: diff ? side : "file" })),
 	};
+}
+
+/** Read native shadow selection without traversing or copying code rows. */
+export function codeSelectionRange(host: HTMLElement): Range | null {
+	const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+	const range = selection ? selectionRange(selection) : null;
+	return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
 }
 
 /** Reads the rows a selection covers inside one Pierre surface, or null. */
@@ -109,12 +123,16 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const lastBox = last.getBoundingClientRect();
 	const onLastLine = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.bottom > lastBox.top + 1 && rect.top < lastBox.bottom - 1);
 	const edge = onLastLine.length ? Math.max(...onLastLine.map((rect) => rect.right)) : lastBox.left;
+	const viewport = scrollParent(host);
 	return {
 		host,
-		rows: elements.map(diffRow),
+		rows: elements.map(element => ({ ...diffRow(element), side: rowSide(element) === "deletions" ? "old" : "new" })),
 		range: { start: Number(first.getAttribute("data-line")), side: rowSide(first), end: Number(last.getAttribute("data-line")), endSide: rowSide(last) },
 		point: { x: edge, y: lastBox.top + lastBox.height / 2 },
 		dragging,
+		textRange: range,
+		viewport,
+		toolbarHeader: host.querySelector("[data-selection-toolbar-header]") ?? host.closest("[data-selection-toolbar-scope]")?.querySelector("[data-selection-toolbar-header]") ?? undefined,
 	};
 }
 
@@ -149,7 +167,7 @@ export type CodeSelectionSource = {
  * re-rendering the surface would redraw Pierre's rows and drop the very
  * selection it shows.
  */
-export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => void, enabled = true) {
+export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => boolean | void, enabled = true) {
 	const [store] = useState(createSelectionStore);
 	const selectionRef = useRef<CodeSelection | null>(null);
 	const onAskRef = useRef(onAsk);
@@ -159,10 +177,25 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 	const ask = useCallback((): boolean => {
 		const current = selectionRef.current;
 		if (!current) return false;
-		onAskRef.current(current);
+		if (current.textRange && (!current.host.isConnected || !current.textRange.startContainer.isConnected || !current.textRange.endContainer.isConnected)) return false;
+		if (current.textRange) {
+			const liveSelection = (current.host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+			const liveRange = liveSelection ? selectionRange(liveSelection) : null;
+			const toolbarFocused = document.activeElement?.closest("[data-selection-ask]");
+			if (!selectionRangesEqual(liveRange ?? undefined, current.textRange) && !(toolbarFocused && (!liveRange || liveRange.collapsed))) return false;
+		}
+		if (onAskRef.current(current) === false) return false;
 		clearSelection(current.host);
+		selectionRef.current = null;
+		store.set(null);
 		return true;
-	}, []);
+	}, [store]);
+	const dismiss = useCallback(() => {
+		const current = selectionRef.current;
+		if (current) clearSelection(current.host);
+		selectionRef.current = null;
+		store.set(null);
+	}, [store]);
 	useEffect(() => {
 		const publish = (next: CodeSelection | null) => {
 			selectionRef.current = next;
@@ -190,12 +223,7 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			// A redraw that replaces the selected rows does not always announce a
 			// selection change, so watch the surfaces' rows while one is shown.
 			redraws.disconnect();
-			if (next) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
-			// Off screen (scrolled away), the button hides; the selection stays.
-			if (next) {
-				const view = scrollParent(next.host).getBoundingClientRect();
-				if (next.point.y < Math.max(view.top, 0) || next.point.y > Math.min(view.bottom, window.innerHeight)) next = null;
-			}
+			if (next?.host.shadowRoot) redraws.observe(next.host.shadowRoot, { childList: true, subtree: true });
 			publish(next);
 		};
 		const schedule = () => {
@@ -208,41 +236,22 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			pressed = false;
 			schedule();
 		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			const current = selectionRef.current;
-			if (!current) return;
-			if (event.key === "Escape") {
-				clearSelection(current.host);
-				return;
-			}
-			// Cmd/Ctrl+L adds the selection to chat, as in Cursor.
-			if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "l" && ask()) {
-				event.preventDefault();
-				event.stopPropagation();
-			}
-		};
 		document.addEventListener("selectionchange", schedule);
 		document.addEventListener("pointerdown", onPointerDown, true);
 		document.addEventListener("pointerup", onPointerUp, true);
 		document.addEventListener("pointercancel", onPointerUp, true);
-		document.addEventListener("scroll", schedule, true);
-		document.addEventListener("keydown", onKeyDown, true);
-		window.addEventListener("resize", schedule);
 		schedule();
 		return () => {
 			document.removeEventListener("selectionchange", schedule);
 			document.removeEventListener("pointerdown", onPointerDown, true);
 			document.removeEventListener("pointerup", onPointerUp, true);
 			document.removeEventListener("pointercancel", onPointerUp, true);
-			document.removeEventListener("scroll", schedule, true);
-			document.removeEventListener("keydown", onKeyDown, true);
-			window.removeEventListener("resize", schedule);
 			if (frame !== null) cancelAnimationFrame(frame);
 			redraws.disconnect();
 			publish(null);
 		};
 	}, [ask, containerRef, enabled, store]);
-	return { source: store, ask };
+	return { source: store, ask, dismiss };
 }
 
 function clearSelection(host: HTMLElement) {

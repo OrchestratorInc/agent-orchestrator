@@ -10,7 +10,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { fileMediaKind } from "../lib/file-media";
 import { artifactContentUrl } from "../lib/artifact-content-url";
-import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
+import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_PAGE_SIZE } from "../lib/workspace-review";
 import { useUiStore } from "../stores/ui-store";
 import {
 	getWorkspaceFileConnectionState,
@@ -152,6 +152,48 @@ export function workspaceErrorCode(error: unknown): string | undefined {
 	return error instanceof WorkspaceRequestError ? error.code : undefined;
 }
 
+export function isMissingWorkspaceError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "PROJECT_FOLDER_MISSING" && error.status === 404;
+}
+
+export function isStaleWorkspaceSnapshotError(error: unknown): boolean {
+	return error instanceof WorkspaceRequestError && error.code === "WORKSPACE_SNAPSHOT_STALE" && error.status === 409;
+}
+
+const missingWorkspaces = new Map<string, { error: WorkspaceRequestError; expiresAt: number }>();
+const MISSING_WORKSPACE_TTL_MS = 60_000;
+const workspaceRecoveryEpochs = new Map<string, number>();
+const missingWorkspaceKey = (sessionId: string, hostId?: string) => sessionUiKey(sessionId, hostId);
+
+export function workspaceRecoveryEpoch(sessionId: string, hostId?: string): number {
+	return workspaceRecoveryEpochs.get(missingWorkspaceKey(sessionId, hostId)) ?? 0;
+}
+
+export function clearMissingWorkspace(sessionId: string, hostId?: string): void {
+	const key = missingWorkspaceKey(sessionId, hostId);
+	missingWorkspaces.delete(key);
+	workspaceRecoveryEpochs.set(key, workspaceRecoveryEpoch(sessionId, hostId) + 1);
+}
+
+export function knownMissingWorkspace(sessionId: string, hostId?: string): WorkspaceRequestError | undefined {
+	const key = missingWorkspaceKey(sessionId, hostId);
+	const entry = missingWorkspaces.get(key);
+	if (entry && entry.expiresAt <= Date.now()) {
+		missingWorkspaces.delete(key);
+		return undefined;
+	}
+	return entry?.error;
+}
+
+export function recordWorkspaceResult(sessionId: string, hostId: string | undefined, error: unknown, response: Response | undefined, fallback: string, epoch = workspaceRecoveryEpoch(sessionId, hostId)): WorkspaceRequestError {
+	const typed = workspaceRequestError(error, response, fallback);
+	if (isMissingWorkspaceError(typed) && epoch === workspaceRecoveryEpoch(sessionId, hostId)) {
+		missingWorkspaces.set(missingWorkspaceKey(sessionId, hostId), { error: typed, expiresAt: Date.now() + MISSING_WORKSPACE_TTL_MS });
+		if (missingWorkspaces.size > 256) missingWorkspaces.delete(missingWorkspaces.keys().next().value!);
+	}
+	return typed;
+}
+
 /**
  * Retries a failed read up to three times, except a 4xx answer: it comes back
  * the same every time, and the recovery keyed on its code (a moved tip, a gone
@@ -168,10 +210,13 @@ const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 const MAX_ARTIFACT_TEXT_BYTES = 256 * 1024;
 
 async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
+	const { data, error, response: httpResponse } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, errorMessage));
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, httpResponse, errorMessage, epoch);
 	const response = (data ? { ...data, commits: [] } : {
 		sessionId,
 		files: [],
@@ -189,13 +234,16 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 }
 
 async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH): Promise<WorkspaceHistoryResponse> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const query = branch.kind === "branch" ? { branch: branch.name }
 		: branch.kind === "pull_request" ? { prNumber: branch.number, sourceUrl: branch.url || undefined }
 		: undefined;
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
 		params: query ? { path: { sessionId }, query } : { path: { sessionId } },
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return {
 		...data,
@@ -204,10 +252,13 @@ async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: str
 }
 
 async function fetchSessionWorkspaceBranches(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceBranches> {
+	const missing = knownMissingWorkspace(sessionId, hostId);
+	if (missing) throw missing;
+	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/branches", {
 		params: { path: { sessionId } },
 	});
-	if (error) throw workspaceRequestError(error, response, errorMessage);
+	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
 	return { ...data, branches: data.branches ?? [] };
 }
@@ -287,7 +338,7 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 }
 
 /** Cloud artifact files read as text; any other cloud file is shown as binary. */
-export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
+export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
 export class CloudArtifactAccessError extends Error {}
@@ -510,8 +561,9 @@ export function sessionWorkspaceDiffsQueryOptions({
 }) {
 	return {
 		queryKey: sessionWorkspaceDiffsQueryKey(sessionId, scope, paths, contextLines, ignoreWhitespace, workspaceVersion, selectionKeyFor(view, commitSha, commitShas), hostId),
-		queryFn: async (): Promise<WorkspaceDiffsResponse> => {
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}): Promise<WorkspaceDiffsResponse> => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/workspace/diffs", {
+				signal,
 				params: { path: { sessionId } },
 				body: { ...view, ...commitParams(commitSha, commitShas), contextLines, ignoreWhitespace, paths: [...paths], scope, workspaceVersion },
 			});
@@ -737,6 +789,8 @@ export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessag
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
 		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
+		retry: retryWorkspaceRead,
+		refetchOnWindowFocus: false,
 	};
 }
 
@@ -860,7 +914,6 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 // Must match WorkspaceReviewPane: the Files tab requests these batches, with
 // this context size, and then full contents for files whose patch ends on the
 // last hunk. A mismatch leaves the tab on "Loading diff…".
-const REVIEW_PREFETCH_BATCHES = 4;
 const REVIEW_PREFETCH_EOF_MAX = 40;
 const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
 const lastPrefetchedReview = new Map<string, string>();
@@ -886,7 +939,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 	// runs against a full workspace response.
 	if (!data.sections) return;
 	const target = defaultWorkspaceReviewTarget(data);
-	const files = (target.files ?? []).filter((file) => !isDeferredReviewFile(file)).slice(0, WORKSPACE_REVIEW_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
+	const files = (target.files ?? []).slice(0, WORKSPACE_REVIEW_PAGE_SIZE).filter((file) => !isDeferredReviewFile(file));
 	if (files.length === 0) return;
 	const token = `${target.workspaceVersion ?? ""}:${target.scope}:${target.selectionKey}:${files.map((file) => file.path).join("\n")}`;
 

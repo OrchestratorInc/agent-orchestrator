@@ -58,6 +58,9 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 // switched for again, so its retry cannot take the chat back from a later
 // switch. switched says the chat is on the target, so a failure is the send's.
 func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (turn domain.ConversationTurn, switched bool, err error) {
+	if err := validateFileReferenceContent(msg, string(id)); err != nil {
+		return turn, false, err
+	}
 	unlock, err := s.lockProviderSwitch(ctx, id)
 	if err != nil {
 		return turn, false, err

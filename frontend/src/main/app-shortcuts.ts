@@ -43,6 +43,24 @@ type BeforeInputContents = {
 	): unknown;
 };
 
+// Browser listeners handle their own page reloads; browser menu callbacks also
+// handle force reload while focus is in the shell-painted address bar.
+export function attachShellReloadGuard(
+	contents: BeforeInputContents,
+	isMac: boolean,
+	hasBrowserTarget: () => boolean = () => false,
+	isRecording: () => boolean = () => false,
+): void {
+	contents.on("before-input-event", (event, input) => {
+		if (input.type !== "keyDown" || input.alt || isRecording()) return;
+		const key = input.key.toLowerCase();
+		const primary = isMac ? input.meta && !input.control : input.control && !input.meta;
+		if ((key === "r" && primary && !hasBrowserTarget()) || (key === "f5" && !input.meta)) {
+			event.preventDefault();
+		}
+	});
+}
+
 type ShortcutTargetContents = {
 	focus: () => void;
 	send: (channel: string, ...args: unknown[]) => void;

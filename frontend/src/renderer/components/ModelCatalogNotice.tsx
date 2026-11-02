@@ -10,11 +10,6 @@ export type ModelCatalogNoticeProps = {
 	issue: ModelCatalogAuthIssue;
 	/** The daemon's own wording, kept out of the headline but one click away. */
 	detail?: string;
-	/**
-	 * A cloud task runs with the user's cloud connection, so this computer's
-	 * login only affects which models are listed: say so, quietly.
-	 */
-	cloud?: boolean;
 	onLogin: () => void;
 	onRetry: () => Promise<void>;
 };
@@ -24,16 +19,14 @@ export type ModelCatalogNoticeProps = {
  * Says so in plain words and offers the fix (log in) and a retry in place,
  * instead of a raw provider error and a retry buried in the model menu.
  */
-export function ModelCatalogNotice({ agentLabel, issue, detail, cloud = false, onLogin, onRetry }: ModelCatalogNoticeProps) {
+export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry }: ModelCatalogNoticeProps) {
 	const { t } = useTranslation();
 	const detailId = useId();
 	const [showDetail, setShowDetail] = useState(false);
 	const [retrying, setRetrying] = useState(false);
-	const headline = cloud
-		? t("newTask.modelNotice.cloud", { agent: agentLabel })
-		: issue === "expired"
-			? t("newTask.modelNotice.expired", { agent: agentLabel })
-			: t("newTask.modelNotice.signedOut", { agent: agentLabel });
+	const headline = issue === "expired"
+		? t("newTask.modelNotice.expired", { agent: agentLabel })
+		: t("newTask.modelNotice.signedOut", { agent: agentLabel });
 	const retry = async () => {
 		if (retrying) return;
 		setRetrying(true);
@@ -48,8 +41,8 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, cloud = false, o
 	return (
 		<div
 			// Only a signed-out agent is a problem to fix here. An expired token
-			// renews on its own, and a cloud task does not use this login at all.
-			className={cn("flex flex-col gap-1 text-caption", cloud || issue === "expired" ? "text-muted-foreground" : "text-warning")}
+			// renews on its own.
+			className={cn("flex flex-col gap-1 text-caption", issue === "expired" ? "text-muted-foreground" : "text-warning")}
 			data-testid="model-catalog-notice"
 			role="status"
 		>

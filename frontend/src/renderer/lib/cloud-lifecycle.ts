@@ -1,4 +1,6 @@
 import type { WorkspaceSession } from "../types/workspace";
+import type { CloudCpClient } from "./cloud-cp";
+import { FREESTYLE_PROVIDER } from "./cloud-offering";
 
 export type CloudLifecycleStage =
 	| "paused_by_coder"
@@ -12,6 +14,23 @@ export type CloudLifecycleStage =
 /** A stage where the sandbox is paused on purpose (no startup loader). */
 export function isCloudPausedStage(stage: CloudLifecycleStage | undefined): stage is "paused" | "paused_by_coder" {
 	return stage === "paused" || stage === "paused_by_coder";
+}
+
+/** Sandbox states of a session being created or woken, before its worker connects. */
+const STARTING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrapping", "stopped", "restoring"]);
+
+/**
+ * A Freestyle Chat session starting or waking: it stays on its conversation
+ * (no startup screen), its composer shimmers, and messages queue until its
+ * worker connects. Other providers start behind the startup screen, which
+ * shows a Coder start's steps and workspace link.
+ */
+export function cloudChatStartingInPlace(session?: WorkspaceSession): boolean {
+	const cloud = session?.cloud;
+	if (session?.mode !== "chat" || cloud?.sandboxProvider !== FREESTYLE_PROVIDER || session.runtimeConnected) return false;
+	// Only a session meant to run is starting: a paused one keeps its badge, and
+	// one being deleted (or archived) is going away, not getting ready.
+	return cloud.desiredState === "running" && STARTING_SANDBOX_STATES.has(cloud.observedState ?? "");
 }
 
 /**
@@ -107,4 +126,20 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	}
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;
+}
+
+const resumesInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Asks the control plane to resume a cloud session, sharing a request already
+ * in flight for it: opening a session asks from both its view and its Chat,
+ * and one request wakes it.
+ */
+export function resumeCloudSession(client: Pick<CloudCpClient, "resumeSession">, orgId: string, sessionId: string): Promise<unknown> {
+	const key = `${orgId}/${sessionId}`;
+	const pending = resumesInFlight.get(key);
+	if (pending) return pending;
+	const request = client.resumeSession(orgId, sessionId).finally(() => resumesInFlight.delete(key));
+	resumesInFlight.set(key, request);
+	return request;
 }

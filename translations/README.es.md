@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<h3>Deja de hacer de niñera de tus agentes. Empieza a integrar trabajo real.</h3>
+### Orchestrator.inc
+
+<h4>Deja de hacer de niñera de tus agentes. Empieza a integrar trabajo real.</h4>
 
 <p>
   Ejecuta una flota de agentes de programación sin perder el control de las ramas, las revisiones ni los fallos de CI.

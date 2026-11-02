@@ -1,8 +1,6 @@
-import { BrowserIcon } from "../icons";
 import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
 	clampRenderHeight,
@@ -242,19 +240,19 @@ function RenderSource({ path }: { path: string }) {
 	);
 }
 
-/** Opens an artifact in the session's Browser panel, on its own preview origin. */
-function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: string; previewUrl: string; onOpen: () => void }) {
+/** Opens the artifact in the session's contextual Artifacts tab. */
+function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
-	const openArtifactPreview = useOpenArtifactPreview(sessionId);
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	return (
 		<RenderAction
 			label={t("chat.artifact.openInPanel")}
 			onClick={() => {
 				onOpen();
-				openArtifactPreview(previewUrl);
+				requestWorkspaceFileOpen(sessionId, path, undefined, "artifact");
 			}}
 		>
-			<BrowserIcon className="size-3.5" />
+			<FileText className="size-3.5" />
 		</RenderAction>
 	);
 }
@@ -327,8 +325,8 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 					<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
 					<span className="min-w-0 flex-1 truncate text-muted-foreground">{page.title}</span>
-					{links?.previewUrl ? (
-						<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => undefined} />
+					{links && "artifact" in props ? (
+						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
@@ -386,8 +384,8 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 								<FilePlus className="size-3.5" />
 							</RenderAction>
 						) : null}
-						{links?.previewUrl ? (
-							<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => setExpanded(false)} />
+						{links && "artifact" in props ? (
+							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						<RenderAction
 							label={t("chat.render.openInBrowser")}

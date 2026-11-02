@@ -5,7 +5,7 @@ import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
-import { TerminalTabFrame } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type ShellTerminalTabProps = {
@@ -29,8 +29,8 @@ type ShellTerminalTabProps = {
 // macOS/Linux, right-click on Windows. Enter or blur commits, Escape cancels,
 // and an empty or unchanged name is discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
-// invalid HTML and breaks keyboard traversal. Connected session-strip tabs hug
-// the title and reveal that sibling in the terminal glyph's slot on hover.
+// invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
+// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
 export function ShellTerminalTab({
 	shell,
 	isActive,
@@ -128,18 +128,12 @@ export function ShellTerminalTab({
 		onContextMenu: (event: MouseEvent) => event.stopPropagation(),
 		type: "button" as const,
 	};
-	const connectedGlyphClass =
-		"size-icon-sm shrink-0 translate-y-px";
-	const isConnected = appearance === "connected";
-	if (isConnected) {
+	if (appearance === "connected") {
 		const closeAction = isEditing || shell.optimistic ? undefined : (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
-						{...closeControl}
-						className="relative grid size-icon-sm place-items-center text-passive opacity-0 pointer-events-none before:absolute before:-inset-1.5 before:content-[''] transition-colors duration-fast ease-out hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
-					>
-						<X aria-hidden="true" className="size-icon-sm translate-y-px" />
+					<button {...closeControl} className={terminalTabActionClassName}>
+						<X aria-hidden="true" className="size-icon-sm" />
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
@@ -148,7 +142,7 @@ export function ShellTerminalTab({
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
-				className="min-w-0 w-full rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent"
+				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
@@ -165,11 +159,9 @@ export function ShellTerminalTab({
 			/>
 		) : undefined;
 		return (
-		<TerminalTabFrame
-			action={closeAction}
-			actionLayout="overlay"
-			actionPosition="leading"
-			active={isActive}
+			<TerminalTabFrame
+				action={closeAction}
+				active={isActive}
 				buttonProps={{
 					"aria-current": isActive,
 					"aria-selected": isActive,
@@ -185,51 +177,24 @@ export function ShellTerminalTab({
 					type: "button",
 				}}
 				buttonRef={ref}
-				className="max-w-shell-tab-max"
 				editingContent={editingContent}
-			>
-				<SquareTerminal
-					aria-hidden="true"
-					className={cn(
-						"size-icon-sm shrink-0",
-						closeAction && "group-hover:opacity-0 group-focus-within:opacity-0",
-					)}
-				/>
-				<span className="truncate">{title}</span>
-			</TerminalTabFrame>
+				icon={<SquareTerminal aria-hidden="true" className="size-icon-sm" />}
+				label={title}
+			/>
 		);
 	}
 
 	return (
 		<span
-			data-editing={isConnected && isEditing ? "true" : undefined}
 			className={cn(
-				"group relative h-full shrink-0 self-stretch items-center",
-				isConnected
-					? cn(
-							"session-tab-icon-floor session-tab-icon-floor--closable relative inline-flex max-w-shell-tab-max border-x border-transparent",
-							isEditing && "pl-2 pr-1",
-						)
-					: "inline-flex min-w-shell-tab-min shrink-0 items-center gap-1 rounded-md px-2 py-1",
-				isConnected
-					? isActive
-						? "border-border-strong bg-overlay text-foreground"
-						: "border-transparent text-passive hover:bg-raised hover:text-foreground"
-					: isActive
-						? "bg-interactive-active"
-						: "hover:bg-interactive-hover/60",
+				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center gap-1 rounded-md px-2 py-1",
+				isActive ? "bg-interactive-active" : "hover:bg-interactive-hover/60",
 			)}
 		>
-			{isConnected && isEditing ? (
-				<SquareTerminal aria-hidden="true" className={cn("mr-1", connectedGlyphClass)} />
-			) : null}
 			{isEditing ? (
 				<input
 					aria-label={t("terminal.rename", { title })}
-					className={cn(
-						"rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent",
-						isConnected ? "min-w-0 w-full text-left" : "min-w-flex-min max-w-shell-tab-max",
-					)}
+					className="min-w-flex-min max-w-shell-tab-max rounded-sm border border-accent bg-background px-1 font-mono text-control font-semibold text-foreground shadow-sm outline-none ring-1 ring-accent"
 					onBlur={commit}
 					onChange={(event) => setDraft(event.target.value)}
 					onKeyDown={(event) => {
@@ -250,11 +215,7 @@ export function ShellTerminalTab({
 					aria-current={isActive}
 					aria-selected={isActive}
 					className={cn(
-						"select-none truncate text-control focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-						isConnected
-							? "inline-flex h-full min-w-0 cursor-pointer items-center pl-2 pr-2 text-left"
-							: "min-w-flex-min max-w-shell-tab-max cursor-pointer",
-					isConnected ? "font-normal" : "font-mono font-semibold",
+						"min-w-flex-min max-w-shell-tab-max cursor-pointer select-none truncate font-mono text-control font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
 						isActive ? "text-foreground" : "text-passive group-hover:text-foreground",
 					)}
 					{...tabRenameHandlers}
@@ -271,40 +232,21 @@ export function ShellTerminalTab({
 					type="button"
 				>
 					<span className="inline-flex min-w-0 -translate-y-px items-center">
-						{isConnected ? (
-							<SquareTerminal
-								aria-hidden="true"
-								className={cn(
-									"mr-1",
-									connectedGlyphClass,
-									"group-hover:opacity-0 group-focus-within:opacity-0",
-								)}
-							/>
-						) : null}
 						<span className="truncate">{title}</span>
 					</span>
 				</button>
 			)}
-			{isConnected && (isEditing || shell.optimistic) ? null : (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							{...closeControl}
-							className={
-								isConnected
-									? "absolute inset-y-0 right-2 z-20 grid size-icon-sm place-items-center text-passive opacity-0 pointer-events-none before:absolute before:-inset-1.5 before:content-[''] transition-colors duration-fast ease-out hover:text-foreground group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
-									: "inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
-								}
-							>
-							<X
-								aria-hidden="true"
-								className={isConnected ? "size-icon-sm translate-y-px" : "size-icon-sm"}
-							/>
-						</button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
-				</Tooltip>
-			)}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<button
+						{...closeControl}
+						className="inline-flex h-control-sm w-control-sm shrink-0 items-center justify-center overflow-hidden text-passive opacity-0 transition-colors duration-fast ease-out hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 motion-reduce:transition-none"
+					>
+						<X aria-hidden="true" className="size-icon-sm" />
+					</button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{t("terminal.closeNamed", { title })}</TooltipContent>
+			</Tooltip>
 		</span>
 	);
 }

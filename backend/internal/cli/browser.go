@@ -22,6 +22,7 @@ type browserStatusDTO struct {
 	Connected   bool      `json:"connected"`
 	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 	Transport   string    `json:"transport"`
+	Target      string    `json:"target,omitempty"`
 }
 
 type browserCommandRequestDTO struct {
@@ -83,7 +84,11 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 			if status.Connected {
 				state = "connected"
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Browser runtime: %s (%s)\n", state, status.Transport)
+			target := ""
+			if status.Target == "chrome" {
+				target = ", target: your Chrome"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Browser runtime: %s (%s%s)\n", state, status.Transport, target)
 			return err
 		},
 	})
@@ -617,6 +622,9 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 		})
 	}
 	cmd.AddCommand(dialogCmd)
+
+	cmd.AddCommand(newBrowserTargetCommand(ctx, &jsonOutput))
+	cmd.AddCommand(newBrowserChromeCommand(ctx, &jsonOutput))
 
 	for _, action := range []string{"console", "errors"} {
 		cmd.AddCommand(&cobra.Command{

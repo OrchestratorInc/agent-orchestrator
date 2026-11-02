@@ -1779,9 +1779,10 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 	}, {
 		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
 	}}
-	// Only AO's own server is pre-approved.
+	// Only AO's own server is pre-approved, and given time for a
+	// computer-use batch.
 	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
-		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}},` +
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"},"tool_timeout_sec":150},` +
 		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
 	for _, method := range []string{"thread/start", "thread/resume"} {
 		t.Run(method, func(t *testing.T) {

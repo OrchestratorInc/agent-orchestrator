@@ -3711,3 +3711,84 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 		})
 	}
 }
+
+// A review AO just posted must reach the worker on the next poll, not after the
+// repo guard, review cadence, or max-age backstop happen to notice it.
+func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	review := ports.SCMReviewObservation{
+		Decision: string(domain.ReviewNone),
+		Reviews:  []ports.SCMReviewSummaryObservation{{ID: "review-1", Author: "ao-reviewer", State: "COMMENTED", SubmittedAt: time.Unix(199, 0).UTC()}},
+		Threads:  []ports.SCMReviewThreadObservation{{ID: "t1", Path: "f.go", Line: 2, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "ao-reviewer", Body: "fix this"}}}},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review},
+	}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(200, 0).UTC())
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("unrequested poll fetched: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+
+	obs.RequestReviewRefresh(local.URL)
+	select {
+	case <-obs.trigger:
+	default:
+		t.Fatal("review refresh request did not wake the poll loop")
+	}
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 || len(provider.fetchBatches) != 1 {
+		t.Fatalf("requested refresh: reviews=%d batches=%d, want 1 each", provider.reviewCalls, len(provider.fetchBatches))
+	}
+	if len(store.writes) == 0 || len(store.writes[0].comments) != 1 || store.writes[0].reviewMode != ports.ReviewWriteReplace {
+		t.Fatalf("requested review not persisted: %#v", store.writes)
+	}
+	if len(lc.observed) != 1 || !lc.observed[0].Changed.Review {
+		t.Fatalf("requested review not delivered to lifecycle: %#v", lc.observed)
+	}
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 {
+		t.Fatalf("one request refreshed more than once: reviews=%d", provider.reviewCalls)
+	}
+}
+
+// A forced review refresh is still a provider call: during a rate-limit
+// cooldown it must not fetch threads (or the PR) before Retry-After elapses.
+func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): {Decision: string(domain.ReviewNone)}},
+	}
+	now := time.Unix(200, 0).UTC()
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+	obs.setRateLimitCooldown(now, "github", 2*time.Minute)
+
+	obs.RequestReviewRefresh(local.URL)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("forced refresh called a cooled-down provider: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+}

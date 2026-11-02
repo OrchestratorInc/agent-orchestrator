@@ -1,3 +1,4 @@
+import { captureFileReference } from "../../../shared/chat-file-reference";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -186,4 +187,29 @@ describe("ChatAnnotationSummary", () => {
 		await user.keyboard("{Enter}");
 		expect(screen.getByRole("button", { name: "selected text" })).toBeInTheDocument();
 	});
+});
+
+it("renders captured file code as static selectable context alongside navigable chat excerpts", () => {
+ const onSelect = vi.fn();
+ const fileReference = captureFileReference({path:"src/retry.ts", side:"file", line:3, endLine:3, lines:[{kind:"context",oldNo:3,newNo:3,text:"await retry();"}]}, "session");
+ render(<ChatAnnotationSummary annotations={[{id:"chat", text:"chat selection", order:2}, {id:fileReference.id, text:"file", fileReference, order:1}]} onSelect={onSelect} />);
+ fireEvent.click(screen.getByRole("button", {name:"2 annotations"}));
+ fireEvent.click(screen.getByText("await retry();"));
+ expect(onSelect).not.toHaveBeenCalled();
+ expect(screen.getByText("await retry();").closest("pre")).toHaveClass("select-text");
+ expect(screen.queryByRole("button",{name:/retry.ts/})).not.toBeInTheDocument();
+ fireEvent.click(screen.getByRole("button", {name:"chat selection"}));
+ expect(onSelect).toHaveBeenCalledOnce();
+});
+
+it("does not bubble preview clicks to the composer and steal selection focus", async () => {
+ const user = userEvent.setup();
+ const focusComposer = vi.fn();
+ const reference = captureFileReference({ path: "src/a.ts", side: "file", line: 1, endLine: 1, lines: [{kind: "context", oldNo: 1, newNo: 1, text: "captured();"}] }, "session");
+ render(<div onClick={focusComposer}><ChatAnnotationSummary annotations={[{id: reference.id, text: reference.path, fileReference: reference}]} /></div>);
+ await user.click(screen.getByRole("button", { name: "1 annotation" }));
+ focusComposer.mockClear();
+ await user.click(screen.getByText("captured();"));
+ expect(focusComposer).not.toHaveBeenCalled();
+ expect(screen.getByRole("dialog")).toBeVisible();
 });

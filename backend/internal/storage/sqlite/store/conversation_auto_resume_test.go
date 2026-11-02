@@ -46,6 +46,28 @@ func TestSetTurnAutoResumeRefusalPreservesConsumedConsent(t *testing.T) {
 	}
 }
 
+// ACP history replays a failed turn without its error. The live refusal is what
+// classifies a usage limit, so the replay must not erase it.
+func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	if err := s.BindTurnToProvider(ctx, "turn-limited", "provider-limited", testNow); err != nil {
+		t.Fatal(err)
+	}
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, "", testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	source, err := s.TurnByID(ctx, "turn-limited")
+	if err != nil || source.ErrorMessage != refusal || source.UsageLimit == nil || source.UsageLimit.ResetsAt == nil {
+		t.Fatalf("replay erased the usage-limit refusal: %+v, %v", source, err)
+	}
+}
+
 func TestAppendAutoResumeRetryRequiresDueConsent(t *testing.T) {
 	for _, state := range []string{"due", "future", "cancelled", "changed account", "failed insert"} {
 		t.Run(state, func(t *testing.T) {
