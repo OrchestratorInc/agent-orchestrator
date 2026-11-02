@@ -9,8 +9,10 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { cloudAccessMock, deleteArtifactMock, deleteCloudArtifactMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+const { cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
 	cloudAccessMock: vi.fn(),
+	createArtifactAccessMock: vi.fn(),
+	listArtifactsMock: vi.fn(),
 	deleteCloudArtifactMock: vi.fn(),
 	sendSessionMessageMock: vi.fn(),
 	deleteArtifactMock: vi.fn(),
@@ -28,7 +30,12 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { sendSessionMessage: sendSessionMessageMock, deleteSessionArtifact: deleteCloudArtifactMock },
+		client: {
+			sendSessionMessage: sendSessionMessageMock,
+			deleteSessionArtifact: deleteCloudArtifactMock,
+			listSessionArtifacts: listArtifactsMock,
+			createSessionArtifactAccess: createArtifactAccessMock,
+		},
 		ready: true,
 		baseUrl: "https://cp.test",
 		userId: "u-1",
@@ -248,6 +255,44 @@ describe("SessionArtifactsView for a cloud session", () => {
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
 		expect(screen.getAllByRole("menuitem", { name: /^Show in / })).toHaveLength(1);
 		expect(screen.queryByRole("menuitem", { name: "Show in Terminal" })).toBeNull();
+	});
+
+	it("copies only the artifact a Show in action is for", async () => {
+		createArtifactAccessMock.mockReset().mockResolvedValue({ filesPrefix: "/api/cloud/v1/artifact-files/token/", expiresAt: "2026-09-30T00:00:00Z" });
+		listArtifactsMock.mockReset().mockResolvedValue({ artifacts: cloudSession().artifactFiles });
+		const openFolder = vi.spyOn(aoBridge.cloudArtifact, "openFolder").mockResolvedValue(undefined);
+		try {
+			renderView(<SessionArtifactsView session={cloudSession()} />);
+			await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+			await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+			await userEvent.click(screen.getByRole("menuitem", { name: /^Show in / }));
+
+			await vi.waitFor(() => expect(openFolder).toHaveBeenCalledTimes(1));
+			expect(openFolder).toHaveBeenCalledWith({
+				sessionId: "cloud-1",
+				files: [{ path: "docs/notes.md", url: `${CLOUD_ROOT}docs/notes.md?v=2026-09-22T00%3A00%3A00Z` }],
+				reveal: "docs/notes.md",
+			});
+			expect(listArtifactsMock).not.toHaveBeenCalled();
+		} finally {
+			openFolder.mockRestore();
+		}
+	});
+
+	it("copies every artifact when the session's folder is opened", async () => {
+		createArtifactAccessMock.mockReset().mockResolvedValue({ filesPrefix: "/api/cloud/v1/artifact-files/token/", expiresAt: "2026-09-30T00:00:00Z" });
+		listArtifactsMock.mockReset().mockResolvedValue({ artifacts: cloudSession().artifactFiles });
+		const openFolder = vi.spyOn(aoBridge.cloudArtifact, "openFolder").mockResolvedValue(undefined);
+		try {
+			renderView(<SessionArtifactsView session={cloudSession()} />);
+			await userEvent.click(screen.getByRole("button", { name: /^Open in / }));
+
+			await vi.waitFor(() => expect(openFolder).toHaveBeenCalledTimes(1));
+			expect(openFolder.mock.calls[0][0].files.map((file) => file.path)).toEqual(["report.html", "docs/notes.md"]);
+			expect(openFolder.mock.calls[0][0].reveal).toBeUndefined();
+		} finally {
+			openFolder.mockRestore();
+		}
 	});
 
 	it("deletes a cloud file from cloud storage and the sandbox after confirming", async () => {

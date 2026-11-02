@@ -33,20 +33,26 @@ function terminalName(): string {
 
 /**
  * Copies a cloud session's artifact files to its folder under ~/.ao and opens
- * it in the file manager, or shows `reveal` in it: a cloud session's
- * artifacts live in the control plane, so this is the folder a local
- * session's "Show in" opens.
+ * it in the file manager, or, given `reveal`, copies only that artifact and
+ * shows it there: a cloud session's artifacts live in the control plane, so
+ * this is the folder a local session's "Show in" opens.
  */
-export async function openCloudArtifactsFolder(client: CloudCpClient, baseUrl: string, orgId: string, sessionId: string, reveal?: string): Promise<void> {
-	const [{ artifacts }, access] = await Promise.all([
-		client.listSessionArtifacts(orgId, sessionId),
+export async function openCloudArtifactsFolder(
+	client: CloudCpClient,
+	baseUrl: string,
+	orgId: string,
+	sessionId: string,
+	reveal?: Pick<SessionArtifact, "path" | "updatedAt">,
+): Promise<void> {
+	const [files, access] = await Promise.all([
+		reveal ? [reveal] : client.listSessionArtifacts(orgId, sessionId).then(({ artifacts }) => artifacts),
 		client.createSessionArtifactAccess(orgId, sessionId),
 	]);
 	const root = `${baseUrl.replace(/\/+$/, "")}${access.filesPrefix}`;
 	await aoBridge.cloudArtifact.openFolder({
 		sessionId,
-		files: artifacts.map((file) => ({ path: file.path, url: cloudArtifactFileUrl(root, file.path, file.updatedAt) })),
-		reveal,
+		files: files.map((file) => ({ path: file.path, url: cloudArtifactFileUrl(root, file.path, file.updatedAt) })),
+		reveal: reveal?.path,
 	});
 }
 
@@ -128,7 +134,7 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			if (!session.cloud) return;
-			await openCloudArtifactsFolder(cloudClient, cloudBaseUrl, session.cloud.orgId, session.id, artifact.path);
+			await openCloudArtifactsFolder(cloudClient, cloudBaseUrl, session.cloud.orgId, session.id, artifact);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
