@@ -26,6 +26,7 @@ var aiderHistoryID = regexp.MustCompile(`^aider_[0-9a-f]{64}$`)
 
 var (
 	_ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
+	_ ports.AgentImportedSessionPreparer  = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber      = (*Plugin)(nil)
 	_ ports.AgentTranscriptLocator        = (*Plugin)(nil)
 )
@@ -124,8 +125,8 @@ func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) erro
 }
 
 // RelocateImportedSession copies the selected native Markdown into the AO
-// worktree. A marker preserves its file-based identity; retries retain the
-// copy containing AO's later turns and refuse unrelated destination history.
+// worktree. A marker preserves its file-based identity. Any existing native
+// history is refused; shared preparation checkpoints prevent a second copy.
 func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if !aiderHistoryID.MatchString(r.NativeSessionID) || NativeHistoryID(r.ConfigDir) != r.NativeSessionID || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
 		return errors.New("aider import identity or source path changed")
@@ -136,11 +137,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	}
 	defer func() { _ = dst.Close() }()
 	if _, err := dst.Lstat(aiderHistoryFile); err == nil {
-		if err := checkAiderIdentity(ctx, dst, r.LaunchCWD, r.NativeSessionID); err != nil {
-			return err
-		}
-		_, err = aiderHistory(ctx, dst)
-		return err
+		return errors.New("aider worktree already contains native history")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -159,11 +156,20 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err := checkAiderIdentity(ctx, dst, r.LaunchCWD, r.NativeSessionID); err != nil {
 		return err
 	}
-	if err := writeAiderFile(ctx, dst, aiderHistoryFile, data); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := writeAiderFile(ctx, dst, aiderHistoryFile, data); err != nil {
 		return err
 	}
 	_, err = aiderHistory(ctx, dst)
 	return err
+}
+
+// PrepareImportedSession returns the native copy for AO's separate resume
+// checkpoint, preserving the original repository and history as provenance.
+func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	if err := p.RelocateImportedSession(ctx, r); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.LaunchCWD, TranscriptPath: filepath.Join(r.LaunchCWD, aiderHistoryFile)}, nil
 }
 
 // GetRestoreCommand restores Aider's native Markdown into its own message
@@ -171,6 +177,9 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if !aiderHistoryID.MatchString(id) {
+		if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
 		return nil, false, ctx.Err()
 	}
 	if !filepath.IsAbs(cfg.Session.WorkspacePath) {

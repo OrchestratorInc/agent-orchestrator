@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/aider"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestAiderProjectHistoryDiscoveryAndNativeMessages(t *testing.T) {
@@ -27,6 +28,32 @@ func TestAiderProjectHistoryDiscoveryAndNativeMessages(t *testing.T) {
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.title != "make a greeting with two lines" {
 		t.Fatalf("transcript = %+v", got)
 	}
+}
+
+func TestAiderRegisteredProjectScanImportsNativeTerminalHistory(t *testing.T) {
+	project, unrelated := t.TempDir(), t.TempDir()
+	path := writeFile(t, filepath.Join(project, aiderImportHistory), "#### make a greeting\n\nHello\n")
+	writeFile(t, filepath.Join(unrelated, aiderImportHistory), "#### never scan this repository\n")
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(st, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].Harness != domain.HarnessAider || preview.Candidates[0].ProjectID != "repo" {
+		t.Fatalf("registered project scan = %+v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("import = %+v, %v", results, err)
+	}
+	rec := st.sessions[0]
+	if rec.Mode != domain.SessionModeTUI || rec.Metadata.AgentSessionID != aider.NativeHistoryID(project) || rec.Metadata.ImportSource.ConfigDir != canonical(project) || !rec.NeedsImportResume() {
+		t.Fatalf("native Terminal record = %+v", rec)
+	}
+	writeFile(t, path, "#### make a greeting\n\nHello\n#### a later turn\n\nDone\n")
+	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, st.messages, "user: make a greeting", "assistant: Hello", "user: a later turn", "assistant: Done")
 }
 
 func TestAiderDiscoveryDoesNotSearchNestedOrEscapingFiles(t *testing.T) {

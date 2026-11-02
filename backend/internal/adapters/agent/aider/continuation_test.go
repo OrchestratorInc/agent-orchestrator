@@ -26,8 +26,12 @@ func aiderImportFixture(t *testing.T) ports.ImportedSessionRelocation {
 func TestImportedAiderRestoresNativeHistoryFromWorktree(t *testing.T) {
 	r := aiderImportFixture(t)
 	p := &Plugin{resolvedBinary: "aider"}
-	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
+	prepared, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if prepared.NativeSessionID != r.NativeSessionID || prepared.ConfigDir != r.LaunchCWD || prepared.TranscriptPath != filepath.Join(r.LaunchCWD, aiderHistoryFile) {
+		t.Fatalf("prepared identity = %+v", prepared)
 	}
 	cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: r.LaunchCWD, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: r.NativeSessionID}}, SystemPromptFile: "/ao/context.md"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg)
@@ -54,7 +58,7 @@ func TestImportedAiderRestoresNativeHistoryFromWorktree(t *testing.T) {
 	}
 }
 
-func TestAiderRelocationRetainsLaterTurnsWhenSourceDisappears(t *testing.T) {
+func TestAiderRelocationRefusesToReplaceExistingWorktreeHistory(t *testing.T) {
 	r := aiderImportFixture(t)
 	p := &Plugin{}
 	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
@@ -68,8 +72,8 @@ func TestAiderRelocationRetainsLaterTurnsWhenSourceDisappears(t *testing.T) {
 	if err := os.Remove(r.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
-		t.Fatal(err)
+	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
+		t.Fatal("accepted an existing native history file")
 	}
 	got, err := os.ReadFile(dst)
 	if err != nil || string(got) != string(later) {

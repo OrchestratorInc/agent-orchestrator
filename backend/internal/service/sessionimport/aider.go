@@ -15,6 +15,21 @@ import (
 
 const aiderImportHistory = ".aider.chat.history.md"
 
+func discoverAiderRegistered(ctx context.Context, projects []string) ([]sourceFiles, error) {
+	var out []sourceFiles
+	for _, project := range projects {
+		files, err := discoverAiderProject(ctx, project)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue // One unreadable registered project does not hide the others.
+		}
+		out = append(out, files...)
+	}
+	return out, nil
+}
+
 // discoverAiderProject reads exactly one registered project root. It never
 // searches a home directory or recursively traverses a repository.
 func discoverAiderProject(ctx context.Context, project string) ([]sourceFiles, error) {
