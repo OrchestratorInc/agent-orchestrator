@@ -3596,7 +3596,7 @@ describe("useTaskLaunch on the new chat page", () => {
 });
 
 describe("Chat launch permission capability boundary", () => {
-	it.each(["proj-1", "__standalone__"])("clears stale mode when switching to Kimi in %s", async (projectId) => {
+	it.each(["proj-1", "__standalone__"])("uses Kimi native permissions and preserves the chosen policy when switching back in %s", async (projectId) => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex", "kimi"], agent: "codex" } };
 			if (path.includes("/models")) return { data: { models: [], allowCustom: true, selectionMode: "text" } };
@@ -3623,7 +3623,8 @@ describe("Chat launch permission capability boundary", () => {
 		act(() => task.switchAgent("codex"));
 		await waitFor(() => expect(task.agent.value).toBe("codex"));
 		expect(task.approvalModes).toContain("auto");
-		expect(task.turnSettings.approvalMode).toBe("auto");
+		expect(task.turnSettings.approvalMode).toBe("accept-edits");
+		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
 		await act(async () => { await task.launch("back on auto"); });
 		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
 	});

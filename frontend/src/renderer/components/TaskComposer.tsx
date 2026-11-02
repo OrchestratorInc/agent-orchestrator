@@ -772,6 +772,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const wantedApproval = approvalMode ?? (isCloudProject ? "bypass-permissions" : APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto");
 	// An inherited or stale choice cannot invent an ACP mode. Use the agent's
 	// normal approval behavior when it has no alternatives, never implicitly bypass.
+	// Keep the chosen policy intact so switching back restores it.
 	const effectiveApproval = usesChatPermissions && chatPermissionModes?.length === 1 && chatPermissionModes[0] === "default"
 		? "default" : wantedApproval;
 	// With no provider default for the reported levels AO picks one, shows it as
@@ -1083,7 +1084,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 				...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
 			};
 		}
-		setApprovalMode(undefined);
 		setAgent(value);
 		setAgentTouched(true);
 		setModel("");
