@@ -496,6 +496,7 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 // the session's input lease, which the resume waits to drain.
 func (s *Service) admitController(ctx context.Context, id domain.SessionID, wakeAsleep bool) (*Controller, func(), error) {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	restored := false
 	for {
 		if !gate.tryLock() {
 			if controller, err := s.Controller(id); err == nil {
@@ -549,7 +550,20 @@ func (s *Service) admitController(ctx context.Context, id domain.SessionID, wake
 			}
 			if !s.isWaking(id) {
 				gate.unlock()
-				return nil, nil, ErrNoController
+				if restored {
+					return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatControllerRestore, ErrNoController)
+				}
+				if s.restoreController == nil || rec.IsTerminated || rec.Activity.State == domain.ActivityExited ||
+					rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+					return nil, nil, ErrNoController
+				}
+				// Restoration acquires this start/stop gate itself. Reenter after
+				// it completes to admit delivery with hibernation fenced out.
+				if err := s.restoreController(ctx, id); err != nil {
+					return nil, nil, err
+				}
+				restored = true
+				continue
 			}
 		}
 		gate.unlock()

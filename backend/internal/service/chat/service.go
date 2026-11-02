@@ -96,6 +96,7 @@ type Service struct {
 	waking                map[domain.SessionID]int
 	wakeRuns              map[domain.SessionID]*wakeRun
 	backgroundWakes       map[domain.SessionID]bool
+	restoreController     func(context.Context, domain.SessionID) error
 	autoResumeMu          sync.Mutex
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
@@ -118,6 +119,7 @@ type Service struct {
 	handoffInterrupted map[domain.SessionID]string
 	gateMu             sync.Mutex
 	gates              map[domain.ConversationOwner]controllerGate
+	inputGates         map[domain.SessionID]controllerGate
 	probeMu            sync.Mutex
 	probed             map[domain.AgentHarness]ports.ChatCapabilities
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
@@ -129,6 +131,41 @@ type Service struct {
 // has constructed both services.
 func (s *Service) SetReportCoordinator(coordinator *reportsvc.Coordinator) {
 	s.reports = coordinator
+}
+
+// SetControllerRestorer late-binds the session manager after daemon wiring.
+// Reads and catalog requests never call it; only input needs a live provider.
+func (s *Service) SetControllerRestorer(restore func(context.Context, domain.SessionID) error) {
+	s.restoreController = restore
+}
+
+// ChatNeedsController checks durable continuity obligations without restoring
+// a provider or loading the full transcript. Read failures remain conservative.
+func (s *Service) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	rec, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return true, err
+	}
+	switch rec.Activity.State {
+	case domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited:
+	default:
+		return true, nil
+	}
+	if rec.Metadata.ConversationCheckpointUnsettled {
+		return true, nil
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	work, err := s.store.HasUnsettledConversationTurns(ctx, conversation.ID)
+	if err != nil || work {
+		return true, err
+	}
+	return s.store.HasPendingConversationInteractions(ctx, conversation.ID)
 }
 
 // controllerGate serializes start/stop for one session without making provider
@@ -239,6 +276,7 @@ func New(opts Options) *Service {
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
 		awakeInterrupted:       make(map[domain.ConversationOwner]domain.AwakeAgentTarget),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
+		inputGates:             make(map[domain.SessionID]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
@@ -256,6 +294,20 @@ func (s *Service) controllerGate(owner domain.ConversationOwner) controllerGate 
 	if gate == nil {
 		gate = make(controllerGate, 1)
 		s.gates[owner] = gate
+	}
+	return gate
+}
+
+// Input retains its admission order across lazy restoration, before a
+// controller (and its sendMu) exists. It is separate from the start/stop gate:
+// restoration must be able to acquire that gate while this input waits.
+func (s *Service) inputGate(id domain.SessionID) controllerGate {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	gate := s.inputGates[id]
+	if gate == nil {
+		gate = make(controllerGate, 1)
+		s.inputGates[id] = gate
 	}
 	return gate
 }
@@ -1345,6 +1397,11 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	gate := s.inputGate(id)
+	if err := gate.lock(ctx); err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	defer gate.unlock()
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1960,6 +2017,16 @@ func idleControllerState(record domain.SessionRecord) ports.ChatControllerState 
 	return ports.ChatControllerStopped
 }
 
+func (s *Service) absentControllerState(record domain.SessionRecord) ports.ChatControllerState {
+	if s.restoreController != nil && !record.IsTerminated && record.HibernatedAt == nil && !s.isWaking(record.ID) &&
+		record.ProvisionState.WithDefault() == domain.SessionProvisionReady &&
+		record.Metadata.ProviderConversationID != "" &&
+		(record.Activity.State == domain.ActivityIdle || record.Activity.State == domain.ActivityWaitingInput) {
+		return ports.ChatControllerCold
+	}
+	return idleControllerState(record)
+}
+
 // withDispatchingTurnRunning reports the turn being dispatched as running. Its row
 // stays queued until the provider binds it, but a client reads queued as "waiting
 // behind other work", which is false for a message sent to an idle agent.
@@ -2001,7 +2068,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: s.absentControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -2014,7 +2081,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	}
 
 	waking := s.isWaking(id)
-	state := idleControllerState(record)
+	state := s.absentControllerState(record)
 	if waking && !record.IsTerminated && state == ports.ChatControllerStopped {
 		state = ports.ChatControllerHibernated
 	}
@@ -2106,7 +2173,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			SessionID:  id,
 			Harness:    record.Harness,
 			Mode:       domain.NormalizeSessionMode(record.Mode),
-			Controller: idleControllerState(record),
+			Controller: s.absentControllerState(record),
 		}, nil
 	}
 	if err != nil {
@@ -2122,7 +2189,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
 	waking := s.isWaking(id)
-	state := idleControllerState(record)
+	state := s.absentControllerState(record)
 	if waking && !record.IsTerminated && state == ports.ChatControllerStopped {
 		state = ports.ChatControllerHibernated
 	}
@@ -2809,6 +2876,11 @@ func (s *Service) relayChatTurn(
 	text, clientMessageID string,
 	options ports.MessageDeliveryOptions,
 ) (string, error) {
+	gate := s.inputGate(id)
+	if err := gate.lock(ctx); err != nil {
+		return "", err
+	}
+	defer gate.unlock()
 	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
 		Text: text, ClientMessageID: clientMessageID,
 		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,

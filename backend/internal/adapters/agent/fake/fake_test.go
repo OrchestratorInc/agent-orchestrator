@@ -313,6 +313,9 @@ func TestFullLifecycleSpawnToTermination(t *testing.T) {
 
 	// Hooks fire: run the script with the stub `ao` ahead of the real PATH.
 	run := exec.Command(cmd[0], cmd[1:]...) //nolint:gosec // argv is the harness's own launch command
+	// Login profiles may reset PATH. Keep this fixture's hook recorder ahead of
+	// installed binaries after the shell has loaded its profile.
+	run.Args[2] = "export PATH='" + strings.ReplaceAll(dir, "'", "'\\''") + "':$PATH\n" + run.Args[2]
 	run.Env = append(os.Environ(),
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"AO_HOOK_LOG="+hookLog,
