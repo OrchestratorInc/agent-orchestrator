@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,11 +87,12 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		Info struct{ ID, CWD string } `json:"info"`
 		Title string `json:"generated_title"`
 	}
-	body, err := r.ReadFile(rel)
+	summaryFile, err := r.Open(rel)
 	if err != nil {
 		return t, err
 	}
-	if err := json.Unmarshal(body, &summary); err != nil {
+	defer func() { _ = summaryFile.Close() }()
+	if err := json.NewDecoder(io.LimitReader(summaryFile, 4<<20)).Decode(&summary); err != nil {
 		return t, err
 	}
 	if summary.Info.ID != t.nativeID || !filepath.IsAbs(summary.Info.CWD) {
