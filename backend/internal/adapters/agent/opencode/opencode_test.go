@@ -696,6 +696,14 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
 	}
+	// Subagent sessions arrive on the same bus. The plugin must track them from
+	// session.created(parentID) and never report a child id as the identity:
+	// AO persists that id as the native restore handle.
+	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "reportSessionID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
+		}
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)
