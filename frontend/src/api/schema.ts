@@ -6498,8 +6498,12 @@ export interface components {
             shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         OpenShellTerminalRequest: {
+            /** @description Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored). */
+            cols?: number;
             /** @description Project whose root the shell starts in. Omitted opens the shell in the daemon data dir. */
             projectId?: string;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
             /** @description Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell. */
             sessionId?: string;
             /** @description Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux. */

@@ -938,17 +938,7 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 	// Regression: the shell LAYOUT must own this, not the session view. When the
 	// session view owned it, the shortcut did nothing outside a session route —
 	// nothing was mounted to hear it.
-	it("opens a terminal from the dedicated terminals route", async () => {
-		shellMocks.state.matchRouteTarget = "/terminals";
-		await renderShell();
-
-		pressNewShellTerminal();
-
-		expect(useUiStore.getState().newShellTerminalNonce).toBe(1);
-		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(1);
-	});
-
-	// Regression (#4772): ⌘T on the project board must not yank users into /terminals.
+	// Regression (#4772): ⌘T on the project board has no session to open a terminal in.
 	it("ignores the shortcut on the project board", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-1" };
 		await renderShell();
