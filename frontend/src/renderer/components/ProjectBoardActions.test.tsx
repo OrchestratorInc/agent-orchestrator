@@ -17,23 +17,25 @@ const actions: ProjectOrchestratorAction = {
 };
 
 describe("ProjectBoardActions", () => {
-	it("uses the same filled treatment for both cloud header actions", () => {
+	it("keeps Orchestrator the one filled header action on a cloud board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} cloud placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: "New task" })).not.toHaveClass("bg-accent-strong");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
 	});
 
-	it("keeps the same filled header actions on an empty local board", () => {
+	it("keeps Orchestrator the one filled header action on an empty local board", () => {
 		render(
 			<TooltipProvider>
 				<ProjectBoardActions actions={actions} placement="header" quiet />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary", "bg-accent-strong");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: "New task" })).not.toHaveClass("bg-accent-strong");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--primary", "bg-accent-strong");
 	});
 });

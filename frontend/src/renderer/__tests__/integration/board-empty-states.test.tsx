@@ -668,7 +668,7 @@ describe("shared project board actions", () => {
 		const empty = await screen.findByTestId("project-board-empty");
 		const headerTask = screen.getAllByRole("button", { name: "New task" }).find((button) => !empty.contains(button))!;
 		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn Orchestrator" }).find((button) => !empty.contains(button))!;
-		expect(headerTask).toHaveClass("topbar-control--primary", "topbar-control--labeled");
+		expect(headerTask).toHaveClass("topbar-control--action", "topbar-control--labeled");
 		expect(headerOrchestrator).toHaveClass("topbar-control--primary", "topbar-control--labeled");
 		expect(headerTask).toHaveAttribute("data-priority", "primary");
 		expect(headerTask.querySelector("[data-compact-label]")).not.toBeNull();
@@ -688,12 +688,12 @@ describe("shared project board actions", () => {
 		for (const session of [worker, { ...worker, status: "terminated" as const, isTerminated: true }]) {
 			updateWorkers([session]);
 			await waitFor(() => expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument());
-			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
+			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
 			expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
 		}
 		updateWorkers([]);
 		await screen.findByTestId("project-board-empty");
-		expect(headerTask).toHaveClass("topbar-control--primary");
+		expect(headerTask).toHaveClass("topbar-control--action");
 	});
 
 	it("shows the starting chat while a request is pending, then restores the board with Terminal UI recovery", async () => {
@@ -750,7 +750,7 @@ describe("shared project board actions", () => {
 		renderBoard(board());
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action");
 		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
 	});
 });

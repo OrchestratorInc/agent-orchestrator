@@ -65,7 +65,7 @@ describe("PageTopbarSurface", () => {
 		]);
 	});
 
-	it("hides workspace controls when settings replaces a still-mounted session", () => {
+	it("keeps the bell but hides session controls when settings replaces a still-mounted session", () => {
 		render(
 			<PageTopbarSurface notifications>
 				<SessionTabsTopbar tabs={<div role="tablist" />} />
@@ -77,7 +77,7 @@ describe("PageTopbarSurface", () => {
 
 		act(() => useUiStore.getState().openGlobalSettings("harness"));
 		expect(screen.getByRole("tablist")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
 		expect(screen.queryByRole("button", { name: "Toggle inspector" })).not.toBeInTheDocument();
 
 		act(() => useUiStore.getState().closeSettings());
