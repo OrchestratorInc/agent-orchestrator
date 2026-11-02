@@ -6,7 +6,9 @@
 // child id would make restoration resume the subagent conversation. Child tool /
 // execution activity is folded onto the root session as plain `active` so
 // subagent work still reads as activity, while child turn boundaries are
-// dropped — a child finishing does not end the parent's turn.
+// dropped — a child finishing does not end the parent's turn. Roots report tool
+// calls as pre-tool-use / post-tool-use(-failure) with the upstream call id so
+// AO's step timeline and in-flight correlation work.
 import { spawn } from "node:child_process"
 
 const HOOK_TIMEOUT_MS = 1_250
@@ -138,13 +140,17 @@ export default {
         const root = resolveSessionID(input.sessionID)
         ensureSession(root)
         if (isChildSession(input.sessionID)) report("active", root)
-        else report("active", root, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
+        else report("pre-tool-use", root, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
       }),
       context.tool.hook("execute.after", (input) => {
         const root = resolveSessionID(input.sessionID)
         ensureSession(root)
         if (isChildSession(input.sessionID)) report("active", root)
-        else report("active", root, { tool_name: input.tool ?? "", tool_use_id: input.id ?? "" })
+        else
+          report(input.status === "error" ? "post-tool-use-failure" : "post-tool-use", root, {
+            tool_name: input.tool ?? "",
+            tool_use_id: input.id ?? "",
+          })
       }),
     ])
 
