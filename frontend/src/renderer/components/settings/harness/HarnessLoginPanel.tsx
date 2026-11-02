@@ -58,6 +58,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const pending = useRef(false);
 	const openedOperation = useRef<string | undefined>(undefined);
 	const secretRowRef = useRef<HTMLDivElement>(null);
+	// Set once the user answers a native menu; until then an unrecognized
+	// screen hands straight off to the terminal instead of asking.
+	const nativeAnswered = useRef(false);
 	const verifyRef = useRef(onVerify);
 	verifyRef.current = onVerify;
 	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
@@ -258,6 +261,25 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			if (mounted.current) setBusy(false);
 		}
 	};
+	// With native sign-in as the only method there is nothing to choose: start
+	// it straight away. The timer keeps a double mount from starting twice.
+	const onlyNative = availableMethods.length === 1 && availableMethods[0].id === "native";
+	useEffect(() => {
+		if (!onlyNative) return;
+		const timer = window.setTimeout(() => void start(availableMethods[0]), 0);
+		return () => window.clearTimeout(timer);
+	// Start once per panel; start reads the latest state through refs.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [onlyNative]);
+	// A first screen AO cannot drive goes to the terminal without an extra
+	// click; mid-flow, the panel offers the terminal as its main action.
+	useEffect(() => {
+		// Wait until the start that produced this screen has settled; leave()
+		// ignores calls while it is still pending.
+		if (busy || operation?.status !== "running" || operation.nativePrompt !== "terminal_required" || nativeAnswered.current) return;
+		void leave(true);
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [operation?.id, operation?.status, operation?.nativePrompt, busy]);
 	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
 		// Clicking an open credential row again collapses it.
@@ -293,6 +315,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	};
 	const menuAction = async (action: MenuAction) => {
 		if (!operation || busy || !running) return;
+		nativeAnswered.current = true;
 		setBusy(true);
 		setError("");
 		try { updateOperation(await actOnAgentUILogin(agentId, operation.id, action, hostId)); }
@@ -431,7 +454,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			{!operation?.deviceCode && <p className="text-xs leading-4 text-settings-muted">{methodLabel}</p>}
 			<div className="space-y-1">
 				<p role="status" aria-live="polite" className={connected ? "flex items-center gap-2.5 text-[15px] leading-5 font-medium text-settings-label" : "flex items-center gap-2 text-[13px] leading-5 text-settings-label"}>
-					{connected ? <span className={`flex size-6 shrink-0 items-center justify-center rounded-full ${configured ? "bg-(--color-bg-tertiary) text-settings-muted" : "bg-success/10 text-success"}`}>{configured ? <KeyRound className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}</span> : <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />}
+					{connected ? <span className={`flex size-6 shrink-0 items-center justify-center rounded-full ${configured ? "bg-(--color-bg-tertiary) text-settings-muted" : "bg-success/10 text-success"}`}>{configured ? <KeyRound className="size-4" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}</span> : running && operation?.nativePrompt === "terminal_required" ? <Terminal className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
+						: <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />}
 					{status}
 				</p>
 				{connected && <p className="pl-8.5 text-xs leading-4 text-settings-muted">{configured ? t("settings.harness.models.configuredProviderHint") : t("settings.harness.loginUi.connectedDescription")}</p>}
@@ -480,8 +504,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			</details>}
 			<div className="ml-auto flex flex-wrap items-center justify-end gap-2">
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
-				{running && operation?.method === "native" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
-				{running && operation?.nativePrompt === "terminal_required" && <Button variant="outline" size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
+				{running && operation?.nativePrompt === "terminal_required" && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 				<Button variant={connected ? "primary" : "ghost"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
 			</div>
 		</div>

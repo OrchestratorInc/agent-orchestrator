@@ -123,10 +123,10 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		vi.mocked(actOnAgentUILogin).mockResolvedValue({ ...native, nativePrompt: "waiting", selectedOption: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "Native sign-in" })).toBeVisible();
-		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
+		// Native sign-in is the only method, so it starts without a click.
+		expect(await screen.findByText("Selected: OpenAI")).toBeVisible();
+		expect(startAgentUILogin).toHaveBeenCalledTimes(1);
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "native", "", undefined);
-		expect(screen.getByText("Selected: OpenAI")).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Next option" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "next", undefined);
 		expect(screen.queryByText("Selected: OpenAI")).toBeNull();
@@ -138,23 +138,34 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue(true);
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
-		await user.click(screen.getByRole("button", { name: "Check sign-in" }));
+		await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
 		await waitFor(() => expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined));
 		expect(onVerify).toHaveBeenCalledTimes(1);
 		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
 	});
 
-	it("offers terminal fallback when a native prompt is unrecognized", async () => {
-		const user = userEvent.setup();
+	it("hands an unrecognized first native screen straight to the terminal", async () => {
 		const native: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "terminal_required", loginUrl: undefined, deviceCode: undefined };
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
 		const onTerminal = vi.fn().mockResolvedValue(undefined);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
-		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
-		expect(screen.getByText("This step needs the terminal. Open the terminal login to continue.")).toBeVisible();
-		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
+		await waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(1));
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined);
+	});
+	it("offers the terminal as the main action when a native screen goes unrecognized mid-flow", async () => {
+		const user = userEvent.setup();
+		const menu: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "menu", nativeOptions: ["Anthropic", "OpenAI"], loginUrl: undefined, deviceCode: undefined };
+		const stuck: AgentLoginSnapshot = { ...menu, nativePrompt: "terminal_required", nativeOptions: undefined };
+		vi.mocked(startAgentUILogin).mockResolvedValue(menu);
+		vi.mocked(getAgentUILogin).mockResolvedValue(menu);
+		vi.mocked(actOnAgentUILogin).mockImplementation(async () => { vi.mocked(getAgentUILogin).mockResolvedValue(stuck); return stuck; });
+		const onTerminal = vi.fn().mockResolvedValue(undefined);
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
+		await user.click(await screen.findByRole("button", { name: "2. OpenAI" }));
+		expect(await screen.findByText("This step needs the terminal. Open the terminal login to continue.")).toBeVisible();
+		expect(screen.queryByRole("button", { name: "Check sign-in" })).toBeNull();
+		expect(onTerminal).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(onTerminal).toHaveBeenCalledTimes(1);
 	});
 	it("keeps an interactive-only harness in Account with an explicit terminal action", async () => {
@@ -238,8 +249,7 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		vi.mocked(actOnAgentUILogin).mockResolvedValue({ ...native, nativePrompt: "waiting", nativeOptions: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
-		expect(screen.getByRole("button", { name: "2. OpenAI" })).toBeVisible();
+		expect(await screen.findByRole("button", { name: "2. OpenAI" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "2. OpenAI" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "2", undefined);
 	});
@@ -249,8 +259,7 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
-		expect(screen.getByRole("group", { name: "Choose how to continue:" })).toBeVisible();
+		expect(await screen.findByRole("group", { name: "Choose how to continue:" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Press Enter" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "select", undefined);
 	});

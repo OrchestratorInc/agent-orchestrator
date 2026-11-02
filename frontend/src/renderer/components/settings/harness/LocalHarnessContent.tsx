@@ -550,7 +550,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const authPlan = agentAuthPlans.get(agentId);
 		// Any plan with inline methods opens the Account login panel; a plan
 		// without methods falls back to its terminal or documentation flow.
-		if (action === "login" && !terminal && (authPlan?.methods?.length || authPlan?.launchMode === "terminal")) {
+		if (action === "login" && !terminal && authPlan?.methods?.length) {
 			uiLoginAgentRef.current = agentId;
 			setUiLoginAgent(agentId);
 			return true;
