@@ -176,9 +176,6 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	if summary.Title != "" {
 		t.title = summary.Title
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
+	t.title = importTitle(t.title)
 	return t, nil
 }
