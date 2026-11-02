@@ -778,7 +778,8 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
 			}
-			if err := os.Setenv("LLM_MODEL", model); err != nil {
+			// Like the key itself, so removing it restores what the user had.
+			if err := providerkeys.ExportForProbes("LLM_MODEL", model); err != nil {
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
 			}
 		}
