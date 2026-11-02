@@ -40,6 +40,7 @@ import type { SessionView as LoadedSessionView } from "../components/SessionView
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -371,6 +372,9 @@ function ShellLayout() {
 	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
+	// Body-level popout portals sit outside #root; they read the platform here.
+	useDocumentFlag("data-shell-windows", isWindows);
+	useDocumentFlag("data-shell-linux", isLinux);
 	const windowZoomFactor = useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
@@ -558,7 +562,6 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isTerminalsRoute = Boolean(matchRoute({ to: "/terminals" }));
 	const isSettingsRoute =
 		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
 		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
@@ -1316,36 +1319,27 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[requestCreateProjectFromPath],
 	);
 
-	// New standalone terminal (⌘T / Ctrl+T), also detected in the main process so it
-	// fires from inside a terminal pane. It raises the same store signal as the
-	// tab-strip + button so the two cannot drift apart.
+	// New session terminal (⌘T / Ctrl+T), also detected in the main process so it
+	// fires from inside a terminal pane. Terminals only live in a session's tab
+	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
 			aoBridge.app.onNewShellTerminalShortcut(() => {
-				// The project board is not a terminal surface — ⌘T here used to yank
-				// users into the standalone /terminals route (#4772). Sessions and the
-				// dedicated terminals view keep the shortcut; explicit UI can still
-				// open shells from the board.
-				if (!routeParams.hostId && (routeParams.sessionId || isTerminalsRoute)) {
+				if (!routeParams.hostId && routeParams.sessionId) {
 					requestNewShellTerminal();
 				}
 			}),
-		[isTerminalsRoute, requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
+		[requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
 	);
 
 	// The shell layout is the single consumer of that signal, because it is the
-	// only component mounted on EVERY route. Owning it here is what lets the
-	// topbar + button and the keyboard shortcut work from a session or the
-	// standalone terminals view alike — when the session view owned it, both
-	// silently did nothing outside a session, since nothing was listening.
-	//
-	// Where the new shell becomes visible depends on where the user is: inside a
-	// session it joins that pane's tab strip; on /terminals it joins that strip;
-	// explicit board UI can still route here without the keyboard shortcut.
+	// only component mounted on every route. The new shell joins the tab strip
+	// of the session on screen; with no session on screen there is nowhere to
+	// show it, so the request is dropped.
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (routeParams.hostId) return;
+		if (routeParams.hostId || !routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
 			projectId: scopedProjectId,
 			sessionId: routeParams.sessionId,
@@ -1353,9 +1347,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		});
 		if (!shell) return;
 		setActiveShellTerminal(shell.handleId);
-		if (!routeParams.sessionId) {
-			void navigate({ to: "/terminals" });
-		}
 	}, [
 		newShellTerminalNonce,
 		openShellTerminal,
@@ -1363,7 +1354,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		scopedSession?.cloud,
 		routeParams.sessionId,
 		routeParams.hostId,
-		navigate,
 		setActiveShellTerminal,
 	]);
 
