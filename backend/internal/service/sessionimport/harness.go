@@ -22,7 +22,6 @@ type harnessImporter struct {
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessGemini:   {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript},
-	domain.HarnessGoose:    {root: gooseRoot, discover: discoverGoose, read: readGooseTranscript},
 	domain.HarnessKilocode: {root: kiloCodeRoot, discover: discoverKiloCode, read: readKiloCodeTranscript},
 }
 
