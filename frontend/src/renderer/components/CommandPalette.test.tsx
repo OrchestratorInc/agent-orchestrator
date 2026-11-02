@@ -14,6 +14,7 @@ const writeTextMock = vi.hoisted(() => vi.fn());
 const restoreMock = vi.hoisted(() => vi.fn());
 const workspaceSubscriptionMock = vi.hoisted(() => vi.fn());
 const cloudSearchMock = vi.hoisted(() => vi.fn());
+const cloudChatSearchMock = vi.hoisted(() => vi.fn());
 const createProjectFlowMock = vi.hoisted(() => ({
 	props: null as null | {
 		existingProjectPaths?: readonly string[];
@@ -110,7 +111,7 @@ vi.mock("../hooks/useCommandPaletteEnabled", () => ({
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { searchWorkspaceReview: cloudSearchMock },
+		client: { searchWorkspaceReview: cloudSearchMock, searchChats: cloudChatSearchMock },
 		ready: true,
 		baseUrl: "https://cloud.example.test",
 		userId: "user-1",
@@ -243,6 +244,7 @@ beforeEach(() => {
 	restoreMock.mockReset();
 	workspaceSubscriptionMock.mockReset();
 	cloudSearchMock.mockReset();
+	cloudChatSearchMock.mockReset().mockResolvedValue({ results: [] });
 	createProjectFlowMock.props = null;
 	createProjectFlowMock.lastOpenSignal = 0;
 	restoreMock.mockResolvedValue({ status: "success" });
@@ -463,6 +465,31 @@ describe("CommandPalette workspace file search", () => {
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+	});
+
+	it("goes quiet and stops asking while Cloud chat search is rate limited", async () => {
+		const { CloudCpError } = await import("../lib/cloud-cp/errors");
+		ctx.workspaces[0].kind = "cloud";
+		ctx.workspaces[0].cloudOrgId = "org-limited";
+		ctx.workspaces[0].sessions[1]!.cloud = { orgId: "org-limited" };
+		try {
+			cloudChatSearchMock.mockRejectedValue(new CloudCpError("Too many searches. Try again in a minute.", { status: 429, code: "rate_limited", retryAfterMs: 60_000 }));
+			getMock.mockResolvedValue({ data: { results: [], truncated: false } });
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			const input = await screen.findByPlaceholderText(/search sessions/i);
+			fireEvent.change(input, { target: { value: "rate" } });
+			await waitFor(() => expect(cloudChatSearchMock).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+			for (const value of ["rate l", "rate li", "rate limit"]) {
+				fireEvent.change(input, { target: { value } });
+				await new Promise((resolve) => setTimeout(resolve, 600));
+			}
+			expect(cloudChatSearchMock).toHaveBeenCalledTimes(1);
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(useUiStore.getState().globalToasts).toEqual([]);
+		} finally {
+			delete ctx.workspaces[0].cloudOrgId;
+		}
 	});
 
 	it("navigates to the selected connected-host worktree before opening its file", async () => {
