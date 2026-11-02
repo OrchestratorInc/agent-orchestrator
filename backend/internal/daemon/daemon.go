@@ -359,6 +359,16 @@ func Run(buildVersion string) error {
 	// registered driver cannot start in chat mode, so an unsupported request fails
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
+	// The session's own account (a saved one, or this computer's login) is read
+	// again off the chat path; the CLI probe can take seconds.
+	recheckSessionAccount := func(sessionID domain.SessionID, harness domain.AgentHarness) {
+		if accounts := agentAccountSvc; accounts != nil {
+			go func() {
+				defer sentryobs.RecoverBackground()
+				accounts.RecheckSessionAccount(ctx, sessionID, harness)
+			}()
+		}
+	}
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -418,14 +428,7 @@ func Run(buildVersion string) error {
 		Log:      log,
 		NewID:    uuid.NewString,
 		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			// The session's own account (a saved one, or this computer's login) is
-			// read again off the chat path; the CLI probe can take seconds.
-			if accounts := agentAccountSvc; accounts != nil {
-				go func() {
-					defer sentryobs.RecoverBackground()
-					accounts.RecheckSessionAccount(ctx, sessionID, harness)
-				}()
-			}
+			recheckSessionAccount(sessionID, harness)
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
 			}
@@ -434,6 +437,7 @@ func Run(buildVersion string) error {
 				agentSvc.InvalidateCodexAccountAuthentication()
 			}
 		},
+		RecheckAccount: recheckSessionAccount,
 		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
 			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return

@@ -953,12 +953,13 @@ func firstActivityOfKind(s store.ConversationSnapshot, kind domain.ActivityKind)
 
 func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
 	h := newHarness(t)
-	rechecksAfter := func(want int32) {
+	countsAfter := func(changes, rechecks int32) {
 		t.Helper()
 		deadline := time.Now().Add(2 * time.Second)
-		for h.accountRechecks.Load() != want {
+		for h.accountChanges.Load() != changes || h.accountRechecks.Load() != rechecks {
 			if time.Now().After(deadline) {
-				t.Fatalf("account rechecks = %d, want %d", h.accountRechecks.Load(), want)
+				t.Fatalf("account changes, rechecks = %d, %d; want %d, %d",
+					h.accountChanges.Load(), h.accountRechecks.Load(), changes, rechecks)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -969,10 +970,11 @@ func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
 	})
-	rechecksAfter(1) // the refusal itself
+	countsAfter(1, 0) // the refusal is an account change; the first turn had no demand
 	// The user signed in again, maybe with the CLI outside AO, and sent a message.
+	// That is a recheck, not another refusal: it must not invalidate readiness.
 	h.advance(time.Second)
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "second"})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })
-	rechecksAfter(2)
+	countsAfter(1, 1)
 }

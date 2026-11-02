@@ -3136,7 +3136,9 @@ type harness struct {
 	ctrl      *chatsvc.Controller
 	activity  *recordingActivity
 	hostStops atomic.Int32
-	// accountRechecks counts the controller asking to read the session's account again.
+	// accountChanges counts refusals and account updates; accountRechecks counts
+	// turns asking to read the session's account again.
+	accountChanges  atomic.Int32
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
@@ -3244,6 +3246,9 @@ func newHarnessWithConversationAndStoreForHarness(
 		Activity: h.activity,
 		Log:      slog.New(slog.DiscardHandler),
 		OnAccountChanged: func(domain.SessionID, string, domain.AgentHarness) {
+			h.accountChanges.Add(1)
+		},
+		RecheckAccount: func(domain.SessionID, domain.AgentHarness) {
 			h.accountRechecks.Add(1)
 		},
 		NewID: func() string {
