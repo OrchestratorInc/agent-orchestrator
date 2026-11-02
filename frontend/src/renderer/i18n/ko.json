@@ -3481,7 +3481,7 @@
 	"sideChat.editingQueuedMessage": "Editing queued message",
 	"sideChat.editQueuedSideQuestion": "Edit queued side question",
 	"sideChat.aboutIsolation": "About side-chat isolation",
-	"sideChat.temporaryNotice": "임시 채팅 — AO를 종료하면 저장되지 않습니다.",
+	"sideChat.emptyDescription": "메인 채팅을 중단하지 않고 간단한 질문을 탐색하세요.",
 	"sideChat.forkPoint": "Frozen fork point: {{turn}}",
 	"sideChat.noInheritedTurns": "Created before any completed main-chat turn.",
 	"sideChat.tabs": "Side chat tabs",

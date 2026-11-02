@@ -5531,14 +5531,9 @@ html[data-shell-linux] body > .files-popout-overlay {
 	white-space: nowrap;
 }
 
-/* The speech-bubble tail extends below the icon's visual center. Keep the
- * side-chat label on a 16px line box and lift only that glyph for optical alignment. */
+/* Match the title line box to the icon so flex centering aligns both. */
 .side-chat__tab-row .browser-panel__tab-title {
 	line-height: 16px;
-}
-
-.side-chat__tab-row .browser-panel__tab-icon {
-	transform: translateY(-1px);
 }
 
 .browser-panel__tab-close {

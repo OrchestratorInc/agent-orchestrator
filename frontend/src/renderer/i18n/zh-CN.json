@@ -3463,7 +3463,7 @@
 	"sideChat.editingQueuedMessage": "Editing queued message",
 	"sideChat.editQueuedSideQuestion": "Edit queued side question",
 	"sideChat.aboutIsolation": "About side-chat isolation",
-	"sideChat.temporaryNotice": "临时聊天 — 退出 AO 后不会保存。",
+	"sideChat.emptyDescription": "探索一个小问题，而不中断主聊天。",
 	"sideChat.forkPoint": "Frozen fork point: {{turn}}",
 	"sideChat.noInheritedTurns": "Created before any completed main-chat turn.",
 	"sideChat.tabs": "Side chat tabs",

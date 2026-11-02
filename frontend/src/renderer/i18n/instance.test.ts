@@ -52,13 +52,13 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
-	it("provides a brief side-chat lifetime notice in every locale", () => {
+	it("provides a brief side-chat description in every locale", () => {
 		for (const locale of APP_LOCALES) {
 			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
-			expect(catalog["sideChat.temporaryNotice"], locale).toBeTruthy();
+			expect(catalog["sideChat.emptyDescription"], locale).toBeTruthy();
 		}
-		expect(createAppI18n("en").t("sideChat.temporaryNotice"))
-			.toBe("Temporary chat — not saved after you quit AO.");
+		expect(createAppI18n("en").t("sideChat.emptyDescription"))
+			.toBe("Explore a quick question without interrupting the main chat.");
 	});
 
 	it("provides agent management and readiness labels for every supported locale", () => {

@@ -3543,7 +3543,7 @@
 	"sideChat.editingQueuedMessage": "Editing queued message",
 	"sideChat.editQueuedSideQuestion": "Edit queued side question",
 	"sideChat.aboutIsolation": "About side-chat isolation",
-	"sideChat.temporaryNotice": "Discussion temporaire : non conservée après la fermeture d’AO.",
+	"sideChat.emptyDescription": "Explorez une question rapide sans interrompre la discussion principale.",
 	"sideChat.forkPoint": "Frozen fork point: {{turn}}",
 	"sideChat.noInheritedTurns": "Created before any completed main-chat turn.",
 	"sideChat.tabs": "Side chat tabs",
