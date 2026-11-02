@@ -3303,6 +3303,10 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
 	app.relaunch();
+	// Relaunch is the documented way out of a stuck update, so it gets the same
+	// exit deadline as an update restart. Without it a quit cleanup step that
+	// never settles leaves this process running and the dialog waiting (#6911).
+	updateRelaunchRequested = true;
 	desktopQuit.quitCompletely();
 });
 
@@ -3899,6 +3903,8 @@ setUpdateRestartFailureHandler(() => {
 });
 
 let updateQuitDeadlineArmed = false;
+let updateRelaunchRequested = false;
+const updateExitRequested = () => isUpdateRestartRequested() || updateRelaunchRequested;
 app.on("before-quit", (event) => {
 	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
@@ -3912,6 +3918,7 @@ app.on("before-quit", (event) => {
 			app.quit();
 		} else {
 			desktopQuit.cancelQuit();
+			updateRelaunchRequested = false;
 		}
 		return;
 	}
@@ -3952,12 +3959,12 @@ app.on("before-quit", (event) => {
 			};
 			browserQuitCleanupPromise = cleanup.then(() => undefined).finally(finishQuit);
 		}
-		if (isUpdateRestartRequested() && !updateQuitDeadlineArmed) {
+		if (updateExitRequested() && !updateQuitDeadlineArmed) {
 			updateQuitDeadlineArmed = true;
 			// Also cover a normal quit already waiting on the same cleanup.
 			void finishUpdateQuit(browserQuitCleanupPromise, {
 				quit: () => undefined, // The existing cleanup continuation owns normal quit.
-				exit: () => { if (isUpdateRestartRequested()) app.exit(0); },
+				exit: () => { if (updateExitRequested()) app.exit(0); },
 				log: (error) => console.error("update shutdown:", error),
 			});
 		}
