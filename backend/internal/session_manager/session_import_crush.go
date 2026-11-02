@@ -15,7 +15,7 @@ func crushImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bo
 		return false
 	}
 	db := filepath.Dir(rec.Metadata.NativeTranscriptPath)
-	if len(source.ResumeCwd) > 0 {
+	if source.ResumeCwd != "" {
 		db = filepath.Join(source.ResumeCwd, ".crush", "crush.db")
 	}
 	return providerLockHeld(filepath.Join(filepath.Dir(db), "crush.lock")) || writableTranscriptOwner(ctx, db)

@@ -23,10 +23,10 @@ type crushProject struct {
 }
 
 func crushRoot(home string) string {
-	if root := os.Getenv("CRUSH_GLOBAL_DATA"); len(root) > 0 {
+	if root := os.Getenv("CRUSH_GLOBAL_DATA"); root != "" {
 		return root
 	}
-	if root := os.Getenv("XDG_DATA_HOME"); len(root) > 0 {
+	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "crush")
 	}
 	return filepath.Join(home, ".local", "share", "crush")
@@ -77,12 +77,18 @@ func discoverCrush(ctx context.Context, root string) ([]sourceFiles, error) {
 			continue
 		}
 		seen[path] = true
-		db, err := crushImportDB(path)
-		if err != nil {
-			continue
-		}
-		rows, err := db.QueryContext(ctx, `SELECT id, updated_at, message_count FROM sessions WHERE parent_session_id IS NULL OR parent_session_id = ''`)
-		if err == nil {
+		files, err := func() ([]sourceFiles, error) {
+			db, err := crushImportDB(path)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = db.Close() }()
+			rows, err := db.QueryContext(ctx, `SELECT id, updated_at, message_count FROM sessions WHERE parent_session_id IS NULL OR parent_session_id = ''`)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = rows.Close() }()
+			var files []sourceFiles
 			for rows.Next() {
 				var id string
 				var updated, count int64
@@ -91,11 +97,13 @@ func discoverCrush(ctx context.Context, root string) ([]sourceFiles, error) {
 				}
 				// A virtual row path preserves both the project DB and native ID
 				// for RefreshArchive without introducing shared-file changes.
-				out = append(out, sourceFiles{harness: domain.HarnessCrush, root: root, key: id, paths: []string{filepath.Join(path, id)}, modTime: time.Unix(updated, 0), size: count})
+				files = append(files, sourceFiles{harness: domain.HarnessCrush, root: root, key: id, paths: []string{filepath.Join(path, id)}, modTime: time.Unix(updated, 0), size: count})
 			}
-			_ = rows.Close()
+			return files, rows.Err()
+		}()
+		if err == nil {
+			out = append(out, files...)
 		}
-		_ = db.Close()
 	}
 	return out, ctx.Err()
 }
@@ -117,7 +125,7 @@ func readCrushTranscript(ctx context.Context, root string, paths ...string) (tra
 			break
 		}
 	}
-	if len(t.cwd) == 0 {
+	if t.cwd == "" {
 		return t, errors.New("crush database is not in the project registry")
 	}
 	db, err := crushImportDB(dbPath)
@@ -149,7 +157,7 @@ func readCrushTranscript(ctx context.Context, root string, paths ...string) (tra
 		if err := rows.Scan(&id, &role, &created, &text); err != nil {
 			return t, err
 		}
-		if len(strings.TrimSpace(text.String)) == 0 {
+		if strings.TrimSpace(text.String) == "" {
 			continue
 		}
 		chunk := text.String
@@ -178,7 +186,7 @@ func readCrushTranscript(ctx context.Context, root string, paths ...string) (tra
 		t.messages = append(t.messages, item.Message)
 		if item.Role == domain.MessageRoleUser {
 			hasUser = true
-			if len(strings.TrimSpace(t.title)) == 0 {
+			if strings.TrimSpace(t.title) == "" {
 				t.title = item.Text
 			}
 		}

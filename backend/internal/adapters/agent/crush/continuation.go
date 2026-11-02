@@ -21,6 +21,7 @@ var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
 var _ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
 
+// NativeSessionConfigDir returns the global project registry directory.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -31,10 +32,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return os.Getenv(key)
 	}
-	if root := lookup("CRUSH_GLOBAL_DATA"); len(root) > 0 {
+	if root := lookup("CRUSH_GLOBAL_DATA"); root != "" {
 		return root, nil
 	}
-	if root := lookup("XDG_DATA_HOME"); len(root) > 0 {
+	if root := lookup("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "crush"), nil
 	}
 	home, err := os.UserHomeDir()
@@ -49,14 +50,14 @@ func crushNativeDB(path string) (*sql.DB, error) {
 	return sql.Open("sqlite", uri.String()+"?mode=ro&_pragma=busy_timeout(2000)")
 }
 
-// Crush has a project database, not a file per conversation, so it deliberately
+// ProbeNativeSession checks Crush's project databases, so it deliberately
 // exposes a row-availability probe rather than AgentTranscriptLocator.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
 	}
 	id, err := uuid.Parse(ref.NativeSessionID)
-	if err != nil || len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+	if err != nil || strings.TrimSpace(ref.ConfigDir) == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)

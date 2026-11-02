@@ -148,17 +148,16 @@ func copyCrushConversation(ctx context.Context, source, target, id string) error
 		return err
 	}
 	type schemaItem struct{ kind, name, sql string }
+	defer func() { _ = rows.Close() }()
 	var schema []schemaItem
 	for rows.Next() {
 		var item schemaItem
 		if err := rows.Scan(&item.kind, &item.name, &item.sql); err != nil {
-			_ = rows.Close()
 			return err
 		}
 		schema = append(schema, item)
 	}
 	err = rows.Err()
-	_ = rows.Close()
 	if err != nil {
 		return err
 	}
@@ -199,7 +198,7 @@ func copyCrushConversation(ctx context.Context, source, target, id string) error
 
 func copyCrushRows(ctx context.Context, read, write *sql.Tx, table, filter string, args []any) error {
 	quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
-	rows, err := read.QueryContext(ctx, "SELECT * FROM "+quoted+filter, args...)
+	rows, err := read.QueryContext(ctx, "SELECT * FROM "+quoted+filter, args...) // #nosec G202 -- Identifiers are quoted, predicates are internal constants, and values are bound.
 	if err != nil {
 		return err
 	}
@@ -218,7 +217,7 @@ func copyCrushRows(ctx context.Context, read, write *sql.Tx, table, filter strin
 		if err := rows.Scan(pointers...); err != nil {
 			return err
 		}
-		if _, err := write.ExecContext(ctx, "INSERT INTO "+quoted+" VALUES ("+placeholders+")", values...); err != nil {
+		if _, err := write.ExecContext(ctx, "INSERT INTO "+quoted+" VALUES ("+placeholders+")", values...); err != nil { // #nosec G202 -- Identifiers are quoted and all row values are bound.
 			return fmt.Errorf("copy crush %s: %w", table, err)
 		}
 	}
