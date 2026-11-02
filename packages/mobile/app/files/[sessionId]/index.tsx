@@ -159,7 +159,7 @@ function ChangesSummary({ manifest }: { manifest: NonNullable<ReturnType<typeof 
 		<View style={styles.summary}>
 			<View accessible accessibilityLabel={`${plural(summary.files, "file")} changed against ${base}, ${plural(summary.additions, "line")} added, ${plural(summary.deletions, "line")} removed`} style={styles.summaryRow}>
 				<Feather name="git-branch" size={iconSize.sm} color={t.textTertiary} />
-				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.summaryText}>{`${plural(summary.files, "file")} vs ${base}`}</Text>
+				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.summaryText}>{`Compared with ${base}`}</Text>
 				<LineCounts additions={summary.additions} deletions={summary.deletions} />
 			</View>
 			{notes.map((note) => (

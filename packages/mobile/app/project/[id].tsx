@@ -92,7 +92,8 @@ function ProjectScreenContent() {
 	// Memoized on what the items show. hostStates is replaced on every poll, and
 	// each new toolbar element would register the header's options again.
 	const machine = hostStates.find((host) => host.hostId === currentHostId);
-	const machineName = machine?.name;
+	// With one machine paired, every project is on it: naming it says nothing.
+	const machineName = hostStates.length > 1 ? machine?.name : undefined;
 	const machineSymbol = machine?.appearance.symbol;
 	// iOS has no floating action button; its create action is a header "+".
 	// Android floats Material's FAB below instead.

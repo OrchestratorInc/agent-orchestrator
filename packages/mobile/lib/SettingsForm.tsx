@@ -75,9 +75,9 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
  * text, which would pick up the Form's body font. The title keeps VoiceOver's
  * heading trait.
  */
-export function SettingsSection({ title, footer, children, testID }: SettingsSectionProps) {
+export function SettingsSection({ title, footer, children, testID, modifiers }: SettingsSectionProps & { modifiers?: ModifierConfig[] }) {
 	return (
-		<FieldGroup.Section testID={testID}>
+		<FieldGroup.Section testID={testID} modifiers={modifiers}>
 			{title ? <FieldGroup.SectionHeader><SectionText header>{title}</SectionText></FieldGroup.SectionHeader> : null}
 			{children}
 			{footer ? <FieldGroup.SectionFooter><SectionText>{footer}</SectionText></FieldGroup.SectionFooter> : null}
@@ -248,7 +248,9 @@ export function SettingsPickerRow<T extends string>({ icon, label, options, sele
 export function SettingsChoiceSection<T extends string>({ label, options, selectedValue, onValueChange, footer, testID }: SettingsChoiceSectionProps<T>) {
 	const t = useTheme();
 	return (
-		<SettingsSection footer={footer}>
+		// An inline picker's rows join the Form's list and take the section's
+		// tint, not the picker's: tinted only there, the checkmark was system blue.
+		<SettingsSection footer={footer} modifiers={[tint(t.accent)]}>
 			<Picker
 				label={label}
 				selection={selectedValue}

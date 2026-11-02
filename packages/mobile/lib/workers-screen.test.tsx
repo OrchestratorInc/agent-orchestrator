@@ -315,7 +315,7 @@ describe("Workers filter menu", () => {
 	it("names the chosen machine and project on Android, where the check is silent", () => {
 		fixtures.platform = "android";
 		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
-		fixtures.projects = [project("ao", "AO", "mac", "Mac")];
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("web", "Web", "mac", "Mac")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(0);
 		choose(environmentMenu(), "Mac");
@@ -324,6 +324,13 @@ describe("Workers filter menu", () => {
 		choose(submenu("All projects"), "AO");
 		expect(submenu("AO").props.icon).toBe("folder");
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac, AO");
+	});
+
+	it("leaves the filter out with one machine and one project", () => {
+		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
+		fixtures.projects = [project("ao", "AO", "mac", "Mac")];
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findAllByType("StackToolbarMenu" as never)).toHaveLength(0);
 	});
 
 	// A row reading "All machines" alone did not say it was a choice of

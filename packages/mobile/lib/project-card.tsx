@@ -202,13 +202,10 @@ function OrchestratorPill({
 	row,
 	busy,
 	onPress,
-	openLabel,
 }: {
 	row: OrchestratorProjectRow;
 	busy: boolean;
 	onPress: (row: OrchestratorProjectRow) => void;
-	/** Overrides the running label where "Orchestrator" is already on screen. */
-	openLabel?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -232,7 +229,7 @@ function OrchestratorPill({
 		>
 			{busy ? <Spinner size={iconSize.sm} color={ink} /> : <OrchestratorIcon size={iconSize.sm} color={ink} />}
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>
-				{copy.running && openLabel ? openLabel : copy.short}
+				{copy.short}
 			</Text>
 		</Pressable>
 	);
@@ -276,7 +273,8 @@ export function ProjectPageHeader({
 		{ label: "Needs you", value: stats.needsYou, color: stats.needsYou ? t.amber : undefined },
 		{ label: "Ready", value: stats.ready },
 		{ label: "Archived", value: stats.archived },
-	];
+	// A strip of zeros says nothing: past the worker count, only what is there.
+	].filter((tile, index) => index === 0 || tile.value > 0);
 	return (
 		<View>
 			<View style={styles.stats} accessible accessibilityLabel={tiles.map((tile) => `${tile.value} ${tile.label}`).join(", ")}>
@@ -292,14 +290,16 @@ export function ProjectPageHeader({
 				))}
 			</View>
 
-			{/* The whole row opens the orchestrator, and so does the pill beside it. */}
+			{/* The whole row opens the orchestrator; the pill starts or resumes one. */}
 			<TrailingActionRow
 				style={styles.orchestratorRow}
 				bodyStyle={styles.orchestratorBody}
 				accessibilityLabel={`${orchestratorButtonCopy(row, busy).label}, ${status.label}, ${row.detail}`}
 				disabled={busy}
 				onPress={() => onPress(row)}
-				trailing={<OrchestratorPill row={row} busy={busy} onPress={onPress} openLabel="Open" />}
+				// A live orchestrator opens with the row itself; the pill would only
+				// repeat that, so it shows when it starts or resumes one.
+				trailing={orchestratorButtonCopy(row, busy).running ? undefined : <OrchestratorPill row={row} busy={busy} onPress={onPress} />}
 			>
 				{/* The worker row's three lines — eyebrow, title, detail — so the
 				    orchestrator reads as one of the rows below. */}

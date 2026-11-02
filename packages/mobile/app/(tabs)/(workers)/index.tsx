@@ -122,7 +122,9 @@ export default function FleetScreen() {
 		setWorkerEnvironmentId(environmentId);
 		setWorkerProjectId((projectId) => workerProjectForEnvironment(allProjects, environmentId, projectId));
 	}, [allProjects]);
-	const filterMenu = useMemo(() => workerFilterMenu({
+	// One machine with one project leaves nothing to narrow the board to.
+	const filterable = environments.length > 1 || allProjects.length > 1;
+	const filterMenu = useMemo(() => filterable ? workerFilterMenu({
 		environments,
 		selectedEnvironmentId: workerEnvironmentId,
 		onSelectEnvironment: selectEnvironment,
@@ -130,7 +132,7 @@ export default function FleetScreen() {
 		selectedProjectId: workerProjectId,
 		onSelectProject: setWorkerProjectId,
 		badgeColor: t.accent,
-	}), [allProjects, environments, selectEnvironment, t.accent, workerEnvironmentId, workerProjectId]);
+	}) : null, [filterable, allProjects, environments, selectEnvironment, t.accent, workerEnvironmentId, workerProjectId]);
 
 	useEffect(() => {
 		if (
