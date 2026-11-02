@@ -391,6 +391,14 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
   });
 
+  it("shows an orchestrator side chat without exposing worker inspector tabs", () => {
+    renderWithQuery(<SessionInspector browserOnly session={session([], { kind: "orchestrator" })} sideChatView={<div>side conversation</div>} view="sideChat" />);
+    expect(screen.getByText("side conversation")).toBeVisible();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Browser", "Side chat"]);
+    expect(screen.queryByRole("tab", { name: "Summary" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+  });
+
   it("keeps the same Browser-only inspector for a remote orchestrator", () => {
     renderWithQuery(<SessionInspector browserOnly hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();

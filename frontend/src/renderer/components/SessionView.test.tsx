@@ -5375,6 +5375,23 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
 	});
 
+	it("preserves the orchestrator side chat selection while side chats are enabled", () => {
+		workerSession("sess-orch").mode = "chat";
+		useUiStore.setState({ developerMode: true, sideChats: true });
+		render(<SessionView sessionId="sess-orch" />);
+
+		act(() => {
+			useUiStore.getState().setInspectorView("sess-orch", "sideChat");
+			useUiStore.getState().setInspectorOpen("sess-orch", true);
+		});
+
+		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "sideChat");
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+		act(() => useUiStore.getState().setSideChats(false));
+		expect(screen.getByRole("button", { name: "pop browser" })).toHaveAttribute("data-view", "browser");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+	});
+
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
 		const defaultGet = reviewGetMock.getMockImplementation()!;
 		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) =>

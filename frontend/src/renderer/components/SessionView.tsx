@@ -493,7 +493,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const inspectorView = useUiStore((state) => {
+		const view = state.inspectorSessions[uiSessionId]?.view ?? "summary";
+		return browserOnly && !(sideChatsAvailable && view === "sideChat") ? "browser" : view;
+	});
+	const showBrowserToggle = browserOnly && inspectorView === "browser";
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -1440,11 +1444,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (browserOnly) {
 			const current = useUiStore.getState().inspectorSessions[uiSessionId];
 			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
+			if (current?.view !== "browser" && !(sideChatsAvailable && current?.view === "sideChat")) {
+				setInspectorViewForSession(uiSessionId, "browser");
+			}
 			return;
 		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+	}, [browserOnly, sideChatsAvailable, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
@@ -1831,9 +1837,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
-		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		if (showBrowserToggle) setBrowserContentRevealed(uiSessionId, true);
 		toggleInspector(uiSessionId);
-	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	}, [showBrowserToggle, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
@@ -2252,7 +2258,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					<TooltipTrigger asChild>
 						<TopbarButton
 							aria-label={
-								browserOnly
+								showBrowserToggle
 									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
 									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
 							}
@@ -2261,7 +2267,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							style={noDragStyle}
 							variant="icon"
 						>
-							{browserOnly ? (
+							{showBrowserToggle ? (
 								<span className="relative inline-flex">
 									<BrowserIcon aria-hidden="true" className="size-icon-md" />
 									{!isInspectorOpen && browserUnseen ? (
@@ -2278,7 +2284,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						</TopbarButton>
 					</TooltipTrigger>
 					<TooltipContent side="bottom">
-						{browserOnly
+						{showBrowserToggle
 							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
 							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
 					</TooltipContent>
