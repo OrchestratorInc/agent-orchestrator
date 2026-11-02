@@ -35,6 +35,7 @@ type geminiRecord struct {
 	ProjectHash string           `json:"projectHash"`
 	LastUpdated time.Time        `json:"lastUpdated"`
 	Kind        string           `json:"kind"`
+	Omitted     bool             `json:"aoOmitted"`
 	Messages    *[]geminiMessage `json:"messages"`
 	geminiMessage
 	Set    *geminiRecord `json:"$set"`
@@ -134,7 +135,12 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 			order = append(order, msg.ID)
 		}
 		// Bound retained text, even when a recording contains huge tool payloads.
-		msg.Content, _ = json.Marshal(geminiText(msg.Content))
+		text := geminiText(msg.Content)
+		if strings.Contains(text, omittedText) {
+			t.shortened = true
+			text = strings.ReplaceAll(text, omittedText, "")
+		}
+		msg.Content, _ = json.Marshal(text)
 		held += len(msg.Content)
 		messages[msg.ID] = msg
 		for held > maxClaudeHeld && len(order) > 1 {
@@ -147,6 +153,7 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 	}
 	var apply func(geminiRecord)
 	apply = func(rec geminiRecord) {
+		t.shortened = t.shortened || rec.Omitted
 		if rec.SessionID != "" {
 			metadata.SessionID = rec.SessionID
 		}
@@ -196,6 +203,15 @@ func readGeminiTranscript(ctx context.Context, root string, paths ...string) (tr
 			for _, id := range rec.Patch.RemoveIDs {
 				held -= len(messages[id].Content)
 				delete(messages, id)
+			}
+			if len(rec.Patch.RemoveIDs) > 0 {
+				retained := order[:0]
+				for _, id := range order {
+					if _, ok := messages[id]; ok {
+						retained = append(retained, id)
+					}
+				}
+				order = retained
 			}
 			if rec.Patch.OrderIDs != nil {
 				order = rec.Patch.OrderIDs

@@ -3,7 +3,6 @@ package sessionimport
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -98,9 +97,13 @@ func readGooseTranscript(ctx context.Context, root string, paths ...string) (tra
 		return t, err
 	}
 	t.last = gooseTime(updated)
-	rows, err := db.QueryContext(ctx, `SELECT role, content_json, created_timestamp FROM messages
-		WHERE session_id = ? AND role IN ('user', 'assistant')
-		AND COALESCE(json_extract(metadata_json, '$.userVisible'), 1) != 0 ORDER BY created_timestamp, id`, t.nativeID)
+	rows, err := db.QueryContext(ctx, `SELECT m.role,
+		COALESCE((SELECT substr(group_concat(json_extract(p.value, '$.text'), char(10)), 1, ?)
+		FROM json_each(m.content_json) p WHERE json_extract(p.value, '$.type') = 'text'), ''),
+		m.created_timestamp FROM messages m
+		WHERE m.session_id = ? AND m.role IN ('user', 'assistant')
+		AND COALESCE(json_extract(m.metadata_json, '$.userVisible'), 1) != 0
+		ORDER BY m.created_timestamp, m.id`, maxVisibleBytes+1, t.nativeID)
 	if err != nil {
 		return t, err
 	}
@@ -112,11 +115,7 @@ func readGooseTranscript(ctx context.Context, root string, paths ...string) (tra
 		if err := rows.Scan(&role, &content, &stamp); err != nil {
 			return t, err
 		}
-		var blocks []textBlock
-		if json.Unmarshal([]byte(content), &blocks) != nil {
-			continue
-		}
-		text := strings.TrimSpace(blockText(blocks))
+		text := strings.TrimSpace(content)
 		if text == "" {
 			continue
 		}
