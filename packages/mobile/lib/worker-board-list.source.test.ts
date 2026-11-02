@@ -15,11 +15,16 @@ describe("worker board list identity", () => {
 	// state drawn on top of rows that were still on screen. A different set of
 	// workers is a different list, so it is mounted as one.
 	it("remounts the whole animation boundary without retaining outgoing rows", () => {
-		expect(list).toContain("<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>");
+		expect(list).toContain("<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>");
 		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
 		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;");
 		expect(board).toContain("key={boardIdentityKey}");
 		expect(board).toContain("identityKey={boardIdentityKey}");
+	});
+
+	// Memoised rows kept the old text size's measurements after a live change.
+	it("rebuilds the list when the text size changes", () => {
+		expect(list).toContain("const { fontScale } = useWindowDimensions();");
 	});
 });
 

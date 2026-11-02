@@ -32,7 +32,7 @@ import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { EffortSliderOverlay } from "../effort-slider";
 import { useChatEffort } from "./useChatEffort";
@@ -196,6 +196,7 @@ export function ChatComposer({
 	const t = useTheme();
 	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
+	const fieldSize = useComposerFieldSize();
 	const iconFeedback = usePressFeedback("icon");
 	const buttonFeedback = usePressFeedback("button");
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
@@ -522,7 +523,7 @@ export function ChatComposer({
 	// The session's state as chips over the composer, open or not: its PR, what
 	// it changed, and how full the context is once that matters.
 	const chips = activeReviewPR || changes || contextMeter ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
-		<ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
 			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
 				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
 			</ComposerChip> : null}
@@ -651,7 +652,7 @@ export function ChatComposer({
 				    keeps its focus as the pill opens around it. While the mic is open
 				    the dictation takes its place, and the field waits hidden with the
 				    draft the transcript will be added to. */}
-				<Animated.View style={[styles.composerRow, fieldInsets]}>
+				<Animated.View style={[styles.composerRow, fieldSize.row, fieldInsets]}>
 					{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
 					<TextInput
 						ref={inputRef}
@@ -665,12 +666,13 @@ export function ChatComposer({
 						onBlur={() => setFocused(false)}
 						placeholder={placeholder}
 						placeholderTextColor={t.textFaint}
+						maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
 						{...textSelectionColors(t)}
 						// No height of its own: a multiline field grows with its text
 						// between the rule's min and max and then scrolls. Setting the
 						// height from the content-size event lagged a line behind, so
 						// each new line first scrolled the field and cut off its top line.
-						style={[styles.input, (listening || transcribing) && styles.hiddenField]}
+						style={[styles.input, fieldSize.field, (listening || transcribing) && styles.hiddenField]}
 						multiline
 						maxLength={40_000}
 					/>
@@ -775,8 +777,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	chips: { gap: space.xs, paddingVertical: CHIP_SLOP },
 	// A capsule; the glass fills it on iOS 26, so the fill drops out there.
 	chip: { height: CHIP_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.md, borderRadius: radius.pill, borderCurve: "continuous", overflow: "hidden", backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderWidth: composerGlassSupported ? 0 : rowDividerWidth, borderColor: t.borderDefault },
-	chipText: { fontFamily: "DMSans_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-	chipCount: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
+	// Never shrunk: the chips scroll sideways, so a count is shown whole rather than cut to "+..".
+	chipText: { fontFamily: "DMSans_600SemiBold", flexShrink: 0, color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+	chipCount: { fontFamily: t.fontMono, flexShrink: 0, fontSize: type.footnote.fontSize },
 	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.xxs, marginHorizontal: space.sm },
 	quote: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
 	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },

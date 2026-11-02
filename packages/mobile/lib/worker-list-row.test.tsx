@@ -31,6 +31,7 @@ vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callba
 const backHandler = vi.hoisted(() => ({ listeners: [] as (() => boolean)[] }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
+	useWindowDimensions: () => ({ fontScale: 1 }),
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
 	BackHandler: {
 		addEventListener: (_event: string, listener: () => boolean) => {

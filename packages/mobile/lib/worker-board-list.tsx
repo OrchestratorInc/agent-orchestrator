@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
 	absorbNewHosts,
@@ -163,6 +163,10 @@ export function WorkerBoardList({
 	const router = useRouter();
 	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
+	// The rows are memoised on their session, so a live text-size change would
+	// leave them drawn at the old size's measurements, cut into fragments,
+	// until a relaunch. The list is rebuilt once instead (see its key).
+	const { fontScale } = useWindowDimensions();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
 	// Collapsed by default, like desktop's archive strip: it is history, and on a
@@ -481,8 +485,9 @@ export function WorkerBoardList({
 			{/* A filter/search scope is a wholesale replacement, not rows moving
 			    inside one board. Key this boundary and suppress both sides of that
 			    replacement so outgoing native cells cannot overlap the new list or
-			    retain invisible height. Same-board row changes still animate below. */}
-			<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>
+			    retain invisible height. Same-board row changes still animate below.
+			    A new text size rebuilds it the same way, so every row is measured again. */}
+			<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>
 				<FlatList
 					ref={listRef}
 					data={listData}

@@ -1,13 +1,14 @@
 import { useRouter } from "expo-router";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
 import { useMemo } from "react";
-import { Platform } from "react-native";
+import { Platform, useWindowDimensions } from "react-native";
 import { boardTitle, workersNeedingYou } from "../../lib/board-tabs";
 import { rippleColor } from "../../lib/pressFeedback";
 import { startNewTask } from "../../lib/newTaskAction";
 import { useApp } from "../../lib/store";
 import { symbols } from "../../lib/symbols";
 import { useTheme } from "../../lib/ThemeProvider";
+import { fontScaleCap } from "../../lib/tokens";
 // Material Symbols has no pull request, so the tab draws lucide's, as the
 // board's bar did, from a bundled bitmap.
 import PULL_REQUEST_GLYPH from "../../assets/icons/pull-request.png";
@@ -35,6 +36,11 @@ export default function BoardTabsLayout() {
 	// content clear of it themselves (`useTabBarFrost`), rather than being
 	// ended above it. iOS's tabs keep the system's own insets.
 	const android = Platform.OS === "android";
+	// Past 1.3× text, four labels no longer fit Android's bar side by side and
+	// run into each other, so only the selected tab keeps its label, as
+	// Material's own bars do; TalkBack still names every tab.
+	const { fontScale } = useWindowDimensions();
+	const labelVisibilityMode = fontScale > fontScaleCap.chrome ? "selected" : "labeled";
 	// The store changes on every poll; the tabs only need to change with the
 	// theme or the badge.
 	return useMemo(() => (
@@ -57,8 +63,8 @@ export default function BoardTabsLayout() {
 			indicatorColor={t.accentTint}
 			// Every destination keeps its label, as Material 3's bar specifies:
 			// past three tabs the platform's bar otherwise labels only the
-			// selected one.
-			labelVisibilityMode="labeled"
+			// selected one. Large text is the exception (see above).
+			labelVisibilityMode={labelVisibilityMode}
 			rippleColor={rippleColor(t)}
 		>
 			<NativeTabs.Trigger name="(workers)" disableAutomaticContentInsets={android}>
@@ -103,5 +109,5 @@ export default function BoardTabsLayout() {
 				<NativeTabs.Trigger.Icon sf="square.and.pencil" md="add" />
 			</NativeTabs.Trigger>
 		</NativeTabs>
-	), [android, router, t, waiting]);
+	), [android, labelVisibilityMode, router, t, waiting]);
 }

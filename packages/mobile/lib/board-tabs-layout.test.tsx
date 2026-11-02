@@ -6,6 +6,7 @@ import type { DashboardSession } from "./api";
 
 const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
+	fontScale: 1,
 	sessions: [] as DashboardSession[],
 	tabRenders: 0,
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
@@ -16,7 +17,7 @@ const fixtures = vi.hoisted(() => ({
 fixtures.router = { push: (href: string) => fixtures.push(href) };
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-vi.mock("react-native", () => ({ Platform: fixtures.platform }));
+vi.mock("react-native", () => ({ Platform: fixtures.platform, useWindowDimensions: () => ({ fontScale: fixtures.fontScale }) }));
 vi.mock("expo-router/unstable-native-tabs", () => {
 	const host = (name: string) => ({ children, ...props }: { children?: ReactNode }) => createElement(name, props, children);
 	const NativeTabs = Object.assign(({ children, ...props }: { children?: ReactNode }) => {
@@ -60,6 +61,7 @@ function trigger(name: string) {
 
 beforeEach(() => {
 	fixtures.platform.OS = "ios";
+	fixtures.fontScale = 1;
 	fixtures.sessions = [];
 	fixtures.tabRenders = 0;
 });
@@ -119,6 +121,15 @@ describe("board tabs", () => {
 			labelVisibilityMode: "labeled",
 			backgroundColor: os === "android" ? "#bgBase" : undefined,
 		});
+	});
+
+	// At 2× text Android's four labels ran together ("WorkersProjects"), so past
+	// the chrome cap only the selected tab keeps its label.
+	it.each([[1, "labeled"], [1.3, "labeled"], [2, "selected"]])("labels the tabs at %s× text as %s", (fontScale, mode) => {
+		fixtures.platform.OS = "android";
+		fixtures.fontScale = fontScale as number;
+		render();
+		expect(renderer!.root.findByType("NativeTabs" as never).props.labelVisibilityMode).toBe(mode);
 	});
 
 	// Any font family on iOS also takes React Native's 14pt default, which makes

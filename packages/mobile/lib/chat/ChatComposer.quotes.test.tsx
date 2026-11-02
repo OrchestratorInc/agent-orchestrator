@@ -11,6 +11,7 @@ vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Keyboard: { dismiss: vi.fn() },
 	PanResponder: { create: () => ({ panHandlers: {} }) }, Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
+	useWindowDimensions: () => ({ fontScale: 1 }),
 }));
 vi.mock("react-native-reanimated", () => {
 	const spring = (): object => new Proxy({}, { get: () => () => spring() });

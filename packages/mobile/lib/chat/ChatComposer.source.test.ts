@@ -52,7 +52,7 @@ describe("chat composer pill", () => {
 		// each new line first scrolled the field and cut off its top line.
 		expect(composer).not.toContain("onContentSizeChange");
 		expect(composer).not.toContain("fieldHeight");
-		expect(composer).toContain("style={[styles.input, (listening || transcribing) && styles.hiddenField]}");
+		expect(composer).toContain("style={[styles.input, fieldSize.field, (listening || transcribing) && styles.hiddenField]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
 		expect(styleRule("composerRow")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
 		expect(styleRule("composerRow")).toContain('alignItems: "flex-end"');
