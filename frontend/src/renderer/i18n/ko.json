@@ -3481,7 +3481,7 @@
 	"sideChat.editingQueuedMessage": "Editing queued message",
 	"sideChat.editQueuedSideQuestion": "Edit queued side question",
 	"sideChat.aboutIsolation": "About side-chat isolation",
-	"sideChat.isolationPolicy": "History is frozen at creation. Later main messages require explicit attachment. Files and Git are shared. Read-only is behavioral; explicit requests here may authorize edits. Sub-agent interaction is prohibited by instruction.",
+	"sideChat.temporaryNotice": "임시 채팅 — AO를 종료하면 저장되지 않습니다.",
 	"sideChat.forkPoint": "Frozen fork point: {{turn}}",
 	"sideChat.noInheritedTurns": "Created before any completed main-chat turn.",
 	"sideChat.tabs": "Side chat tabs",
