@@ -184,7 +184,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// and the window behind them only exist with Diagnostics on in Developer mode.
 	// They read this machine, so another machine's board shows none of them.
 	const diagnostics = useDiagnosticsEnabled();
-	// The light sits beside the orchestrator button, not in the archive bar.
+	// The light leads the board's actions, before the Task button, not in the archive bar.
 	const memoryLight = diagnostics && !hostId ? <AppMemoryIndicator /> : null;
 	// Per-session readings feed each card's resource chip. Chips are grey
 	// unless the machine is tight and the card is part of the fix (idle, or
@@ -251,8 +251,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
-			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{memoryLight}
+			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 		</>
 	) : memoryLight ?? undefined;
 
