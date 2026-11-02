@@ -252,7 +252,9 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
-vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
+vi.mock("../components/HarnessUpdateNotice", () => ({
+	HarnessUpdateNotice: ({ enabled }: { enabled: boolean }) => <div data-enabled={String(enabled)} data-testid="harness-update-notice" />,
+}));
 vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
@@ -535,6 +537,22 @@ describe("shell workspace startup", () => {
 		);
 
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+	});
+
+	it("starts agent update checks once launch has settled, not with the app", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+			await renderShell();
+			// Each check can hold a daemon connection for seconds on a fresh daemon.
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps chat hibernation disabled when Developer Mode is off", async () => {

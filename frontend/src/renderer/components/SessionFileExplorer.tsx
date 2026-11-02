@@ -477,7 +477,7 @@ export function SessionFileExplorer({
 					{review.notice}
 				</p>
 			) : null}
-   {!showChanges && source.kind === "snapshot" && review.target.state === "pending" ? <PanelMessage>{t("files.loading")}</PanelMessage> : showChanges ? (
+   {!showChanges && source.kind === "snapshot" && (review.target.state === "pending" || review.sourcePending) ? <PanelMessage>{t("files.loading")}</PanelMessage> : showChanges ? (
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
