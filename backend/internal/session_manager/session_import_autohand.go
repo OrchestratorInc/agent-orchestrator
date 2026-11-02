@@ -45,7 +45,7 @@ func autohandImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord)
 				ID      string    `json:"sessionId"`
 				PID     int       `json:"pid"`
 				CWD     string    `json:"workspaceRoot"`
-				Started time.Time `json:"startedAt"`
+				Updated time.Time `json:"updatedAt"`
 			}
 			err = json.NewDecoder(io.LimitReader(f, 64<<10)).Decode(&live)
 			_ = f.Close()
@@ -57,7 +57,10 @@ func autohandImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord)
 			}
 			name, started, known := processStart(ctx, live.PID)
 			name = strings.ToLower(name)
-			if known && (strings.Contains(name, "autohand") || strings.Contains(name, "bun") || strings.Contains(name, "node")) && (live.Started.IsZero() || !started.After(live.Started)) {
+			// startedAt is the conversation's creation time, including resumed
+			// conversations. updatedAt is the current process's heartbeat.
+			fresh := !live.Updated.IsZero() && time.Since(live.Updated) <= 15*time.Second && !live.Updated.After(time.Now().Add(time.Second))
+			if known && fresh && (strings.Contains(name, "autohand") || strings.Contains(name, "bun") || strings.Contains(name, "node")) && !started.After(live.Updated) {
 				return true
 			}
 		}
