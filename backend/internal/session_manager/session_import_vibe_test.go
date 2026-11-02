@@ -10,7 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestVibeImportLease(t *testing.T) {
+func TestVibeImportIgnoresStaleLeaseDiagnostics(t *testing.T) {
 	root := t.TempDir()
 	id := "synthetic-session"
 	dir := filepath.Join(root, "logs", "session", "active")
@@ -25,7 +25,7 @@ func TestVibeImportLease(t *testing.T) {
 		body string
 		want bool
 	}{
-		{name: "live", body: fmt.Sprintf(`{"session_id":%q,"process_id":%d}`, id, os.Getpid()), want: true},
+		{name: "live unrelated pid", body: fmt.Sprintf(`{"session_id":%q,"process_id":%d}`, id, os.Getpid())},
 		{name: "other id", body: fmt.Sprintf(`{"session_id":"other","process_id":%d}`, os.Getpid())},
 		{name: "invalid pid", body: `{"session_id":"synthetic-session","process_id":0}`},
 		{name: "torn", body: `{"session_id":`},

@@ -139,12 +139,19 @@ func readVibeTranscript(ctx context.Context, root string, paths ...string) (tran
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var message struct {
+		var message *struct {
 			Role    string      `json:"role"`
 			Content contentText `json:"content"`
 		}
-		if json.Unmarshal(line, &message) != nil || (message.Role != "user" && message.Role != "assistant") {
-			return nil //nolint:nilerr // Skip torn or non-conversation records without discarding readable history.
+		if json.Unmarshal(line, &message) != nil || message == nil {
+			return errors.New("invalid vibe message record")
+		}
+		switch message.Role {
+		case "system", "tool":
+			return nil
+		case "user", "assistant":
+		default:
+			return errors.New("invalid vibe message role")
 		}
 		text := string(message.Content)
 		if strings.Contains(text, omittedText) {

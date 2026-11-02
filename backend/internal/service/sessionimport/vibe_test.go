@@ -19,7 +19,6 @@ func TestVibeImportFormats(t *testing.T) {
 {"role":"user","content":"Remember the synthetic code word"}
 {"role":"assistant","content":[{"type":"text","text":"Remembered"},{"type":"tool_call","text":"hidden"}]}
 {"role":"tool","content":"hidden output"}
-{"role":
 `)
 			files, err := discoverVibe(context.Background(), root)
 			if err != nil || len(files) != 1 {
@@ -32,6 +31,20 @@ func TestVibeImportFormats(t *testing.T) {
 			wantTexts(t, got.messages, "user: Remember the synthetic code word", "assistant: Remembered")
 			if got.nativeID != files[0].nativeID() || got.cwd != "/work/source" || got.title != "Synthetic chat" || got.last.IsZero() {
 				t.Fatalf("metadata = %+v", got)
+			}
+		})
+	}
+}
+
+func TestVibeImportRejectsInvalidNativeLog(t *testing.T) {
+	for _, invalid := range []string{`{"role":`, `null`, `{"role":"unknown","content":"invalid role"}`} {
+		t.Run(invalid, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "logs", "session", "session_synthetic")
+			writeFile(t, filepath.Join(dir, "meta.json"), `{"session_id":"synthetic","environment":{"working_directory":"/work/source"}}`)
+			path := writeFile(t, filepath.Join(dir, "messages.jsonl"), "{\"role\":\"user\",\"content\":\"Valid prompt\"}\n"+invalid+"\n")
+			if _, err := readVibeTranscript(context.Background(), root, path); err == nil {
+				t.Fatal("accepted a log that native resume rejects")
 			}
 		})
 	}
