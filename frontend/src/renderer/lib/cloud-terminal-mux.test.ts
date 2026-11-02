@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudTerminalMux } from "./cloud-terminal-mux";
 import { subscribeCloudNotificationHints } from "./cloud-notification-hints";
+import { useUiStore } from "../stores/ui-store";
 
 // Minimal fake WebSocket: records its URL and every frame it sends, lets the
 // test deliver frames, and reports OPEN so sendJSON works.
@@ -333,6 +334,25 @@ describe("createCloudTerminalMux cloud notification hints", () => {
 		ws.deliver({ type: "notification_hint", eventId: "evt-1", eventType: "needs_input", occurredAt: "2026-09-21T00:00:00Z", payload: { message: "Need a choice" } });
 		expect(hints).toEqual(["evt-1"]);
 		unsubscribe();
+		mux.dispose();
+	});
+});
+
+describe("createCloudTerminalMux shared session input", () => {
+	it("tells the person once when the agent refuses keystrokes someone else's turn blocks", async () => {
+		FakeWebSocket.instances = [];
+		useUiStore.setState({ globalToasts: [] });
+		const mux = makeMux();
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		const output: number[] = [];
+		mux.onData("pane", (bytes) => output.push(bytes.length));
+		ws.deliver({ type: "input_refused", inputId: "in-1", message: "Someone else is writing to the agent." });
+		ws.deliver({ type: "input_refused", inputId: "in-2", message: "Someone else is writing to the agent." });
+		const toasts = useUiStore.getState().globalToasts.filter((toast) => toast.dedupeKey === "composer-terminal-refused");
+		expect(toasts).toHaveLength(1);
+		expect(toasts[0].title).toBe("Someone else is writing to the agent. Request a turn in Chat to type.");
+		expect(output).toEqual([]);
 		mux.dispose();
 	});
 });

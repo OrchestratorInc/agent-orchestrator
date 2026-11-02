@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
+import { remarkMath } from "./remark-math";
 import { splitStreamingMarkdown, type MarkdownBlocks } from "./streaming-markdown";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
+const mathParser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
 const withoutPositions = (value: unknown) => JSON.parse(JSON.stringify(value, (key, item: unknown) => key === "position" ? undefined : item));
 
 const examples = [
@@ -21,20 +23,49 @@ const examples = [
 	"  A\r\n\r\n  B\r\n\r\n  C\r\n\r\n  D",
 	"😀 A\n\n**B**\n\n[docs][ref]\n\n[ref]: https://example.com",
 	"[^first]\n\nOther[^second]\n\n[^first]: one\n\n[^second]: two",
+	"[docs][ref]\n\nB\n\n- > [ref]: https://example.com\n\nlast",
+	"A\n\nB\n\n```py\ndef f(rows: list[int]) -> dict[str, int]:\n```\n\nlast",
 ];
+
+// A display formula's lines can look like a list item or end at a blank line.
+const mathExamples = [
+	"A\n\nB\n\n$$\n(a-b)^2 = a^2\n- 2ab + b^2\n\n# not a heading\n$$\n\nlast",
+	"A\n\nB\n\n\\[\nx\n\n- y\n\\]\n\nlast",
+	"A\n\nB\n\nInline $a_i *b*$ and \\(x_1\\) here.\n\nlast",
+];
+
+function expectSplitMatchesParse(source: string, parse: typeof parser, math: boolean) {
+	let previous: MarkdownBlocks | undefined;
+	for (let length = 0; length <= source.length; length++) {
+		const text = source.slice(0, length);
+		const result = splitStreamingMarkdown(text, previous, math);
+		expect(result.blocks.map((block) => block.source).join("")).toBe(text);
+		for (const block of result.blocks) expect(text.slice(block.start, block.start + block.source.length)).toBe(block.source);
+		const splitTree = result.blocks.flatMap((block) => parse.parse(block.source).children);
+		expect(withoutPositions(splitTree), `prefix ${JSON.stringify(text)}`).toEqual(withoutPositions(parse.parse(text).children));
+		previous = result;
+	}
+}
 
 describe("splitStreamingMarkdown", () => {
 	it.each(examples)("matches a full GFM parse at every character: %s", (source) => {
-		let previous: MarkdownBlocks | undefined;
-		for (let length = 0; length <= source.length; length++) {
-			const text = source.slice(0, length);
-			const result = splitStreamingMarkdown(text, previous);
-			expect(result.blocks.map((block) => block.source).join("")).toBe(text);
-			for (const block of result.blocks) expect(text.slice(block.start, block.start + block.source.length)).toBe(block.source);
-			const splitTree = result.blocks.flatMap((block) => parser.parse(block.source).children);
-			expect(withoutPositions(splitTree), `prefix ${JSON.stringify(text)}`).toEqual(withoutPositions(parser.parse(text).children));
-			previous = result;
-		}
+		expectSplitMatchesParse(source, parser, false);
+	});
+
+	it.each(mathExamples)("matches a full math parse at every character: %s", (source) => {
+		expectSplitMatchesParse(source, mathParser, true);
+	});
+
+	it("keeps splitting when only code looks like a definition", () => {
+		const text = "A\n\n```py\nif rows[0]:\n```\n\n```ts\nconst o = {\n  [key]: 1,\n};\n```\n\nB";
+		expect(splitStreamingMarkdown(text).blocks).toHaveLength(4);
+	});
+
+	it("leaves formulas out of prose repair and re-cuts when the dialect changes", () => {
+		const text = "A\n\n$$\nx_1 * y\n$$\n\nInline $a_i$\n\nprose *open";
+		const math = splitStreamingMarkdown(text, undefined, true);
+		expect(math.blocks.map((block) => block.repairInline)).toEqual([true, false, false, true]);
+		expect(splitStreamingMarkdown(text, math, false)).toEqual(splitStreamingMarkdown(text));
 	});
 
 	it("reuses stable blocks across interleaved messages and resets for edits/truncation", () => {

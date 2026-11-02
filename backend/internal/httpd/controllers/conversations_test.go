@@ -902,3 +902,38 @@ func TestContinuationUnavailableIsAConflict(t *testing.T) {
 		t.Fatalf("stale Continue response: %d %s", status, body)
 	}
 }
+
+func TestConversationFileAnnotationsRoundTripAndValidateOwnership(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	input := map[string]any{"text": "why?", "fileReferences": []any{map[string]any{"id": "file-one", "order": 2, "sessionId": "p1-1", "path": "src/a.ts", "side": "file", "line": 1, "endLine": 1, "source": map[string]any{"kind": "workspace"}, "lines": []any{map[string]any{"kind": "context", "oldNo": 1, "newNo": 1, "text": "captured();"}}}}}
+	encoded, _ := json.Marshal(input)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status %d: %s", response.StatusCode, body)
+	}
+	if service.sent.Text != "why?" || len(service.sent.Content) != 1 || service.sent.Content[0].FileReference.Lines[0].Text != "captured();" {
+		t.Fatalf("lost annotation: %+v", service.sent)
+	}
+	content, _ := json.Marshal(service.sent.Content)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{Conversation: domain.ConversationRecord{ID: "c"}, SessionID: "p1-1", Messages: []domain.ConversationMessage{{ID: "m", Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "why?", DeliveryContentJSON: string(content)}}})
+	messages := body["messages"].([]any)
+	summary := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if summary["type"] != "file_reference" || summary["fileReference"].(map[string]any)["path"] != "src/a.ts" {
+		t.Fatalf("summary: %+v", summary)
+	}
+	wrong := bytes.Replace(encoded, []byte(`"p1-1"`), []byte(`"other"`), 1)
+	rejected, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json", bytes.NewReader(wrong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rejected.Body.Close()
+	if rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cross-session status %d", rejected.StatusCode)
+	}
+}

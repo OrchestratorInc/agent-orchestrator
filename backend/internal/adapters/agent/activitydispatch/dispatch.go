@@ -81,6 +81,16 @@ var Derivers = map[string]DeriveFunc{
 	"fake":         fake.DeriveActivityState,
 }
 
+// AgentSessionID extracts a native resumable-session identifier from an
+// adapter's hook payload. Most adapters obtain this metadata through other
+// mechanisms; Cline exposes its root session id in lifecycle hook payloads.
+func AgentSessionID(agent string, payload []byte) (string, bool) {
+	if agent != "cline" {
+		return "", false
+	}
+	return cline.SessionIDFromHook(payload)
+}
+
 // SignalCoverage describes how much of a harness lifecycle AO can observe.
 // Partial coverage can report useful transitions but cannot prove that silence
 // means a broken pipeline. Complete coverage is eligible for the no_signal

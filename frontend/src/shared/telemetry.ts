@@ -1,8 +1,24 @@
 import { access, link, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
+import { type CiSignal, detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
+
+/**
+ * Segmentation the renderer cannot see for itself: CPU architecture, the real
+ * OS version (Chromium freezes the macOS version in its user agent), how the
+ * app was installed (~/.ao/app-state.json), and whether this is a CI or
+ * container run. The daemon stamps the same values on its own events.
+ */
+export type TelemetryInstallContext = {
+	arch: string;
+	osVersion?: string;
+	installSource: string;
+	installedAt?: string;
+	isCi: boolean;
+	ciSignal?: CiSignal;
+};
 
 export type TelemetryBootstrap = {
 	distinctId: string;
@@ -22,7 +38,41 @@ export type TelemetryBootstrap = {
 	disabledEvents: string[];
 	eventsEnabled: boolean;
 	consentGeneration: string;
+	install?: TelemetryInstallContext;
+	/** This install's fixed 0-99 experiment bucket; absent when unreadable. */
+	experimentCohort?: number;
 };
+
+/** Reads the install context for the bootstrap. Never throws. */
+export async function readTelemetryInstallContext(input: {
+	/** Directory holding app-state.json (dirname of running.json); null if unknown. */
+	stateDir: string | null;
+	arch: string;
+	osVersion: string;
+	env: Record<string, string | undefined>;
+	exists: (file: string) => boolean;
+}): Promise<TelemetryInstallContext> {
+	let state: { installSource?: unknown; installedAt?: unknown } = {};
+	if (input.stateDir) {
+		try {
+			const parsed: unknown = JSON.parse(await readFile(path.join(input.stateDir, "app-state.json"), "utf8"));
+			if (parsed && typeof parsed === "object") state = parsed as typeof state;
+		} catch {
+			// Absent or unreadable: report unknown rather than block the bootstrap.
+		}
+	}
+	const ci = detectCiEnvironment(input.env, input.exists);
+	const installedAt = installDay(typeof state.installedAt === "string" ? state.installedAt : undefined);
+	const osVersion = safeOsVersion(input.osVersion);
+	return {
+		arch: input.arch,
+		...(osVersion ? { osVersion } : {}),
+		installSource: normalizeInstallSource(typeof state.installSource === "string" ? state.installSource : undefined),
+		...(installedAt ? { installedAt } : {}),
+		isCi: ci.isCi,
+		...(ci.ciSignal ? { ciSignal: ci.ciSignal } : {}),
+	};
+}
 
 /** Parses the comma-separated deny list. Never throws: an unusable entry is inert. */
 export function parseDisabledEvents(raw: string | undefined): string[] {
@@ -59,6 +109,43 @@ export function defaultDataDir(
 	if (env.AO_DATA_DIR) return env.AO_DATA_DIR;
 	if (!homeDir) return null;
 	return path.join(homeDir, ".ao", "data");
+}
+
+export const EXPERIMENT_COHORT_BUCKETS = 100;
+
+/**
+ * This install's experiment bucket, 0-99, assigned once on the first run (by
+ * the desktop app or the daemon, whichever gets there first) and never changed.
+ * Onboarding tests split installs by bucket range without PostHog flags. The
+ * daemon reads and creates the same file
+ * (backend/internal/adapters/telemetry/cohort.go). Never throws: an unreadable
+ * or unwritable bucket is reported as absent rather than guessed.
+ */
+export async function loadOrAssignExperimentCohort(dataDir: string): Promise<number | undefined> {
+	const file = path.join(dataDir, "telemetry_experiment_cohort");
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const value = Number((await readFile(file, "utf8")).trim());
+			return Number.isInteger(value) && value >= 0 && value < EXPERIMENT_COHORT_BUCKETS ? value : undefined;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+		}
+		const cohort = randomInt(EXPERIMENT_COHORT_BUCKETS);
+		// A complete temp file linked into place: the link fails if the daemon
+		// won the race, and a reader never sees a half-written file.
+		const temporary = path.join(dataDir, `.telemetry_experiment_cohort_${randomUUID()}`);
+		try {
+			await mkdir(dataDir, { recursive: true });
+			await writeFile(temporary, `${cohort}\n`, { mode: 0o600, flag: "wx" });
+			await link(temporary, file);
+			return cohort;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+		} finally {
+			await unlink(temporary).catch(() => {});
+		}
+	}
+	return undefined;
 }
 
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
@@ -174,6 +261,7 @@ export async function buildTelemetryBootstrap(
 	homeDir = os.homedir(),
 	isPackaged = true,
 	policy?: TelemetryPolicySnapshot,
+	install?: TelemetryInstallContext,
 ): Promise<TelemetryBootstrap | null> {
 	// Returning null is the whole switch: initTelemetry() bails on a null
 	// bootstrap, so the renderer never constructs a PostHog client at all. That
@@ -186,6 +274,7 @@ export async function buildTelemetryBootstrap(
 	// This policy controls failure reporting only. Existing anonymous PostHog
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
+	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
 		installId: await loadOrCreateTelemetryInstallId(dataDir),
@@ -194,5 +283,7 @@ export async function buildTelemetryBootstrap(
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),
 		eventsEnabled,
 		consentGeneration: policy.consentGeneration,
+		...(install ? { install } : {}),
+		...(experimentCohort === undefined ? {} : { experimentCohort }),
 	};
 }

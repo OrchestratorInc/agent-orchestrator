@@ -85,6 +85,8 @@ const CODE: Record<string, Partial<Base>> = {
 	WORKSPACE_LOCKED: { severity: "P1", owner: "ours" },
 	BRANCH_CHECKED_OUT_ELSEWHERE: { severity: "P1", owner: "ours" },
 	WORKSPACE_CWD_MISMATCH: { severity: "P1", owner: "ours" },
+	// agent relaunch failed (resume/restore answers 409, not 500) — still ours to fix
+	AGENT_RESUME_FAILED: { severity: "P1", owner: "ours" },
 	// git / project setup — user
 	NOT_A_GIT_REPO: { severity: "P2", owner: "user" },
 	BRANCH_NOT_FETCHED: { severity: "P2", owner: "user" },

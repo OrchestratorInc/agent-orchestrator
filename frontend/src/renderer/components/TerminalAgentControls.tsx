@@ -4,13 +4,14 @@ import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
 import { apiErrorMessage } from "../lib/api-client";
+import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
 import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
-import { TopbarButton } from "./TopbarButton";
+import { terminalTabActionClassName } from "./TerminalTabFrame";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
@@ -77,16 +78,16 @@ export function SessionTabMenu({
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
-				<TopbarButton
+				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
+				<button
 					aria-label={t("session.actionsMenu")}
-					className="size-7 !bg-transparent text-muted-foreground hover:!bg-transparent active:!bg-transparent focus:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground"
+					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={t("session.actionsMenu")}
 					type="button"
-					variant="icon"
 				>
-					<MoreVertical aria-hidden="true" className="size-icon-md" />
-				</TopbarButton>
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
+				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}

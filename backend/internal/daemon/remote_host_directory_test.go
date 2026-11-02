@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,9 @@ func TestPublishRemoteHostAddressUsesScopedDigestWithoutRedirects(t *testing.T) 
 		if r.URL.Path != "/api/cloud/v1/remote-hosts/h_test/address" || r.Header.Get("Authorization") != "Bearer "+hash {
 			t.Errorf("unexpected request: %s %s", r.URL.Path, r.Header.Get("Authorization"))
 		}
+		if !strings.Contains(r.Header.Get("X-AO-Host-Signature"), ".") {
+			t.Errorf("unsigned publish: %q", r.Header.Get("X-AO-Host-Signature"))
+		}
 		var input struct {
 			URL string `json:"url"`
 		}
@@ -26,7 +30,7 @@ func TestPublishRemoteHostAddressUsesScopedDigestWithoutRedirects(t *testing.T) 
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	if err := publishRemoteHostAddress(context.Background(), srv.Client(), srv.URL, "h_test", "https://new.example.com:443", hash); err != nil {
+	if err := publishRemoteHostAddress(context.Background(), srv.Client(), srv.URL, "h_test", "https://new.example.com:443", hash, filepath.Join(t.TempDir(), "mobile", "config.json")); err != nil {
 		t.Fatal(err)
 	}
 	if !called {

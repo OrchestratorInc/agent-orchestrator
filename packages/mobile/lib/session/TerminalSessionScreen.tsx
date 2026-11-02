@@ -689,6 +689,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const previewBase = (preview?.entry ?? "").split("/").pop() ?? "";
 	const isReadme = /^readme\.(md|markdown)$/i.test(previewBase);
 	const hasPreview = !!preview && !isReadme;
+	// The terminal has no overflow menu, so its artifacts get their own header
+	// button, shown only once the agent has written something.
+	const artifactCount = !shellOnly && known && "artifacts" in known ? known.artifacts?.length ?? 0 : 0;
+	const openArtifacts = useCallback(() => {
+		haptics.tap();
+		router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId, title: params.title, hostId: params.hostId } });
+	}, [params.hostId, params.title, router, sessionId]);
 
 	// Neither platform shrinks the layout for the keyboard: iOS never has, and on
 	// Android edge-to-edge (edgeToEdgeEnabled) defeats windowSoftInputMode=adjustResize
@@ -970,7 +977,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		setSending(true);
 		try {
 			if (!activeConfig) throw new Error("No active machine connection");
-			await sendMessage(activeConfig, id, text);
+			await sendMessage(activeConfig, id, text, { userAuthored: true });
 			haptics.success();
 			setMsg("");
 		} catch (e) {
@@ -1196,10 +1203,21 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					>
 						<Feather name="file-diff" size={iconSize.lg} color={t.textSecondary} />
 					</Pressable>
+					{artifactCount > 0 ? (
+						<Pressable
+							hitSlop={10}
+							accessibilityRole="button"
+							accessibilityLabel={`Artifacts, ${artifactCount}`}
+							onPress={openArtifacts}
+							style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
+						>
+							<Feather name="layers" size={iconSize.md} color={t.textSecondary} />
+						</Pressable>
+					) : null}
 				</View>
 			),
 		});
-	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title]);
+	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title, artifactCount, openArtifacts]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {

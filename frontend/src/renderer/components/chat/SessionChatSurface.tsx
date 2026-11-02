@@ -1,3 +1,4 @@
+import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -19,7 +20,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
 import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
@@ -50,7 +51,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -120,10 +121,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	shellError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -171,11 +173,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
@@ -385,7 +388,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
-	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
+	const controllerCatalogsEnabled = targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
@@ -448,13 +451,65 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	// A pending action owns its destination; an unanswered creation owns only its
+	// request identity. Reselecting text must not turn a lost reply into a new fork.
+	const selectionSideScope = useMemo(() => ({ active: true,
+		processing: new Map<string, Promise<void>>(),
+		receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
+	}), [uiSessionId, snapshot?.conversationId]);
+	const selectionSideScopeRef = useRef(selectionSideScope);
+	selectionSideScopeRef.current = selectionSideScope;
+	const selectionSideChatsRef = useRef(sideChats);
+	selectionSideChatsRef.current = sideChats;
+	useEffect(() => {
+		selectionSideScope.active = true;
+		return () => {
+			selectionSideScope.active = false;
+			selectionSideScope.processing.clear(); selectionSideScope.receipts.clear();
+		};
+	}, [selectionSideScope]);
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-		openSideInspector();
-		if (sideChats.activeId) {
-			sideChats.addReference(sideChats.activeId, excerpt);
-			sideChats.show(sideChats.activeId);
-		} else {
-			await sideChats.create(excerpt);
+		const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
+		if (!current()) throw new Error("Side chat is no longer active.");
+		const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+		const pending = selectionSideScope.processing.get(identity);
+		if (pending) return pending;
+		const destination = selectionSideChatsRef.current;
+		const destinationId = destination.activeId;
+		// Reserve before any UI update or synchronous failure can trigger activation.
+		const action = Promise.resolve().then(async () => {
+			if (!current()) throw new Error("Side chat is no longer active.");
+			openSideInspector();
+			if (destinationId) {
+				if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
+				destination.addReference(destinationId, excerpt);
+				destination.show(destinationId);
+			} else {
+				let receipt = selectionSideScope.receipts.get(identity);
+				if (!receipt) {
+					receipt = { creationKey: crypto.randomUUID(), excerpt: { ...excerpt } };
+					selectionSideScope.receipts.set(identity, receipt);
+				}
+				try {
+					await destination.create(receipt.excerpt, false, receipt.creationKey, {
+						isCurrent: current,
+						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
+					});
+				} catch (error) {
+					// A confirmed close is terminal, not an unanswered creation. Do not retry
+					// automatically; the next deliberate Add may allocate a fresh request.
+					if (apiErrorCode(error) === "CHAT_SIDE_CLOSED") selectionSideScope.receipts.delete(identity);
+					throw error;
+				}
+				if (!current()) throw new Error("Side chat is no longer active.");
+				selectionSideScope.receipts.delete(identity);
+			}
+		});
+		selectionSideScope.processing.set(identity, action);
+		try {
+			await action;
+		} finally {
+			selectionSideScope.processing.delete(identity);
 		}
 	};
 
@@ -520,7 +575,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		}
 	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
-		targetChatControllerReady && !controllerBusy && !localEchos.length &&
+		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
@@ -639,6 +694,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
+				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
@@ -669,7 +725,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				theme={theme}
 				headerActions={headerActions}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
+				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabs={workspaceTabs}
 				workspaceTabActions={workspaceTabActions}
@@ -685,12 +741,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={async (text, attachments, clientMessageId, excerpts) => {
-					// Only claim /btw and /side where side chats can open. Elsewhere the
+				fileReferencesEnabled={Boolean(renderSnapshot.supportsFileReferences)}
+				onSend={async (text, attachments, clientMessageId, excerpts, fileReferences) => {
+					// Only claim /btw where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
-					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
-					if (btw) {
+					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
+     if (btw && fileReferences?.length) {
+      throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
+     }
+     if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
@@ -705,7 +765,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
+						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
+							id: excerpt.id, order: excerpt.order,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
@@ -797,7 +859,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				draftSettings={launchSettings && (!settingsReady || settingsLoading) ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
-				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
+				// A Scratchpad session has no project to remember a mode for.
+				onRememberPermissions={session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
@@ -814,6 +877,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}
 				onOpenFile={onOpenFile}
+				onOpenFileAnnotation={onOpenFileAnnotation}
 				retryControl={commands.retryControl}
 				onEditMessage={commands.editMessage}
 				editMessagePending={commands.editMessagePending}
@@ -821,7 +885,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={sideCreationEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
+				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

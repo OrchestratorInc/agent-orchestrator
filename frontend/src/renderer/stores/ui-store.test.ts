@@ -200,19 +200,19 @@ describe("navigation gestures", () => {
 		useUiStore.setState({ navigationGestures: false });
 	});
 
-	it("is off by default", async () => {
-		expect((await bootStore()).getState().navigationGestures).toBe(false);
+	it("is on by default", async () => {
+		expect((await bootStore()).getState().navigationGestures).toBe(true);
 	});
 
 	it("restores the saved choice after restarting", async () => {
-		useUiStore.getState().setNavigationGestures(true);
-		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("true");
+		useUiStore.getState().setNavigationGestures(false);
+		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("false");
 		let store = await bootStore();
-		expect(store.getState().navigationGestures).toBe(true);
-		store.getState().setNavigationGestures(false);
+		expect(store.getState().navigationGestures).toBe(false);
+		store.getState().setNavigationGestures(true);
 		vi.resetModules();
 		store = await bootStore();
-		expect(store.getState().navigationGestures).toBe(false);
+		expect(store.getState().navigationGestures).toBe(true);
 	});
 });
 

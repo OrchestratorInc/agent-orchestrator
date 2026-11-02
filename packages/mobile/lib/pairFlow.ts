@@ -6,11 +6,23 @@ import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { isLegacyPairingCode, parsePairingCode } from "./pairingCode";
 import type { RaceOutcome } from "./race";
 
+type SavedHost = Pick<Host, "id" | "name" | "appearance">;
+
+export type PairSuccess = {
+	ok: true;
+	config: ServerConfig;
+	host: Host;
+	/** How the code related to what the phone already had saved. */
+	kind: "added" | "reconnected" | "existing";
+	/** The machine the user set out to reconnect, when the code named another. */
+	instead?: Pick<Host, "id" | "name">;
+};
+
 export type PairResult =
-	| { ok: true; config: ServerConfig; host: Host }
+	| PairSuccess
 	| {
 			ok: false;
-			reason: "not-ao-qr" | "outdated-desktop" | "no-candidates" | "none-reachable" | "incompatible" | "wrong-machine" | "cancelled" | "name-required";
+			reason: "not-ao-qr" | "outdated-desktop" | "no-candidates" | "none-reachable" | "incompatible" | "cancelled" | "name-required";
 		}
 	| {
 			ok: false;
@@ -31,6 +43,8 @@ export type PairDeps = {
 	/** New pairings are not persisted until the user confirms a readable name.
 	 * The icon is offered alongside it, starting from the machine's default. */
 	chooseName: (suggested: string, appearance: MachineAppearance, hostId: string) => Promise<MachineNameChoice | null>;
+	/** The saved pairing for a machine, if this phone has one. */
+	findHost: (id: string) => Promise<SavedHost | null>;
 	saveHost: (host: Host) => Promise<void>;
 	setActiveHost: (id: string) => Promise<void>;
 };
@@ -38,8 +52,9 @@ export type PairDeps = {
 export type MachineNameChoice = { name: string; appearance: MachineAppearance };
 
 export type PairOptions = {
-	/** Existing identity and name when refreshing one saved pairing. */
-	repairHost?: Pick<Host, "id" | "name" | "appearance">;
+	/** The saved pairing the user chose to reconnect. A code for any other
+	 * machine still pairs, as that machine, and leaves this one untouched. */
+	repairHost?: SavedHost;
 };
 
 /**
@@ -61,10 +76,6 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	if (!offer) {
 		return { ok: false, reason: isLegacyPairingCode(raw) ? "outdated-desktop" : "not-ao-qr" };
 	}
-	if (options.repairHost && offer.hostId !== options.repairHost.id) {
-		return { ok: false, reason: "wrong-machine" };
-	}
-
 	const outcome = await deps.race(offer.endpoints, offer.hostId);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
 
@@ -79,8 +90,18 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	}
 
 	const hostId = offer.hostId || outcome.hostId;
-	let name = options.repairHost?.name.trim() ?? "";
-	let appearance = options.repairHost?.appearance;
+	// The pairing to refresh is chosen by the identity the code carries, never
+	// by where the scan started: a code for another machine pointed at the
+	// reconnect screen is still what the user wants connected now, and saving
+	// it under the machine they started from would hand that entry B's token.
+	// Compared with the id being saved, not the code's own field: an id-less
+	// legacy pairing and an id-less code would otherwise "match" on "" while
+	// the machine is saved under the id it reported (#7346).
+	const repair = options.repairHost;
+	const repairing = repair !== undefined && repair.id === hostId;
+	const saved = repairing ? repair : hostId ? await deps.findHost(hostId) : null;
+	let name = saved?.name.trim() ?? "";
+	let appearance = saved?.appearance;
 	if (!name) {
 		const suggested = offer.name || outcome.endpoint.host;
 		const chosen = await deps.chooseName(suggested, appearance ?? machineAppearance({ id: hostId, name: suggested }), hostId);
@@ -105,5 +126,29 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	await deps.saveHost(host);
 	await deps.setActiveHost(host.id);
 
-	return { ok: true, config, host };
+	return {
+		ok: true,
+		config,
+		host,
+		kind: repairing ? "reconnected" : saved ? "existing" : "added",
+		...(repair && !repairing ? { instead: { id: repair.id, name: repair.name } } : {}),
+	};
+}
+
+export type PairedNotice = { title: string; message?: string };
+
+/**
+ * What to tell the user once a scan has paired, or null when nothing needs
+ * saying. A machine they have just named needs no confirmation; the other
+ * outcomes otherwise look identical to it, since every one closes the scanner.
+ */
+export function pairedNotice(result: PairSuccess): PairedNotice | null {
+	const name = result.host.name;
+	if (result.instead) {
+		return { title: `Connected to ${name}`, message: `That code was for ${name}. ${result.instead.name} still needs a new code.` };
+	}
+	if (result.kind === "reconnected") return { title: `Reconnected ${name}` };
+	// Not "switched": the machine may already have been the active one.
+	if (result.kind === "existing") return { title: `${name} is already paired`, message: "Connection details refreshed." };
+	return null;
 }

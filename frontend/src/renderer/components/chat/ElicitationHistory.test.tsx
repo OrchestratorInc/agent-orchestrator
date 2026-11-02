@@ -30,12 +30,31 @@ function question(overrides: Partial<ConversationActivity> = {}): ConversationAc
 }
 
 describe("ElicitationHistory", () => {
-	it("retains the full prompt, selected option labels and descriptions, and verbatim feedback", () => {
+	it("retains the full prompt, selected option labels, and verbatim feedback", () => {
 		render(<ElicitationHistory activity={question()} />);
 		expect(screen.getByText("Which worktrees should I delete?")).toBeVisible();
-		expect(screen.getByText("fix/login — Merged with no local changes, fix/settings")).toBeVisible();
+		expect(screen.getByText("fix/login, fix/settings")).toBeVisible();
 		expect(screen.getByText("Keep fix/settings until I check it.\nShow me the names first.", { normalizer: (value) => value })).toBeVisible();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
+
+	it("shows only the question and the picked answer once answered", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { inputMode: "form", message: "What should the new agent work on?", schema: { properties: {
+				question_0: { type: "string", title: "Agent task", oneOf: [
+					{ const: "review", title: "Review PR #10 (Recommended)", description: "Run AO's native reviewer on the PR." },
+					{ const: "fix", title: "Fix the failing check" },
+				] },
+				question_0_custom: { type: "string", title: "Other" },
+			} } },
+			inputResponse: { action: "accept", content: { question_0: "review" } },
+		})} />);
+		expect(screen.getByText("What should the new agent work on?")).toBeVisible();
+		expect(screen.getByText("Review PR #10")).toBeVisible();
+		expect(screen.queryByText("Answered")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent task")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Recommended/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/native reviewer/)).not.toBeInTheDocument();
 	});
 
 	it("associates each answer with its full prompt in a multi-question form", () => {
@@ -77,6 +96,7 @@ describe("ElicitationHistory", () => {
 			} } },
 			inputResponse: { action: "accept", content: { removeBranches: false, keepDays: 0, note: "" } },
 		})} />);
+		expect(screen.getByText("Remove local branches")).toBeVisible();
 		expect(screen.getByText("No")).toBeVisible();
 		expect(screen.getByText("0")).toBeVisible();
 		expect(screen.queryByText("Note")).not.toBeInTheDocument();

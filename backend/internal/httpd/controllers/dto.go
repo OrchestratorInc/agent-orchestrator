@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -1050,7 +1051,36 @@ type BrowserStatusResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	Connected   bool             `json:"connected"`
 	ConnectedAt time.Time        `json:"connectedAt,omitempty"`
-	Transport   string           `json:"transport"`
+	Transport   string           `json:"transport" enum:"electron-webcontents-debugger,chrome-extension"`
+	// Target is the browser this session's commands go to: the AO Browser
+	// panel or the user's own Chrome through the AO extension.
+	Target string `json:"target" enum:"panel,chrome"`
+	// Client and ClientVersion identify the connected Chrome extension.
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+}
+
+// BrowserChromeChannel is Chrome-mode registration for one Chrome channel.
+type BrowserChromeChannel struct {
+	Name         string `json:"name"`
+	Available    bool   `json:"available"`
+	Registered   bool   `json:"registered"`
+	ManifestPath string `json:"manifestPath"`
+}
+
+// BrowserChromeStatusResponse describes Chrome mode: whether AO's native host
+// is registered with Chrome, where the unpacked extension is, and whether the
+// extension is connected right now.
+type BrowserChromeStatusResponse struct {
+	Enabled          bool                   `json:"enabled"`
+	Connected        bool                   `json:"connected"`
+	ExtensionID      string                 `json:"extensionId"`
+	ExtensionPath    string                 `json:"extensionPath"`
+	ExtensionBundled bool                   `json:"extensionBundled"`
+	ExtensionVersion string                 `json:"extensionVersion,omitempty"`
+	ClientVersion    string                 `json:"clientVersion,omitempty"`
+	HostPath         string                 `json:"hostPath"`
+	Channels         []BrowserChromeChannel `json:"channels"`
 }
 
 // BrowserCommandRequest is the stable daemon-facing command envelope. Action
@@ -1274,6 +1304,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
+	Branch          string              `json:"branch,omitempty" maxLength:"255"`
 	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
@@ -2114,7 +2145,28 @@ type GitHubAuthRequirementResponse = systemcheck.Requirement
 
 // InstallTargetParam is the {target} path parameter for /system/install routes.
 type InstallTargetParam struct {
-	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared."`
+	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared,cua-driver" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver."`
+}
+
+// ComputerUseStatusResponse is the body of GET /api/v1/computer-use/status and
+// of the daemon-start and permission-grant actions.
+type ComputerUseStatusResponse = computeruse.Status
+
+// ComputerUseCallRequest is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallRequest = computeruse.CallRequest
+
+// ComputerUseCallResponse is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallResponse = computeruse.CallResult
+
+// ComputerUseDoctorResponse is the body of GET /api/v1/computer-use/doctor.
+type ComputerUseDoctorResponse struct {
+	Report string `json:"report" description:"Cua Driver's own environment report (cua-driver doctor)."`
+}
+
+// ComputerUseAgentToolsResponse lists the driver tools AO offers agents as
+// MCP tools, with their input schemas.
+type ComputerUseAgentToolsResponse struct {
+	Tools []computeruse.AgentTool `json:"tools"`
 }
 
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
@@ -2153,6 +2205,9 @@ type CreateAutomationRequest struct {
 	Cron        string `json:"cron,omitempty"`
 	Timezone    string `json:"timezone"`
 	Enabled     *bool  `json:"enabled,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -2165,6 +2220,9 @@ type UpdateAutomationRequest struct {
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
+	Model       *string `json:"model,omitempty"`
+	Mode        *string `json:"mode,omitempty"`
+	Effort      *string `json:"effort,omitempty"`
 }
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
@@ -2194,6 +2252,9 @@ type AutomationResponse struct {
 	CreatedAt   time.Time                     `json:"createdAt"`
 	UpdatedAt   time.Time                     `json:"updatedAt"`
 	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+	Model       string                        `json:"model,omitempty"`
+	Mode        string                        `json:"mode,omitempty"`
+	Effort      string                        `json:"effort,omitempty"`
 }
 
 // AutomationEnvelope wraps one automation response.
@@ -2556,7 +2617,12 @@ type LinkPreviewResponse struct {
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
-	Enabled             bool `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// AccountLinked means an AO account holds this machine's account token,
+	// whether or not it still lists the machine. Signing in links only a
+	// machine no account holds, so it never moves one to another account or
+	// lists one again that its account removed.
+	AccountLinked       bool `json:"accountLinked"`
 	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
@@ -2729,13 +2795,22 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	FileReferences  []ConversationFileReferenceRequest    `json:"fileReferences,omitempty"`
 	// Continuation marks the user's request to continue an interrupted task.
 	Continuation bool `json:"continuation,omitempty"`
 }
 
+// ResolveFileReferenceResponse describes the current availability of captured source.
+type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
+
+// ConversationFileReferenceRequest carries bounded, user-supplied captured code.
+type ConversationFileReferenceRequest ports.ChatFileReference
+
 // ConversationExcerptReferenceRequest attaches verified selected transcript
 // text to the next message.
 type ConversationExcerptReferenceRequest struct {
+	ID             string `json:"id,omitempty"`
+	Order          int64  `json:"order,omitempty"`
 	ConversationID string `json:"conversationId"`
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
@@ -2872,10 +2947,13 @@ type EditConversationMessageRequest struct {
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
 // Image bytes and embedded resource text never leave the durable server record.
 type ConversationContentSummaryResponse struct {
-	Type     string `json:"type"`
-	MIMEType string `json:"mimeType,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
+	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
+	AnnotationID    string                            `json:"annotationId,omitempty"`
+	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
+	Type            string                            `json:"type"`
+	MIMEType        string                            `json:"mimeType,omitempty"`
+	URI             string                            `json:"uri,omitempty"`
+	Name            string                            `json:"name,omitempty"`
 	// Text is exposed only for verified chat excerpts, so the timeline can show
 	// what the user referred to without exposing internal resource URIs.
 	Text string `json:"text,omitempty"`
@@ -3053,6 +3131,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -3155,8 +3234,11 @@ type ConversationMessageResponse struct {
 	Streaming bool `json:"streaming"`
 	// Continuation is the user's one-click "continue" after stopping a turn,
 	// shown as a marker instead of a message bubble.
-	Continuation bool   `json:"continuation,omitempty"`
-	CreatedAt    string `json:"createdAt"`
+	Continuation bool `json:"continuation,omitempty"`
+	// AuthoredByUser marks user-written content AO delivered as automation, such
+	// as Browser-panel annotations. Its queued turn can be steered or cancelled.
+	AuthoredByUser bool   `json:"authoredByUser,omitempty"`
+	CreatedAt      string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.
@@ -3218,6 +3300,7 @@ type ConversationSnapshotResponse struct {
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
+	SupportsFileReferences     bool   `json:"supportsFileReferences,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
@@ -3537,6 +3620,8 @@ type SettingsResponse struct {
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
+	// ComputerUse gives new chat sessions the computer-use tools.
+	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3573,6 +3658,11 @@ type UpdateCloudOfferingRequest struct {
 
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
+type UpdateComputerUseRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

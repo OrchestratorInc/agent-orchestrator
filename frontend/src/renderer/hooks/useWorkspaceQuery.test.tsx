@@ -39,7 +39,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -971,5 +971,17 @@ describe("cloud projects made elsewhere", () => {
 		});
 		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
 		focusManager.setFocused(undefined);
+	});
+});
+
+describe("refreshCloudSessionLifecycle", () => {
+	it("refreshes the sessions shared from other organizations with the cloud sessions", async () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		await refreshCloudSessionLifecycle(queryClient);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: cloudSessionsQueryKey });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
+		// A shared session reads as connected from its own list, polled every 15 s.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
 	});
 });

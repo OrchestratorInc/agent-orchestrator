@@ -17,6 +17,7 @@ export type BrowserDownload = {
 	status: BrowserDownloadStatus;
 	active?: boolean;
 	resumable?: boolean;
+	fileRemovable?: boolean;
 	startedAt: number;
 	updatedAt: number;
 };

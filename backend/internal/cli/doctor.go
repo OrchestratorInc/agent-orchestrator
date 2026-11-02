@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -208,6 +211,9 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		c.checkTerminalRuntime(ctx),
 		c.checkAOBinary(daemonExe),
 	)
+	if check, ok := c.checkAOLoginShell(ctx, daemonExe, cfg.DataDir); ok {
+		checks = append(checks, check)
+	}
 	for _, ha := range registry.Harnessed() {
 		id := string(ha.Harness)
 		spec := harnessProbeSpecs[id]
@@ -327,6 +333,115 @@ func sameBinary(a, b string) bool {
 		return os.SameFile(ai, bi)
 	}
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// loginShellProbeTimeout matches the desktop's own login-shell environment
+// probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
+const loginShellProbeTimeout = 3 * time.Second
+
+// checkAOLoginShell reports which ao a login shell runs when it starts the way
+// every AO session starts one: the app's ao first on PATH, plus the wrappers
+// that put it back after the user's startup files in zsh and bash. Codex runs
+// each agent command through such a shell, and a new terminal is one. A
+// startup file that prepends a directory holding another ao still wins in a
+// shell AO cannot wrap (sh, dash, ksh), and an alias or function wins in any,
+// which checkAOBinary cannot see from doctor's own PATH (#3562). ok is false
+// when there is nothing to probe: Windows, a shell this probe does not speak,
+// or a binary not named ao, which sessions never pin. dataDir holds the ao
+// shim and wrappers sessions use.
+func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataDir string) (check doctorCheck, ok bool) {
+	const name = "ao-login-shell"
+	if runtime.GOOS == "windows" {
+		return doctorCheck{}, false
+	}
+	want, wantLabel := daemonExe, "the running daemon's binary"
+	if want == "" {
+		self, err := c.deps.Executable()
+		if err != nil {
+			return doctorCheck{}, false
+		}
+		want, wantLabel = self, "this binary"
+	}
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	shellName := filepath.Base(shell)
+	switch shellName {
+	case "sh", "bash", "zsh", "dash", "ksh":
+	default:
+		return doctorCheck{}, false
+	}
+	if !filepath.IsAbs(shell) || filepath.Base(want) != "ao" {
+		return doctorCheck{}, false
+	}
+
+	couldNotRun := func(err error) (doctorCheck, bool) {
+		return doctorCheck{
+			Level: doctorWarn, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("could not run a %s login shell to see which ao it runs: %v", shellName, err),
+		}, true
+	}
+	dir, err := os.MkdirTemp("", "ao-doctor-login-shell-*")
+	if err != nil {
+		return couldNotRun(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	answerPath := filepath.Join(dir, "ao")
+	pinned := agentlaunch.PinnedDir(func() (string, error) { return want, nil }, dataDir)
+	if pinned == "" {
+		pinned = filepath.Dir(want)
+	}
+	path := pinned
+	if current := os.Getenv("PATH"); current != "" {
+		path += string(os.PathListSeparator) + current
+	}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, nil, dataDir)
+	if err != nil {
+		return couldNotRun(err)
+	}
+	args := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh", "/usr/bin/env", "PATH=" + path}
+	for _, key := range slices.Sorted(maps.Keys(loginEnv)) {
+		args = append(args, key+"="+loginEnv[key])
+	}
+	args = append(args, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
+	reqCtx, cancel := context.WithTimeout(ctx, loginShellProbeTimeout)
+	defer cancel()
+	// The shell answers into a file, and its stdout and stderr point at
+	// /dev/null before any startup file runs. A process a startup file leaves
+	// running then cannot hold doctor's output pipe open past the timeout; the
+	// desktop's probe likewise settles when the shell exits.
+	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", args...)
+	answer, readErr := os.ReadFile(answerPath) //nolint:gosec // path is inside doctor's own temp dir
+	resolved := strings.TrimSpace(string(answer))
+	timedOut := errors.Is(reqCtx.Err(), context.DeadlineExceeded)
+	if readErr != nil || (resolved == "" && timedOut) {
+		switch {
+		case timedOut:
+			err = fmt.Errorf("timed out after %s", loginShellProbeTimeout)
+		case err == nil:
+			err = errors.New("a startup file ended the shell before it checked")
+		}
+		return couldNotRun(err)
+	}
+
+	var msg string
+	switch {
+	case resolved == "":
+		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, pinned)
+	case !filepath.IsAbs(resolved):
+		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
+	case sameBinary(want, resolved) || (pinned != filepath.Dir(want) && sameBinary(filepath.Join(pinned, "ao"), resolved)):
+		// The second form is the shim sessions pin when want's directory holds
+		// other tools; it execs want.
+		return doctorCheck{
+			Level: doctorPass, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
+		}, true
+	default:
+		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.profile puts its directory first, and AO puts its own ao back only in zsh and bash, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
+		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
+			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, and `rm '%s'` removes it", strings.ReplaceAll(resolved, "'", `'\''`))
+		}
+	}
+	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
 }
 
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {

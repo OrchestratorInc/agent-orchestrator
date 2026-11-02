@@ -243,6 +243,8 @@ export type SessionCardViewProps = {
 	 * token usage. Grey unless this card is part of the fix for a tight machine. */
 	resource?: BoardUsagePresentation & { tone?: "neutral" | "warning" | "critical" };
 	session: BoardSessionPresentation;
+	/** A short label above the title, such as whose session this is. */
+	tag?: ReactNode;
 	translate?: ProductUITranslator;
 	usage?: BoardUsagePresentation;
 };
@@ -265,6 +267,7 @@ export function SessionCardView({
 	renderUsage = (usage) => <SessionUsageMetricView usage={usage} />,
 	resource,
 	session,
+	tag,
 	translate,
 	usage,
 }: SessionCardViewProps) {
@@ -341,6 +344,11 @@ export function SessionCardView({
 				/>
 			) : null}
 			<div className="px-3.5 pb-2.5 pt-2.5">
+				{tag ? (
+					<div className="mb-1.5 flex min-w-0" data-testid="board-session-tag">
+						{tag}
+					</div>
+				) : null}
 				<div className="flex min-w-0 items-center gap-2.5">
 					{renderAvatar(session.provider)}
 					<div

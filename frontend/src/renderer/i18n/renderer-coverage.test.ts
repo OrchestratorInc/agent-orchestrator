@@ -24,15 +24,15 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"my-workspace/", "my-project", "web-app", "main", "github_pat_…", "ghp_...",
 		"https://github.com/owner/repo", "GitHub PAT",
 	],
-	"components/DaemonStartupLoader.tsx": ["Agent Orchestrator"],
+	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
 	// Technical branch/prefix examples moved with the common settings fields.
 	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
 	// Key-cap hint beside Cancel.
 	"components/QuitConfirmDialog.tsx": ["Esc"],
 	"components/RemoteDirectoryPicker.tsx": ["/home/you/code"],
 	"components/SessionInspector.tsx": ["PR #"],
-	"components/Sidebar.tsx": ["Orchestrator.inc", "daemon"],
-	"components/TitlebarNav.tsx": ["Orchestrator.inc"],
+	"components/Sidebar.tsx": ["Orchestrator", "daemon"],
+	"components/TitlebarNav.tsx": ["Orchestrator"],
 	"components/WindowTitlebar.tsx": [
 		"Alt+F4",
 		"Ctrl+Z",
