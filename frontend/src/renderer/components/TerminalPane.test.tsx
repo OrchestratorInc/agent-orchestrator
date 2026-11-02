@@ -67,6 +67,14 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
+// What the pane hands the terminal for dropped files, and the session organization's attachment limit.
+const dropSetup = vi.hoisted(() => ({
+	maxAttachmentBytes: undefined as number | undefined,
+	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
+}));
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
+}));
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
@@ -103,8 +111,11 @@ vi.mock("./XtermTerminal", () => ({
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 		supportsCursorColorScheme?: boolean;
+		saveDroppedFile?: unknown;
+		droppedFileMaxBytes?: number;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		dropSetup.props = { saveDroppedFile: props.saveDroppedFile, droppedFileMaxBytes: props.droppedFileMaxBytes };
 		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
@@ -261,6 +272,45 @@ describe("cloud terminal routing", () => {
 			expect(cloudTicketMock).toHaveBeenCalledWith("cloud-org", cloudSession.id, {
 				kind: "workspace",
 			});
+		} finally {
+			view.restore();
+		}
+	});
+});
+
+describe("TerminalPane dropped files", () => {
+	it("takes drops on a Cloud terminal only while the control plane takes files, up to its limit", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		dropSetup.maxAttachmentBytes = undefined;
+		const without = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(dropSetup.props).toBeDefined());
+			// A path on this machine means nothing in the sandbox: no drops at all.
+			expect(dropSetup.props?.saveDroppedFile).toBeNull();
+		} finally {
+			without.restore();
+			without.unmount();
+		}
+		dropSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		dropSetup.props = undefined;
+		const withFiles = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(dropSetup.props?.saveDroppedFile).toBeTypeOf("function"));
+			expect(dropSetup.props?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
+		} finally {
+			withFiles.restore();
+			withFiles.unmount();
+			dropSetup.maxAttachmentBytes = undefined;
+		}
+	});
+
+	it("leaves a local terminal's drops to this machine", async () => {
+		dropSetup.props = undefined;
+		const view = renderPane(worker);
+		try {
+			await waitFor(() => expect(dropSetup.props).toBeDefined());
+			expect(dropSetup.props?.saveDroppedFile).toBeUndefined();
+			expect(dropSetup.props?.droppedFileMaxBytes).toBeUndefined();
 		} finally {
 			view.restore();
 		}

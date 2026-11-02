@@ -364,6 +364,21 @@ describe("useFileAttachments", () => {
 		expect(result.current.error).toMatch(/under/i);
 	});
 
+	it("holds files to a smaller limit when one is given, as AO Cloud's 25 MiB", async () => {
+		const { result } = renderHook(() => useFileAttachments({ maxAttachmentBytes: 25 * mb }));
+		await act(async () => {
+			// Under the daemon's 50 MB, over Cloud's 25 MiB.
+			await result.current.addFiles([file("big.bin", 25 * mb + 1, "application/octet-stream")]);
+		});
+		expect(result.current.attachments).toHaveLength(0);
+		expect(result.current.error).toBe("Each file must be under 25 MB.");
+		const small = renderHook(() => useFileAttachments({ maxAttachmentBytes: 1024 }));
+		await act(async () => {
+			await small.result.current.addFiles([file("fits.txt", 1024), file("over.txt", 1025)]);
+		});
+		expect(small.result.current.attachments.map((attachment) => attachment.name)).toEqual(["fits.txt"]);
+	});
+
 	it("accepts a video above the previous 10 MiB limit", async () => {
 		const { result } = renderHook(() => useFileAttachments());
 		await act(async () => {

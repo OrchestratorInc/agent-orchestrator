@@ -3,6 +3,7 @@ import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { useCloudOffering } from "../../hooks/useCloudOffering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -1332,15 +1333,20 @@ export function CloudSessionChatSurface({
 		() => cloud && ready && baseUrl ? { baseUrl, orgId: cloud.orgId, sessionId: session.id } : undefined,
 		[baseUrl, cloud, ready, session.id],
 	);
+	// Files are offered only while the control plane takes them (attachments in
+	// the session organization's offering), up to its per-file limit.
+	const offering = useCloudOffering(Boolean(cloud), cloud?.orgId);
+	const attachmentMaxBytes = offering.maxAttachmentBytes;
+	const cloudAttachments = useMemo(() => attachmentMaxBytes === undefined ? undefined : { maxBytes: attachmentMaxBytes }, [attachmentMaxBytes]);
 	// A file attached in the composer is uploaded to the session right away;
 	// the composer lists it by reference until the message is sent.
 	const stageAttachments = useMemo(() => {
-		if (!attachmentSource || readOnly || session.isTerminated === true) return undefined;
+		if (!attachmentSource || !cloudAttachments || readOnly || session.isTerminated === true) return undefined;
 		return (attachments: { mimeType: string; data: string; name?: string }[]) => Promise.all(attachments.map(async (attachment) =>
 			cloudAttachmentReference(await uploadCloudAttachment(attachmentSource.baseUrl, attachmentSource.orgId, attachmentSource.sessionId, {
 				name: attachment.name || "attachment", data: attachment.data,
 			}))));
-	}, [attachmentSource, readOnly, session.isTerminated]);
+	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
 	const send = useMutation({
 		mutationFn: async ({ text, attachmentIds, clientMessageId, display }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
@@ -1684,6 +1690,7 @@ export function CloudSessionChatSurface({
 			onFileQuery={setFileQuery}
 			fileReferenceDelivery="text"
 			onStageAttachments={stageAttachments}
+			cloudAttachments={stageAttachments ? cloudAttachments : undefined}
 			onSend={(text, _attachments, clientMessageId, excerpts, fileReferences, displayText) => {
 				// Staged cloud files travel as the message's attachment ids, and the
 				// worker writes the real paths: no reference reaches the agent or the

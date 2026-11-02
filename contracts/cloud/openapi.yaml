@@ -4232,9 +4232,19 @@ components:
             allowed.
         features:
           type: array
-          description: Plan feature flags; empty when none apply.
+          description: >-
+            The organization's product features (share lets it share
+            sessions) and the deployment's own: attachments when the session
+            attachment routes are on. Empty when none apply.
           items:
             type: string
+        maxAttachmentBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The largest file one session attachment may be, in bytes. Sent
+            with attachments in features and omitted without it.
         customCoder:
           type: boolean
           description: >-

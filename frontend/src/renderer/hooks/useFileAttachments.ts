@@ -49,6 +49,8 @@ export type FileAttachmentOptions = {
 	prepareAttachments?: (attachments: FileAttachment[]) => Promise<FileAttachment[]>;
 	/** Called after an accepted add, removal, or clear. */
 	onAttachmentsChange?: (attachments: FileAttachment[]) => void;
+	/** The largest file accepted; the daemon's MAX_ATTACHMENT_BYTES when absent (AO Cloud takes less). */
+	maxAttachmentBytes?: number;
 };
 
 type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
@@ -299,6 +301,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		initialKey,
 		prepareAttachments,
 		onAttachmentsChange,
+		maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
 	} = options;
 	const [attachments, setAttachments] = useState<FileAttachment[]>(() => initialAttachments);
 	const [error, setError] = useState<string | null>(null);
@@ -376,8 +379,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			for (const file of valid) {
 				if (generationRef.current !== generation ||
 					(initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork))) break;
-				if (file.size > MAX_ATTACHMENT_BYTES) {
-					errors.add(`Each file must be under ${mb(MAX_ATTACHMENT_BYTES)} MB.`);
+				if (file.size > maxAttachmentBytes) {
+					errors.add(`Each file must be under ${mb(maxAttachmentBytes)} MB.`);
 					continue;
 				}
 				if (attachmentsRef.current.length + results.length >= MAX_ATTACHMENTS) {
@@ -480,7 +483,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		setError(nextError);
 		if (initialKey) notifySharedAttachmentEntry(initialKey, { error: nextError });
 		return added;
-	}, [initialKey, onAttachmentsChange, prepareAttachments]);
+	}, [initialKey, maxAttachmentBytes, onAttachmentsChange, prepareAttachments]);
 
 	/** Resolves with the attachments this batch actually added, staged when staging is on. */
 	const addFiles = useCallback((files: Iterable<File>): Promise<FileAttachment[]> => {

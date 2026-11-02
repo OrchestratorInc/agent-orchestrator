@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TerminalMux } from "../lib/terminal-mux";
@@ -2983,6 +2983,35 @@ describe("XtermTerminal", () => {
 
 		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
 		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/it'\\''s a $(id) `id`; x & y | z.txt' ", "paste"));
+	});
+
+	it("takes no dropped files when the session cannot take them", async () => {
+		const saveDroppedFile = vi.fn();
+		window.ao!.terminal.saveDroppedFile = saveDroppedFile;
+		const onInput = vi.fn();
+		const { container } = render(<XtermTerminal theme="dark" saveDroppedFile={null} onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+		const event = createEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		fireEvent(container.firstElementChild!, event);
+		// Left to the window, which ignores a dropped file.
+		expect(event.defaultPrevented).toBe(false);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(saveDroppedFile).not.toHaveBeenCalled();
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
+	it("refuses a dropped file over the session's limit before reading it", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/small.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} droppedFileMaxBytes={4} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const big = new File(["hello"], "big.txt", { type: "text/plain" });
+		const small = new File(["hi"], "small.txt", { type: "text/plain" });
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [big, small]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/small.txt' ", "paste"));
+		expect(saveDroppedFile).toHaveBeenCalledTimes(1);
+		expect(saveDroppedFile).toHaveBeenCalledWith({ name: "small.txt", bytes: expect.any(Uint8Array) });
 	});
 
 	// Regression: a dropped folder is the app-wide "open as project" gesture

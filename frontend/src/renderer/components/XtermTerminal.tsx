@@ -71,9 +71,11 @@ export type XtermTerminalProps = {
 	 * Puts a file dropped on the terminal where the terminal's program can open
 	 * it and answers with that path, a POSIX sandbox path, which is typed at the
 	 * prompt quoted for its shell. Absent, the file is saved on this machine (a
-	 * local terminal).
+	 * local terminal). Null, the terminal takes no dropped files.
 	 */
-	saveDroppedFile?: (file: { name: string; bytes: Uint8Array }) => Promise<string | null | undefined>;
+	saveDroppedFile?: ((file: { name: string; bytes: Uint8Array }) => Promise<string | null | undefined>) | null;
+	/** The largest file saveDroppedFile takes; a larger one is refused before it is read. */
+	droppedFileMaxBytes?: number;
 	className?: string;
 	fontSize?: number;
 	isFullscreen?: boolean;
@@ -476,6 +478,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const saveDroppedFileRef = useRef(props.saveDroppedFile);
 	saveDroppedFileRef.current = props.saveDroppedFile;
+	const droppedFileMaxBytesRef = useRef(props.droppedFileMaxBytes);
+	droppedFileMaxBytesRef.current = props.droppedFileMaxBytes;
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarThumbRef = useRef<HTMLDivElement | null>(null);
 	const termRef = useRef<Terminal | null>(null);
@@ -1612,7 +1616,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// a temp file by the main process and that path is inserted instead.
 		const isFileDrag = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
 		const dragOverInput = (event: DragEvent) => {
-			if (!isFileDrag(event)) return;
+			if (!isFileDrag(event) || saveDroppedFileRef.current === null) return;
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
@@ -1623,7 +1627,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const isDirectoryDrag = (event: DragEvent) =>
 			event.dataTransfer?.items?.[0]?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		const dropInput = (event: DragEvent) => {
-			if (isDirectoryDrag(event)) return;
+			if (isDirectoryDrag(event) || saveDroppedFileRef.current === null) return;
 			const files = Array.from(event.dataTransfer?.files ?? []);
 			if (files.length === 0) return;
 			event.preventDefault();
@@ -1636,7 +1640,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				const paths: string[] = [];
 				const sandbox = saveDroppedFileRef.current;
 				const save = sandbox ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
+				const maxBytes = sandbox ? droppedFileMaxBytesRef.current : undefined;
 				for (const file of files) {
+					if (maxBytes !== undefined && file.size > maxBytes) {
+						console.warn("Unable to attach dropped file: it is larger than the session takes", file.size);
+						continue;
+					}
 					try {
 						const bytes = new Uint8Array(await file.arrayBuffer());
 						const saved = await save({ name: file.name, bytes });

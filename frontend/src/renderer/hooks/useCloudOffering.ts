@@ -51,6 +51,7 @@ const EMPTY: ResolvedCloudOffering = {
 	kind: "none",
 	billingMode: undefined,
 	features: [],
+	maxAttachmentBytes: undefined,
 	customCoder: false,
 	artifacts: false,
 	coderWorkerWorkingFolder: false,

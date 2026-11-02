@@ -239,6 +239,14 @@ describe("send keys", () => {
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.fileReferences).toEqual([expect.objectContaining({ id: ref.id })]));
 		expect(onSend.mock.calls[0][5]).toBeUndefined();
 	});
+	it("refuses a file over AO Cloud's limit before it uploads", async () => {
+		const stage = vi.fn().mockResolvedValue(["ao-cloud-attachment:a/big.bin"]);
+		const { field } = renderComposer({ draftSessionId: "composer-cloud-limit", onStageAttachments: stage, cloudAttachments: { maxBytes: 25 * 1024 * 1024 } });
+		const big = new File([new Uint8Array(25 * 1024 * 1024 + 1)], "big.bin", { type: "application/octet-stream" });
+		fireEvent.paste(field, { clipboardData: clipboardData([big]) });
+		expect(await screen.findByText("Each file must be under 25 MB.")).toBeInTheDocument();
+		expect(stage).not.toHaveBeenCalled();
+	});
 	it("lays attachments beside annotations and clears only annotation references", async () => {
 		const sessionId = "composer-shared-attachment-row";
 		writeChatExcerptReferences(sessionId, EXCERPTS);
