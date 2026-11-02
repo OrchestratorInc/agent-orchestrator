@@ -171,13 +171,13 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanNeedsReview,
 		},
 		{
-			name:    "auto review hands a changes-requested head to a person without auto-inject",
+			name:    "auto review keeps a changes-requested head in validating without auto-inject",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
 			name: "auto-inject still keeps the loop moving on a changes-requested head",
@@ -192,30 +192,30 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
-			name:    "without auto review, a changes-requested pass hands off to a person",
+			name:    "without auto review, a changes-requested pass stays in validating",
 			session: contract.KanbanSessionFacts{},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
-			name:    "a changes-requested pass keeps a mergeable pr out of ready",
+			name:    "a changes-requested pass keeps a mergeable pr in validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL: "pr/1", Mergeability: contract.MergeMergeable,
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
-			name: "without auto review, a changes-requested pass keeps a mergeable pr out of ready",
+			name: "without auto review, a changes-requested pass keeps a mergeable pr in validating",
 			pr: contract.KanbanPRFacts{
 				URL: "pr/1", Mergeability: contract.MergeMergeable,
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
 			name:    "auto review keeps a mergeable pr validating after its pass fails",
@@ -248,22 +248,38 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
-			name:    "auto review hands a head whose pass was cancelled to a person",
+			name:    "auto review keeps a head whose pass was cancelled in validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
 			},
+			want: contract.KanbanValidating,
+		},
+		{
+			name: "without auto review, a cancelled pass hands the pr to a person",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
+			},
 			want: contract.KanbanNeedsReview,
 		},
 		{
-			name:    "auto review hands a head to a person once its retries are used up",
+			name: "without auto review, a failed pass hands the pr to a person",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true},
+			},
+			want: contract.KanbanNeedsReview,
+		},
+		{
+			name:    "auto review keeps a head whose retries are used up in validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true, RetryExhausted: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
 			name: "human approval with merge conflicts is not ready",
@@ -589,23 +605,32 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayRetryingReview,
 		},
 		{
-			name:    "a failed pass with no retries left is in review and failed",
+			name:    "a failed pass with no retries left is validating and failed",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true, RetryExhausted: true},
 			},
-			wantColumn: contract.KanbanNeedsReview,
+			wantColumn: contract.KanbanValidating,
 			want:       contract.DisplayReviewFailed,
 		},
 		{
-			name:    "a cancelled pass is in review and cancelled",
-			session: contract.KanbanSessionFacts{AutoReview: true},
+			name: "a cancelled pass without auto review is in review and cancelled",
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
 			},
 			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayReviewCancelled,
+		},
+		{
+			name:    "a cancelled pass under auto review is validating and cancelled",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
+			},
+			wantColumn: contract.KanbanValidating,
 			want:       contract.DisplayReviewCancelled,
 		},
 
@@ -648,22 +673,22 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayMergeConflicts,
 		},
 		{
-			name: "an ao changes request with no ao loop requests changes",
+			name: "an ao changes request with no ao loop is validating",
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			wantColumn: contract.KanbanNeedsReview,
+			wantColumn: contract.KanbanValidating,
 			want:       contract.DisplayChangesRequested,
 		},
 		{
-			name:    "an auto review changes request without auto-inject requests changes",
+			name:    "an auto review changes request without auto-inject is validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			wantColumn: contract.KanbanNeedsReview,
+			wantColumn: contract.KanbanValidating,
 			want:       contract.DisplayChangesRequested,
 		},
 		{

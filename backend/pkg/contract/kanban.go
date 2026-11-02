@@ -12,14 +12,15 @@ type KanbanColumn string
 const (
 	// KanbanBuilding is a session with no PR yet.
 	KanbanBuilding KanbanColumn = "building"
-	// KanbanValidating is a PR inside an AO-driven loop: a review pass running
-	// on the current head, auto review holding the PR until its own pass
-	// approves, AO addressing review feedback, or AO fixing CI.
+	// KanbanValidating is a PR inside an AO-driven loop: AO's own review of
+	// the current head (scheduled, running, cancelled, failed, or asking for
+	// changes), auto review holding the PR until its own pass approves, AO
+	// addressing review feedback, or AO fixing CI.
 	KanbanValidating KanbanColumn = "validating"
-	// KanbanNeedsReview is the review-feedback loop: the PR is in its review
-	// cycle and the next turn is a person's, whether that is giving the review,
-	// answering the feedback already on it, or deciding what to do about a
-	// failing check. It is not limited to PRs awaiting a first human review,
+	// KanbanNeedsReview is the human side of the review-feedback loop: the PR
+	// is waiting on a person's review on the provider, on an answer to that
+	// review's feedback, or on a decision about a failing check that no AO
+	// loop is fixing. It is not limited to PRs awaiting a first human review,
 	// and it does not mean the work is idle.
 	KanbanNeedsReview KanbanColumn = "needs_review"
 	// KanbanReady is a PR merged, closed, mergeable, or approved by a person
@@ -111,18 +112,17 @@ func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanCo
 	// loop is fixing that, so the next turn is a person's.
 	case externallyApproved(pr):
 		return KanbanNeedsReview
-	// Auto review owns this head until its own pass approves it, as long as
-	// it will still review again. It never re-reviews a head whose pass was
-	// cancelled, that asked for changes nobody is sending to the worker, or
-	// that failed as often as it retries; then the next turn is a person's.
-	case session.AutoReview && !approvedByAO(pr):
-		if autoReviewStopped(session, pr) {
-			return KanbanNeedsReview
-		}
-		return KanbanValidating
-	// AO's own pass asked for changes and no AO loop is acting on them, so a
-	// person decides what happens next, even if the PR could merge as it is.
+	// Validating holds everything about AO's own review: a pass that asked for
+	// changes, and, while auto review is on, every head its own pass has not
+	// approved yet, whether that pass is scheduled, failed, or was cancelled.
+	// In review is reserved for a person's review on the provider.
 	case pr.ReviewRun.ChangesRequested:
+		return KanbanValidating
+	case session.AutoReview && !approvedByAO(pr):
+		return KanbanValidating
+	// Without auto review nothing will run AO's pass again, so a pass that
+	// was cancelled or failed without a verdict hands the PR to a person.
+	case pr.ReviewRun.Cancelled || (pr.ReviewRun.Failed && !pr.ReviewRun.Outcome):
 		return KanbanNeedsReview
 	case pr.Mergeability == MergeMergeable:
 		return KanbanReady
@@ -151,18 +151,6 @@ func externallyApproved(pr KanbanPRFacts) bool {
 // that someone has to fix: merge conflicts or failing CI.
 func mergeBlockedByPR(pr KanbanPRFacts) bool {
 	return pr.Mergeability == MergeConflicting || pr.CI == CIFailing
-}
-
-// autoReviewStopped reports that auto review will not review the current head
-// again on its own, matching the reasons its planner skips a head.
-func autoReviewStopped(session KanbanSessionFacts, pr KanbanPRFacts) bool {
-	run := pr.ReviewRun
-	if run.Running {
-		return false
-	}
-	return run.Cancelled ||
-		(run.ChangesRequested && !session.AutoInjectReview) ||
-		(run.Failed && !run.Outcome && run.RetryExhausted)
 }
 
 // aoOwnsNextStep reports whether AO itself is turning the PR's review-feedback

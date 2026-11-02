@@ -419,8 +419,8 @@ func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.KanbanColumn != domain.KanbanNeedsReview || got.DisplayStatus != contract.DisplayReviewFailed {
-		t.Fatalf("at the retry limit = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanNeedsReview, contract.DisplayReviewFailed)
+	if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != contract.DisplayReviewFailed {
+		t.Fatalf("at the retry limit = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, contract.DisplayReviewFailed)
 	}
 }
 
