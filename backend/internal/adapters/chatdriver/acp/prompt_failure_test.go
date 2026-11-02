@@ -487,7 +487,7 @@ func promptResponseFailure(meta map[string]any) error {
 // reason on the completion the turn is stored with an empty error_message and
 // the timeline shows a bare "The agent ran into a problem" (#5289).
 func TestFailingStopReasonExplainsTheFailedTurn(t *testing.T) {
-	for _, reason := range []acpsdk.StopReason{acpsdk.StopReasonMaxTokens, acpsdk.StopReasonMaxTurnRequests, acpsdk.StopReasonRefusal} {
+	for _, reason := range []acpsdk.StopReason{acpsdk.StopReasonMaxTokens, acpsdk.StopReasonMaxTurnRequests, acpsdk.StopReasonRefusal, ""} {
 		t.Run(string(reason), func(t *testing.T) {
 			conv := &conversation{
 				sessionID:  "session-1",
@@ -501,8 +501,12 @@ func TestFailingStopReasonExplainsTheFailedTurn(t *testing.T) {
 				if ev.Kind != ports.ChatEventTurnCompleted {
 					continue
 				}
-				if ev.TurnState != domain.TurnStateFailed || ev.Err == nil || !strings.Contains(ev.Err.Error(), string(reason)) {
-					t.Fatalf("completion = state %s err %v, want failed with the stop reason", ev.TurnState, ev.Err)
+				if ev.TurnState != domain.TurnStateFailed || ev.Err == nil {
+					t.Fatalf("completion = state %s err %v, want failed with a reason", ev.TurnState, ev.Err)
+				}
+				// An empty stop reason gets no bare "Stop reason:" detail line.
+				if hasDetail := strings.Contains(ev.Err.Error(), "Stop reason: "+string(reason)); hasDetail != (reason != "") {
+					t.Fatalf("completion err %q: stop reason detail present=%v for reason %q", ev.Err, hasDetail, reason)
 				}
 				return
 			}

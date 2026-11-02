@@ -1110,7 +1110,11 @@ func stopReasonFailure(reason acpsdk.StopReason) error {
 	case acpsdk.StopReasonRefusal:
 		title = "The agent refused to continue"
 	}
-	return ports.NewChatProviderFailure(title, fmt.Sprintf("Stop reason: %s", reason), nil)
+	detail := ""
+	if reason != "" {
+		detail = fmt.Sprintf("Stop reason: %s", reason)
+	}
+	return ports.NewChatProviderFailure(title, detail, nil)
 }
 
 func turnState(reason acpsdk.StopReason) domain.TurnState {
