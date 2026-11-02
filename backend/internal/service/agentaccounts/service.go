@@ -60,6 +60,7 @@ type Service struct {
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
 	defaultChanged func(domain.AgentAccountProvider)
+	loginConfirmed func(domain.AgentAccount, time.Time)
 }
 
 // reading is the last identity and limits read for one account.
@@ -227,7 +228,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
+	confirmed := s.loginConfirmed
 	s.mu.Unlock()
+	// The limits come from the provider's API under this login, so a reading
+	// that has them shows the login worked when the reading began.
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+		confirmed(account, r.at)
+	}
 	return r
 }
 
@@ -344,6 +351,16 @@ func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultChanged = changed
+}
+
+// SetLoginConfirmed late-binds what must hear that a reading found an
+// account's login working, with the time the reading began: chat sessions on
+// it that were refused their credentials can stop asking for a sign-in, however
+// the login came back (AO's sign-in, the CLI's own, or a renewed token).
+func (s *Service) SetLoginConfirmed(confirmed func(domain.AgentAccount, time.Time)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loginConfirmed = confirmed
 }
 
 func (s *Service) notifyDefaultChanged(p domain.AgentAccountProvider) {

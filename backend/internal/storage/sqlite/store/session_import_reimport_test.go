@@ -37,3 +37,42 @@ func TestImportedConversationImportsAgainAfterTermination(t *testing.T) {
 		t.Fatalf("the live import must still be found: id=%s fresh=%v err=%v", again.ID, fresh, err)
 	}
 }
+
+func TestImportedSessionPreservesDeletedNumberFloor(t *testing.T) {
+	for _, projectID := range []domain.ProjectID{"floor", ""} {
+		name := string(projectID)
+		if name == "" {
+			name = "standalone"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newTestStore(t)
+			if projectID != "" {
+				seedProject(t, s, projectID)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			previous, err := s.CreateSession(ctx, sampleRecord(projectID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous.IsTerminated = true
+			if err := s.UpdateSession(ctx, previous); err != nil {
+				t.Fatal(err)
+			}
+			if deleted, err := s.DeleteTerminatedSession(ctx, previous.ID); err != nil || !deleted {
+				t.Fatalf("delete previous: deleted=%v err=%v", deleted, err)
+			}
+			rec := sampleRecord(projectID)
+			rec.Mode = domain.SessionModeChat
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-floor", ConfigDir: "/provider/home", CWD: "/original/folder"}
+			messages := []domain.ImportedMessage{{Role: domain.MessageRoleUser, Text: "hello", At: time.Now()}}
+			created, fresh, err := s.CreateImportedSession(ctx, rec, messages)
+			if err != nil || !fresh {
+				t.Fatalf("import: fresh=%v err=%v", fresh, err)
+			}
+			if created.ID != domain.SessionID(name+"-2") {
+				t.Fatalf("import id=%s, want %s-2 after deletion", created.ID, name)
+			}
+		})
+	}
+}
