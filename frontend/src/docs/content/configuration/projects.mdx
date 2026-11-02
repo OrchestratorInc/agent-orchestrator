@@ -67,6 +67,8 @@ The default `defaultBranch: "auto"` resolves each repository separately. Orchest
 
 Orchestrator does not guess from the checked-out branch, `main`, or `master`. If a repository has no authoritative remote default, or its remotes are ambiguous, spawning fails with `DEFAULT_BRANCH_UNRESOLVED`.
 
+If a new task asks for a specific branch name, that name must be unused in the project repository and its remotes. Workspace projects check every registered repository. Choose another name if a branch already exists; Orchestrator will not switch to it or silently add a suffix.
+
 For a single repository or workspace root, set `defaultBranch` explicitly. For a workspace child, configure its primary remote with `checkout.defaultRemote` when needed, then set its cached remote `HEAD` with `git remote set-head`. Orchestrator-created repositories are an exception: Orchestrator records their branch choice when it creates them and backfills the choice for older Orchestrator-created repositories on first resolution.
 
 ## Worker and orchestrator roles

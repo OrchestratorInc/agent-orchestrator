@@ -209,9 +209,8 @@ export function NotificationRuntime() {
 	);
 	useEffect(() => connectRemoteNotificationStreams(queryClient), [queryClient]);
 
-	// Keep the OS launcher badge in sync here rather than in NotificationCenter:
-	// NotificationRuntime is always mounted in the shell, whereas the notification
-	// bell is absent from the Linux topbar and only mounts on the sessions board.
+	// Keep the OS launcher badge in sync in the persistent shell runtime;
+	// topbar controls can remount as the visible page changes.
 	useEffect(() => {
 		void aoBridge.notifications.setBadge(unreadCount);
 	}, [unreadCount]);

@@ -5945,6 +5945,7 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            branch?: string;
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
