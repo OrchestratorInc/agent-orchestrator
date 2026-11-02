@@ -24,6 +24,12 @@ export type TurnSettingRow = {
 	 * editing the provider's.
 	 */
 	providerKind?: ProviderTurnControlKind;
+	/**
+	 * The choice the agent runs with when none is picked. Picking it clears the
+	 * pick rather than saving it, so the conversation follows the agent's
+	 * default again, even after that default changes.
+	 */
+	defaultValue?: string;
 	choices: TurnSettingChoice[];
 	target:
 		| { kind: "settings"; key: keyof TurnSettings }
@@ -295,6 +301,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				label: "Effort",
 				value: effort ? effortChoiceLabel(effort) : NOT_REPORTED,
 				kind: "select",
+				defaultValue: selectedModel.defaultEffort,
 				choices: selectedModel.efforts.map((value) => ({ value, label: effortChoiceLabel(value), selected: value === effort })),
 				target: { kind: "settings", key: "reasoningEffort" },
 			});
@@ -443,6 +450,7 @@ export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, ch
 function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
 	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };
+	if (row.defaultValue !== undefined && value === row.defaultValue) return { ...settings, [row.target.key]: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;
 }
 

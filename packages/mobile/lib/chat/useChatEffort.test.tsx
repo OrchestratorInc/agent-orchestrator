@@ -96,6 +96,15 @@ describe("chat effort", () => {
 	});
 
 	// A model that names no default and a conversation that reports no level.
+	// Back on the model's own level, the conversation follows its default again
+	// rather than being pinned to that level for good.
+	it("clears the pick when the slider goes back to the model's default level", () => {
+		const { onSettings } = render({ snapshot: snapshot({ settings: { model: "opus", approvalMode: "auto", reasoningEffort: "high" } }) });
+		act(() => effort.toggle());
+		act(() => { effort.choose("low"); effort.release(); });
+		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "opus", approvalMode: "auto", reasoningEffort: undefined });
+	});
+
 	it("shows Medium when nothing names a level, saving it only once picked", () => {
 		const undecided = [{ id: "opus", displayName: "Opus", efforts: ["low", "medium", "high", "max"] }] as ChatModel[];
 		const { onSettings } = render({ models: undecided });
