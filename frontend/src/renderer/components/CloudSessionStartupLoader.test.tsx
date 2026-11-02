@@ -6,6 +6,8 @@ import { groupScriptRuns } from "../lib/cloud-script-runs";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const workspaceUrl = "https://coder.acme.example.com/@dev/dev-3f2a9c1e7b4d";
 
 function mount(props: Parameters<typeof CloudSessionStartupLoader>[0]) {

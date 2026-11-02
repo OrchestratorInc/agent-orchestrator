@@ -68,6 +68,9 @@ type SteerResult struct {
 	// ActivityID is the timeline row recording the guidance, so a client can
 	// reconcile an optimistic bubble with the durable one instead of showing both.
 	ActivityID string
+	// Replayed is a retry of an already accepted client message id answered
+	// from its stored receipt, without contacting the provider again.
+	Replayed bool
 }
 
 // SteerOrSendResult identifies whether one atomic request joined an active turn
@@ -250,7 +253,9 @@ func (c *Controller) PromoteQueuedTurn(
 			c.log.Error("failed to release queued turn promotion", "turn", turnID, "error", releaseErr)
 		}
 	}
-	if queued.Origin != domain.MessageOriginHuman {
+	// Only the user's own queued words can be promoted: typed messages, and
+	// user-authored content AO relayed as automation (Browser annotations).
+	if queued.Origin != domain.MessageOriginHuman && !queued.AuthoredByUser {
 		release()
 		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
 	}
@@ -276,7 +281,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	msg := ports.ChatUserMessage{
 		Text: queued.Text, Content: content, Origin: queued.Origin,
-		ClientMessageID: queued.ClientMessageID,
+		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
 	}
 	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
 	if err != nil {
@@ -693,6 +698,7 @@ func replaySteerDelivery(
 		return SteerResult{
 			ProviderTurnID: delivery.ProviderTurnID,
 			ActivityID:     delivery.ActivityID,
+			Replayed:       true,
 		}, nil
 	case domain.ConversationSteerRejected:
 		return SteerResult{}, replaySteerRejection(delivery)

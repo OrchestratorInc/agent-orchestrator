@@ -306,7 +306,8 @@ export function SelectionComposer({
 	error?: string;
 	initialText?: string;
 	onAction: (action: ComposerAction, text: string) => void;
-	onCopy: () => void;
+	/** Copies what the comment is about; without it there is no copy button. */
+	onCopy?: () => void;
 	onClose: () => void;
 }) {
 	const t = useTheme();
@@ -326,9 +327,11 @@ export function SelectionComposer({
 				<View style={styles.composerMeta}>
 					<Feather name="message-square-text" size={iconSize.sm} color={t.textTertiary} />
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.composerLabel}>{label}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" hitSlop={6} onPress={() => { haptics.success(); onCopy(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
-						<Feather name="copy" size={iconSize.md} color={t.textSecondary} />
-					</Pressable>
+					{onCopy ? (
+						<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" hitSlop={6} onPress={() => { haptics.success(); onCopy(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
+							<Feather name="copy" size={iconSize.md} color={t.textSecondary} />
+						</Pressable>
+					) : null}
 					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" hitSlop={6} onPress={() => { haptics.tap(); onClose(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
 						<Feather name="x" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>

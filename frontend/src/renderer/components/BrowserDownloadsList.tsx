@@ -96,7 +96,7 @@ export function BrowserDownloadsList({
 									</>
 								) : null}
 								<Button
-									aria-label={t(active ? "browser.downloads.cancel" : blocked ? "browser.downloads.dismiss" : "browser.downloads.remove", { file: download.fileName })}
+									aria-label={t(active ? "browser.downloads.cancel" : blocked ? "browser.downloads.dismiss" : download.status === "completed" && download.fileRemovable !== false ? "browser.downloads.remove" : "browser.downloads.removeHistory", { file: download.fileName })}
 									onClick={() => onAction(download.id, active ? "cancel" : "remove")}
 									size="icon-sm"
 									type="button"

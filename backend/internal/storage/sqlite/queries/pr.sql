@@ -516,20 +516,26 @@ FROM pr
 JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = ?;
 -- name: RecordWorkerPRUsage :exec
-INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported)
+-- While export is not allowed, every outcome observed (association, merge,
+-- close) is consumed here, so a later opt-in never exports the off interval.
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported, closed_reported)
 SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
         THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
         ELSE pr.url END,
     sessions.project_id,
     CASE WHEN sqlc.arg(export_allowed) = 0 THEN 1 ELSE 0 END,
-    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'closed' THEN 1 ELSE 0 END
 FROM pr JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = sqlc.arg(pr_url) AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
 ON CONFLICT(pr_key) DO UPDATE SET
     associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
     merged_reported = CASE WHEN ?1 = 0 AND
         (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
-        THEN 1 ELSE usage_pr_measurement.merged_reported END;
+        THEN 1 ELSE usage_pr_measurement.merged_reported END,
+    closed_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'closed'
+        THEN 1 ELSE usage_pr_measurement.closed_reported END;
 
 -- name: UpgradeWorkerPRUsageIdentity :exec
 UPDATE OR IGNORE usage_pr_measurement

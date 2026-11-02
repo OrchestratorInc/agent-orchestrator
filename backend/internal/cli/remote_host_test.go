@@ -280,13 +280,14 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"h-0d483066194a12a5dc17.useao.dev","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true,"fixed":true}}`)
+		_, _ = io.WriteString(w, `{"enabled":true,"accountLinked":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"h-0d483066194a12a5dc17.useao.dev","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true,"fixed":true}}`)
 	}))
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
 	if err != nil || !strings.Contains(out, "https://h-0d483066194a12a5dc17.useao.dev:443") ||
-		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") {
+		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") ||
+		!strings.Contains(out, "Linked to an AO account") {
 		t.Fatalf("fixed address status = %q, %v", out, err)
 	}
 }

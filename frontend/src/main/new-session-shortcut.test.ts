@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
-import { attachAppShortcuts } from "./app-shortcuts";
+import { attachAppShortcuts, attachShellReloadGuard } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
 type InputEvent = {
@@ -49,7 +49,7 @@ describe("attachAppShortcuts", () => {
 		const browserHost = { toggleDevToolsForLastFocused: vi.fn().mockResolvedValue(null) };
 		let toggle: Promise<void> | undefined;
 		attachAppShortcuts(source, false, target, false, () => ({}), () => false, () => true, (id) => {
-			if (id === "toggle-browser-devtools") toggle = toggleAppDevTools(browserHost, () => target);
+			if (id === "toggle-browser-devtools") toggle = toggleAppDevTools(browserHost, () => target, true);
 		});
 
 		const event = source.emit({ key: "I", control: true, shift: true });
@@ -465,5 +465,60 @@ describe("attachAppShortcuts", () => {
 		const zoomEvent = source.emit({ key: "+", code: "Equal", control: true });
 		expect(zoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
+	});
+});
+
+
+describe("packaged shell reload guard", () => {
+	it.each([
+		[true, { key: "r", meta: true }],
+		[true, { key: "R", meta: true, shift: true }],
+		[false, { key: "r", control: true }],
+		[false, { key: "R", control: true, shift: true }],
+		[false, { key: "F5", control: true }],
+	] as const)("allows recording reload chords and resumes blocking afterwards on isMac=%s with %j", (isMac, input) => {
+		const source = fakeSource();
+		let recording = false;
+		attachShellReloadGuard(source, isMac, () => false, () => recording);
+
+		expect(source.emit(input).preventDefault).toHaveBeenCalledOnce();
+		recording = true;
+		expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
+		recording = false;
+		expect(source.emit(input).preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		[true, { key: "r", meta: true }],
+		[true, { key: "R", meta: true, shift: true }],
+		[false, { key: "r", control: true }],
+		[false, { key: "R", control: true, shift: true }],
+		[false, { key: "F5" }],
+		[false, { key: "F5", control: true }],
+		[true, { key: "F5", shift: true }],
+	] as const)("blocks reload on isMac=%s with %j", (isMac, input) => {
+		const source = fakeSource();
+		attachShellReloadGuard(source, isMac);
+		expect(source.emit(input).preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it("leaves browser address-bar reloads to the guarded browser menu", () => {
+		const source = fakeSource();
+		attachShellReloadGuard(source, true, () => true);
+		expect(source.emit({ key: "r", meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(source.emit({ key: "R", meta: true, shift: true }).preventDefault).not.toHaveBeenCalled();
+		expect(source.emit({ key: "F5" }).preventDefault).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		[true, { key: "r", control: true }],
+		[true, { key: "r" }],
+		[true, { key: "r", meta: true, alt: true }],
+		[false, { key: "r", meta: true }],
+		[false, { key: "c", control: true }],
+	] as const)("preserves terminal and editing chords on isMac=%s with %j", (isMac, input) => {
+		const source = fakeSource();
+		attachShellReloadGuard(source, isMac);
+		expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
 	});
 });
