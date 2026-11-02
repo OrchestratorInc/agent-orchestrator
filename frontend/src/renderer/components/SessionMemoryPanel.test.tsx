@@ -196,21 +196,24 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "Memory", "CPU", "Share"]);
-		// A session is not a process: its PID cell says what is under it and that the row opens.
-		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes ›");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.0 GB");
-		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("Available 20.0 GB");
-		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("In use");
-		expect(screen.getByTestId("session-memory-stacked")).not.toHaveTextContent("Other");
-		// CPU graph at the bottom: host 40% busy on 8 cores, AO's 160% of one core is 20% of the machine.
+		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "CPU", "Memory", "Share"]);
+		// A session is not a process: no PID, and the line under its title says what is under it.
+		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes");
+		const machine = screen.getByTestId("session-memory-stacked");
+		expect(machine).toHaveTextContent(/AO memory\s*2\.0 GB/);
+		expect(machine).toHaveTextContent(/Available\s*20\.0 GB/);
+		expect(machine).toHaveTextContent(/CPU cores\s*8/);
+		expect(machine).toHaveTextContent(/Load \(1 min\)\s*0\.50/);
+		expect(machine).not.toHaveTextContent("In use");
+		expect(machine).not.toHaveTextContent("Other");
+		// CPU graphs: host 40% busy on 8 cores, AO's 160% of one core is 20% of the machine.
 		const cpu = screen.getByTestId("session-cpu-graph");
-		expect(cpu).toHaveTextContent("CPU · 8 cores");
-		expect(cpu).toHaveTextContent("load 0.50");
-		// Each line is named, so a colour is never the only clue.
-		expect(cpu).toHaveTextContent("Machine 40%");
-		expect(cpu).toHaveTextContent("AO 20%");
-		// Two lines, no bars: the machine and AO's share of it.
+		expect(within(cpu).getByTestId("session-cpu-machine")).toHaveTextContent(/Machine CPU\s*40%/);
+		expect(within(cpu).getByTestId("session-cpu-ao")).toHaveTextContent(/AO CPU\s*20%/);
+		// Each graph tops out at the first of 10/25/50/100% that clears its peak.
+		expect(within(within(cpu).getByTestId("session-cpu-machine")).getByTestId("session-cpu-ceiling")).toHaveTextContent("50%");
+		expect(within(within(cpu).getByTestId("session-cpu-ao")).getByTestId("session-cpu-ceiling")).toHaveTextContent("25%");
+		// One line per graph, no bars: the machine and AO's share of it.
 		expect(cpu.querySelectorAll("path")).toHaveLength(2);
 		expect(within(cpu).queryByTestId("session-cpu-cores")).not.toBeInTheDocument();
 		// Fine: no suggestion, every row grey.
@@ -294,13 +297,13 @@ describe("AppMemoryIndicator", () => {
 		expect(report.indexOf("Review of s-gone")).toBeLessThan(report.indexOf("Daemon and app"));
 	});
 
-	it("hides the load figure on a platform with no load average, in the graph and in the copied report", async () => {
+	it("hides the load figure on a platform with no load average, in the machine figures and in the copied report", async () => {
 		appMemoryMock.mockReturnValue(appReading(20, 0, 2, 40, 160, -1));
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
-		const cpu = await screen.findByTestId("session-cpu-graph");
-		expect(cpu).toHaveTextContent("CPU · 8 cores");
-		expect(cpu).not.toHaveTextContent("load");
+		const machine = await screen.findByTestId("session-memory-stacked");
+		expect(machine).toHaveTextContent(/CPU cores\s*8/);
+		expect(machine).not.toHaveTextContent(/load/i);
 		await userEvent.click(screen.getByRole("button", { name: "Copy report" }));
 		const report = clipboardMock.mock.calls[0][0] as string;
 		expect(report).not.toContain("load");
@@ -389,7 +392,7 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
-		const [memory, cpu] = within(table).getAllByTestId("session-memory-sort");
+		const [cpu, memory] = within(table).getAllByTestId("session-memory-sort");
 		expect(memory.closest("th")).toHaveAttribute("aria-sort", "descending");
 		expect(order()).toEqual(["big", "small"]);
 
@@ -436,7 +439,7 @@ describe("AppMemoryIndicator", () => {
 		const table = await screen.findByTestId("session-memory-table");
 		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
 		expect(order()).toEqual(["big", "small"]);
-		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[1]);
+		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[0]);
 		// Both read 0% on screen, but 0.4% is busier than 0.1%: the smaller session leads.
 		expect(order()).toEqual(["small", "big"]);
 	});
@@ -454,10 +457,10 @@ describe("AppMemoryIndicator", () => {
 		const table = await screen.findByTestId("session-memory-table");
 		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
 		// Memory order puts the small session last; reversed, first.
-		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[0]);
+		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[1]);
 		expect(order()).toEqual(["small", "big"]);
 		// Both idle at 0% CPU: name order, A to Z, both ways round.
-		const cpu = within(table).getAllByTestId("session-memory-sort")[1];
+		const cpu = within(table).getAllByTestId("session-memory-sort")[0];
 		await userEvent.click(cpu);
 		expect(order()).toEqual(["big", "small"]);
 		await userEvent.click(cpu);
