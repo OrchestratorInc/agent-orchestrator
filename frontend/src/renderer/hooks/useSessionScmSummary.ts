@@ -1,13 +1,13 @@
 import type { PROpener } from "@aoagents/product-ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { CloudCpPullRequestSummary } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 import { useSettings } from "./useSettings";
 
 // openedBy only comes from AO Cloud, which names the person behind a PR its
@@ -71,46 +71,22 @@ export function useSessionScmSummary(
 			: sessionScmSummaryQueryKey(sessionId, hostId),
 		[baseUrl, cloud, cloudOrgId, hostId, sessionId],
 	);
-	useEffect(() => {
-		if (!enabled || !cloudOrgId || !sessionId || baseUrl === "") return;
-		const controller = new AbortController();
-		let after: number | undefined;
-		const reconnect = async () => {
-			while (!controller.signal.aborted) {
-				await subscribeSessionEventsBridged({
-					baseUrl,
-					orgId: cloudOrgId,
-					sessionId,
-					after,
-					signal: controller.signal,
-					onEvent: (event) => {
-						after = Math.max(after ?? 0, event.sequence);
-						if (
-							event.type === "scm.updated" ||
-							event.type === "pull_request.created" ||
-							event.type === "pull_request.claimed"
-						) {
-							void queryClient.invalidateQueries({ queryKey });
-						}
-					},
-				});
-				if (controller.signal.aborted) return;
-				await new Promise<void>((resolve) => {
-					const onAbort = () => {
-						clearTimeout(timer);
-						resolve();
-					};
-					const timer = setTimeout(() => {
-						controller.signal.removeEventListener("abort", onAbort);
-						resolve();
-					}, 1000);
-					controller.signal.addEventListener("abort", onAbort, { once: true });
-				});
+	// The session's shared event stream says when its pull requests change.
+	useCloudSessionEventListener({
+		baseUrl,
+		orgId: cloudOrgId,
+		sessionId,
+		enabled,
+		onEvent: (event) => {
+			if (
+				event.type === "scm.updated" ||
+				event.type === "pull_request.created" ||
+				event.type === "pull_request.claimed"
+			) {
+				void queryClient.invalidateQueries({ queryKey });
 			}
-		};
-		void reconnect();
-		return () => controller.abort();
-	}, [baseUrl, cloudOrgId, enabled, queryClient, queryKey, sessionId]);
+		},
+	});
 	return useQuery({
 		queryKey,
 		enabled: enabled && Boolean(sessionId) && (!cloud || baseUrl !== ""),
@@ -119,7 +95,9 @@ export function useSessionScmSummary(
 			const response = await cloudClient.listSessionPullRequests(cloudOrgId, sessionId!);
 			return {
 				prs: response.pullRequests.map((pr) => cloudPRSummaryToSessionPRSummary(pr, cloudAutoInjectCI)),
-				linkedPrs: [],
+				linkedPrs: (response.linkedPullRequests ?? []).map((pr): SessionPRReference => ({
+					host: "github.com", number: pr.number, provider: "github", repo: pr.repository, url: pr.url,
+				})),
 			};
 		},
 		retry: 1,

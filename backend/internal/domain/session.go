@@ -183,6 +183,14 @@ type SessionImportSource struct {
 	// Every later launch of the session uses it, so the provider keeps finding
 	// the same copy even if WorkingSubdir appears or disappears in between.
 	ResumeCwd string `json:"resumeCwd,omitempty"`
+	// ResumeNativeID and ResumeConfigDir name a provider-created import/fork.
+	// NativeID and ConfigDir remain the immutable source/deduplication identity.
+	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
+	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
+	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
+	// SourceTranscriptPath preserves the archive's source when preparation
+	// selects a different native transcript for the resumed binding.
+	SourceTranscriptPath string `json:"sourceTranscriptPath,omitempty"`
 	// HistoryThrough is the last conversation sequence the provider replayed
 	// while adopting. The timeline shows the archive in place of that replay.
 	HistoryThrough int64 `json:"historyThrough,omitempty"`
@@ -559,6 +567,9 @@ type Session struct {
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
+	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
+	// archive: clients list its failure but raise no error for it.
+	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`

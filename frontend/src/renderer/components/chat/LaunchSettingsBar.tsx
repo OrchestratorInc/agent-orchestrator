@@ -17,6 +17,8 @@ export type LaunchSettings = {
 	settings: TurnSettings;
 	configOptions?: ChatConfigOption[];
 	showApprovalMode?: boolean;
+	/** What no chosen model means, as the bar names it (see TurnSettingsBar). */
+	unsetModelLabel?: string;
 };
 
 const launchSettingsKey = (sessionId: string, hostId?: string) => ["session-launch-settings", sessionUiKey(sessionId, hostId)] as const;
@@ -60,7 +62,7 @@ const ignorePending = () => undefined;
 
 // The new chat page's settings bar, held still while the task starts. The
 // session's own bar replaces it, in the same place, once its agent is ready.
-export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode }: LaunchSettings) {
+export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel }: LaunchSettings) {
 	const providerMode = Boolean(configOptions?.length);
 	return (
 		<div className="contents [&_button:disabled]:cursor-default [&_button:disabled]:opacity-100">
@@ -72,6 +74,7 @@ export function LaunchSettingsBar({ harness, projectId, hostId, models, settings
 				configOptions={configOptions}
 				onChangeConfigOption={providerMode ? ignoreChange : undefined}
 				showApprovalMode={showApprovalMode}
+				unsetModelLabel={unsetModelLabel}
 				agentSwitch={{ projectId, hostId, disabled: true, onPendingChange: ignorePending }}
 				disabled
 			/>
