@@ -383,3 +383,112 @@ func TestQwenAbandonedTextDoesNotShortenActiveBranch(t *testing.T) {
 		t.Fatal("discarded text outside the active branch must not mark its history shortened")
 	}
 }
+
+func TestQwenAggregatesSameUUIDFragments(t *testing.T) {
+	root := t.TempDir()
+	latest := time.Now().UTC().Add(-time.Second)
+	first := qwenLinkedRecord("reply", "prompt", "assistant", "first ")
+	first["timestamp"] = latest.Add(-time.Second)
+	second := qwenLinkedRecord("reply", "prompt", "assistant", "second")
+	second["timestamp"] = latest
+	tool := qwenLinkedRecord("reply", "prompt", "assistant", "")
+	tool["message"] = map[string]any{"role": "model", "parts": []map[string]any{{"functionCall": map[string]any{"name": "read", "args": map[string]any{}}}}}
+	tool["timestamp"] = latest
+	usage := qwenLinkedRecord("reply", "abandoned", "assistant", "")
+	delete(usage, "message")
+	usage["usageMetadata"] = map[string]any{"totalTokenCount": 1}
+	usage["timestamp"] = latest
+	path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
+		qwenLinkedRecord("abandoned", "", "user", "discarded question"),
+		qwenLinkedRecord("prompt", "", "user", "question"), first, second, tool, usage,
+	})
+	got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: question", "assistant: first second")
+	if got.title != "question" || !got.messages[1].At.Equal(latest) || got.shortened {
+		t.Fatalf("fragment metadata = title %q, timestamp %v, shortened %v", got.title, got.messages[1].At, got.shortened)
+	}
+}
+
+func TestQwenUserFragmentsKeepFirstDisplayProjection(t *testing.T) {
+	for _, display := range []string{"typed prompt", ""} {
+		name := display
+		if name == "" {
+			name = "empty display"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			first := qwenLinkedRecord("prompt", "", "user", "PRIVATE FIRST MODEL INPUT")
+			first["systemPayload"] = map[string]any{"displayText": display}
+			second := qwenLinkedRecord("prompt", "", "user", "PRIVATE SECOND MODEL INPUT")
+			second["systemPayload"] = map[string]any{"displayText": "later fragment projection"}
+			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{first, second, qwenLinkedRecord("reply", "prompt", "assistant", "answer")})
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if display == "" {
+				if err == nil {
+					t.Fatal("a later fragment must not replace an empty display projection")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: typed prompt", "assistant: answer")
+			if got.title != "typed prompt" {
+				t.Fatalf("first display projection was replaced: %q", got.title)
+			}
+		})
+	}
+}
+
+func TestQwenFragmentTextBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		limit    int
+		fragment string
+		want     string
+	}{
+		{"ASCII", 16, "abcdefghij", "1234567890abcdef"},
+		{"UTF8", 15, "ééé", "1234567890éé"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldLimit := maxClaudeHeld
+			maxClaudeHeld = tc.limit
+			t.Cleanup(func() { maxClaudeHeld = oldLimit })
+			root := t.TempDir()
+			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
+				qwenLinkedRecord("prompt", "", "user", "1234567890"),
+				qwenLinkedRecord("prompt", "", "user", tc.fragment),
+			})
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: "+tc.want)
+			if !got.shortened || len(got.messages[0].Text) > tc.limit {
+				t.Fatal("combined fragment text must be bounded and marked shortened")
+			}
+		})
+	}
+}
+
+func TestQwenNonConversationRecordsDoNotChangeLeaf(t *testing.T) {
+	for _, subtype := range []string{"session_artifact_event", "session_artifact_snapshot", "session_sources_snapshot", "managed_session_header_v1", "managed_session_event_v1", "managed_session_commit_v1", "managed_session_snapshot_base_v1", "foreign"} {
+		t.Run(subtype, func(t *testing.T) {
+			root := t.TempDir()
+			extra := qwenLinkedRecord("extra", "", "system", "")
+			extra["subtype"] = subtype
+			if subtype == "foreign" {
+				extra["type"] = "foreign"
+			}
+			path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{qwenLinkedRecord("prompt", "", "user", "question"), qwenLinkedRecord("reply", "prompt", "assistant", "answer"), extra})
+			got, err := readTranscript(context.Background(), domain.HarnessQwen, root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: question", "assistant: answer")
+		})
+	}
+}

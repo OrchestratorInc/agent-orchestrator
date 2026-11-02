@@ -41,6 +41,7 @@ type qwenRecord struct {
 	ParentUUID string    `json:"parentUuid"`
 	Type       string    `json:"type"`
 	Provenance string    `json:"provenance"`
+	Subtype    string    `json:"subtype"`
 	SessionID  string    `json:"sessionId"`
 	CWD        string    `json:"cwd"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -65,6 +66,7 @@ type qwenNode struct {
 	id, parent, role, text string
 	at                     time.Time
 	omitted                bool
+	projected              bool
 }
 
 // qwenVisibleText joins a message's plain text parts. A part that also carries a
@@ -81,6 +83,17 @@ func qwenVisibleText(r qwenRecord) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// qwenAppendText bounds a logical message across physical fragments and keeps
+// a valid UTF-8 prefix when a fragment crosses the held-text budget.
+func qwenAppendText(text, fragment string) (string, bool) {
+	remaining := max(0, maxClaudeHeld-len(text))
+	shortened := len(fragment) > remaining
+	if shortened {
+		fragment = strings.ToValidUTF8(fragment[:remaining], "")
+	}
+	return text + fragment, shortened
 }
 
 func qwenPartPresent(raw json.RawMessage) bool {
@@ -136,6 +149,15 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		if r.SessionID != "" && r.SessionID != t.nativeID {
 			return errNativeIdentityMismatch
 		}
+		if r.Type != "user" && r.Type != "assistant" && r.Type != "tool_result" && r.Type != "system" {
+			return nil
+		}
+		if r.Type == "system" {
+			switch r.Subtype {
+			case "session_artifact_event", "session_artifact_snapshot", "session_sources_snapshot", "managed_session_header_v1", "managed_session_event_v1", "managed_session_commit_v1", "managed_session_snapshot_base_v1":
+				return nil // Qwen excludes these records when selecting the active leaf.
+			}
+		}
 		if r.Timestamp.After(t.last) && r.Timestamp.Before(now.Add(time.Hour)) {
 			t.last = r.Timestamp
 		}
@@ -148,7 +170,7 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 			node.role = "user"
 			if r.SystemPayload.DisplayText != nil {
 				// Presence matters: an empty projection must not expose model input.
-				node.text = *r.SystemPayload.DisplayText
+				node.text, node.projected = *r.SystemPayload.DisplayText, true
 			} else {
 				node.text = qwenVisibleText(r) // Older records have no display projection.
 			}
@@ -166,12 +188,26 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 			}
 		}
 		if idx < len(nodes) {
-			held -= len(nodes[idx].text)
-			nodes[idx] = node
+			previous := nodes[idx]
+			held -= len(previous.text)
+			// Fragments keep the first record's parent, role and display projection.
+			if previous.role != "" && !previous.projected {
+				var shortened bool
+				previous.text, shortened = qwenAppendText(previous.text, qwenVisibleText(r))
+				previous.omitted = previous.omitted || shortened
+			}
+			previous.omitted = previous.omitted || r.Omitted && previous.role != ""
+			if r.Timestamp.After(previous.at) {
+				previous.at = r.Timestamp
+			}
+			nodes[idx] = previous
 		} else {
+			var shortened bool
+			node.text, shortened = qwenAppendText("", node.text)
+			node.omitted = node.omitted || shortened
 			nodes = append(nodes, node)
 		}
-		if firstText < 0 && node.text != "" {
+		if firstText < 0 && nodes[idx].text != "" {
 			firstText = idx
 		}
 		if idx < drop && idx != firstText {
