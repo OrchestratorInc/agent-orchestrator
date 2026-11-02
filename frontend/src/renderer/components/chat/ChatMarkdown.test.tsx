@@ -187,11 +187,10 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("does not swap an absolute link or inline path for a same-named workspace file", async () => {
-		const onLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
 		renderWithLinkHandler(
 			"See [the readme](/other-repo/README.md) and `/other-repo/README.md:3`.",
-			onLinkOpen,
+			vi.fn(),
 			["README.md"],
 			onFileOpen,
 		);
@@ -199,31 +198,8 @@ describe("ChatMarkdown", () => {
 		await userEvent.click(screen.getByRole("link", { name: "the readme" }));
 		await userEvent.click(screen.getByRole("button", { name: "Open README.md in Files" }));
 
-		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("/other-repo/README.md");
-		expect(onFileOpen).toHaveBeenCalledExactlyOnceWith("/other-repo/README.md", 3);
-	});
-
-	it("opens rendered pages in the Browser panel and source or line references in Files", async () => {
-		const onLinkOpen = vi.fn();
-		const onFileOpen = vi.fn();
-		renderWithLinkHandler(
-			"[plan](plan.md), [diagram](out/flow.svg), [plan line](docs/plan.md#L4) and [code](src/App.tsx)",
-			onLinkOpen,
-			["docs/plan.md", "out/flow.svg", "src/App.tsx"],
-			onFileOpen,
-		);
-
-		await userEvent.click(screen.getByRole("link", { name: "plan" }));
-		await userEvent.click(screen.getByRole("link", { name: "diagram" }));
-		await userEvent.click(screen.getByRole("link", { name: "plan line" }));
-		await userEvent.click(screen.getByRole("link", { name: "code" }));
-
-		// The matched workspace file, not the bare name the agent wrote.
-		expect(onLinkOpen).toHaveBeenNthCalledWith(1, "docs/plan.md");
-		expect(onLinkOpen).toHaveBeenNthCalledWith(2, "out/flow.svg");
-		expect(onLinkOpen).toHaveBeenCalledTimes(2);
-		expect(onFileOpen).toHaveBeenNthCalledWith(1, "docs/plan.md", 4);
-		expect(onFileOpen).toHaveBeenNthCalledWith(2, "src/App.tsx");
+		expect(onFileOpen).toHaveBeenNthCalledWith(1, "/other-repo/README.md");
+		expect(onFileOpen).toHaveBeenNthCalledWith(2, "/other-repo/README.md", 3);
 	});
 
 	it("opens an explicit relative file link before the workspace catalog catches up", async () => {

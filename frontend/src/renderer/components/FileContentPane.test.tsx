@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { AppBrowserLinkContext } from "./AppLink";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
@@ -389,6 +390,35 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="README.md" sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByText("hello")).toBeInTheDocument();
+	});
+
+	it("opens a workspace HTML file in the session Browser from its toolbar", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "reports/index.html",
+				status: "unmodified",
+				additions: 0,
+				deletions: 0,
+				size: 20,
+				binary: false,
+				deleted: false,
+				content: "<h1>Report</h1>\n",
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		const openInBrowser = vi.fn();
+
+		renderWithQuery(
+			<AppBrowserLinkContext.Provider value={openInBrowser}>
+				<FileContentPane annotation={noopAnnotation()} path="reports/index.html" sessionId="sess-1" split={false} />
+			</AppBrowserLinkContext.Provider>,
+		);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Open in AO Browser" }));
+		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 
 	it("renders an image without waiting for syntax highlighting", async () => {
