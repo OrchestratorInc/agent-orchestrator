@@ -187,7 +187,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "--system", systemPrompt)
 	}
 	appendModelFlag(&cmd, cfg.Config)
-	cmd = append(cmd, "--resume", "--session-id", agentSessionID)
+	cmd = append(cmd, "--resume", "--session-id", agentSessionID, "--history")
 	return cmd, true, nil
 }
 
