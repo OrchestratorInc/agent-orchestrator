@@ -14,6 +14,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
+func TestRestoreArgvPreservesLaunchEnvironment(t *testing.T) {
+	agent := &recordingAgent{}
+	env := map[string]string{"JCODE_HOME": t.TempDir()}
+	_, _, mode, err := restoreArgv(context.Background(), agent, "s1", t.TempDir(),
+		domain.SessionMetadata{AgentSessionID: "native-original", Prompt: "original task"},
+		"", "", ports.AgentConfig{}, domain.KindWorker, domain.HarnessJCode, t.TempDir(), env)
+	if err != nil || mode != RestoreModeNative {
+		t.Fatalf("restore = %q, %v; want native restore", mode, err)
+	}
+	if got := agent.lastRestore.Env["JCODE_HOME"]; got != env["JCODE_HOME"] {
+		t.Fatalf("restore home = %q, want launch home %q", got, env["JCODE_HOME"])
+	}
+}
+
 type interactiveTestAgent struct {
 	fakeAgent
 	plan        *interactiveTestPlan

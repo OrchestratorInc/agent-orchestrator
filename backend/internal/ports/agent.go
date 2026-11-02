@@ -803,8 +803,11 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
-	Config          AgentConfig
-	DataDir         string
+	Config  AgentConfig
+	DataDir string
+	// Env carries the launch environment overrides, including provider state
+	// roots. Restore eligibility must inspect the same state as the runtime.
+	Env             map[string]string
 	Kind            domain.SessionKind
 	Permissions     PermissionMode
 	AllowedTools    []string

@@ -171,7 +171,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if _, ok := workspaceSession(id, cfg.Session.WorkspacePath, nil); !ok {
+	if _, ok := workspaceSession(id, cfg.Session.WorkspacePath, cfg.Env); !ok {
 		return nil, false, nil
 	}
 	if err := unsupportedTuning(cfg.Config, cfg.AllowedTools, cfg.DisallowedTools); err != nil {

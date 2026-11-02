@@ -164,6 +164,27 @@ func TestRestoreResumesOnlyTheExactSessionOfThisWorkspace(t *testing.T) {
 	}
 }
 
+func TestRestoreUsesProjectHomeInsteadOfDaemonHome(t *testing.T) {
+	t.Setenv("JCODE_HOME", t.TempDir())
+	home := t.TempDir()
+	workspace := t.TempDir()
+	writeNativeSession(t, home, testSessionID, workspace)
+	cfg := ports.RestoreConfig{
+		Env: map[string]string{"JCODE_HOME": home},
+		Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{
+			ports.MetadataKeyAgentSessionID: testSessionID,
+		}},
+	}
+	p := testPlugin(t)
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg)
+	if err != nil || !ok || !reflect.DeepEqual(cmd, []string{"/opt/jcode/bin/jcode", "--no-update", "--resume", testSessionID}) {
+		t.Fatalf("project-home restore = %q, %v, %v; want the original conversation", cmd, ok, err)
+	}
+	if exists, err := p.NativeConversationExists(context.Background(), cfg.Session, testSessionID, cfg.Env); err != nil || !exists {
+		t.Fatalf("project-home history probe = %v, %v", exists, err)
+	}
+}
+
 func TestRestoreFallsBackFreshForMissingForeignOrAmbiguousConversations(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JCODE_HOME", home)
