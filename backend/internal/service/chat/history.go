@@ -52,6 +52,9 @@ var (
 	// ErrTurnProviderMismatch reports a durable turn owned by an earlier agent
 	// provider. Its opaque provider turn id is invalid in the current controller.
 	ErrTurnProviderMismatch = errors.New("conversation turn belongs to a different agent provider")
+	// ErrFilesNotRestorable refuses a rollback asked to restore files AO has no
+	// way to put back. Nothing was changed; a conversation-only rollback still works.
+	ErrFilesNotRestorable = errors.New("chat rollback cannot restore files")
 	// ErrTitleRequired refuses a blank thread title. The provider refuses one too,
 	// and reporting it here keeps the error about the caller's input.
 	ErrTitleRequired = errors.New("thread title is required")
@@ -105,14 +108,15 @@ func classify(err error) error {
 const maxTitleRunes = 80
 
 // Rollback discards a turn and everything after it, from the agent's memory and
-// from AO's timeline.
+// from AO's timeline. With restoreFiles it also puts the session's worktree back
+// to the snapshot taken when that turn was sent.
 //
 // Refused while a turn is running, and refused BEFORE the provider is asked. The
 // provider refuses this too, but relying on that alone would make the outcome a
 // race: AO would have already decided to hide rows by the time it learned it could
 // not. The controller holds its dispatch lock across the check and the call, so
 // within AO the answer cannot change underneath.
-func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string) (int, error) {
+func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string, restoreFiles bool) (int, error) {
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return 0, err
@@ -121,7 +125,7 @@ func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID stri
 	if _, ok := controller.conv.(ports.ChatRollbacker); !ok {
 		return 0, ErrRollbackUnsupported
 	}
-	return controller.Rollback(ctx, turnID)
+	return controller.Rollback(ctx, turnID, restoreFiles)
 }
 
 // ForkConversation branches this session's provider conversation and returns the
@@ -436,7 +440,7 @@ func (s *Service) EditMessage(
 	}
 	conversation := source.conversation
 	conversation.ActiveBranchID = branchID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.CreateAndActivateConversationBranch(
 		operationCtx, id, branch, generation, s.now(),
 	); err != nil {
@@ -961,7 +965,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	generation := s.newID()
 	conversation := source.conversation
 	conversation.ActiveBranchID = branch.ID
-	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	replacement := newController(id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
 		branch.ProviderConversationID, generation, s.now()); err != nil {
 		_ = cleanupUnpublishedConversation(provider, true)
@@ -1077,7 +1081,7 @@ func (s *Service) restoreClosedSourceController(
 	generation := s.newID()
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
-		id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+		id, source.owner(), conversation, generation, source.harness, source.workspacePath, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	if err := s.store.ActivateConversationBranch(recoveryCtx, id, conversation.ID, branch.ID,
 		providerConversationID, generation, s.now()); err != nil {
 		_ = provider.Close()

@@ -55,7 +55,8 @@ type ConversationService interface {
 	Skills(ctx context.Context, session domain.SessionID) ([]ports.ChatSkill, error)
 	SetTurnSettings(ctx context.Context, session domain.SessionID, settings domain.ConversationSettings) (domain.ConversationSettings, error)
 	Compact(ctx context.Context, session domain.SessionID) (ports.ChatCompactionResult, error)
-	Rollback(ctx context.Context, session domain.SessionID, turnID string) (int, error)
+	Rollback(ctx context.Context, session domain.SessionID, turnID string, restoreFiles bool) (int, error)
+	RollbackPreview(ctx context.Context, session domain.SessionID, turnID string) (chatsvc.RollbackPreview, error)
 	RetryTurn(ctx context.Context, session domain.SessionID, turnID string) (domain.ConversationTurn, error)
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
@@ -149,6 +150,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
 	r.Get("/sessions/{sessionId}/conversation/skills", c.skills)
 	r.Patch("/sessions/{sessionId}/conversation/settings", c.setSettings)
+	r.Get("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollbackPreview)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)
@@ -624,16 +626,54 @@ func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *htt
 	})
 }
 
+// maxRollbackPreviewFiles bounds the file list a preview carries; a turn that
+// generated thousands of files is summarized by its count past this point.
+const maxRollbackPreviewFiles = 200
+
+// rollbackPreview lists the worktree files rolling back to a turn would restore,
+// so the confirmation can show them before anything changes.
+func (c *ConversationsController) rollbackPreview(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET",
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback")
+		return
+	}
+	preview, err := c.Svc.RollbackPreview(r.Context(),
+		domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"))
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	shown := preview.Changes[:min(len(preview.Changes), maxRollbackPreviewFiles)]
+	files := make([]RollbackFileChange, 0, len(shown))
+	for _, change := range shown {
+		files = append(files, RollbackFileChange{Path: change.Path, Change: string(change.Kind)})
+	}
+	envelope.WriteJSON(w, http.StatusOK, RollbackPreviewResponse{
+		FilesRestorable: preview.Unavailable == "",
+		Reason:          preview.Unavailable,
+		Files:           files,
+		TotalFiles:      len(preview.Changes),
+		CommitsSince:    preview.CommitsSince,
+	})
+}
+
 // rollback discards a turn and everything after it, from the agent's memory as well
-// as from the timeline.
+// as from the timeline, and restores the worktree too when the body asks for it.
 func (c *ConversationsController) rollback(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST",
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback")
 		return
 	}
+	var req RollbackConversationRequest
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
 	discarded, err := c.Svc.Rollback(r.Context(),
-		domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"))
+		domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"), req.RestoreFiles)
 	if err != nil {
 		writeConversationError(w, r, err)
 		return
@@ -1271,6 +1311,12 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chatsvc.ErrRollbackUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_ROLLBACK_UNSUPPORTED", "this agent cannot discard conversation history", nil)
+
+	case errors.Is(err, chatsvc.ErrFilesNotRestorable):
+		// Nothing changed, files or conversation. The reason names what is missing,
+		// and a rollback without restoreFiles still works.
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_ROLLBACK_FILES_UNAVAILABLE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrForkUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",

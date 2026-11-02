@@ -190,7 +190,7 @@ describe("orchestrator worker updates", () => {
 
 		await userEvent.click(within(answer).getByRole("button", { name: "Roll back to here" }));
 		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Roll back" }));
-		expect(onRollback).toHaveBeenCalledWith("t1");
+		expect(onRollback).toHaveBeenCalledWith("t1", false);
 	});
 
 	it("keeps an answer that asks the user something as the full reply", () => {

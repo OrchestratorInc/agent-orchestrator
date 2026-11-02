@@ -8661,8 +8661,8 @@ paths:
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback:
-    post:
-      operationId: rollbackSessionConversation
+    get:
+      operationId: previewSessionConversationRollback
       parameters:
       - description: Session identifier, e.g. project-1.
         in: path
@@ -8684,7 +8684,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RollbackConversationResponse'
+                $ref: '#/components/schemas/RollbackPreviewResponse'
           description: OK
         "404":
           content:
@@ -8710,7 +8710,71 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Discard a turn and everything after it from the agent's memory
+      summary: List the worktree files rolling back to a turn would restore
+      tags:
+      - conversations
+    post:
+      operationId: rollbackSessionConversation
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: AO conversation turn identifier, from the snapshot's turns array.
+        in: path
+        name: turnId
+        required: true
+        schema:
+          description: AO conversation turn identifier, from the snapshot's turns
+            array.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackConversationRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollbackConversationResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Discard a turn and everything after it from the agent's memory, optionally
+        restoring its files
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer:
@@ -19460,12 +19524,51 @@ components:
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
       type: object
+    RollbackConversationRequest:
+      properties:
+        restoreFiles:
+          type: boolean
+      type: object
     RollbackConversationResponse:
       properties:
         turnsDiscarded:
           type: integer
       required:
       - turnsDiscarded
+      type: object
+    RollbackFileChange:
+      properties:
+        change:
+          enum:
+          - restored
+          - reverted
+          - removed
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - change
+      type: object
+    RollbackPreviewResponse:
+      properties:
+        commitsSince:
+          type: integer
+        files:
+          items:
+            $ref: '#/components/schemas/RollbackFileChange'
+          type: array
+        filesRestorable:
+          type: boolean
+        reason:
+          type: string
+        totalFiles:
+          type: integer
+      required:
+      - filesRestorable
+      - files
+      - totalFiles
+      - commitsSince
       type: object
     RollbackSessionResponse:
       properties:
