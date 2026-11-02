@@ -33,8 +33,8 @@ type Store interface {
 
 // Snapshot is the current preference set.
 type Snapshot struct {
-	HarnessDefaults    map[string]domain.HarnessDefault
-	DefaultSessionMode domain.SessionMode
+	HarnessDefaults        map[string]domain.HarnessDefault
+	DefaultSessionMode     domain.SessionMode
 	ChatHibernationEnabled bool
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran (Settings, General). On by default.
