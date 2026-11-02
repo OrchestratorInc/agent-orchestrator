@@ -100,10 +100,12 @@ describe("settling under a reader who scrolled up", () => {
 		});
 		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
 		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
-		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: scrollTop });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: log.scrollHeight });
 		restoreLayout = () => spy.mockRestore();
-		// Reading back up the turn releases the follow.
+		// Browser wheel intent precedes the viewport movement. Cancelling a recent
+		// programmatic scroll must record the old position, not the reader's destination.
 		fireEvent.wheel(log, { deltaY: -120 });
+		log.scrollTop = scrollTop;
 		fireEvent.scroll(log);
 	}
 
