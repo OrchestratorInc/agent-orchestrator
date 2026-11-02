@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
@@ -102,6 +103,102 @@ func TestObserverIntegrationReconcilesRealTmuxOutputIntoSQLite(t *testing.T) {
 			)
 			if err := observer.Poll(ctx); err != nil {
 				t.Fatal(err)
+			}
+
+			got, ok, err := store.GetSession(ctx, session.ID)
+			if err != nil || !ok {
+				t.Fatalf("GetSession: ok=%v err=%v", ok, err)
+			}
+			if got.Activity.State != tt.wantState {
+				t.Fatalf("activity state = %q, want %q", got.Activity.State, tt.wantState)
+			}
+		})
+	}
+}
+
+// workloadFreeTmux is the real tmux runtime with no command running under the
+// agent: the test pane has no AO supervisor for tmux to count commands below.
+type workloadFreeTmux struct{ *tmux.Runtime }
+
+func (workloadFreeTmux) RunningWorkloadCommands(context.Context, ports.RuntimeHandle, ports.SupervisedProcessRef) (int, error) {
+	return 0, nil
+}
+
+func TestObserverIntegrationMovesFrozenTerminalWithoutDetectorToWaitingInput(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+
+	tests := []struct {
+		name      string
+		script    string
+		wantState domain.ActivityState
+	}{
+		{
+			name:      "prompt left after a lost stop hook",
+			script:    "printf '>\\n  ? for help'; sleep 60",
+			wantState: domain.ActivityWaitingInput,
+		},
+		{
+			name:      "turn timer keeps it working",
+			script:    "printf '? for help\\n'; i=0; while :; do i=$((i+1)); printf '\\r- Thinking (%ds)' \"$i\"; sleep 0.1; done",
+			wantState: domain.ActivityActive,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := sqlitetest.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			workspace := t.TempDir()
+			now := time.Now().UTC()
+			staleAt := now.Add(-3 * time.Minute)
+			projectID := domain.ProjectID("ao7486e2e")
+			if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: string(projectID), Path: workspace, RegisteredAt: staleAt}); err != nil {
+				t.Fatal(err)
+			}
+			session, err := store.CreateSession(ctx, domain.SessionRecord{
+				ProjectID:     projectID,
+				Kind:          domain.KindWorker,
+				Harness:       domain.HarnessDroid,
+				Activity:      domain.Activity{State: domain.ActivityActive, LastActivityAt: staleAt},
+				FirstSignalAt: staleAt,
+				CreatedAt:     staleAt,
+				UpdatedAt:     staleAt,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			runtime := tmux.New(tmux.Options{Timeout: 5 * time.Second, ReapGrace: 100 * time.Millisecond})
+			handle, err := runtime.Create(ctx, ports.RuntimeConfig{SessionID: session.ID, WorkspacePath: workspace, Argv: []string{"sh", "-c", tt.script}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runtime.Destroy(context.Background(), handle) })
+
+			waitForTerminalOutput(t, runtime, handle, "? for help")
+			session.Metadata.RuntimeHandleID = handle.ID
+			session.Metadata.RuntimeLaunchID = "launch-1"
+			if err := store.UpdateSession(ctx, session); err != nil {
+				t.Fatal(err)
+			}
+
+			clock := now
+			observer := New(store, lifecycle.New(store, nil), workloadFreeTmux{runtime}, fakeAgents{domain.HarnessDroid: droid.New()},
+				Config{StaleAfter: time.Minute, Clock: func() time.Time { return clock }, Logger: testLogger()})
+			for at := now; !at.After(now.Add(quietAfter)); at = at.Add(DefaultTickInterval) {
+				clock = at
+				if err := observer.Poll(ctx); err != nil {
+					t.Fatal(err)
+				}
+				// Real time between ticks, so a running timer redraws.
+				time.Sleep(250 * time.Millisecond)
 			}
 
 			got, ok, err := store.GetSession(ctx, session.ID)

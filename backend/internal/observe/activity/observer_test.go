@@ -14,7 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
@@ -338,26 +337,6 @@ func TestPollPreservesClaudeWaitingInputWithoutContinuousCapability(t *testing.T
 	}
 	if runtime.calls != 0 || len(sink.signals) != 0 {
 		t.Fatalf("sticky Claude waiting state was sampled: output calls=%d signals=%+v", runtime.calls, sink.signals)
-	}
-}
-
-func TestPollLeavesOtherHarnessesUntouched(t *testing.T) {
-	now := time.Unix(500, 0).UTC()
-	sink := &fakeSink{}
-	runtime := &fakeRuntime{output: "› prompt\nmodel · ~/project\n"}
-	observer := New(
-		fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessDroid)}},
-		sink,
-		runtime,
-		fakeAgents{domain.HarnessDroid: droid.New()},
-		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
-	)
-
-	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.calls != 0 || len(sink.signals) != 0 {
-		t.Fatalf("unaffected harness: output calls=%d signals=%+v", runtime.calls, sink.signals)
 	}
 }
 
