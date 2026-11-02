@@ -4,6 +4,7 @@
 // must not invalidate session state when they come and go.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queueCloudShellInput } from "../lib/cloud-shell-input";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { components } from "../../api/schema";
 import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -159,6 +160,12 @@ export type OpenShellTerminalInput = {
 	sessionId?: string;
 	shell?: string;
 	cloud?: { orgId: string };
+	/**
+	 * Typed into a Cloud shell once it is up (a command cue's command). It is
+	 * queued before the shell is listed, so the terminal that connects to it
+	 * always finds it.
+	 */
+	initialInput?: string;
 };
 
 function nextCloudShellTitle(terminals: ShellTerminal[], sessionId: string): string {
@@ -234,6 +241,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 		sessionId,
 		shell,
 		cloud,
+		initialInput,
 		optimisticShell,
 	}: OpenShellTerminalMutationInput): Promise<ShellTerminal> => {
 		if (usePreviewData && !remote) {
@@ -264,6 +272,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				createdAt: new Date().toISOString(),
 				cloud,
 			};
+			if (initialInput) queueCloudShellInput(shell.handleId, initialInput);
 			cloudShellTerminals = [...cloudShellTerminals, shell];
 			return shell;
 		}

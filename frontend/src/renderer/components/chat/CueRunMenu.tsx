@@ -6,7 +6,6 @@ import { useUiStore } from "../../stores/ui-store";
 import { apiErrorMessage } from "../../lib/api-client";
 import { useCueHost, useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, invokeCloudCue, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
-import { queueCloudShellInput } from "../../lib/cloud-shell-input";
 import { shellTerminalsQueryKey, toShellTerminal, useOpenShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
 import { markTerminalHandleFresh } from "../../lib/fresh-terminal-handles";
 import { terminalShellRequestValue, useTerminalShellStore } from "../../stores/terminal-shell-store";
@@ -146,12 +145,13 @@ function CueRunMenuTrigger({
 			if (cloud) {
 				// A Cloud agent cue was sent to the session; a command cue runs in a
 				// new shell of its sandbox, which types the command once it is up.
+				// The command is queued as the shell is created, before its tab
+				// appears and its terminal connects.
 				const result = await invokeCloudCue(cloud, cue.id, sessionId);
 				rememberLastRunCue(projectId, cue.id);
 				if (result.kind !== "command" || !result.command) return;
-				const shell = await openShellTerminal.mutateAsync({ projectId, sessionId, cloud: { orgId: cloud.orgId } });
+				const shell = await openShellTerminal.mutateAsync({ projectId, sessionId, cloud: { orgId: cloud.orgId }, initialInput: `${result.command}\r` });
 				if (!shell) return;
-				queueCloudShellInput(shell.handleId, `${result.command}\r`);
 				if (origin !== generation.current) return;
 				setActiveShellTerminal(shell.handleId);
 				return;

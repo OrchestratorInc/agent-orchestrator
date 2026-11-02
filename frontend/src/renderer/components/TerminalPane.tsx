@@ -401,11 +401,12 @@ export function TerminalCacheProvider({
 			// terminal settles instead of flickering. A different pane gets a
 			// different factory and therefore its own cursor starting at 0.
 			const cursor = { value: 0 };
-			// A shell a command cue opened types the cue's command once it is up.
-			let initialInput = terminalTarget?.kind === "shell" ? takeCloudShellInput(terminalTarget.handleId) : undefined;
+			const shellHandle = terminalTarget?.kind === "shell" ? terminalTarget.handleId : undefined;
 			const factory = () => {
-				const input = initialInput;
-				initialInput = undefined;
+				// A shell a command cue opened types the cue's command once it is
+				// up. It is taken when the connection is made, not when this
+				// factory is, so a command queued after the tab rendered still goes.
+				const input = shellHandle ? takeCloudShellInput(shellHandle) : undefined;
 				return createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
