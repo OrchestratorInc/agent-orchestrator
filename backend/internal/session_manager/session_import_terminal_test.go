@@ -65,11 +65,11 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 			if len(a.restores) != 1 || a.restores[0].Session.Metadata[ports.MetadataKeyAgentSessionID] != "native-terminal" || a.restores[0].Session.WorkspacePath != child {
 				t.Fatalf("restore configs = %#v", a.restores)
 			}
-			if a.restores[0].Session.ImportSource == nil || a.restores[0].Session.ImportSource.NativeID != "native-terminal" || len(a.probes) != 2 {
+			if a.restores[0].Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || len(a.probes) != 2 {
 				t.Fatalf("restore/preflight import context missing: restores=%#v probes=%#v", a.restores, a.probes)
 			}
 			for _, probe := range a.probes {
-				if probe.ImportSource == nil || probe.ImportSource.NativeID != "native-terminal" || probe.WorkspacePath != child {
+				if probe.Metadata[ports.MetadataKeyImportSourceNativeID] != "native-terminal" || probe.Metadata[ports.MetadataKeyImportConfigDir] != rec.Metadata.ImportSource.ConfigDir || probe.WorkspacePath != child {
 					t.Fatalf("strict probe lost import identity/worktree: %#v", probe)
 				}
 			}

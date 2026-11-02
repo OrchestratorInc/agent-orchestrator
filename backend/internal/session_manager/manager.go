@@ -3698,8 +3698,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
-			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, ImportSource: rec.Metadata.ImportSource,
-				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}
+			ref := ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}
 			exists, probeErr := probe.NativeConversationExists(ctx, ref, rec.Metadata.AgentSessionID, env)
 			if probeErr != nil || !exists {
 				return RestoreResult{}, fmt.Errorf("%s %s: native history could not be verified: %w", operation, rec.ID,
@@ -3730,7 +3729,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
-			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec), ImportSource: rec.Metadata.ImportSource}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
 				argv = initialization.Argv()
 				for key, value := range initialization.LaunchEnv() {
@@ -7159,14 +7158,12 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // ErrNotResumable when transcript-preserving restore is required but unavailable,
 // or when a promptless, unresumable worker has nothing to restore from.
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+	metadata := nativeRestoreMetadata(domain.SessionRecord{Metadata: meta})
+	metadata[ports.MetadataKeySessionMode] = string(domain.SessionModeTUI)
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
-		ImportSource:  meta.ImportSource,
-		Metadata: map[string]string{
-			ports.MetadataKeyAgentSessionID: meta.AgentSessionID,
-			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
-		},
+		Metadata:      metadata,
 	}
 	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
 	var cmd []string
