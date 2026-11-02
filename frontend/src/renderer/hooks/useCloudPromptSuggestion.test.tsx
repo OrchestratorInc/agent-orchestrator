@@ -1,3 +1,4 @@
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -66,6 +67,13 @@ describe("useCloudPromptSuggestion", () => {
 		suggestChatPrompt.mockClear();
 		renderHook(() => useCloudPromptSuggestion({ ...session, runtimeConnected: false }, settled, true), { wrapper });
 		expect(suggestChatPrompt).not.toHaveBeenCalled();
+	});
+
+	it("asks a busy worker again instead of giving up", async () => {
+		suggestChatPrompt.mockRejectedValueOnce(new CloudCpError("A prompt suggestion is already running.", { status: 429, code: "CHAT_PROMPT_SUGGESTION_BUSY" }));
+		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
+		await waitFor(() => expect(result.current?.text).toBe("Add a regression test."), { timeout: 3500 });
+		expect(suggestChatPrompt).toHaveBeenCalledTimes(2);
 	});
 
 	it("drops an answer for another turn", async () => {
