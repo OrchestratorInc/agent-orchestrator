@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -176,6 +177,49 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 	if has, err := s.HasConversationTurns(ctx, conversation.ID); err != nil || !has {
 		t.Fatalf("shared turns lost: has=%v err=%v", has, err)
+	}
+}
+
+// A retry and an edit branch point at earlier turns with ON DELETE RESTRICT,
+// which SQLite checks even when the same cascade removes the pointing row.
+// Deleting the session must still remove its whole conversation.
+func TestDeleteTerminatedSessionRemovesRetriedAndEditedConversation(t *testing.T) {
+	for name, link := range map[string]func(*testing.T, *sqlite.Store, domain.SessionRecord, domain.ConversationRecord){
+		"retry": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, conversation domain.ConversationRecord) {
+			created, err := s.AppendRetryUserMessage(context.Background(), conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+				ID: "message-3", Origin: domain.MessageOriginHuman, Text: "second prompt",
+				ClientMessageID: "client-3", DeliveryContentJSON: `[{"type":"text","text":"second prompt"}]`,
+			}, "turn-3", "turn-2", testNow.Add(2*time.Minute))
+			if err != nil || !created {
+				t.Fatalf("AppendRetryUserMessage: created=%v err=%v", created, err)
+			}
+		},
+		"edit": func(t *testing.T, s *sqlite.Store, _ domain.SessionRecord, conversation domain.ConversationRecord) {
+			if err := s.CreateConversationBranch(context.Background(), domain.ConversationBranch{
+				ID: "branch-edit", ConversationID: conversation.ID, ProviderConversationID: "thread-edit",
+				ParentBranchID: conversation.ActiveBranchID, ForkAfterTurnID: "turn-1", ReplacedTurnID: "turn-2",
+				ForkAfterSequence: 2,
+			}, testNow.Add(2*time.Minute)); err != nil {
+				t.Fatalf("CreateConversationBranch: %v", err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s, session, conversation := seededChatConversation(t)
+			seedBranchTurns(t, s, session, conversation)
+			link(t, s, session, conversation)
+			session.IsTerminated = true
+			mustNoError(t, s.UpdateSession(ctx, session))
+
+			deleted, err := s.DeleteTerminatedSession(ctx, session.ID)
+			if err != nil || !deleted {
+				t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+			}
+			if has, err := s.HasConversationTurns(ctx, conversation.ID); err != nil || has {
+				t.Fatalf("turns survived the session: has=%v err=%v", has, err)
+			}
+		})
 	}
 }
 
