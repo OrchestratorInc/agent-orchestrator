@@ -44,7 +44,7 @@ describe("SpawnComposerControls fallback", () => {
 		const props = {
 			hosts: [{ id: "host-a", label: "Alpha" }], hostId: "host-a", onSelectHost: vi.fn(),
 			projects: [], projectId: null, onSelectProject: vi.fn(),
-			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], agentModels: {}, modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onSelectAgentModel: vi.fn(), usesDefaultModel: true, onBrowseModels: vi.fn(), prompt: "", onChangePrompt: vi.fn(), placeholder: "Ask Codex", attachments: null, hasAttachments: false,
+			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], agentModels: {}, modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onSelectAgentModel: vi.fn(), usesDefaultModel: true, onBrowseModels: vi.fn(), prompt: "", onChangePrompt: vi.fn(), placeholder: "Ask Codex", attachments: null,
 			approvalModes: [{ id: "auto", label: "Auto" }], approvalMode: "auto", onSelectApprovalMode: vi.fn(), effortChoices: [], onSelectEffort: vi.fn(),
 			onChoosePhoto, onChooseFile, voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: false,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];

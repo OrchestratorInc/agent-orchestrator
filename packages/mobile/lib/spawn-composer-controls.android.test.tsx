@@ -128,7 +128,6 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	onChangePrompt: vi.fn(),
 	placeholder: "Ask Codex",
 	attachments: null,
-	hasAttachments: false,
 	onBrowseModels: vi.fn(),
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
 	approvalMode: "auto",

@@ -558,7 +558,6 @@ export default function SpawnScreen() {
 							setAttachments(attachmentsRef.current);
 						}}
 					/>}
-					hasAttachments={attachments.length > 0}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}

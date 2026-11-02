@@ -76,7 +76,6 @@ export type SpawnComposerControlsProps = {
 	placeholder: string;
 	/** The picked files, shown above the composer as the chat shows its own. */
 	attachments: ReactNode;
-	hasAttachments: boolean;
 	onSpawn: () => void;
 	busy: boolean;
 	disabled: boolean;

@@ -61,7 +61,6 @@ const baseProps = (overrides: Partial<SpawnComposerProps> = {}): SpawnComposerPr
 	onChangePrompt: vi.fn(),
 	placeholder: "Ask Codex",
 	settings: "Settings",
-	hasAttachments: false,
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
 	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
@@ -98,6 +97,19 @@ describe("SpawnComposer", () => {
 		expect(attach.props).toMatchObject({ disabled: false, canAttachFile: true });
 		attach.props.onChoosePhoto();
 		expect(props.onChoosePhoto).toHaveBeenCalledOnce();
+	});
+
+	// The page is for choosing who runs the task: the model, effort and
+	// approval stay in sight and in reach with nothing written and the field
+	// left, unlike the chat's composer, which folds to a pill.
+	it("keeps the settings row open with an empty, unfocused prompt", async () => {
+		const root = await render({ ...baseProps(), prompt: "" });
+		const field = root.findByType("TextInput" as never);
+		await act(async () => field.props.onBlur?.());
+		const settings = root.findAll((node) => node.props.children === "Settings")[0];
+		let row: ReactTestInstance | null = settings;
+		while (row && row.props.pointerEvents === undefined) row = row.parent;
+		expect(row?.props.pointerEvents).toBe("box-none");
 	});
 
 	it("starts the task from the chat's accent disc once there is text", async () => {

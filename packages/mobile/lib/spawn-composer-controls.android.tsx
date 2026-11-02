@@ -77,7 +77,6 @@ export function SpawnComposerControls({
 	onChangePrompt,
 	placeholder,
 	attachments,
-	hasAttachments,
 	onSpawn,
 	busy,
 	disabled,
@@ -154,7 +153,6 @@ export function SpawnComposerControls({
 					prompt={prompt}
 					onChangePrompt={onChangePrompt}
 					placeholder={placeholder}
-					hasAttachments={hasAttachments}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
 					voice={voice}

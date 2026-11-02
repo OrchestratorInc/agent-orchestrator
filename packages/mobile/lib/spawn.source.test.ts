@@ -54,7 +54,6 @@ describe("spawn composer", () => {
 		expect(spawn).toContain("prompt={prompt}\n\t\t\t\t\tonChangePrompt={setPrompt}");
 		expect(spawn).toContain('placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}');
 		expect(spawn).toContain("attachments={<SpawnAttachmentRow");
-		expect(spawn).toContain("hasAttachments={attachments.length > 0}");
 	});
 
 	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {

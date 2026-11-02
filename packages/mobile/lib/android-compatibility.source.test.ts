@@ -103,14 +103,16 @@ describe("Android native compatibility boundaries", () => {
 	});
 
 	// The new task's composer is the chat's on both platforms: its pill, its
-	// field, its attach menu and its round button.
+	// field, its attach menu and its round button. Its controls row never folds
+	// away, so the model, effort and approval stay in sight.
 	it("draws the Spawn composer as the chat composer", () => {
 		const shell = source("./spawn-composer.tsx");
 		expect(shell).not.toContain("@expo/ui");
 		expect(shell).toContain("<ChatAttachmentMenu");
 		expect(shell).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(shell).toContain("...composerStyleRules(t),");
-		expect(shell).toContain('style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}');
+		expect(shell).toContain('<View pointerEvents="box-none" style={styles.controlsRow}>');
+		expect(shell).not.toContain("controlsOpening");
 	});
 
 	// The turn's settings have no sheet of their own: they are the controls
