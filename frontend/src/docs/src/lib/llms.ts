@@ -8,7 +8,7 @@ type Node = ReturnType<typeof source.getPageTree>["children"][number];
 
 /** A short summary of the product, at the top of llms.txt. */
 export const PRODUCT_SUMMARY =
-  "Orchestrator is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.";
+  "Orchestrator, also known as Agent Orchestrator or AO, is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.";
 
 /** The Markdown copy of an English article, e.g. `/quickstart.md`. The home page is `/index.md`. */
 export function markdownPath(slugs: string[]): string {

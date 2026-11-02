@@ -53,7 +53,7 @@ const website = {
   "@id": `${COMPANY.DOCS_URL}/#website`,
   name: SITE_NAME,
   // The names the docs are also searched by.
-  alternateName: ["Orchestrator Docs", "AO Docs"],
+  alternateName: ["Agent Orchestrator Docs", "AO Docs"],
   url: absoluteUrl("/"),
   publisher: organization,
 };
