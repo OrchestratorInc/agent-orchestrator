@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, typ
 // The first preview waits out a short hover and fades in. Once one is showing,
 // sweeping across the other rows swaps previews instantly with no animation,
 // until the pointer has been off every row for COOL_DOWN_MS.
-const FIRST_OPEN_DELAY_MS = 350;
+const FIRST_OPEN_DELAY_MS = 150;
 const COOL_DOWN_MS = 300;
 // Time to cross the gap from the row to its card (or back) without closing it.
-const LEAVE_GRACE_MS = 120;
+const LEAVE_GRACE_MS = 60;
 
 // Shared by every row: a preview opened on one row warms all of them.
 let warm = false;
@@ -119,7 +119,7 @@ export function useSessionPreviewHover(suppressed: boolean) {
 		clearTimeout(leaveTimerRef.current);
 		if (openRef.current) return;
 		if (warm) show("none");
-		else openTimerRef.current = setTimeout(() => show("enter"), FIRST_OPEN_DELAY_MS);
+		else openTimerRef.current = setTimeout(() => show("none"), FIRST_OPEN_DELAY_MS);
 	}, [show]);
 
 	// Off the row or off the card: a pending open is cancelled outright, a

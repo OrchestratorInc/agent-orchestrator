@@ -28,10 +28,10 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
-	// A teal between the theme's blue and green stays apart from Building, Ready
-	// and In review. `p.cyan` does not: it equals blue in Dracula and Monokai and
-	// green in Rosé Pine.
-	const validating = mixColor(p.blue, p.green, 0.5);
+	// Pink, as in Orchestrate: a red/purple mix stays apart from Building, Ready
+	// and In review. Palettes have no pink role, and `p.cyan` would not do: it
+	// equals blue in Dracula and Monokai and green in Rosé Pine.
+	const validating = mixColor(p.red, p.purple, 0.5);
 
 	return {
 		"--background": p.bg,

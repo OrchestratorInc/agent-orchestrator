@@ -24,7 +24,6 @@ import {
 	ChevronRight,
 	CircleAlert,
 	Copy,
-	Eye,
 	GitMerge,
 	GitPullRequest,
 	LoaderCircle,
@@ -151,6 +150,7 @@ import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { applyOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -219,7 +219,7 @@ const SECTION_ROW_CLASS =
 // Reorder drags start from the row's primary click surface. The 4px activation
 // distance keeps a plain navigation/disclosure click from starting a drag;
 // nested action buttons remain outside that activator surface.
-const REORDER_ACTIVATION_DISTANCE = 4;
+const REORDER_ACTIVATION_DISTANCE = 8;
 // A transparent 1x1 image replaces the browser's default drag ghost, so the
 // dragged row stays put at reduced opacity instead of trailing under the cursor.
 const EMPTY_DRAG_IMAGE = typeof Image === "undefined" ? null : new Image();
@@ -610,7 +610,9 @@ function useSelection() {
 // A row spins while its agent works, ahead of any PR state: it may already be
 // on its next PR, and the hover card has the PR detail.
 function isSessionRowWorking(session: WorkspaceSession): boolean {
-	return isAgentActivityWorking(session.activity) && session.displayStatus !== "Terminated";
+	if (session.displayStatus === "Terminated") return false;
+	// Setting up (worktree, agent) already counts as working, so the row spins from the moment it is created.
+	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
 }
 
 // Rows showing the red alert sit above the rest, but only in the default
@@ -626,12 +628,12 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // The icons a row or a collapsed project can show, plus the working
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
-// alert needs you now, an orange eye is a person's review next, a green pull
+// alert needs you now, an orange alert is a person's review next, a green pull
 // request is ready to merge.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
-	review: { Icon: Eye, tone: "text-status-in-review" },
+	review: { Icon: CircleAlert, tone: "text-status-in-review" },
 	// Done, so it sits a step below the colours that ask something of you.
 	merged: { Icon: GitMerge, tone: "text-status-merged opacity-70" },
 } as const satisfies Record<SessionRowMarker, { Icon: unknown; tone: string }>;
@@ -660,6 +662,8 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 	// the agent may be on another PR, and the hover card has the PR detail.
 	// The marker returns once the agent stops.
 	const marker = working ? null : getSessionRowMarker(session);
+	// Filled until the user has opened the session since it last changed.
+	const unread = useSessionUnread(session);
 	const previous = useRef(marker);
 	const [popped, setPopped] = useState(false);
 	useEffect(() => {
@@ -680,7 +684,7 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 		);
 	}
 	// Rows with nothing to flag still get a quiet dot, so every title starts on
-	// the same column: filled when idle, hollow once the agent has stopped.
+	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
 		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
 	return (
@@ -709,8 +713,8 @@ function SessionStatusDot({ session, working, harnessOnly }: { session: Workspac
 				>
 					<span
 						className={cn(
-							"size-1.5 rounded-full",
-							stopped ? "border border-muted-foreground/50" : "bg-muted-foreground/50",
+							"size-2 rounded-full",
+							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
 						)}
 					/>
 				</span>
@@ -2610,6 +2614,13 @@ const SessionRow = memo(function SessionRow({
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
 	const working = isSessionRowWorking(session);
+	// Having the session open reads it, including anything that lands while it is open.
+	const markRead = useSessionReadStore((state) => state.markRead);
+	useEffect(() => {
+		if (!active) return;
+		const updated = Date.parse(session.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(session), updated);
+	}, [active, markRead, session]);
 	const shimmer = working && !active && !harnessOnly;
 	const marker = harnessOnly || working ? null : getSessionRowMarker(session);
 	const queryClient = useQueryClient();
@@ -2729,6 +2740,7 @@ const SessionRow = memo(function SessionRow({
 					)}
 					data-session-row=""
 					data-dragging={reorder?.isDragging ? "true" : undefined}
+					data-preview-open={preview.open ? "" : undefined}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
