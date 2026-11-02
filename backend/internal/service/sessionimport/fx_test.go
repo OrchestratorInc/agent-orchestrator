@@ -52,12 +52,15 @@ func TestFXImportLayoutsAndTerminalMode(t *testing.T) {
 			if got.nativeID != fxImportID || got.cwd != filepath.ToSlash(cwd) || got.title != "explain synthetic parser" || got.last.IsZero() {
 				t.Fatalf("transcript = %#v", got)
 			}
-			store := &importStore{}
+			store := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-fx", Path: cwd}}}
 			svc := New(store, "", nil)
 			svc.roots = map[domain.AgentHarness]string{domain.HarnessFX: root}
 			preview, err := svc.Scan(context.Background())
 			if err != nil || len(preview.Candidates) != 1 {
 				t.Fatalf("scan = %#v, %v", preview, err)
+			}
+			if preview.Candidates[0].ProjectID != "synthetic-fx" {
+				t.Fatalf("project = %q", preview.Candidates[0].ProjectID)
 			}
 			result, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
 			if err != nil || len(result) != 1 || result[0].Status != "created" {
@@ -66,6 +69,10 @@ func TestFXImportLayoutsAndTerminalMode(t *testing.T) {
 			if store.sessions[0].Mode != domain.SessionModeTUI || store.sessions[0].Metadata.AgentSessionID != fxImportID {
 				t.Fatalf("record = %#v", store.sessions[0])
 			}
+			if err := svc.RefreshArchive(context.Background(), store.sessions[0]); err != nil {
+				t.Fatalf("refresh imported archive = %v", err)
+			}
+			wantTexts(t, store.messages, "user: explain synthetic parser", "assistant: synthetic answer")
 		})
 	}
 }

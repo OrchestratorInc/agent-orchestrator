@@ -18,7 +18,7 @@ import (
 var fxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 func fxRoot(home string) string {
-	if root := strings.TrimSpace(os.Getenv("FX_HOME")); len(root) > 0 {
+	if root := strings.TrimSpace(os.Getenv("FX_HOME")); root != "" {
 		return root
 	}
 	return filepath.Join(home, ".fx")
@@ -111,6 +111,11 @@ type fxImportRecord struct {
 }
 
 func readFXTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	// First-open refresh receives the saved transcript path without its v1
+	// metadata sibling. Reopen that sibling through the same confined reader.
+	if len(paths) == 1 && filepath.Base(paths[0]) == "events.jsonl" {
+		paths = []string{filepath.Join(filepath.Dir(paths[0]), "session.json"), paths[0]}
+	}
 	t := transcript{harness: domain.HarnessFX, root: canonical(root), paths: paths}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
@@ -138,7 +143,7 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 			t.shortened = true
 			text = strings.ReplaceAll(text, omittedText, "")
 		}
-		if len(strings.TrimSpace(text)) == 0 {
+		if strings.TrimSpace(text) == "" {
 			return
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
@@ -152,15 +157,15 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 		}
 		var record fxImportRecord
 		if json.Unmarshal(line, &record) != nil {
-			return nil // A torn tail does not hide the committed conversation.
+			return nil //nolint:nilerr // A torn tail does not hide the committed conversation.
 		}
-		if len(record.ID) > 0 && (record.Kind == "session_created" || len(record.WorkspaceRoot) > 0) {
+		if record.ID != "" && (record.Kind == "session_created" || record.WorkspaceRoot != "") {
 			if record.ID != t.nativeID || record.Role == "child" {
 				return errors.New("fx native identity mismatch or child session")
 			}
 			sawHeader = true
 			t.cwd = record.WorkspaceRoot
-			if len(record.Workspace) > 0 {
+			if record.Workspace != "" {
 				t.cwd = record.Workspace
 			}
 		}
@@ -195,7 +200,7 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 	}
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
-		if len(t.title) == 0 && item.Role == domain.MessageRoleUser {
+		if t.title == "" && item.Role == domain.MessageRoleUser {
 			t.title = strings.Join(strings.Fields(item.Text), " ")
 		}
 	}

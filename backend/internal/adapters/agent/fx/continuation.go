@@ -28,7 +28,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	if !fxNativeID.MatchString(ref.NativeSessionID) {
 		return "", false, errors.New("fx: invalid native session id")
 	}
-	if len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+	if strings.TrimSpace(ref.ConfigDir) == "" {
 		return "", false, nil
 	}
 	r, err := os.OpenRoot(ref.ConfigDir)
@@ -63,9 +63,10 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return "", false, nil
 }
 
-// A local transcript is backing-state evidence; unreadable homes remain unknown.
+// ProbeNativeSession uses a local transcript as backing-state evidence;
+// unreadable homes remain unknown.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+	if strings.TrimSpace(ref.ConfigDir) == "" {
 		return ports.NativeSessionAvailabilityUnknown, ctx.Err()
 	}
 	_, ok, err := p.LocateTranscript(ctx, ref)
