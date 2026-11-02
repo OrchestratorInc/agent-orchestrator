@@ -1086,7 +1086,7 @@ export function PRSummaryCard({
 		<InspectorPullRequestCardView
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
-			description={<PullRequestDescription cloud={Boolean(cloudOrgId)} pr={pr} />}
+			description={<PullRequestDescription cloud={Boolean(cloudOrgId)} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={

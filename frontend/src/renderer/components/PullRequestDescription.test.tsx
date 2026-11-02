@@ -1,9 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { noPRDetails } from "../lib/pr-display";
-import { PullRequestDescription } from "./PullRequestDescription";
+import { closePRDescription, resetPRDescriptionPanes, usePRDescriptionPane } from "../lib/pr-description-pane";
+import { PRDescriptionPane } from "./PRDescriptionPane";
+import { descriptionImages, descriptionTableCount, PullRequestDescription } from "./PullRequestDescription";
 
 const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
   ...noPRDetails(),
@@ -30,33 +32,57 @@ const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary =>
 
 const loaded = (overrides: Partial<SessionPRSummary> = {}) => summary({ detailsObservedAt: "2026-10-22T00:00:00Z", ...overrides });
 
-const renderDescription = (pr: SessionPRSummary, cloud = false) => render(<PullRequestDescription cloud={cloud} pr={pr} />);
+const KEY = "sess-1";
+
+/** What the session view would draw in its main area. */
+function OpenPane() {
+  const pr = usePRDescriptionPane(KEY);
+  return pr ? <PRDescriptionPane onClose={() => closePRDescription(KEY)} pr={pr} /> : null;
+}
+
+const renderDescription = (pr: SessionPRSummary, cloud = false) => render(<><PullRequestDescription cloud={cloud} pr={pr} sessionKey={KEY} /><OpenPane /></>);
 
 describe("PullRequestDescription", () => {
+  afterEach(() => resetPRDescriptionPanes());
   const overflowing = () => [
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(120),
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(72),
   ];
 
-  it("renders the body as markdown clamped to four lines that never renders raw HTML, and opens it in place", async () => {
+  it("shows three lines of the body as markdown that never renders raw HTML, and opens the whole body in the main area", async () => {
     const heights = overflowing();
-    const { container } = renderDescription(
-      loaded({ description: "Fixes two bugs.\n\n## Fixes\n\n- the **checkpoint**\n\n<script>window.__pwned = true</script><img src=x onerror=\"window.__pwned = true\">" }),
-    );
+    try {
+      const { container } = renderDescription(
+        loaded({ description: "Fixes two bugs.\n\n## Fixes\n\n- the **checkpoint**\n\n<script>window.__pwned = true</script><img src=x onerror=\"window.__pwned = true\">" }),
+      );
 
-    const body = screen.getByRole("heading", { name: "Fixes" }).parentElement as HTMLElement;
-    expect(body).toHaveClass("line-clamp-4");
-    const toggle = screen.getByRole("button", { name: "Show more" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(toggle);
+      const body = screen.getByRole("heading", { name: "Fixes" }).parentElement as HTMLElement;
+      expect(body).toHaveClass("line-clamp-3");
+      expect(screen.queryByTestId("pr-description-pane")).not.toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
 
-    expect(body).not.toHaveClass("line-clamp-4");
-    expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("link", { name: /Open PR #7/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
-    expect(container.querySelector("script")).toBeNull();
-    expect(container.querySelector("img[onerror]")).toBeNull();
-    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
-    for (const spy of heights) spy.mockRestore();
+      const pane = within(screen.getByTestId("pr-description-pane"));
+      expect(pane.getByRole("heading", { name: "#7 Fix dashboard" })).toBeInTheDocument();
+      expect(pane.getByText("checkpoint")).toBeInTheDocument();
+      expect(pane.getByRole("link", { name: /Open PR #7/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
+      expect(screen.getByRole("button", { name: "Read full description" })).toHaveAttribute("aria-pressed", "true");
+      expect(container.querySelector("script")).toBeNull();
+      expect(container.querySelector("img[onerror]")).toBeNull();
+      expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+    } finally {
+      for (const spy of heights) spy.mockRestore();
+    }
+  });
+
+  it("closes the full description with its close button or Escape", async () => {
+    renderDescription(loaded({ description: "Short.\n\n![shot](https://example.com/shot.png)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close description" }));
+    expect(screen.queryByTestId("pr-description-pane")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByTestId("pr-description-pane")).not.toBeInTheDocument();
   });
 
   it("drops an opening heading that only repeats the Description title, and keeps the rest", () => {
@@ -78,41 +104,65 @@ describe("PullRequestDescription", () => {
     expect(container.textContent).toContain("<span>kept</span>");
   });
 
-  it("shows images as placeholders that load nothing until one opens in a lightbox", async () => {
+  it("counts the images and tables in a line under the text, loading no image in the card", () => {
     const { container } = renderDescription(loaded({
-      description: "Before:\n\n![Old header](https://example.com/old.png)\n\n<img width=\"600\" alt=\"New header\" src=\"https://github.com/user-attachments/assets/abc?x=1&amp;y=2\">",
+      description: "Before and after:\n\n| a | b |\n| --- | --- |\n| ![Old](https://example.com/old.png) | <img alt=\"New\" src=\"https://example.com/new.png\"> |",
     }));
     expect(container.querySelector("img")).toBeNull();
-    const placeholders = screen.getAllByTestId("pr-description-image");
-    expect(placeholders.map((button) => button.textContent)).toEqual(["Old header", "New header"]);
-
-    await userEvent.click(screen.getByRole("button", { name: "Open image: New header" }));
-    const dialog = screen.getByRole("dialog", { name: "New header" });
-    expect(dialog.querySelector("img")).toHaveAttribute("src", "https://github.com/user-attachments/assets/abc?x=1&y=2");
-    expect(screen.getByRole("link", { name: /Open original/ })).toHaveAttribute("href", "https://github.com/user-attachments/assets/abc?x=1&y=2");
+    const media = within(screen.getByTestId("pr-description-media"));
+    expect(media.getByRole("button", { name: "2 images" })).toBeInTheDocument();
+    expect(media.getByText("1 table")).toBeInTheDocument();
   });
 
-  it("keeps an open image open when the card re-renders with fresh details", async () => {
+  it("opens the images in a gallery stepped through with the arrows, keys and thumbnails", async () => {
+    renderDescription(loaded({
+      description: "Before:\n\n![Old header](https://example.com/old.png)\n\n<img width=\"600\" alt=\"New header\" src=\"https://github.com/user-attachments/assets/abc?x=1&amp;y=2\">",
+    }));
+    await userEvent.click(screen.getByRole("button", { name: "2 images" }));
+    const gallery = within(screen.getByTestId("pr-image-gallery"));
+    expect(gallery.getByRole("img", { name: "Old header" })).toHaveAttribute("src", "https://example.com/old.png");
+    expect(gallery.getByText("1 of 2")).toBeInTheDocument();
+
+    await userEvent.click(gallery.getByRole("button", { name: "Next image" }));
+    expect(gallery.getByRole("img", { name: "New header" })).toHaveAttribute("src", "https://github.com/user-attachments/assets/abc?x=1&y=2");
+    expect(gallery.getByRole("link", { name: /Open original/ })).toHaveAttribute("href", "https://github.com/user-attachments/assets/abc?x=1&y=2");
+    await userEvent.keyboard("{ArrowRight}");
+    expect(gallery.getByText("1 of 2")).toBeInTheDocument();
+    await userEvent.click(gallery.getByRole("button", { name: "Show image 2" }));
+    expect(gallery.getByText("2 of 2")).toBeInTheDocument();
+  });
+
+  it("keeps the gallery open when the card re-renders with fresh details", async () => {
     const description = "![shot](https://example.com/shot.png)";
     const view = renderDescription(loaded({ description }));
-    await userEvent.click(screen.getByRole("button", { name: "Open image: shot" }));
-    view.rerender(<PullRequestDescription cloud={false} pr={loaded({ description, updatedAt: "2026-10-23T00:00:00Z" })} />);
-    expect(screen.getByRole("dialog", { name: "shot" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "1 image" }));
+    view.rerender(<><PullRequestDescription cloud={false} pr={loaded({ description, updatedAt: "2026-10-23T00:00:00Z" })} sessionKey={KEY} /><OpenPane /></>);
+    expect(screen.getByTestId("pr-image-gallery")).toBeInTheDocument();
   });
 
   it("says when an image cannot load, and keeps the link to the original", async () => {
     renderDescription(loaded({ description: "![shot](https://example.com/private.png)" }));
-    await userEvent.click(screen.getByRole("button", { name: "Open image: shot" }));
-    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+    await userEvent.click(screen.getByRole("button", { name: "1 image" }));
+    fireEvent.error(within(screen.getByTestId("pr-image-gallery")).getByRole("img", { name: "shot" }));
     expect(screen.getByText(/can't be shown here/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open original/ })).toHaveAttribute("href", "https://example.com/private.png");
   });
 
-  it("opens a linked image instead of nesting its button in the link, and never opens a non-web source", () => {
-    renderDescription(loaded({ description: "[![demo](https://example.com/demo.png)](https://example.com/video)\n\n![local](file:///etc/passwd)" }));
-    expect(screen.getByRole("button", { name: "Open image: demo" }).closest("a")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open image: local" })).not.toBeInTheDocument();
-    expect(screen.getByText("local")).toBeInTheDocument();
+  it("shows images full size in the main area, each opening the gallery at itself", async () => {
+    renderDescription(loaded({ description: "Text.\n\n![one](https://example.com/1.png)\n\n![two](https://example.com/2.png)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    const pane = within(screen.getByTestId("pr-description-pane"));
+    await userEvent.click(pane.getByRole("button", { name: "Open image: two" }));
+    expect(within(screen.getByTestId("pr-image-gallery")).getByText("2 of 2")).toBeInTheDocument();
+    // Escape closes the gallery first, and leaves the description open.
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByTestId("pr-description-pane")).toBeInTheDocument();
+  });
+
+  it("only offers web images, and never counts what sits in code", () => {
+    const markdown = "[![demo](https://example.com/demo.png)](https://example.com/video)\n\n![local](file:///etc/passwd)\n\n```\n![code](https://example.com/c.png)\n| a | b |\n| --- | --- |\n```";
+    expect(descriptionImages(markdown).map((image) => image.alt)).toEqual(["demo"]);
+    expect(descriptionTableCount(markdown)).toBe(0);
   });
 
   it("keeps a body that is only a heading", () => {
@@ -120,27 +170,18 @@ describe("PullRequestDescription", () => {
     expect(screen.getByRole("heading", { name: "Work in progress" })).toBeInTheDocument();
   });
 
-  it("folds back from Show less", async () => {
-    const heights = overflowing();
-    renderDescription(loaded({ description: "first\n\nsecond" }));
-    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
-    await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-    expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Open PR #7/ })).not.toBeInTheDocument();
-    for (const spy of heights) spy.mockRestore();
-  });
-
-  it("offers no toggle for a body that four lines already hold", () => {
+  it("offers no full view for a short body with nothing more to show", () => {
     renderDescription(loaded({ description: "Fixes the dashboard." }));
     expect(screen.getByText("Fixes the dashboard.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Read full description" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-description-media")).not.toBeInTheDocument();
   });
 
-  it("says when the body was cut short, once it is open, even if it fits", async () => {
+  it("says in the full view when the body was cut short, even if it fits the card", async () => {
     renderDescription(loaded({ description: "first\n\nsecond", descriptionTruncated: true }));
     expect(screen.queryByText("The description is shortened.")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
-    expect(screen.getByText("The description is shortened.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Read full description" }));
+    expect(within(screen.getByTestId("pr-description-pane")).getByText("The description is shortened.")).toBeInTheDocument();
   });
 
   it("says so when details have not been observed yet, instead of claiming there are none", () => {
@@ -162,6 +203,6 @@ describe("PullRequestDescription", () => {
   it("says a PR has no description once details are loaded", () => {
     renderDescription(loaded());
     expect(screen.getByText("No description.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Read full description" })).not.toBeInTheDocument();
   });
 });

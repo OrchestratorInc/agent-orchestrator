@@ -1,17 +1,17 @@
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlignLeft, ArrowUpRight } from "lucide-react";
+import { AlignLeft, Images, PanelRightOpen } from "lucide-react";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { prBrowserUrl } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
-import { PRDescriptionImage } from "./PRDescriptionImage";
-import { ProductExternalLink } from "./ProductExternalLink";
+import { openPRDescription, refreshPRDescription, usePRDescriptionPane } from "../lib/pr-description-pane";
+import { isWebImageUrl, PRDescriptionImage } from "./PRDescriptionImage";
+import { type DescriptionImage, PRImageGallery } from "./PRImageGallery";
 
 // The Reviews tab's review summary typography, so the two read as one family.
-const bodyClass = cn(
+export const bodyClass = cn(
 	"min-w-0 select-text break-words text-xs leading-relaxed text-muted-foreground",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
 	"[&_code]:rounded [&_code]:bg-muted/55 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-foreground",
@@ -58,7 +58,7 @@ function imageAsMarkdown(tag: string): string {
 
 // Kept outside the component: a new renderer each render would remount every
 // image placeholder and close an open lightbox on the next re-render.
-const markdownComponents: Components = {
+export const markdownComponents: Components = {
 	a: ({ node, href, children }) => {
 		// A linked image ([![shot](src)](href)) is just the image: its
 		// placeholder is a button, which cannot sit inside a link.
@@ -76,35 +76,69 @@ const markdownComponents: Components = {
 	img: ({ alt, src }) => <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
 };
 
-const footerLinkClass = "font-medium transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
+const footerLinkClass = "inline-flex items-center gap-1 font-medium transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
 /**
- * The PR body inside the PR card, shaped like a review summary: a small
- * header, the rendered markdown clamped to four lines, and Show more under it.
- * It reads the body the daemon already stored, so opening it makes no
- * provider call.
+ * The PR body as the card and the full view show it: raw HTML made safe,
+ * template padding squeezed, and an opening heading dropped when it only
+ * repeats the card's Description title ("## Summary").
  */
-export function PullRequestDescription({ cloud, pr }: { cloud: boolean; pr: SessionPRSummary }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const [overflows, setOverflows] = useState(false);
-	const bodyRef = useRef<HTMLDivElement>(null);
-	const bodyId = useId();
-	// Template padding (runs of blank lines) would only spend the four lines, and
-	// an opening heading ("## Summary") only repeats the card's Description title.
+export function descriptionMarkdown(pr: SessionPRSummary): string {
 	const body = withoutRawHtml(pr.description ?? "").trim().replace(/\n{3,}/g, "\n\n");
 	const withoutHeading = body.replace(/^#{1,6}[ \t]+[^\n]*(\n+|$)/, "").trimStart();
-	const description = withoutHeading || body;
+	return withoutHeading || body;
+}
+
+/** Splits markdown into prose and code parts, so code is never read as images or tables. */
+const proseParts = (markdown: string) => markdown.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/).filter((_, index) => index % 2 === 0);
+const IMAGE = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
+
+/** The web images in the description, in order (others stay labels in the text). */
+export function descriptionImages(markdown: string): DescriptionImage[] {
+	return proseParts(markdown).flatMap((part) => [...part.matchAll(IMAGE)].map((match) => ({ alt: match[1] ?? "", src: match[2] ?? "" })))
+		.filter((image) => isWebImageUrl(image.src));
+}
+
+/** How many tables the description holds, counted by their header separator rows. */
+export function descriptionTableCount(markdown: string): number {
+	return proseParts(markdown).reduce((total, part) => total + (part.match(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm) ?? []).length, 0);
+}
+
+/** The text without its images (a linked image goes with its link), for the short preview. */
+function withoutImages(markdown: string): string {
+	return markdown.replace(/\[\s*!\[[^\]]*\]\([^)]*\)\s*\]\([^)]*\)/g, "").replace(IMAGE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * The PR body inside the PR card: three lines of its text, a line counting
+ * its images and tables (the images open in a gallery), and Read full
+ * description, which opens the whole body in the session's main area. It
+ * reads the body the daemon already stored, so none of this calls the provider.
+ */
+export function PullRequestDescription({ cloud, pr, sessionKey }: { cloud: boolean; pr: SessionPRSummary; sessionKey: string }) {
+	const { t } = useTranslation();
+	const [overflows, setOverflows] = useState(false);
+	const [imageIndex, setImageIndex] = useState<number | null>(null);
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const bodyId = useId();
+	const description = descriptionMarkdown(pr);
+	const preview = withoutImages(description);
+	const images = descriptionImages(description);
+	const tables = descriptionTableCount(description);
+	const openPane = usePRDescriptionPane(sessionKey);
+	const isOpen = openPane?.url === pr.url;
+	// Fresh details reach the open full view while the card is on screen.
+	useEffect(() => { if (isOpen) refreshPRDescription(sessionKey, pr); }, [isOpen, pr, sessionKey]);
 	useLayoutEffect(() => {
 		const element = bodyRef.current;
-		if (!element || open) return;
+		if (!element) return;
 		const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
 		measure();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [open, description]);
+	}, [preview]);
 
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
@@ -113,8 +147,8 @@ export function PullRequestDescription({ cloud, pr }: { cloud: boolean; pr: Sess
 	} else if (!description) {
 		empty = t("pr.description.none");
 	}
-	// A shortened body opens too, to say so and point at the full one.
-	const canToggle = !empty && (open || overflows || pr.descriptionTruncated === true);
+	// The full view is worth opening when the card shows only part of the body.
+	const hasMore = !empty && (overflows || images.length > 0 || tables > 0 || pr.descriptionTruncated === true || preview !== description);
 
 	return (
 		// The PR card is already a filled surface, so the description keeps its own
@@ -126,31 +160,34 @@ export function PullRequestDescription({ cloud, pr }: { cloud: boolean; pr: Sess
 			</h4>
 			{empty ? (
 				<p className="text-xs leading-relaxed text-passive">{empty}</p>
-			) : (
-				<div className={cn(bodyClass, !open && "line-clamp-4")} id={bodyId} ref={bodyRef}>
-					{/* The PR body is provider content: react-markdown never renders raw HTML. */}
-					<ReactMarkdown
-						components={markdownComponents}
-						remarkPlugins={[remarkGfm]}
-					>
-						{description}
-					</ReactMarkdown>
+			) : preview ? (
+				<div className={cn(bodyClass, "line-clamp-3 max-h-[3lh] overflow-hidden")} id={bodyId} ref={bodyRef}>
+					{/* The PR body is provider content: react-markdown never renders raw HTML.
+					    line-clamp only folds text; the height cap folds tables, lists and code too. */}
+					<ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>{preview}</ReactMarkdown>
 				</div>
-			)}
-			{open && pr.descriptionTruncated ? <p className="text-micro text-passive">{t("pr.description.truncated")}</p> : null}
-			{canToggle ? (
-				<span className="mt-1 flex min-w-0 items-center justify-between gap-2 text-micro text-passive">
-					<button aria-controls={bodyId} aria-expanded={open} className={footerLinkClass} onClick={() => setOpen((value) => !value)} type="button">
-						{open ? t("inspector.showLess") : t("inspector.showMore")}
-					</button>
-					{open ? (
-						<ProductExternalLink className={cn(footerLinkClass, "inline-flex min-w-0 items-center gap-0.5")} href={prBrowserUrl(pr)}>
-							<span className="truncate">{t("inspector.openPR", { number: pr.number })}</span>
-							<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" />
-						</ProductExternalLink>
+			) : null}
+			{!empty && (images.length > 0 || tables > 0) ? (
+				<p className="m-0 inline-flex min-w-0 items-center gap-1 text-micro text-passive" data-testid="pr-description-media">
+					<Images aria-hidden="true" className="size-icon-2xs shrink-0" />
+					{images.length > 0 ? (
+						<button className="font-medium text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => setImageIndex(0)} type="button">
+							{t("pr.description.images", { count: images.length })}
+						</button>
 					) : null}
+					{images.length > 0 && tables > 0 ? <span aria-hidden="true">·</span> : null}
+					{tables > 0 ? <span>{t("pr.description.tables", { count: tables })}</span> : null}
+				</p>
+			) : null}
+			{hasMore ? (
+				<span className="mt-1 flex min-w-0 items-center text-micro text-muted-foreground">
+					<button aria-pressed={isOpen} className={footerLinkClass} data-testid="pr-description-read" onClick={() => openPRDescription(sessionKey, pr)} type="button">
+						<PanelRightOpen aria-hidden="true" className="size-icon-2xs" />
+						{t("pr.description.readFull")}
+					</button>
 				</span>
 			) : null}
+			<PRImageGallery images={images} index={imageIndex} onIndexChange={setImageIndex} />
 		</article>
 	);
 }

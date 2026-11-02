@@ -39,6 +39,8 @@ import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
+import { PRDescriptionPane } from "./PRDescriptionPane";
+import { closePRDescription, usePRDescriptionPane } from "../lib/pr-description-pane";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
@@ -551,6 +553,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [artifactRequestsBySession, setArtifactRequestsBySession] = useState<Record<string, ArtifactOpenRequest>>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
+	// A PR's full description, opened from its card, sits over the chat and file tabs.
+	const prDescription = usePRDescriptionPane(uiSessionId);
+	// Turning to a file tab puts the description away.
+	useEffect(() => { if (fileTabs.activePath) closePRDescription(uiSessionId); }, [fileTabs.activePath, uiSessionId]);
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
 	const dirtyFiles = dirtyFilesBySession[uiSessionId] ?? {};
 	const [centerFileRequestsBySession, setCenterFileRequestsBySession] = useState<
@@ -1960,8 +1966,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{/* The committed mode owns the agent surface. Auxiliary shell and
 							    reviewer targets remain terminal surfaces in either mode. */}
 							<div
-								className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
-								inert={fileTabs.activePath ? true : undefined}
+								className={cn("h-full min-h-0", (fileTabs.activePath || prDescription) && "invisible pointer-events-none")}
+								inert={fileTabs.activePath || prDescription ? true : undefined}
 							>
 							{/* Every Cloud Chat target stays on the Cloud surface: the local one
 							    asks this machine's daemon, which has never heard of a Cloud
@@ -2145,6 +2151,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												);
 											})}
 										</>									)}
+								</div>
+							) : null}
+							{prDescription ? (
+								<div className="absolute inset-0 z-10">
+									<PRDescriptionPane key={prDescription.url} onClose={() => closePRDescription(uiSessionId)} pr={prDescription} />
 								</div>
 							) : null}
 							{interfaceUi.notice}
