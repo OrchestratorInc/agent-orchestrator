@@ -76,16 +76,28 @@ func TestSyncWritesCanonicalContentAddressedCatalog(t *testing.T) {
 
 // Break caught: treating conflicting provider/model records as independent
 // models would silently select an arbitrary price.
-func TestSyncRejectsConflictingCanonicalDuplicates(t *testing.T) {
+// Break caught: the live table is not reviewed before the daemon reads it, so
+// one entry priced twice, or one AO cannot read, failed every price at once.
+func TestSyncDropsConflictingDuplicatesAndUnreadableEntries(t *testing.T) {
 	upstream := `{
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
 "OPENAI/GPT-TEST":{"litellm_provider":" OPENAI ","mode":"responses","input_cost_per_token":3,"output_cost_per_token":2},
+"openai/unreadable":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":"cheap","output_cost_per_token":2},
+"other/unreadable":{"litellm_provider":7},
+"openai/ok":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`
-	_, err := Sync(t.TempDir(), []byte(upstream), testSource("1"))
-	if err == nil || !strings.Contains(err.Error(), "conflicting duplicate rates") {
-		t.Fatalf("Sync error = %v, want conflicting duplicate rates", err)
+	root := t.TempDir()
+	if _, err := Sync(root, []byte(upstream), testSource("1")); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	var ids []string
+	for _, model := range readProviderBlob(t, root, "openai").Models {
+		ids = append(ids, model.ModelID)
+	}
+	if strings.Join(ids, ",") != "ok" {
+		t.Fatalf("openai models = %v, want only ok", ids)
 	}
 }
 

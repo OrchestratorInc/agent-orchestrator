@@ -3619,6 +3619,7 @@
 	"usage.byAgent": "エージェント別の使用状況",
 	"usage.harnessCostLine": "コストの {{share}} · {{tokens}} トークン",
 	"usage.harnessTokenLine": "トークンの {{share}} · {{cost}}",
+	"usage.harnessUnpricedLine": "{{tokens}} トークン",
 	"usage.chart.dailyCost": "日別コスト",
 	"usage.chart.hourlyCost": "時間別コスト",
 	"usage.chart.dailyTokens": "日別の処理トークン",

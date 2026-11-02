@@ -3686,6 +3686,7 @@
 	"usage.byAgent": "Uso por agente",
 	"usage.harnessCostLine": "{{share}} del coste · {{tokens}} tokens",
 	"usage.harnessTokenLine": "{{share}} de los tokens · {{cost}}",
+	"usage.harnessUnpricedLine": "{{tokens}} tokens",
 	"usage.chart.dailyCost": "Coste diario",
 	"usage.chart.hourlyCost": "Coste por hora",
 	"usage.chart.dailyTokens": "Tokens procesados por día",

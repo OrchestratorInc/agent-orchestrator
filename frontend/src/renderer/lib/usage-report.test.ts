@@ -42,6 +42,11 @@ describe("usage report aggregation", () => {
 		expect(usageByHarness(report, "tokens").map((entry) => entry.harness)).toEqual(["codex", "claude-code"]);
 	});
 
+	it("counts each agent's priced events, so an agent with none reads as not priced", () => {
+		const unpriced = usageByHarness({ rows: [row({ harness: "kimi", pricedEvents: 0 }), row({ harness: "codex" })], sessions: [] }, "cost");
+		expect(unpriced.map((entry) => [entry.harness, entry.pricedEvents])).toEqual([["codex", 1], ["kimi", 0]]);
+	});
+
 	it("zero-fills periods with no usage so every bar keeps its slot", () => {
 		const series = usageSeries(report, "cost");
 		expect(series.harnesses).toEqual(["claude-code", "codex"]);

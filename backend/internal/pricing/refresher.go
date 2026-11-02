@@ -19,6 +19,13 @@ const (
 	RetryMaximum = time.Hour
 )
 
+// FetchResult reports either a complete validated catalog or a valid 304.
+type FetchResult struct {
+	Catalog     *Catalog
+	ETag        string
+	NotModified bool
+}
+
 // CatalogFetcher is the injected remote transport boundary.
 type CatalogFetcher interface {
 	Fetch(context.Context, string, bool) (FetchResult, error)

@@ -3600,6 +3600,7 @@
 	"usage.byAgent": "Usage by agent",
 	"usage.harnessCostLine": "{{share}} of cost · {{tokens}} tokens",
 	"usage.harnessTokenLine": "{{share}} of tokens · {{cost}}",
+	"usage.harnessUnpricedLine": "{{tokens}} tokens",
 	"usage.chart.dailyCost": "Daily cost",
 	"usage.chart.hourlyCost": "Hourly cost",
 	"usage.chart.dailyTokens": "Daily processed tokens",

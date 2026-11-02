@@ -3619,6 +3619,7 @@
 	"usage.byAgent": "에이전트별 사용량",
 	"usage.harnessCostLine": "비용의 {{share}} · 토큰 {{tokens}}",
 	"usage.harnessTokenLine": "토큰의 {{share}} · {{cost}}",
+	"usage.harnessUnpricedLine": "토큰 {{tokens}}",
 	"usage.chart.dailyCost": "일별 비용",
 	"usage.chart.hourlyCost": "시간별 비용",
 	"usage.chart.dailyTokens": "일별 처리 토큰",

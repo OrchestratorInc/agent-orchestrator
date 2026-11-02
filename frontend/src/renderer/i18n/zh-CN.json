@@ -3601,6 +3601,7 @@
 	"usage.byAgent": "按代理划分的用量",
 	"usage.harnessCostLine": "费用占比 {{share}} · {{tokens}} Token",
 	"usage.harnessTokenLine": "Token 占比 {{share}} · {{cost}}",
+	"usage.harnessUnpricedLine": "{{tokens}} Token",
 	"usage.chart.dailyCost": "每日费用",
 	"usage.chart.hourlyCost": "每小时费用",
 	"usage.chart.dailyTokens": "每日处理的 Token",

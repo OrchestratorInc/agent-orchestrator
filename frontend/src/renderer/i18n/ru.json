@@ -3856,6 +3856,7 @@
 	"usage.byAgent": "Использование по агентам",
 	"usage.harnessCostLine": "{{share}} стоимости · {{tokens}} токенов",
 	"usage.harnessTokenLine": "{{share}} токенов · {{cost}}",
+	"usage.harnessUnpricedLine": "{{tokens}} токенов",
 	"usage.chart.dailyCost": "Стоимость по дням",
 	"usage.chart.hourlyCost": "Стоимость по часам",
 	"usage.chart.dailyTokens": "Обработанные токены по дням",
