@@ -72,9 +72,12 @@ describe("settling under a reader who scrolled up", () => {
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
 	let restoreLayout: (() => void) | undefined;
-	afterEach(() => {
+	afterEach(async () => {
 		restoreLayout?.();
 		restoreLayout = undefined;
+		// The scroll starts the virtualizer's 150ms "scrolling stopped" timer, which
+		// unmount does not clear; let it fire while jsdom's window still exists.
+		await new Promise((resolve) => setTimeout(resolve, 200));
 	});
 
 	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" is 28px) under a scrollable log. */
