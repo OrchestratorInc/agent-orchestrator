@@ -1403,6 +1403,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		};
 		const observer = new ResizeObserver((entries) => {
 			if (disposed) return;
+			// Track the box even while parked, so the stabilizer never proposes
+			// from a box that changed while this terminal was hidden.
+			const observed = entries.find((entry) => entry.target === host)?.contentRect;
+			if (observed) observedBox = { width: observed.width, height: observed.height };
 			if (callbacksRef.current.isVisible === false) {
 				waitingForResizeOutput = false;
 				hasResizeFrame = false;
@@ -1412,13 +1416,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				scheduleVisibleFit();
 				return;
 			}
-			const box = entries.find((entry) => entry.target === host)?.contentRect;
-			if (!box) {
+			if (!observed) {
 				scheduleLiveFit();
 				return;
 			}
-			observedBox = { width: box.width, height: box.height };
-			if (box.width <= 0 || box.height <= 0) return;
+			if (observed.width <= 0 || observed.height <= 0) return;
 			const grid = gridFromObservedBox();
 			if (!grid) {
 				scheduleLiveFit();

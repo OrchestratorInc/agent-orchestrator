@@ -1089,6 +1089,34 @@ func TestOpenShellTerminalDefersStartWhenTheClientWillSizeIt(t *testing.T) {
 	}
 }
 
+func TestOpenShellTerminalStartsAtTheClientGridWhenGiven(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 146, Rows: 37}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 146 || rt.created[0].InitialRows != 37 {
+		t.Fatalf("runtime creates = %+v, want the client's 146x37 grid", rt.created)
+	}
+}
+
+func TestOpenShellTerminalIgnoresAnOutOfRangeGrid(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	in := OpenShellTerminalInput{ProjectID: "portfolio", StartOnAttach: true, Cols: 1, Rows: 5000}
+	if _, err := svc.OpenShellTerminal(context.Background(), in); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if len(rt.created) != 1 || rt.created[0].InitialCols != 0 || rt.created[0].InitialRows != 0 || !rt.created[0].StartOnAttach {
+		t.Fatalf("runtime creates = %+v, want no grid and start-on-attach kept", rt.created)
+	}
+}
+
 func TestOpenShellTerminalRejectsUnavailableWindowsShell(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows shell selection only applies on Windows")

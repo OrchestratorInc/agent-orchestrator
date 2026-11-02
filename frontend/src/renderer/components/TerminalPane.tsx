@@ -1431,7 +1431,9 @@ function AttachedTerminal({
 					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
-					onGridChange={rememberPaneTerminalGrid}
+					// Only session panes, where new shell tabs open. Settings login and
+					// onboarding terminals have other sizes and must not set the hint.
+					onGridChange={session ? rememberPaneTerminalGrid : undefined}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
