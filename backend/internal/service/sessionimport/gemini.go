@@ -310,15 +310,15 @@ func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 			return err
 		}
 		if walkErr != nil || !entry.Type().IsRegular() || filepath.Base(filepath.Dir(path)) != "chats" || !strings.HasPrefix(entry.Name(), "session-") || (!strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, ".jsonl")) {
-			return nil
+			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
 		t, err := readGeminiTranscript(ctx, root, path)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // One malformed or unreadable conversation does not hide its neighbors.
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // Files removed or made unreadable during discovery are ineligible.
 		}
 		file := sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()}
 		if _, ok := byID[t.nativeID]; !ok || t.last.After(activity[t.nativeID]) {
@@ -327,7 +327,7 @@ func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
 		}
 		return nil
 	})
-	var files []sourceFiles
+	files := make([]sourceFiles, 0, len(byID))
 	for _, file := range byID {
 		files = append(files, file)
 	}
