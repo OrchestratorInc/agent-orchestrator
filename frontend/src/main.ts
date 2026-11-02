@@ -3184,6 +3184,7 @@ registerChatImageIpc({
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
+	appName: app.getName(),
 });
 registerCloudArtifactIpc({
 	ipcMain,
