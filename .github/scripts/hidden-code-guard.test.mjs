@@ -333,6 +333,19 @@ test("checks execution and registry settings in modern and classic Yarn syntax",
 	}
 });
 
+test("requires review for Yarn flow mappings and unsupported YAML syntax", () => {
+	for (const text of [
+		'{"yarnPath":"./scripts/payload.cjs"}',
+		"{nodeLinker: node-modules, yarnPath: ./scripts/payload.cjs}",
+		"npmScopes: {scope: {npmRegistryServer: https://evil.example}}",
+		"cacheFolder: &path ./scripts/payload.cjs", "cacheFolder: *path", "cacheFolder: >",
+		String.raw`"\x79arnPath": ./scripts/payload.cjs`, '? "yarnPath"',
+	]) assert.deepEqual(rules(check(".yarnrc.yml", text)), ["R7"], text);
+	for (const text of ["", "  ", "# flow example: {yarnPath: ./payload.cjs}"]) {
+		assert.deepEqual(check(".yarnrc.yml", text), []);
+	}
+});
+
 test("flags npm config indirection and code-loading keys, while ignoring comments and harmless values", () => {
 	for (const file of [".npmrc", "frontend/.npmrc"]) {
 		for (const key of ["userconfig", "globalconfig", "node-options", "node-gyp", "script-shell", "onload-script", "init-module"]) {

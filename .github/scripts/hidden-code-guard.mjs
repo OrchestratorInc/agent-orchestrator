@@ -71,12 +71,16 @@ function riskyNpmConfig(text) {
 }
 
 function riskyYarnConfig(text) {
+	if (!text.trim() || /^\s*#/.test(text)) return false;
+	// Require review for collections and syntax this line parser cannot verify.
+	if (/[{}\[\]]/.test(text)) return true;
 	const setting = text.match(/^\s*("(?:\\.|[^"\\])*"|'[^']*'|(?:@[^:\s]+:)?[\w-]+)(?:\s*[:=]\s*|\s+)(.*)$/);
-	if (!setting) return false;
+	if (!setting || setting[1].includes("\\")) return true;
 	const key = String(iniValue(setting[1])).replace(/^--(?:install\.)?/, "");
 	return /^(?:@[^:]+:)?registry$|^(?:yarnPath|yarn-path|npmRegistryServer|plugins|script-shell|onload-script|node-options)$/.test(key)
 		|| (key === "ignore-scripts" && iniValue(setting[2]) === "false")
-		|| (key === "enableScripts" && iniValue(setting[2]) === "true");
+		|| (key === "enableScripts" && iniValue(setting[2]) === "true")
+		|| /(?:^|\s)[&*!|>]/.test(setting[2]);
 }
 
 export function scan(lines) {
