@@ -295,6 +295,9 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_START_FAILED", "The native login could not start. Try the terminal login.")
 	}
 	s.operations[op.snapshot.ID] = op
+	// Cleanup after the process exits outlives this request but keeps its
+	// values; each step adds its own timeout.
+	afterLogin := context.WithoutCancel(ctx)
 	go func() {
 		err := cmd.Wait()
 		if op.stdin != nil {
@@ -304,7 +307,9 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		// override it. Do that before "succeeded" is visible, so no session
 		// started after it still gets the key. Best effort, outside s.mu.
 		if err == nil && loginCtx.Err() == nil {
-			_ = s.releaseSubscriptionKey(context.Background(), agentID)
+			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
+			_ = s.releaseSubscriptionKey(releaseCtx, agentID)
+			releaseCancel()
 		}
 		s.mu.Lock()
 		if op.snapshot.Status == "running" {
@@ -443,7 +448,9 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// As for CLI logins, the finished sign-in replaces an AO-saved key
 			// that would override it, before "succeeded" is visible. The
 			// agent ID never changes after the operation is created.
-			_ = s.releaseSubscriptionKey(context.Background(), op.snapshot.AgentID)
+			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			_ = s.releaseSubscriptionKey(releaseCtx, op.snapshot.AgentID)
+			releaseCancel()
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "succeeded"
