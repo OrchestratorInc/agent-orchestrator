@@ -592,6 +592,17 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 	return i, err
 }
 
+const getSessionNumFloor = `-- name: GetSessionNumFloor :one
+SELECT max_num FROM session_num_floors WHERE id_prefix = ?
+`
+
+func (q *Queries) GetSessionNumFloor(ctx context.Context, idPrefix string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionNumFloor, idPrefix)
+	var max_num int64
+	err := row.Scan(&max_num)
+	return max_num, err
+}
+
 const insertSession = `-- name: InsertSession :exec
 INSERT INTO sessions (
     id, project_id, num, issue_id, kind, harness, reviewer_harness, reviewer_agent_config, auto_review_enabled, display_name,
@@ -988,6 +999,61 @@ func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.S
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReleasedArchivedSessions = `-- name: ListReleasedArchivedSessions :many
+SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
+WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
+    AND (s.workspace_path = '' OR EXISTS (
+        SELECT 1 FROM session_cleanup_facts f
+        WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
+            AND f.workspace_disposition IN ('removed', 'not_applicable')
+    ))
+    AND s.id NOT IN (
+        SELECT t.handled_by_session_id FROM conversation_turns t
+        JOIN conversations c ON c.id = t.conversation_id
+        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+    )
+    AND s.id NOT IN (
+        SELECT c.current_session_id FROM conversations c
+        WHERE c.current_session_id IS NOT NULL
+            AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+    )
+ORDER BY s.id
+`
+
+type ListReleasedArchivedSessionsRow struct {
+	ID           domain.SessionID
+	TerminatedAt sql.NullTime
+	UpdatedAt    time.Time
+}
+
+// Archived sessions retention may delete: the worktree is released for the
+// current generation, or there never was one. A row archived before
+// terminated_at existed counts from its last update. Sessions in another
+// session's conversation history are left out, as DeleteTerminatedSession
+// refuses them, so retention does not retry them on every pass.
+func (q *Queries) ListReleasedArchivedSessions(ctx context.Context) ([]ListReleasedArchivedSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReleasedArchivedSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReleasedArchivedSessionsRow{}
+	for rows.Next() {
+		var i ListReleasedArchivedSessionsRow
+		if err := rows.Scan(&i.ID, &i.TerminatedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

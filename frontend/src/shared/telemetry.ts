@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
-import { type CiSignal, detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
+import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
 
 /**
  * Segmentation the renderer cannot see for itself: CPU architecture, the real
@@ -17,12 +17,16 @@ export type TelemetryInstallContext = {
 	installSource: string;
 	installedAt?: string;
 	isCi: boolean;
-	ciSignal?: CiSignal;
+	isContainer: boolean;
 };
 
 export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
+	daysSinceInstall?: number;
+	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
+	installTimestampMs?: number;
+	lifetimeSessions?: number;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -70,7 +74,7 @@ export async function readTelemetryInstallContext(input: {
 		installSource: normalizeInstallSource(typeof state.installSource === "string" ? state.installSource : undefined),
 		...(installedAt ? { installedAt } : {}),
 		isCi: ci.isCi,
-		...(ci.ciSignal ? { ciSignal: ci.ciSignal } : {}),
+		isContainer: ci.isContainer,
 	};
 }
 
@@ -275,9 +279,23 @@ export async function buildTelemetryBootstrap(
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	let daysSinceInstall: number | undefined;
+	let installTimestampMs: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(dataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) {
+			installTimestampMs = installedAt;
+			daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+		}
+	} catch {
+		// An unreadable creation time is unknown.
+	}
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
-		installId: await loadOrCreateTelemetryInstallId(dataDir),
+		installId,
+		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
+		...(installTimestampMs === undefined ? {} : { installTimestampMs }),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

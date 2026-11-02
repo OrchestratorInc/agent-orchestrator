@@ -196,9 +196,17 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
+// `ao session cleanup` and the daemon's background pass record what they find
+// on sessions nobody archived; only a cleanup an archive started is the app's
+// to report.
+function archiveCleanup(session: WorkspaceSession | undefined): WorkspaceSession["workspaceCleanup"] {
+	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
+}
+
 function workspaceCleanupErrorKey(session: WorkspaceSession | undefined): "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty" | null {
-	if (session?.workspaceCleanup === "failed") return "shell.workspaceCleanupFailed";
-	if (session?.workspaceCleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
+	const cleanup = archiveCleanup(session);
+	if (cleanup === "failed") return "shell.workspaceCleanupFailed";
+	if (cleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
 	return null;
 }
 
@@ -220,7 +228,7 @@ export function useTerminateSessionState(sessionId: string, hostId?: string) {
 		error: (errorKey ? t(errorKey) : null) ??
 			(!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
 				? summary.latest.error.message : null),
-		isPending: summary?.isPending === true || session?.workspaceCleanup === "pending",
+		isPending: summary?.isPending === true || archiveCleanup(session) === "pending",
 	};
 }
 
@@ -238,7 +246,7 @@ export function useProjectTerminateSessionStates(workspaceId: string | undefined
 	for (const session of sessions) {
 		const errorKey = workspaceCleanupErrorKey(session);
 		const error = errorKey ? t(errorKey) : null;
-		const cleanupPending = session.workspaceCleanup === "pending";
+		const cleanupPending = archiveCleanup(session) === "pending";
 		if (!error && !cleanupPending) continue;
 		const previous = states.findIndex((state) => state.session.id === session.id);
 		const state = { error, isPending: cleanupPending, session, cleanupPending };

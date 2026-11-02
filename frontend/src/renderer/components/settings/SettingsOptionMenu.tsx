@@ -158,7 +158,8 @@ export function SettingsOptionMenu<T extends string>({
 							<DropdownMenuItem
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
-								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
+								// Rows remain mounted during the exit animation; they must not restart a preview.
+								onFocus={menuOpen && onHighlight ? () => onHighlight(option.value) : undefined}
 								// Hovering off the options (or into the search box) ends the
 								// preview; moving to another option hands it straight over.
 								onBlur={

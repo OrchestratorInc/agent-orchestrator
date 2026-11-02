@@ -720,7 +720,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 				sessionJSON("demo-old", "demo", "worker", "terminated", true)+`,`+
 				sessionJSON("demo-orch", "demo", "orchestrator", "terminated", true)+`]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/cleanup":
-			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","reason":"workspace has uncommitted changes"}]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old"],"skipped":[{"sessionId":"demo-orch","code":"dirty","reason":"workspace has uncommitted changes"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -736,7 +736,7 @@ func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Cleaned: demo-old",
-		"Skipped: demo-orch (workspace has uncommitted changes)",
+		"Skipped: demo-orch (workspace has uncommitted changes) [dirty]\n",
 		"Cleanup complete. 1 session cleaned, 1 skipped.",
 	} {
 		if !strings.Contains(out, want) {
