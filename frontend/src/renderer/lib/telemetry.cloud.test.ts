@@ -10,6 +10,15 @@ import {
 afterEach(() => resetCloudTelemetryContextForTest());
 
 describe("cloud funnel event allowlist", () => {
+	it.each(["ao.renderer.cloud_limit_reached", "ao.renderer.cloud_plan_refusal_shown"])("keeps the chat source on %s", async (event) => {
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: false, source: "chat",
+		});
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: true, source: "private text" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: true,
+		});
+	});
+
 	it("keeps vocabulary values and hashes ids", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.cloud_session_failed", {
 			provider: "coder",

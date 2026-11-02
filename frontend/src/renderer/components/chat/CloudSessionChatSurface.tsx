@@ -363,7 +363,10 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 				<button
 					type="button"
 					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
-					onClick={() => useUiStore.getState().openGlobalSettings("billing")}
+					onClick={() => {
+						useUiStore.getState().openGlobalSettings("billing");
+						reportPlanRefusal(code, true, "chat");
+					}}
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
 				</button>

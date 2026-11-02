@@ -866,6 +866,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_limit_reached":
 			safe.code = cloudCode(properties?.code);
 			if (typeof properties?.shown === "boolean") safe.shown = properties.shown;
+			if (properties?.source === "chat") safe.source = "chat";
 			break;
 	}
 	return safe;

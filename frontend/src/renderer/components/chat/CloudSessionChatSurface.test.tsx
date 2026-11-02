@@ -7,6 +7,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { sessionUiKey } from "../../lib/hosts";
@@ -28,6 +29,10 @@ const cloudMocks = vi.hoisted(() => ({
 	chatProps: vi.fn(),
 }));
 const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true } }));
+vi.mock("../../lib/cloud-telemetry", async (original) => ({
+	...await original<typeof import("../../lib/cloud-telemetry")>(),
+	reportPlanRefusal: vi.fn(),
+}));
 vi.mock("../../hooks/useCloudBilling", () => ({
 	useCloudBilling: () => ({ data: { plan: "starter" }, offering: billing.offering }),
 }));
@@ -75,6 +80,8 @@ const session = {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		vi.mocked(reportPlanRefusal).mockClear();
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
@@ -1660,10 +1667,14 @@ describe("CloudSessionChatSurface", () => {
 		expect(notice.textContent).toContain("all running sessions on your plan are in use.");
 		// The plan sits on its own line, so no language needs a joining space.
 		expect(screen.getByText("You're on the Starter plan.").tagName).toBe("SPAN");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		const originalOpenGlobalSettings = useUiStore.getState().openGlobalSettings;
 		const openGlobalSettings = vi.fn();
 		useUiStore.setState({ openGlobalSettings });
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
+		expect(reportPlanRefusal).toHaveBeenLastCalledWith("WORKER_SLOTS_FULL", true, "chat");
+		useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings });
 		// A member cannot buy a plan, so the notice sends them to an admin instead.
 		billing.offering = { selfServeBilling: true, canManageBilling: false };
 		rerender(view(session.id));
@@ -1682,6 +1693,25 @@ describe("CloudSessionChatSurface", () => {
 		rerender(view(session.id));
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("does not report Upgrade opening when a plan notice is dismissed", async () => {
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			}], hasMore: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
 	});
 
 	it("reads a plan refusal only in the shape the control plane reports it", () => {
