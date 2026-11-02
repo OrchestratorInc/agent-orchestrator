@@ -1457,6 +1457,9 @@ export function CloudSessionChatSurface({
 		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
 		const failed = snapshot.items.filter(failedTool);
 		if (!baseline.seen) {
+			// Stream writes also advance dataUpdatedAt. Wait for opening history
+			// to finish before deciding which failures were already present.
+			if (!eventsQuery.isSuccess || eventsQuery.fetchStatus !== "idle") return;
 			baseline.seen = new Set(failed.map((item) => item.id));
 			return;
 		}
@@ -1469,7 +1472,7 @@ export function CloudSessionChatSurface({
 		if (!code) return;
 		setPlanRefusal({ key, code });
 		reportPlanRefusal(code, false, "chat");
-	}, [eventsQuery.dataUpdatedAt, refusalKey, snapshot]);
+	}, [eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.

@@ -1746,6 +1746,41 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+	it("waits for opening history while streamed replay arrives in separate batches", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+		});
+		const replay = [failed(2), failed(3)];
+		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; nextAfter: number }) => void;
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishHistory = resolve; }))
+			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 3 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		for (const event of replay) {
+			await act(async () => {
+				queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [event]));
+			});
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(event.sequence));
+		}
+		expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		await act(async () => finishHistory({ events: replay, hasMore: false, nextAfter: 3 }));
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		expect(screen.queryByRole("alert")).toBeNull();
+		// A refusal arriving after the opening history completed is still new.
+		await act(async () => {
+			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [failed(4)]));
+		});
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+	});
+
 	it("opens a file the agent linked by its sandbox path as the workspace file", async () => {
 		const search = vi.fn(async () => ["NOTES.md", "docs/NOTES.md", "src/app/page.tsx"]);
 		await expect(cloudWorkspaceFilePath("NOTES.md", search)).resolves.toBe("NOTES.md");
