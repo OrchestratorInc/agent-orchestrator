@@ -87,6 +87,8 @@ const approvalGlyph = { ios: "shield", android: "shield" } as const;
 const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
 /** The field's text inset once the pill has opened: just clear of the card's rounded corner. */
 const OPEN_FIELD_INSET = space.xs;
+// The waveform's inset from the pill's leading edge while the mic is open.
+const DICTATION_INSET = space.md;
 
 export function ChatComposer({
 	quoteRequest,
@@ -247,15 +249,22 @@ export function ChatComposer({
 	const hasDraft = Boolean(text.trim() || quotes.length);
 	const listening = voice.state === "starting" || voice.state === "recording";
 	const transcribing = voice.state === "transcribing";
+	const dictating = listening || transcribing;
 	// Collapsed, the composer is a slim pill under the session's chips. Writing
 	// grows it into a card that adds the turn settings between attach and the
-	// round button, and it stays open while anything waits to be sent and while
-	// the mic is open.
-	const expanded = focused || hasDraft || attachments.length > 0 || listening || transcribing;
+	// round button, and it stays open while anything waits to be sent. While the
+	// mic is open it is the slim pill again with only the waveform and the stop
+	// button, so the trace gets the whole width.
+	const expanded = !dictating && (focused || hasDraft || attachments.length > 0);
 	// 0 collapsed, 1 open. Everything that changes as the pill opens reads it, so
 	// the row, the field's insets and the settings move as one.
 	const reduceMotion = useReducedMotion();
 	const openness = useSharedValue(expanded ? 1 : 0);
+	// 1 while the mic is open: the attach button is gone and the field reaches the pill's leading edge.
+	const micOpen = useSharedValue(dictating ? 1 : 0);
+	useEffect(() => {
+		micOpen.value = withTiming(dictating ? 1 : 0, { duration: reduceMotion ? 0 : COMPOSER_FADE_MS });
+	}, [dictating, micOpen, reduceMotion]);
 	useEffect(() => { onExpandedChange?.(expanded); }, [expanded, onExpandedChange]);
 	useEffect(() => {
 		openness.value = reduceMotion ? withTiming(expanded ? 1 : 0, { duration: 0 }) : withSpring(expanded ? 1 : 0, COMPOSER_SPRING);
@@ -512,7 +521,7 @@ export function ChatComposer({
 	// field starts between them and is let out to the pill's full width, and the
 	// controls row opens under it, its settings rising into place.
 	const fieldInsets = useAnimatedStyle(() => ({
-		paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
+		paddingLeft: interpolate(micOpen.value, [0, 1], [interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]), DICTATION_INSET]),
 		paddingRight: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
 	}));
 	const controlsOpening = useAnimatedStyle(() => ({
@@ -653,7 +662,7 @@ export function ChatComposer({
 				    the dictation takes its place, and the field waits hidden with the
 				    draft the transcript will be added to. */}
 				<Animated.View style={[styles.composerRow, fieldSize.row, fieldInsets]}>
-					{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
+					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 					<TextInput
 						ref={inputRef}
 						onLayout={pasteLayout}
@@ -672,7 +681,7 @@ export function ChatComposer({
 						// between the rule's min and max and then scrolls. Setting the
 						// height from the content-size event lagged a line behind, so
 						// each new line first scrolled the field and cut off its top line.
-						style={[styles.input, fieldSize.field, (listening || transcribing) && styles.hiddenField]}
+						style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}
 						multiline
 						maxLength={40_000}
 					/>
@@ -689,7 +698,7 @@ export function ChatComposer({
 				{/* The corner controls, pinned to the pill's bottom corners in both
 				    shapes. The round button changes face in place, as the new-task
 				    sheet's does. */}
-				<View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>
+				{dictating ? null : <View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>}
 				<View style={[styles.corner, styles.cornerTrailing]}>
 					{roundButton}
 				</View>

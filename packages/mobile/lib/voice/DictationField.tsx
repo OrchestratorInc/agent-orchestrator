@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { useEffect, useState } from "react";
+import { StyleSheet, Text, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -9,6 +9,8 @@ import type { VoiceState } from "./types";
 
 /** The waveform keeps this many of the latest input levels, newest at the trailing end. */
 export const WAVEFORM_BARS = 28;
+/** The most a waveform that fills its row keeps: more than any phone's row holds. */
+const MAX_BARS = 120;
 const BAR_WIDTH = 3;
 const BAR_GAP = 2;
 /** A bar at silence, and at full voice. */
@@ -27,18 +29,28 @@ const BAR_EASE_MS = 90;
  * on every tap. The field keeps one label for the whole recording; the warm-up
  * shows as the waveform lying flat in a quiet tint, and the trace takes the
  * recording colour once the mic captures, alongside the haptic that says so.
+ *
+ * `waveformOnly` draws the trace alone across the whole field, for a composer
+ * that hides everything but the stop button while the mic is open. The label
+ * is still what a screen reader hears.
  */
-export function DictationField({ state, partial, subscribeLevel, style }: {
+export function DictationField({ state, partial, subscribeLevel, style, waveformOnly }: {
 	state: VoiceState;
 	/** The live transcript; empty until the recogniser has heard something. */
 	partial: string;
 	subscribeLevel(listener: (level: number) => void): () => void;
 	style?: StyleProp<ViewStyle>;
+	waveformOnly?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const capturing = state === "recording";
 	const label = partial || (state === "transcribing" ? "Transcribing…" : "Listening…");
+	if (waveformOnly) return (
+		<View style={[styles.field, style]} accessibilityLiveRegion="polite" accessible accessibilityLabel={label}>
+			<VoiceWaveform live={capturing} subscribeLevel={subscribeLevel} fill />
+		</View>
+	);
 	return (
 		<View style={[styles.field, style]} accessibilityLiveRegion="polite" accessible accessibilityLabel={label}>
 			{/* The latest words matter most, so a long transcript gives up its start. */}
@@ -50,9 +62,15 @@ export function DictationField({ state, partial, subscribeLevel, style }: {
 	);
 }
 
-/** The input level over the last couple of seconds, as a row of bars. */
-export function VoiceWaveform({ live, subscribeLevel }: { live: boolean; subscribeLevel(listener: (level: number) => void): () => void }) {
+/**
+ * The input level over the last couple of seconds, as a row of bars. With
+ * `fill` it takes its row's width and draws as many bars as fit, which then
+ * reach further back.
+ */
+export function VoiceWaveform({ live, subscribeLevel, fill }: { live: boolean; subscribeLevel(listener: (level: number) => void): () => void; fill?: boolean }) {
 	const t = useTheme();
+	const [width, setWidth] = useState(0);
+	const count = fill && width ? Math.min(MAX_BARS, Math.floor((width + BAR_GAP) / (BAR_WIDTH + BAR_GAP))) : WAVEFORM_BARS;
 	const levels = useSharedValue<number[]>(silence());
 	useEffect(() => {
 		if (!live) {
@@ -64,9 +82,15 @@ export function VoiceWaveform({ live, subscribeLevel }: { live: boolean; subscri
 		});
 	}, [levels, live, subscribeLevel]);
 	return (
-		<View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={waveformStyles.row}>
-			{Array.from({ length: WAVEFORM_BARS }, (_, index) => (
-				<WaveformBar key={index} index={index} levels={levels} color={live ? t.red : t.textFaint} />
+		<View
+			importantForAccessibility="no-hide-descendants"
+			accessibilityElementsHidden
+			onLayout={fill ? (event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width) : undefined}
+			style={[waveformStyles.row, fill && waveformStyles.fill]}
+		>
+			{/* The newest levels, the last bar the latest. */}
+			{Array.from({ length: count }, (_, index) => (
+				<WaveformBar key={index} index={MAX_BARS - count + index} levels={levels} color={live ? t.red : t.textFaint} />
 			))}
 		</View>
 	);
@@ -82,11 +106,12 @@ function WaveformBar({ index, levels, color }: { index: number; levels: SharedVa
 }
 
 function silence(): number[] {
-	return Array.from({ length: WAVEFORM_BARS }, () => 0);
+	return Array.from({ length: MAX_BARS }, () => 0);
 }
 
 const waveformStyles = StyleSheet.create({
 	row: { flexDirection: "row", alignItems: "center", gap: BAR_GAP, height: BAR_MAX, flexShrink: 0 },
+	fill: { flex: 1, flexShrink: 1, minWidth: 0, overflow: "hidden", justifyContent: "flex-end" },
 	bar: { width: BAR_WIDTH, minHeight: BAR_MIN, borderRadius: BAR_WIDTH / 2 },
 });
 

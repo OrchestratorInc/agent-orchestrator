@@ -61,6 +61,9 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, o
 	}, [navigation]);
 	const listening = voice.state === "recording" || voice.state === "starting";
 	const transcribing = voice.state === "transcribing";
+	// While the mic is open the pill holds only the waveform and the stop
+	// button: no attach, no settings row, so the trace gets the whole width.
+	const dictating = listening || transcribing;
 	const promptEmpty = !prompt.trim();
 
 	// One round button that follows the prompt, as the chat's: it stops the mic
@@ -103,10 +106,10 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, o
 	return (
 		<View style={styles.composer}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
-			<View style={[styles.composerRow, styles.fieldInsets]}>
+			<View style={[styles.composerRow, dictating ? styles.dictationInsets : styles.fieldInsets]}>
 				{/* While the mic is open the dictation takes the field's place, as
 				    in the chat's composer; the field waits hidden with the prompt. */}
-				{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}
+				{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 				<TextInput
 					ref={field}
 					accessibilityLabel="Task prompt"
@@ -118,18 +121,20 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, o
 					// Grows on its own between the style's min and max height, as the
 					// chat's field does: a height set from the content-size event lagged
 					// a line behind and scrolled the top line out of view.
-					style={[styles.input, (listening || transcribing) && styles.hiddenField]}
+					style={[styles.input, dictating && styles.hiddenField]}
 					multiline
 					// Android focuses once the push has finished (see above).
 					autoFocus={Platform.OS === "ios"}
 				/>
 			</View>
-			<View pointerEvents="box-none" style={styles.controlsRow}>
-				<View style={styles.settingsSlot}>{settings}</View>
-			</View>
-			<View style={[styles.corner, styles.cornerLeading]}>
-				<ChatAttachmentMenu disabled={busy} canAttachFile onChoosePhoto={onChoosePhoto} onChooseFile={onChooseFile} />
-			</View>
+			{dictating ? null : <>
+				<View pointerEvents="box-none" style={styles.controlsRow}>
+					<View style={styles.settingsSlot}>{settings}</View>
+				</View>
+				<View style={[styles.corner, styles.cornerLeading]}>
+					<ChatAttachmentMenu disabled={busy} canAttachFile onChoosePhoto={onChoosePhoto} onChooseFile={onChooseFile} />
+				</View>
+			</>}
 			<View style={[styles.corner, styles.cornerTrailing]}>{roundButton}</View>
 		</View>
 	);
@@ -146,6 +151,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// Out of the layout while dictating, but still mounted with the prompt.
 	hiddenField: { display: "none" },
 	fieldInsets: { paddingHorizontal: space.sm },
+	// The stop button sits in the trailing corner on the field's own row.
+	dictationInsets: { paddingLeft: space.md, paddingRight: CORNER_CONTROL },
 	controlsRow: { width: "100%", height: touchTarget, paddingHorizontal: CORNER_CONTROL, flexDirection: "row", alignItems: "center", gap: space.xxs, overflow: "hidden" },
 	settingsSlot: { flex: 1, minWidth: 0, minHeight: touchTarget, alignItems: "stretch", justifyContent: "center", overflow: "hidden" },
 	inactive: { opacity: stateOpacity.disabled },

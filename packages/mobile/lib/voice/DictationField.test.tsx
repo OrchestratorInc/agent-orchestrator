@@ -69,3 +69,14 @@ it("listens to the level only while the mic captures, and lets go after", () => 
 	renderer = undefined;
 	expect(recording.listeners).toHaveLength(0);
 });
+
+// A composer that hides all but the stop button gives the trace the whole field.
+it("draws only the waveform across the field when asked, still naming what it hears", () => {
+	render({ waveformOnly: true, partial: "rename the helper" });
+	expect(renderer!.root.findAllByType("Text" as never)).toHaveLength(0);
+	expect(renderer!.root.findByProps({ accessible: true }).props.accessibilityLabel).toBe("rename the helper");
+	const row = renderer!.root.findByProps({ accessibilityElementsHidden: true });
+	act(() => row.props.onLayout({ nativeEvent: { layout: { width: 300 } } }));
+	// 3pt bars 2pt apart: 60 fit in 300.
+	expect(bars()).toHaveLength(60);
+});

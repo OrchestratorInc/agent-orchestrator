@@ -52,7 +52,7 @@ describe("chat composer pill", () => {
 		// each new line first scrolled the field and cut off its top line.
 		expect(composer).not.toContain("onContentSizeChange");
 		expect(composer).not.toContain("fieldHeight");
-		expect(composer).toContain("style={[styles.input, fieldSize.field, (listening || transcribing) && styles.hiddenField]}");
+		expect(composer).toContain("style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
 		expect(styleRule("composerRow")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
 		expect(styleRule("composerRow")).toContain('alignItems: "flex-end"');
@@ -190,9 +190,11 @@ describe("composer controls row", () => {
 
 describe("collapsed and expanded composer", () => {
 	// Collapsed, a slim pill under the session's chips; writing grows it into a
-	// card with the turn settings between attach and the round button.
-	it("opens on focus and stays open while anything waits to be sent or the mic is open", () => {
-		expect(composer).toContain("const expanded = focused || hasDraft || attachments.length > 0 || listening || transcribing;");
+	// card with the turn settings between attach and the round button. The mic
+	// takes it back to the slim pill.
+	it("opens on focus and stays open while anything waits to be sent, until the mic opens", () => {
+		expect(composer).toContain("const dictating = listening || transcribing;");
+		expect(composer).toContain("const expanded = !dictating && (focused || hasDraft || attachments.length > 0);");
 		expect(composer).toContain("onFocus={() => setFocused(true)}");
 		expect(composer).toContain("onBlur={() => setFocused(false)}");
 		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>');
@@ -210,11 +212,11 @@ describe("collapsed and expanded composer", () => {
 	// let out from between them and the controls row opens under it, all on one
 	// spring that Reduce Motion turns into a cut.
 	it("opens on one spring around controls pinned to its corners", () => {
-		expect(composer).toContain("<View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>");
+		expect(composer).toContain("{dictating ? null : <View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>}");
 		expect(composer).toContain("<View style={[styles.corner, styles.cornerTrailing]}>");
 		expect(styleRule("corner")).toContain('position: "absolute", bottom: space.xs');
 		expect(composer).toContain("openness.value = reduceMotion ? withTiming(expanded ? 1 : 0, { duration: 0 }) : withSpring(expanded ? 1 : 0, COMPOSER_SPRING);");
-		expect(composer).toContain("paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET])");
+		expect(composer).toContain("paddingLeft: interpolate(micOpen.value, [0, 1], [interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]), DICTATION_INSET])");
 		// The round button changes face in place, with no transition of its own.
 		expect(composer).not.toContain("ZoomIn");
 	});
@@ -228,9 +230,10 @@ describe("collapsed and expanded composer", () => {
 	});
 
 	// The mic's tap opens dictation in the field's own place; the banner over
-	// the pill came up as "Keep holding…" and changed a moment later.
+	// the pill came up as "Keep holding…" and changed a moment later. Only the
+	// waveform shows, across the width the attach button gave up.
 	it("dictates in the field's place, with no banner over the pill", () => {
-		expect(composer).toContain("{listening || transcribing ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} /> : null}");
+		expect(composer).toContain("{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}");
 		expect(styleRule("hiddenField")).toContain('display: "none"');
 		expect(composer).not.toContain("Keep holding");
 		expect(composer).not.toContain("styles.voice");
