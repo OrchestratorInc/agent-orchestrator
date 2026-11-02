@@ -107,7 +107,7 @@ import {
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -1122,6 +1122,21 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
+	// draft below what is already typed, ready for the person's own words.
+	useEffect(() => {
+		if (!draftSessionId || !draftScope) return;
+		return subscribeChatComposerText(draftSessionId, (text) => {
+			if (getChatComposerMutation(draftScope).pending || readChatSessionDraft(draftScope).composer.delivery) return false;
+			const current = textRef.current.replace(/\s+$/, "");
+			const next = current ? `${current}\n\n${text}\n\n` : `${text}\n\n`;
+			textRef.current = next;
+			editor.current?.setText(next, "end");
+			persistComposerText(next);
+			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
+		});
+	}, [draftSessionId, draftScope, persistComposerText]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {

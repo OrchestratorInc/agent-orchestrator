@@ -6,13 +6,15 @@ import { PRDescriptionImage } from "./PRDescriptionImage";
 
 // The review summary's typography, for PR comments and their preview.
 const bodyClass = cn(
-	"min-w-0 select-text break-words text-xs leading-relaxed text-muted-foreground",
+	// Comment text reads at full contrast, like a PR page; code stays the size of the words around it.
+	"min-w-0 select-text break-words text-xs leading-[1.6] text-foreground/90",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
-	"[&_code]:rounded [&_code]:bg-muted/55 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-foreground",
-	"[&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:my-1 [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md",
-	"[&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/35 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0",
-	"[&_strong]:text-foreground [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-	"[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-2",
+	"[&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:text-foreground [&_code]:[overflow-wrap:anywhere]",
+	"[&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-semibold",
+	"[&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:my-1.5 [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md",
+	"[&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0",
+	"[&_strong]:font-semibold [&_strong]:text-foreground [&_em]:text-muted-foreground [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+	"[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-2 [&_blockquote]:text-muted-foreground",
 );
 
 // Outside the component, so a re-render keeps an open image lightbox open.

@@ -270,6 +270,8 @@ export function SessionInspectorSummaryView({
 	artifactCards,
 	artifactTitle,
 	branch,
+	comments,
+	commentsTitle,
 	completion,
 	context,
 	pullRequestCards,
@@ -285,6 +287,9 @@ export function SessionInspectorSummaryView({
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
+	/** The PR's conversation, as its own section under the PR. Omit alongside {@link commentsTitle} to skip it. */
+	comments?: ReactNode;
+	commentsTitle?: string;
 	completion?: ReactNode;
 	context?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
@@ -305,6 +310,7 @@ export function SessionInspectorSummaryView({
 			{workers}
 			{context}
 			{branch}
+			{commentsTitle ? <InspectorSection title={commentsTitle}>{comments}</InspectorSection> : null}
 			{pullRequestTitle ? (
 				<InspectorSection surface={false} title={pullRequestTitle}>
 					<div className="flex flex-col gap-1.5">{pullRequestCards}</div>
@@ -352,7 +358,6 @@ export function InspectorPullRequestCardView({
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
-	actions,
 	mergeAction,
 	mergeError,
 	openLabel,
@@ -374,8 +379,6 @@ export function InspectorPullRequestCardView({
 	 * header row, as when several PRs share one card as collapsible sections.
 	 */
 	headerless?: boolean;
-	/** The PR's state changes (ready, draft, close, reopen), under the readiness rows. */
-	actions?: ReactNode;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
@@ -449,7 +452,6 @@ export function InspectorPullRequestCardView({
 							{mergeError}
 						</p>
 					) : null}
-					{actions}
 				</>
 			) : null}
 		</Frame>

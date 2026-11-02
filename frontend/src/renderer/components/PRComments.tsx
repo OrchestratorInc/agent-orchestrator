@@ -1,13 +1,15 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronRight, CircleAlert, CircleCheck, Loader2, MessageSquare, MoreHorizontal } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, CheckCheck, ChevronRight, CircleAlert, CircleCheck, FileCode2, Loader2, MessageSquare, MoreHorizontal, Plus, Reply } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorMessage } from "../lib/api-client";
+import { useAddTextToChat } from "../lib/chat-context-bus";
 import { formatTimeCompact } from "../lib/format-time";
+import { getGitHubStatus } from "../lib/github-daemon";
 import { clientForSessionHost } from "../lib/host-clients";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
@@ -21,6 +23,13 @@ type Thread = NonNullable<SessionPRSummary["threads"]>[number];
 type Comment = Thread["comments"][number];
 type Review = NonNullable<SessionPRSummary["review"]["reviews"]>[number];
 
+/** Everything the Comments section lists for a PR: top-level comments, reviews with a body, and review threads. */
+export function prCommentCount(pr: SessionPRSummary): number {
+	return (pr.conversation?.length ?? 0)
+		+ (pr.review.reviews ?? []).filter((review) => review.body?.trim()).length
+		+ (pr.threads ?? []).filter((thread) => thread.comments.length > 0).length;
+}
+
 type Item =
 	| { kind: "comment"; key: string; at: number; comment: Comment }
 	| { kind: "review"; key: string; at: number; review: Review }
@@ -31,16 +40,98 @@ const time = (value?: string | null) => {
 	return Number.isNaN(parsed) ? 0 : parsed;
 };
 
-// The Reviews tab's fold header and row action, so the PR's comments read as
-// the same family as its open and resolved review comments. A button takes its
-// parent's font (styles.css), so the containers carry the text size.
+// The Reviews tab's fold header, so the PR's folded groups read as the same
+// family as its open and resolved review comments. A button takes its parent's
+// font (styles.css), so the containers carry the text size.
 const foldHeaderClass = "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs font-medium leading-none text-muted-foreground transition-colors hover:bg-interactive-hover/20 hover:text-foreground";
-const rowActionClass = "inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:border-border-strong hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
+const iconActionClass = "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
+// Visible at rest: the actions a card offers should read as buttons, not as footnotes.
+const footActionClass = "inline-flex h-6 items-center gap-1 rounded-md border border-(--color-border-settings-input) px-2 font-medium text-muted-foreground transition-colors hover:border-border-strong hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60";
+const showMoreClass = "inline-flex items-center rounded-sm font-medium text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-/** A first line to stand for the comment while its row is folded. */
-function preview(body: string): string {
-	const line = body.split("\n").map((value) => value.replace(/^[>#\-*\s]+/, "").trim()).find(Boolean) ?? "";
-	return line.replace(/[*_`]/g, "");
+/** Quotes a comment as markdown for the chat: who, where, and what they wrote. */
+function quoteForChat(author: string, body: string, where: string, url?: string): string {
+	const head = `**@${sanitizeWorkerMessagePart(author)}** ${sanitizeWorkerMessagePart(where)}${url ? ` (${sanitizeWorkerMessagePart(url)})` : ""}:`;
+	return [head, ...sanitizeWorkerMessagePart(body.trim()).split("\n")].map((line) => `> ${line}`).join("\n");
+}
+
+/** How long a comment's menu says "Added to chat" before offering it again. */
+export const ADDED_TO_CHAT_MS = 2500;
+
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** The text a comment opens by quoting ("> …"), as GitHub's Quote reply writes it. */
+function leadingQuote(body: string): string {
+	const quoted: string[] = [];
+	for (const line of body.split("\n")) {
+		if (!line.startsWith(">")) break;
+		quoted.push(line.replace(/^>\s?/, ""));
+	}
+	return squash(quoted.join(" "));
+}
+
+/** A quote reply's own words: the quote it opens with and the @mention after it go. */
+function ownWords(body: string, author: string): string {
+	const lines = body.split("\n");
+	let start = 0;
+	while (start < lines.length && lines[start]?.startsWith(">")) start++;
+	const words = lines.slice(start).join("\n").trim();
+	const mention = `@${author.toLowerCase()}`;
+	return words.toLowerCase().startsWith(mention) ? words.slice(mention.length).trimStart() : words;
+}
+
+/**
+ * What a reply to a top-level comment opens with: its first paragraph quoted
+ * (cut at a word past 240 characters) and an @mention, so the reply nests
+ * under it and the author is told, without pasting a whole bot summary back.
+ */
+function replyQuote(author: string, body: string): string {
+	let excerpt = body.trim().split(/\n\s*\n/)[0] ?? "";
+	if (excerpt.length > 240) excerpt = excerpt.slice(0, excerpt.lastIndexOf(" ", 240) > 0 ? excerpt.lastIndexOf(" ", 240) : 240);
+	const quoted = excerpt.split("\n").map((line) => `> ${line}`.trimEnd()).join("\n");
+	return `${quoted}\n\n@${author} `;
+}
+
+/** A GitHub login's avatar, or its first letter when the picture can't load. */
+function Avatar({ name, bot, size = "md" }: { name: string; bot?: boolean; size?: "sm" | "md" }) {
+	const [failed, setFailed] = useState(false);
+	const login = name.replace(/\[bot\]$/, "");
+	const box = size === "sm" ? "size-4 text-[8px]" : "size-5 text-[10px]";
+	if (failed || !/^[A-Za-z0-9-]+$/.test(login)) {
+		return <span aria-hidden="true" className={cn("inline-flex shrink-0 items-center justify-center rounded-full bg-muted font-semibold uppercase text-muted-foreground", box)}>{login.slice(0, 1)}</span>;
+	}
+	return (
+		<img
+			alt=""
+			aria-hidden="true"
+			className={cn("shrink-0 bg-muted", bot ? "rounded-sm" : "rounded-full", box)}
+			onError={() => setFailed(true)}
+			referrerPolicy="no-referrer"
+			src={`https://github.com/${login}.png?size=40`}
+		/>
+	);
+}
+
+/** A comment's text: rendered markdown, clamped to six lines until opened. */
+function Body({ body }: { body: string }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const id = useId();
+	const long = body.length > 360 || body.split("\n").length > 6;
+	return (
+		<div className="flex min-w-0 flex-col gap-0.5">
+			<div className={cn("min-w-0", long && !open && "line-clamp-6 max-h-[6lh] overflow-hidden")} id={id}>
+				<PRMarkdown body={body} />
+			</div>
+			{long ? (
+				<span className="mt-0.5 text-micro">
+					<button aria-controls={id} aria-expanded={open} className={showMoreClass} onClick={() => setOpen(!open)} type="button">
+						{open ? t("inspector.showLess") : t("inspector.showMore")}
+					</button>
+				</span>
+			) : null}
+		</div>
+	);
 }
 
 function Fold({ children, count, defaultOpen, label, testId }: { children: ReactNode; count: number; defaultOpen: boolean; label: string; testId: string }) {
@@ -53,100 +144,141 @@ function Fold({ children, count, defaultOpen, label, testId }: { children: React
 				<ChevronRight aria-hidden="true" className={cn("size-icon-2xs shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 				<span>{label} · {count}</span>
 			</button>
-			{open ? <div className="divide-y divide-border/60 pl-1.5" id={id}>{children}</div> : null}
+			{open ? <div className="flex min-w-0 flex-col gap-2 pt-1" id={id}>{children}</div> : null}
 		</section>
 	);
 }
 
-type RowAction = { label: string; onSelect: () => void; disabled?: boolean } | "separator";
+type MenuAction = { label: string; onSelect: () => void; disabled?: boolean } | "separator";
+type FootAction = { label: string; icon?: ReactNode; onClick: () => void; disabled?: boolean; busy?: boolean };
 
 /**
- * One comment, review or thread as a row: where or who, when, and its first
- * line; opening the row shows all of it. Its actions sit in a menu, like an
- * inline review comment's in the Reviews tab.
+ * One comment, review or review thread as a card: who, what they did and
+ * when, the text itself, and the actions people reach for (Reply, Resolve)
+ * in plain sight; the rest sit in its menu.
  */
-function Row({ actions, at, author, bot, children, label, location, note, sent, status, text }: {
-	actions: RowAction[];
-	at?: string | null;
+function Card({ author, at, bot, children, foot, label, location, menu, muted, note, reply, sent, status, verb }: {
 	author: string;
+	at?: string | null;
 	bot?: boolean;
-	children?: ReactNode;
-	/** Names the row for its action menu. */
+	children: ReactNode;
+	foot: FootAction[];
+	/** Names the card for its menu. */
 	label: string;
-	/** A review thread's file and line, which leads the row. */
+	/** A review thread's file and line, shown over its text. */
 	location?: string;
-	/** Under the row whether or not it is open, such as a reply box. */
+	menu: MenuAction[];
+	/** A settled card (a resolved thread) sits back on a tinted ground. */
+	muted?: boolean;
+	/** Under the card, such as an error. */
 	note?: ReactNode;
+	/** The reply box, open in place under the card's actions. */
+	reply?: ReactNode;
 	sent?: boolean;
-	/** A review's verdict, beside the author. */
+	/** A review's verdict or a thread's state, beside the verb. */
 	status?: ReactNode;
-	text: string;
+	verb: string;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const bodyId = useId();
-	return (
-		<div className="flex min-w-0 flex-col gap-1.5 py-2 text-xs">
-			<div className="flex min-w-0 items-start gap-2">
-				<button
-					aria-controls={open ? bodyId : undefined}
-					aria-expanded={open}
-					className="flex min-w-0 flex-1 flex-col gap-1 rounded-md py-0.5 text-left text-xs transition-colors hover:bg-interactive-hover/20"
-					onClick={() => setOpen(!open)}
-					type="button"
-				>
-					<span className="flex w-full min-w-0 items-center gap-1.5">
-						<ChevronRight aria-hidden="true" className={cn("size-icon-2xs shrink-0 text-passive transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-						{location ? <span className="min-w-0 truncate font-mono text-2xs font-semibold text-foreground" title={location}>{location}</span> : null}
-						<span className={cn("min-w-0 truncate", location ? "text-muted-foreground" : "font-medium text-foreground")}>{author}</span>
-						{bot ? <span className="shrink-0 text-micro text-passive">{t("pr.comments.bot")}</span> : null}
-						{status}
-						{at ? <span className="ml-auto shrink-0 text-micro text-passive">{formatTimeCompact(at)}</span> : null}
-					</span>
-					{open ? null : <span className="block w-full min-w-0 truncate pl-4 text-muted-foreground">{text}</span>}
-				</button>
+	const card = (
+		<article aria-label={label} className={cn("flex min-w-0 flex-col gap-2 rounded-lg border px-3 py-2.5 text-xs", muted ? "border-(--color-border-settings-input) bg-(--color-bg-settings-input)" : "border-border bg-background")}>
+			<div className="flex min-w-0 items-center gap-1.5">
+				<Avatar bot={bot} name={author} />
+				<span className="min-w-0 truncate font-semibold text-foreground">{author}</span>
+				{bot ? <span className="shrink-0 rounded-sm border border-border px-1 text-micro font-medium text-muted-foreground">{t("pr.comments.bot")}</span> : null}
+				<span className="shrink-0 text-muted-foreground">{verb}</span>
+				{status}
+				{at ? <span className="ml-auto shrink-0 text-micro text-muted-foreground" title={at}>{formatTimeCompact(at)}</span> : <span className="ml-auto" />}
 				{sent ? (
-					<span aria-label={t("pr.comments.sentToAgent")} className="inline-flex size-7 shrink-0 items-center justify-center text-success" role="status" title={t("pr.comments.sentToAgent")}>
+					<span aria-label={t("pr.comments.sentToAgent")} className="inline-flex size-6 shrink-0 items-center justify-center text-success" role="status" title={t("pr.comments.sentToAgent")}>
 						<Check aria-hidden="true" className="size-icon-xs" />
 					</span>
 				) : null}
-				{actions.length > 0 ? (
+				{menu.length > 0 ? (
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<button aria-label={t("pr.comments.actionsFor", { name: label })} className={rowActionClass} type="button">
+							<button aria-label={t("pr.comments.actionsFor", { name: label })} className={iconActionClass} type="button">
 								<MoreHorizontal aria-hidden="true" className="size-icon-xs" />
 							</button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="min-w-40">
-							{actions.map((action, index) => action === "separator"
+							{menu.map((action, index) => action === "separator"
 								? <DropdownMenuSeparator key={`separator-${index}`} />
 								: <DropdownMenuItem disabled={action.disabled} key={action.label} onSelect={action.onSelect}>{action.label}</DropdownMenuItem>)}
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
 			</div>
-			{open ? <div className="flex min-w-0 flex-col gap-2 pl-4" id={bodyId}>{children}</div> : null}
-			{note ? <div className="flex min-w-0 flex-col gap-1 pl-4">{note}</div> : null}
-		</div>
+			{location ? (
+				<span className="inline-flex min-w-0 max-w-full items-center gap-1 self-start rounded-sm bg-muted/70 px-1.5 py-0.5 font-mono text-2xs text-foreground/80" title={location}>
+					<FileCode2 aria-hidden="true" className="size-icon-2xs shrink-0" />
+					<span className="truncate">{location}</span>
+				</span>
+			) : null}
+			{children}
+			{foot.length > 0 ? (
+				<div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-micro">
+					{foot.map((action) => (
+						<button className={footActionClass} disabled={action.disabled || action.busy} key={action.label} onClick={action.onClick} type="button">
+							{action.busy ? <Loader2 aria-hidden="true" className="size-icon-2xs animate-spin" /> : action.icon}
+							{action.label}
+						</button>
+					))}
+				</div>
+			) : null}
+			{reply}
+			{note}
+		</article>
 	);
+	return card;
 }
 
 /**
- * The PR's conversation under its card, folded the way the Reviews tab folds
- * review comments: open threads and the conversation first, then what came
- * from bots and what is resolved, closed until asked for. Each row opens to
- * the whole comment or thread; its menu replies, resolves, sends it to the
- * session's agent, or opens it on the provider. Reading is free (the daemon
- * already stored it); only posting calls the provider.
+ * The PR's conversation as cards, newest first: reviews,
+ * top-level comments and open review threads, with what came from bots and
+ * what is resolved folded at the end. Each card's text is there to read; its
+ * Reply (on other people's comments, as on GitHub) opens the comment box at
+ * the card, and its menu holds Add to chat (the comment quoted in the
+ * session's chat, with room for your own words), View in diff, Send to agent
+ * now and the GitHub links. Reading is free (the daemon already stored it);
+ * only posting calls the provider.
  */
-export function PRComments({ hostId, pr, session }: { hostId?: string; pr: SessionPRSummary; session: WorkspaceSession }) {
+export function PRComments({ hostId, onViewInDiff, pr, session }: {
+	hostId?: string;
+	/** Opens a review thread's file in the diff at its line. */
+	onViewInDiff?: (target: { line?: number; path: string }) => void;
+	pr: SessionPRSummary;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [replying, setReplying] = useState<string | null>(null);
+	// Threads resolved from here, shown as resolved at once rather than after the next summary.
+	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
+	// The new-comment box stays out of the way until "＋ Comment" asks for it.
+	const [composing, setComposing] = useState(false);
 	const [sent, setSent] = useState<Set<string>>(() => new Set());
+	// "Added to chat" is a moment's confirmation, not a lock: once it fades the
+	// comment can be added again (after the draft was sent or cleared, say).
+	const [added, setAdded] = useState<ReadonlySet<string>>(() => new Set());
+	const addedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+	useEffect(() => () => { for (const timer of addedTimers.current.values()) clearTimeout(timer); }, []);
+	const markAdded = (key: string) => {
+		setAdded((current) => new Set(current).add(key));
+		clearTimeout(addedTimers.current.get(key));
+		addedTimers.current.set(key, setTimeout(() => {
+			addedTimers.current.delete(key);
+			setAdded((current) => { const next = new Set(current); next.delete(key); return next; });
+		}, ADDED_TO_CHAT_MS));
+	};
 	const [actionError, setActionError] = useState<{ key: string; message: string } | null>(null);
 	const sendToWorker = useSendToSessionWorker(session, hostId);
+	const addToChat = useAddTextToChat(session.id, hostId);
 	const canWrite = !session.cloud && !usePreviewData && pr.provider === "github" && Boolean(pr.url);
+	// Who AO posts as. Reply is for other people's comments, as on GitHub; until
+	// the login is known, every comment offers it.
+	const viewer = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000, enabled: canWrite }).data?.login?.toLowerCase();
+	const mine = (author: string) => viewer !== undefined && author.replace(/^@/, "").toLowerCase() === viewer;
 	const refresh = () => Promise.all([
 		queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) }),
 		queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
@@ -181,7 +313,10 @@ export function PRComments({ hostId, pr, session }: { hostId?: string; pr: Sessi
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("pr.comments.resolveFailed")));
 		},
-		onSuccess: refresh,
+		onSuccess: async (_data, thread) => {
+			setResolvedHere((previous) => new Set(previous).add(thread.id));
+			await refresh();
+		},
 		onError: (error, thread) => setActionError({ key: `t:${thread.id}`, message: error.message }),
 	});
 
@@ -206,7 +341,24 @@ export function PRComments({ hostId, pr, session }: { hostId?: string; pr: Sessi
 			setActionError({ key, message: error instanceof Error ? error.message : t("pr.comments.sendFailed") });
 		}
 	};
-	const linkActions = (url?: string): RowAction[] => url ? [
+	// Add to chat drafts the comment in the session's chat; a session without a
+	// chat (a terminal agent) gets it sent to the agent instead.
+	const addOne = (key: string, quote: string, sendArgs: Parameters<typeof send>) => {
+		setActionError(null);
+		if (addToChat) {
+			if (addToChat(quote)) markAdded(key);
+			else setActionError({ key, message: t("pr.comments.addToChatFailed") });
+			return;
+		}
+		void send(...sendArgs);
+	};
+	const chatAction = (key: string, quote: string, sendArgs: Parameters<typeof send>): MenuAction => ({
+		label: addLabel(key),
+		onSelect: () => addOne(key, quote, sendArgs),
+		// Sending straight to the agent happens once; adding to the draft can be repeated.
+		disabled: added.has(key) || (!addToChat && sent.has(key)),
+	});
+	const linkActions = (url?: string): MenuAction[] => url ? [
 		"separator",
 		{ label: t("pr.comments.openOnProvider"), onSelect: () => window.open(url, "_blank", "noopener,noreferrer") },
 		{ label: t("pr.comments.copyLink"), onSelect: () => void navigator.clipboard?.writeText(url).catch(() => {}) },
@@ -215,68 +367,110 @@ export function PRComments({ hostId, pr, session }: { hostId?: string; pr: Sessi
 	const items: Item[] = [
 		...(pr.conversation ?? []).map((comment): Item => ({ kind: "comment", key: `c:${comment.id}`, at: time(comment.createdAt), comment })),
 		...(pr.review.reviews ?? []).filter((review) => review.body?.trim()).map((review): Item => ({ kind: "review", key: `r:${review.reviewUrl ?? review.reviewerId + review.submittedAt}`, at: time(review.submittedAt), review })),
-		...(pr.threads ?? []).filter((thread) => thread.comments.length > 0).map((thread): Item => ({ kind: "thread", key: `t:${thread.id}`, at: time(thread.comments[0]?.createdAt), thread })),
-	].sort((a, b) => a.at - b.at);
-	const isBot = (item: Item) => item.kind === "comment" ? item.comment.isBot : item.kind === "review" ? item.review.isBot === true : item.thread.comments[0]?.isBot === true;
+		...(pr.threads ?? []).filter((thread) => thread.comments.length > 0).map((thread): Item => ({ kind: "thread", key: `t:${thread.id}`, at: time(thread.comments.at(-1)?.createdAt), thread: resolvedHere.has(thread.id) ? { ...thread, resolved: true } : thread })),
+	// Newest on top, so what just arrived (or what you just posted) is the first card; a thread sorts by its latest reply.
+	].sort((a, b) => b.at - a.at);
+	// GitHub's conversation has no threads; a Quote reply opens by quoting what
+	// it answers. Such a reply nests under that comment or review, as on a PR page
+	// read in order, and the pair sorts by the reply.
+	const quoteReplies = new Map<string, Comment[]>();
+	const nested = new Set<string>();
+	for (const item of items) {
+		if (item.kind !== "comment") continue;
+		const quote = leadingQuote(item.comment.body);
+		if (quote.length < 8) continue;
+		const parent = items.find((other) => other !== item && other.kind !== "thread" && other.at <= item.at
+			&& squash(other.kind === "comment" ? other.comment.body : other.review.body ?? "").startsWith(quote.slice(0, 120)));
+		if (!parent) continue;
+		quoteReplies.set(parent.key, [...(quoteReplies.get(parent.key) ?? []), item.comment]);
+		nested.add(item.key);
+		parent.at = Math.max(parent.at, item.at);
+	}
+	items.sort((a, b) => b.at - a.at);
 	const resolved = items.filter((item) => item.kind === "thread" && item.thread.resolved);
-	const live = items.filter((item) => !(item.kind === "thread" && item.thread.resolved));
-	const openThreads = live.filter((item) => item.kind === "thread" && !isBot(item));
-	const conversation = live.filter((item) => item.kind !== "thread" && !isBot(item));
-	const bots = live.filter(isBot);
+	const main = items.filter((item) => !nested.has(item.key) && !(item.kind === "thread" && item.thread.resolved));
 
-	const replyBox = (item: Item, threadId?: string, initial?: string) => replying === item.key ? (
+	const closeReply = () => { setReplying(null); post.reset(); };
+	const openReply = (key: string) => { post.reset(); setComposing(false); setReplying(key); };
+	// The same simple box as a new comment, opened in place under the card it answers.
+	const replyFor = (item: Item, threadId?: string, initial?: string) => canWrite && replying === item.key ? (
 		<PRCommentComposer
 			autoFocus
 			busy={post.isPending}
 			error={post.error instanceof Error ? post.error.message : null}
 			initial={initial}
-			onCancel={() => { setReplying(null); post.reset(); }}
+			onCancel={closeReply}
 			onSubmit={(body) => post.mutateAsync({ body, threadId })}
 			placeholder={t("pr.comments.replyPlaceholder")}
-			submitLabel={threadId ? t("pr.comments.reply") : t("pr.comments.comment")}
+			simple
+			submitLabel={t("pr.comments.reply")}
 			upload={upload}
 		/>
-	) : null;
+	) : undefined;
+	// Reply is offered on someone else's words, and hides while its box is open.
+	const replyAction = (item: Item, offered: boolean): FootAction[] => offered && canWrite && replying !== item.key ? [{ label: t("pr.comments.reply"), icon: replyIcon, onClick: () => openReply(item.key) }] : [];
 	const errorFor = (key: string) => actionError?.key === key ? <p className="m-0 text-2xs font-medium text-error" role="status">{actionError.message}</p> : null;
+	const addLabel = (key: string) => added.has(key) ? t("pr.comments.addedToChat") : addToChat ? t("pr.comments.addToChat") : sent.has(key) ? t("pr.comments.sentToAgent") : t("pr.comments.sendToAgent");
+	const prWhere = t("pr.comments.quoteOnPR", { number: pr.number });
+	const replyIcon = <Reply aria-hidden="true" className="size-icon-2xs" />;
 
-	const row = (item: Item) => {
+	const quoteOf = (item: Item): string => {
+		if (item.kind === "thread") {
+			const location = item.thread.path ? `${item.thread.path}${item.thread.line ? `:${item.thread.line}` : ""}` : "";
+			const where = location ? t("pr.comments.quoteOnFile", { location, number: pr.number }) : prWhere;
+			return item.thread.comments.map((comment, index) => quoteForChat(comment.author, comment.body, index === 0 ? where : t("pr.comments.quoteReplied"), index === 0 ? comment.url : undefined)).join("\n>\n");
+		}
+		if (item.kind === "review") return quoteForChat(item.review.reviewerId, item.review.body ?? "", prWhere, item.review.reviewUrl);
+		return quoteForChat(item.comment.author, item.comment.body, prWhere, item.comment.url);
+	};
+
+	// A thread's replies as they are; a quote reply without the quote and the @mention of `answering`.
+	const replyList = (replies: { id: string; author: string; isBot: boolean; body: string; createdAt?: string | null }[], answering?: string) => replies.map((reply) => (
+		<div className="flex min-w-0 flex-col gap-1 border-l-2 border-border-strong pl-2.5" data-testid="pr-comment-reply" key={reply.id}>
+			<span className="flex min-w-0 items-center gap-1.5 text-micro">
+				<Avatar bot={reply.isBot} name={reply.author} size="sm" />
+				<span className="truncate font-semibold text-foreground">{reply.author}</span>
+				{reply.createdAt ? <span className="text-muted-foreground">{formatTimeCompact(reply.createdAt)}</span> : null}
+			</span>
+			<Body body={answering ? ownWords(reply.body, answering) || reply.body : reply.body} />
+		</div>
+	));
+	const card = (item: Item) => {
 		if (item.kind === "thread") {
 			const { thread } = item;
 			const first = thread.comments[0];
 			const location = thread.path ? `${thread.path}${thread.line ? `:${thread.line}` : ""}` : t("pr.comments.general");
-			const replies = thread.comments.length - 1;
 			const resolving = resolve.isPending && resolve.variables?.id === thread.id;
+			const allText = thread.comments.map((comment) => `@${comment.author}: ${comment.body}`).join("\n\n");
 			return (
 				<div data-kind="thread" key={item.key}>
-					<Row
-						actions={[
-							...(canWrite ? [{ label: t("pr.comments.reply"), onSelect: () => setReplying(item.key) }] : []),
-							...(!thread.resolved ? [{ label: t("pr.comments.sendToAgent"), onSelect: () => void send(item.key, first?.author ?? "", thread.comments.map((comment) => `@${comment.author}: ${comment.body}`).join("\n\n"), first?.url, location), disabled: sent.has(item.key) }] : []),
-							...(canWrite && !thread.resolved ? [{ label: t("pr.comments.resolve"), onSelect: () => { setActionError(null); resolve.mutate(thread); }, disabled: resolve.isPending }] : []),
-							...linkActions(first?.url),
-						]}
+					<Card
 						at={first?.createdAt}
-						author={replies > 0 ? t("pr.comments.authorWithReplies", { name: first?.author ?? "", count: replies }) : first?.author ?? ""}
+						author={first?.author ?? ""}
 						bot={first?.isBot}
+						foot={[
+							// A thread with someone else in it takes a reply; one only you wrote waits for theirs.
+							...replyAction(item, thread.comments.some((comment) => !mine(comment.author))),
+							...(canWrite && !thread.resolved ? [{ label: t("pr.comments.resolve"), icon: <CheckCheck aria-hidden="true" className="size-icon-2xs" />, onClick: () => { setActionError(null); resolve.mutate(thread); }, busy: resolving, disabled: resolve.isPending }] : []),
+						]}
 						label={location}
 						location={location}
-						note={replying === item.key || actionError?.key === item.key || resolving ? (
-							<>
-								{replyBox(item, thread.id)}
-								{errorFor(item.key)}
-								{resolving ? <p className="m-0 inline-flex items-center gap-1 text-2xs text-passive"><Loader2 aria-hidden="true" className="size-icon-2xs animate-spin" />{t("pr.comments.resolving")}</p> : null}
-							</>
-						) : null}
+						muted={thread.resolved}
+						menu={[
+							...(!thread.resolved ? [chatAction(item.key, quoteOf(item), [item.key, first?.author ?? "", allText, first?.url, location])] : []),
+							...(thread.path && onViewInDiff ? [{ label: t("pr.comments.viewInDiff"), onSelect: () => onViewInDiff({ path: thread.path ?? "", line: thread.line ?? undefined }) }] : []),
+							...(!thread.resolved && addToChat ? [{ label: t("pr.comments.sendToAgentNow"), onSelect: () => void send(item.key, first?.author ?? "", allText, first?.url, location), disabled: sent.has(item.key) }] : []),
+							...linkActions(first?.url),
+						]}
+						note={errorFor(item.key)}
+						reply={replyFor(item, thread.id)}
 						sent={sent.has(item.key)}
-						text={preview(first?.body ?? "")}
+						status={thread.resolved ? <span className="shrink-0 text-micro text-success">{t("pr.comments.resolvedTag")}</span> : null}
+						verb={t("pr.comments.verb.commentedOnFile")}
 					>
-						{thread.comments.map((comment, index) => (
-							<div className={cn("flex min-w-0 flex-col gap-0.5", index > 0 && "border-l-2 border-border pl-2")} key={comment.id}>
-								{index > 0 ? <span className="text-micro text-passive"><span className="font-medium text-muted-foreground">{comment.author}</span>{comment.createdAt ? ` · ${formatTimeCompact(comment.createdAt)}` : ""}</span> : null}
-								<PRMarkdown body={comment.body} />
-							</div>
-						))}
-					</Row>
+						<Body body={first?.body ?? ""} />
+						{replyList(thread.comments.slice(1))}
+					</Card>
 				</div>
 			);
 		}
@@ -285,84 +479,105 @@ export function PRComments({ hostId, pr, session }: { hostId?: string; pr: Sessi
 			const verdict = review.verdict === "approved" || review.verdict === "changes_requested" ? review.verdict : "commented";
 			return (
 				<div data-kind="review" key={item.key}>
-					<Row
-						actions={[
-							{ label: t("pr.comments.sendToAgent"), onSelect: () => void send(item.key, review.reviewerId, review.body ?? "", review.reviewUrl), disabled: sent.has(item.key) },
-							...linkActions(review.reviewUrl),
-						]}
+					<Card
 						at={review.submittedAt}
 						author={review.reviewerId}
 						bot={review.isBot}
+						foot={replyAction(item, !mine(review.reviewerId))}
 						label={review.reviewerId}
+						menu={[
+							chatAction(item.key, quoteOf(item), [item.key, review.reviewerId, review.body ?? "", review.reviewUrl]),
+							...(addToChat ? [{ label: t("pr.comments.sendToAgentNow"), onSelect: () => void send(item.key, review.reviewerId, review.body ?? "", review.reviewUrl), disabled: sent.has(item.key) }] : []),
+							...linkActions(review.reviewUrl),
+						]}
 						note={errorFor(item.key)}
+						reply={replyFor(item, undefined, replyQuote(review.reviewerId, review.body ?? ""))}
 						sent={sent.has(item.key)}
-						status={
-							<span className={cn("inline-flex shrink-0 items-center gap-0.5 text-micro font-medium", verdict === "approved" ? "text-success" : verdict === "changes_requested" ? "text-status-in-review" : "text-passive")}>
-								{verdict === "approved" ? <CircleCheck aria-hidden="true" className="size-icon-2xs" /> : verdict === "changes_requested" ? <CircleAlert aria-hidden="true" className="size-icon-2xs" /> : null}
+						status={verdict === "commented" ? null : (
+							<span className={cn("inline-flex shrink-0 items-center gap-0.5 text-micro font-medium", verdict === "approved" ? "text-success" : "text-status-in-review")}>
+								{verdict === "approved" ? <CircleCheck aria-hidden="true" className="size-icon-2xs" /> : <CircleAlert aria-hidden="true" className="size-icon-2xs" />}
 								{t(`pr.comments.verdict.${verdict}`)}
 							</span>
-						}
-						text={preview(review.body ?? "")}
+						)}
+						verb={t("pr.comments.verb.reviewed")}
 					>
-						<PRMarkdown body={review.body ?? ""} />
-					</Row>
+						<Body body={review.body ?? ""} />
+						{replyList(quoteReplies.get(item.key) ?? [], review.reviewerId)}
+					</Card>
 				</div>
 			);
 		}
 		const { comment } = item;
 		return (
 			<div data-kind="comment" key={item.key}>
-				<Row
-					actions={[
-						...(canWrite ? [{ label: t("pr.comments.quoteReply"), onSelect: () => setReplying(item.key) }] : []),
-						{ label: t("pr.comments.sendToAgent"), onSelect: () => void send(item.key, comment.author, comment.body, comment.url), disabled: sent.has(item.key) },
-						...linkActions(comment.url),
-					]}
+				<Card
 					at={comment.createdAt}
 					author={comment.author}
 					bot={comment.isBot}
+					foot={replyAction(item, !mine(comment.author))}
 					label={comment.author}
-					note={replying === item.key || actionError?.key === item.key ? (
-						<>
-							{replyBox(item, undefined, `${comment.body.trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n@${comment.author} `)}
-							{errorFor(item.key)}
-						</>
-					) : null}
+					menu={[
+						chatAction(item.key, quoteOf(item), [item.key, comment.author, comment.body, comment.url]),
+						...(addToChat ? [{ label: t("pr.comments.sendToAgentNow"), onSelect: () => void send(item.key, comment.author, comment.body, comment.url), disabled: sent.has(item.key) }] : []),
+						...linkActions(comment.url),
+					]}
+					note={errorFor(item.key)}
+					reply={replyFor(item, undefined, replyQuote(comment.author, comment.body))}
 					sent={sent.has(item.key)}
-					text={preview(comment.body)}
+					verb={t("pr.comments.verb.commented")}
 				>
-					<PRMarkdown body={comment.body} />
-				</Row>
+					<Body body={comment.body} />
+					{replyList(quoteReplies.get(item.key) ?? [], comment.author)}
+				</Card>
 			</div>
 		);
 	};
 
-	return (
-		<div className="flex min-w-0 flex-col gap-1 border-t border-(--color-border-settings-input) pt-2 pb-2 text-xs" data-testid="pr-comments">
-			<h4 className="m-0 flex min-w-0 items-center gap-1 px-1.5 text-micro font-medium text-muted-foreground">
+	const heading = (
+		<div className="flex min-w-0 items-center gap-1.5 px-0.5">
+			<h4 className="m-0 flex min-w-0 flex-1 items-center gap-1 text-xs font-medium text-muted-foreground">
 				<MessageSquare aria-hidden="true" className="size-icon-2xs shrink-0" />
-				{t("pr.comments.title")}
+				{t("pr.comments.onPR", { number: pr.number })}
 			</h4>
-			{items.length === 0 ? (
-				<p className="m-0 px-1.5 text-xs text-passive">{pr.detailsObservedAt ? t("pr.comments.none") : t("pr.description.pending")}</p>
-			) : null}
-			<Fold count={openThreads.length} defaultOpen label={t("pr.comments.openThreads")} testId="pr-comments-open">{openThreads.map(row)}</Fold>
-			<Fold count={conversation.length} defaultOpen label={t("pr.comments.conversation")} testId="pr-comments-conversation">{conversation.map(row)}</Fold>
-			<Fold count={bots.length} defaultOpen={false} label={t("pr.comments.fromBots")} testId="pr-comments-bots">{bots.map(row)}</Fold>
-			<Fold count={resolved.length} defaultOpen={false} label={t("pr.comments.resolvedThreads")} testId="pr-comments-resolved">{resolved.map(row)}</Fold>
 			{canWrite ? (
-				<div className="mt-1 px-1.5">
-					<PRCommentComposer
-						busy={post.isPending && replying === null}
-						compact
-						error={replying === null && post.error instanceof Error ? post.error.message : null}
-						onSubmit={(body) => post.mutateAsync({ body })}
-						placeholder={t("pr.comments.addPlaceholder")}
-						submitLabel={t("pr.comments.comment")}
-						upload={upload}
-					/>
-				</div>
+				<span className="text-micro">
+					<button
+						aria-expanded={composing}
+						className={footActionClass}
+						data-testid="pr-comments-new"
+						onClick={() => { post.reset(); setReplying(null); setComposing(!composing); }}
+						type="button"
+					>
+						<Plus aria-hidden="true" className="size-icon-2xs" />
+						{t("pr.comments.comment")}
+					</button>
+				</span>
 			) : null}
+		</div>
+	);
+
+	return (
+		<div className="flex min-w-0 flex-col gap-2 text-xs" data-testid="pr-comments">
+			{heading}
+			{/* A new comment is written in place, above the list: the cards below move down while it is open, and the posted comment lands first. */}
+			{canWrite && composing ? (
+				<PRCommentComposer
+					autoFocus
+					busy={post.isPending && replying === null}
+					error={replying === null && post.error instanceof Error ? post.error.message : null}
+					onCancel={() => { post.reset(); setComposing(false); }}
+					onSubmit={async (body) => { await post.mutateAsync({ body }); setComposing(false); }}
+					placeholder={t("pr.comments.writeComment")}
+					simple
+					submitLabel={t("pr.comments.comment")}
+					upload={upload}
+				/>
+			) : null}
+			{items.length === 0 ? (
+				<p className="m-0 px-0.5 text-xs text-passive">{pr.detailsObservedAt ? t("pr.comments.none") : t("pr.description.pending")}</p>
+			) : null}
+			{main.length > 0 ? <div className="flex min-w-0 flex-col gap-2" data-testid="pr-comments-main">{main.map(card)}</div> : null}
+			<Fold count={resolved.length} defaultOpen={false} label={t("pr.comments.resolvedThreads")} testId="pr-comments-resolved">{resolved.map(card)}</Fold>
 		</div>
 	);
 }

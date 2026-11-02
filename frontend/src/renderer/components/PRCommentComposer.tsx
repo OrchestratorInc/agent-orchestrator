@@ -1,5 +1,5 @@
 import { Bold, Code, Italic, Link, List, ListOrdered, Loader2, Paperclip, TextQuote } from "lucide-react";
-import { useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
 import { PRMarkdown } from "./PRMarkdown";
@@ -76,7 +76,7 @@ function ToolButton({ children, label, onClick, disabled }: { children: ReactNod
  * (picked, pasted or dropped; uploaded to the PR's repository while a
  * placeholder holds their place), and a preview before posting.
  */
-export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "", onCancel, onSubmit, placeholder, submitLabel, upload }: {
+export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "", onCancel, onSubmit, placeholder, simple, submitLabel, upload }: {
 	autoFocus?: boolean;
 	busy: boolean;
 	/** One line until focused or typed in. */
@@ -86,6 +86,11 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 	onCancel?: () => void;
 	onSubmit: (body: string) => Promise<unknown>;
 	placeholder: string;
+	/**
+	 * Just text and media: no formatting toolbar or preview, one rounded line
+	 * at rest that grows in place, with Attach and the post button inside it.
+	 */
+	simple?: boolean;
 	submitLabel: string;
 	/** Uploads a file and returns its markdown; without it there is no Attach. */
 	upload?: PRAttachmentUpload;
@@ -103,6 +108,14 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 	const valueRef = useRef(value);
 	valueRef.current = value;
 	const roomy = !compact || focused || value.length > 0 || previewing || uploading > 0;
+	// Opened to write, with the caret after any text it starts with (a quote and @mention).
+	useEffect(() => {
+		if (!autoFocus) return;
+		const element = textareaRef.current;
+		if (!element) return;
+		element.focus();
+		element.setSelectionRange(element.value.length, element.value.length);
+	}, [autoFocus]);
 
 	const apply = (edit: (value: string, start: number, end: number) => Edit) => {
 		const element = textareaRef.current;
@@ -191,6 +204,86 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 		void attach(files);
 	};
 
+	const fileInput = upload ? (
+		<input
+			accept={PR_ATTACHMENT_ACCEPT}
+			aria-hidden="true"
+			className="hidden"
+			data-testid="pr-comment-file"
+			multiple
+			onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void attach(files); }}
+			ref={fileRef}
+			tabIndex={-1}
+			type="file"
+		/>
+	) : null;
+	const attachIcon = uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />;
+	if (simple) {
+		const clear = () => { setValue(""); setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
+		return (
+			<div
+				className="flex min-w-0 flex-col gap-1.5 text-xs"
+				data-testid="pr-comment-composer"
+				onDragLeave={() => setDragging(false)}
+				onDragOver={(event) => { if (upload && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
+				onDrop={onDrop}
+			>
+				<div
+					className={cn(
+						"flex min-w-0 flex-col rounded-xl border border-border bg-background shadow-xs transition-[border-color,box-shadow]",
+						"focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/25",
+						dragging && "border-ring ring-3 ring-ring/25",
+					)}
+				>
+					<div className="flex min-w-0 items-start">
+						<textarea
+							aria-label={placeholder}
+							autoFocus={autoFocus}
+							className={cn(
+								"min-w-0 flex-1 border-0 bg-transparent px-3 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none",
+								// Grows with what is written, up to a cap, then scrolls.
+								roomy ? "max-h-64 min-h-20 resize-none py-2.5 [field-sizing:content]" : "h-9 resize-none py-2",
+							)}
+							disabled={busy}
+							onBlur={() => setFocused(false)}
+							onChange={(event) => setValue(event.target.value)}
+							onFocus={() => setFocused(true)}
+							onKeyDown={onKeyDown}
+							onPaste={onPaste}
+							placeholder={placeholder}
+							ref={textareaRef}
+							value={value}
+						/>
+						{!roomy && upload ? (
+							<button aria-label={t("pr.comments.attach.label")} className="m-1 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
+								{attachIcon}
+							</button>
+						) : null}
+					</div>
+					{roomy ? (
+						<div className="flex min-w-0 items-center gap-1.5 border-t border-border/60 px-2 py-1.5">
+							{upload ? (
+								<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} type="button">
+									{attachIcon}
+									{t("pr.comments.attach.short")}
+								</button>
+							) : null}
+							<span className="min-w-0 flex-1 truncate text-micro text-muted-foreground">{upload ? t("pr.comments.simpleHint") : t("pr.comments.postHint")}</span>
+							<Button className="h-7 px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button>
+							<Button className="h-7 gap-1 rounded-lg px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
+								{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+								{submitLabel}
+							</Button>
+						</div>
+					) : null}
+				</div>
+				{fileInput}
+				{uploadError ? <p className="m-0 text-xs text-error" role="status">{uploadError}</p> : null}
+				{error ? <p className="m-0 text-xs text-error" role="status">{error}</p> : null}
+			</div>
+		);
+	}
+
 	return (
 		<div
 			className={cn("flex min-w-0 flex-col gap-1.5 text-xs", dragging && "rounded-md ring-2 ring-ring/50")}
@@ -244,19 +337,7 @@ export function PRCommentComposer({ autoFocus, busy, compact, error, initial = "
 					/>
 				)}
 			</div>
-			{upload ? (
-				<input
-					accept={PR_ATTACHMENT_ACCEPT}
-					aria-hidden="true"
-					className="hidden"
-					data-testid="pr-comment-file"
-					multiple
-					onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void attach(files); }}
-					ref={fileRef}
-					tabIndex={-1}
-					type="file"
-				/>
-			) : null}
+			{fileInput}
 			{uploadError ? <p className="m-0 text-xs text-error" role="status">{uploadError}</p> : null}
 			{error ? <p className="m-0 text-xs text-error" role="status">{error}</p> : null}
 			{roomy ? (

@@ -70,9 +70,9 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { PRMergeButton, PRStateActions, PRStateMenu } from "./PRActions";
-import { PRComments } from "./PRComments";
-import { prFocusKey, PRSwitcher, switcherGroups } from "./PRSwitcher";
+import { PRActionButton } from "./PRActions";
+import { prCommentCount, PRComments } from "./PRComments";
+import { PRPills, prFocusKey, sortSessionPRs } from "./PRPills";
 import { PRChecksList, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
@@ -371,6 +371,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							onOpenReviewFile={onOpenReviewFile}
 							session={session}
 						/>
 					) : undefined
@@ -404,6 +405,7 @@ const SummaryView = memo(function SummaryView({
 	onOpenArtifact,
 	hostId,
 	onOpenFiles,
+	onOpenReviewFile,
 	onOpenReviews,
 	session,
 }: {
@@ -411,6 +413,8 @@ const SummaryView = memo(function SummaryView({
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
 	onOpenFiles: () => void;
+	/** Opens a file's diff at a line, for a review thread's "View in diff". */
+	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onOpenReviews: () => void;
 	session: WorkspaceSession;
 }) {
@@ -440,15 +444,14 @@ const SummaryView = memo(function SummaryView({
 		: t("inspector.artifact");
 	const branchPR = sessionBranchPR(session, prSummaries);
 	const openPRNumber = branchPR?.number;
-	// One PR at a time: the one picked, else the PR the branch updates, else the
-	// newest open one. Until a pick, it follows the branch, which settles once
-	// the PR details load.
+	// One PR on screen: the one picked, else the PR the branch updates, else the
+	// newest open one; with several, pills over the card pick another. Until a
+	// pick, it follows the branch, which settles once the PR details load.
 	const focusStore = `${hostId ?? ""}:${session.id}`;
 	const [focusChoice, setFocusChoice] = useState<string | undefined>(() => prFocus.get(focusStore));
 	const focusedPR = prSummaries.find((pr) => prFocusKey(pr) === focusChoice)
 		?? branchPR
-		?? switcherGroups(prSummaries).active[0]
-		?? switcherGroups(prSummaries).earlier[0];
+		?? sortSessionPRs(prSummaries)[0];
 	const focusPR = (pr: SessionPRSummary) => {
 		prFocus.set(focusStore, prFocusKey(pr));
 		setFocusChoice(prFocusKey(pr));
@@ -484,20 +487,28 @@ const SummaryView = memo(function SummaryView({
 				<SessionBranchSummary
 					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
 					hostId={hostId}
+					onOpenFile={onOpenReviewFile}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
 					pullRequests={hasPRs ? (work: BranchWork | undefined) => (
 						<>
 							{focusedPR ? (
-								// One card, one PR; the session's other PRs are behind the switcher in its header.
+								// One card, one PR; with several, pills over it pick which.
+								<div className="flex min-w-0 flex-col gap-2">
+								<PRPills
+									branchPR={branchPR}
+									focused={focusedPR}
+									onFocus={focusPR}
+									prs={prSummaries}
+									showRepository={prsSpanRepositories(prSummaries)}
+								/>
 								<div className="flex min-w-0 flex-col rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-1" data-testid="pr-card">
 									<PRSummaryCard
 										canOpenReviews={canOpenReviews}
 										cloudOrgId={session.cloud?.orgId}
-										comments={session.cloud ? undefined : <PRComments hostId={hostId} pr={focusedPR} session={session} />}
 										elsewhere={branchPR && focusedPR.number !== openPRNumber ? (
-											<BranchWorkElsewhere branchPR={branchPR} note={work?.note} onShow={() => focusPR(branchPR)} />
+											<BranchWorkElsewhere branchPR={branchPR} />
 										) : undefined}
 										guest={session.cloud?.shared === true}
 										hostId={hostId}
@@ -508,11 +519,9 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										switcher={prSummaries.length > 1 ? (
-											<PRSwitcher focused={focusedPR} onFocus={focusPR} prs={prSummaries} showRepository={prsSpanRepositories(prSummaries)} />
-										) : undefined}
 										work={focusedPR.number === openPRNumber ? work : undefined}
 									/>
+								</div>
 								</div>
 							) : null}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
@@ -522,6 +531,8 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			}
+			comments={focusedPR && !session.cloud ? <PRComments hostId={hostId} onViewInDiff={onOpenReviewFile} pr={focusedPR} session={session} /> : undefined}
+			commentsTitle={focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -956,22 +967,12 @@ export function resetPRFocus() {
 	prFocus.clear();
 }
 
-/**
- * Under a PR that is not the branch's: the git rows and actions belong to the
- * PR the branch updates, so say which, with any work waiting there, and offer
- * to show it.
- */
-function BranchWorkElsewhere({ branchPR, note, onShow }: { branchPR: SessionPRSummary; note?: string; onShow: () => void }) {
+/** Under a PR that is not the branch's: the git rows and actions belong to the PR the branch updates. */
+function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
 	const { t } = useTranslation();
 	return (
-		<p className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-1.5 border-t border-(--color-border-settings-input) pt-2 pb-2 text-xs text-passive" data-testid="branch-work-elsewhere">
-			<span>{t("pr.switcher.branchOn", { number: branchPR.number })}</span>
-			{note ? <span className="text-status-in-review">{note}</span> : null}
-			<span className="text-xs">
-				<button className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onClick={onShow} type="button">
-					{t("pr.switcher.show", { number: branchPR.number })}
-				</button>
-			</span>
+		<p className="m-0 border-t border-(--color-border-settings-input) pt-2 pb-2 text-xs text-passive" data-testid="branch-work-elsewhere">
+			{t("pr.others.branchOn", { number: branchPR.number })}
 		</p>
 	);
 }
@@ -985,7 +986,6 @@ const prStateIcon: Record<InspectorPullRequest["state"], { icon: LucideIcon; cla
 
 export function PRSummaryCard({
 	canOpenReviews,
-	comments,
 	elsewhere,
 	hostId,
 	cloudOrgId,
@@ -997,12 +997,9 @@ export function PRSummaryCard({
 	sessionId,
 	layout = "card",
 	showRepository = false,
-	switcher,
 	work,
 }: {
 	canOpenReviews: boolean;
-	/** The PR's conversation, under the card when it is in focus. */
-	comments?: ReactNode;
 	/** In focus without the branch's work: where that work is instead. */
 	elsewhere?: ReactNode;
 	hostId?: string;
@@ -1020,13 +1017,10 @@ export function PRSummaryCard({
 	layout?: "card" | "focus";
 	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
-	/** The session's other PRs, in the header row when there are any. */
-	switcher?: ReactNode;
 	/** The branch rows and git action, when new commits land on this PR. */
 	work?: BranchWork;
 }) {
 	const { t } = useTranslation();
-	const [stateError, setStateError] = useState<string | null>(null);
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
@@ -1114,8 +1108,9 @@ export function PRSummaryCard({
 						)}
 						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
 					</Button>
-				) : canMerge && !cloudOrgId ? (
-					<PRMergeButton hostId={hostId} pr={pr} sessionId={sessionId} />
+				) : !cloudOrgId && !guest ? (
+					// In the inspector the one action button sits at the card's foot instead.
+					layout === "focus" ? undefined : <PRActionButton canMerge={canMerge} hostId={hostId} pr={pr} sessionId={sessionId} />
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
@@ -1139,7 +1134,6 @@ export function PRSummaryCard({
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
-			actions={cloudOrgId || guest ? undefined : <PRStateActions hostId={hostId} pr={pr} sessionId={sessionId} />}
 			details={<PRLabelsAndReviewers pr={pr} />}
 			readinessDetails={{ ci: <PRChecksList pr={pr} /> }}
 		/>
@@ -1151,8 +1145,6 @@ export function PRSummaryCard({
 			<InfoRow
 				action={
 					<>
-						{switcher}
-						{cloudOrgId || guest ? null : <PRStateMenu hostId={hostId} onError={setStateError} pr={pr} sessionId={sessionId} />}
 						<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />
 					</>
 				}
@@ -1168,12 +1160,16 @@ export function PRSummaryCard({
 				}
 				title={pr.title}
 			/>
-			{stateError ? <p className="m-0 pb-1 pl-6 text-xs leading-normal text-error" role="status">{stateError}</p> : null}
 			{cardView}
-			{comments}
-			{work ? (
-				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div>
+			{work?.hasRows ? (
+				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
+			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
+			{!cloudOrgId && !guest && pr.state !== "merged" ? (
+				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<PRActionButton canMerge={canMerge} fullWidth git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : null}
 		</section>
 	);
 }

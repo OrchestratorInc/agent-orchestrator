@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -21,7 +21,9 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
+import { cn } from "../lib/utils";
 import { BranchNamingLabel } from "./BranchNamingLabel";
+import { ChangeCounts, ChangedFilesList } from "./ChangedFilesList";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
@@ -53,11 +55,27 @@ type GitFacts = {
 type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind[] };
 
 /** The branch rows and git action, handed to the PR they land on; `note` stands in for them while it is folded. */
-export type BranchWork = { content: ReactNode; note?: string };
+export type GitStep = { kind: SessionGitActionKind; label: string };
+
+/**
+ * The branch's git step, handed to the PR card so its one action button can
+ * offer it beside the PR's own actions: what to do next, what else could be
+ * done, the step running now, and why the last one failed.
+ */
+export type BranchGitStep = {
+	primary?: GitStep;
+	menu: GitStep[];
+	run: (kind: SessionGitActionKind) => void;
+	pending?: string;
+	error?: string | null;
+};
+
+export type BranchWork = { content: ReactNode; hasRows: boolean; note?: string; git?: BranchGitStep };
 
 export function SessionBranchSummary({
 	conflictFiles,
 	hostId,
+	onOpenFile,
 	onOpenFiles,
 	openPRNumber,
 	pullRequests,
@@ -68,6 +86,8 @@ export function SessionBranchSummary({
 	/** Files the open PR conflicts on, named in the request to resolve them. */
 	conflictFiles?: string[];
 	hostId?: string;
+	/** Opens one changed file's diff in the main area. */
+	onOpenFile?: (target: { line?: number; path: string }) => void;
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
@@ -178,15 +198,17 @@ export function SessionBranchSummary({
 		);
 	}
 
-	const workRows = (
+	const rows = (
 		<>
 			{facts.uncommitted.length > 0 ? (
 				<GitStatusRow
 					additions={sum(facts.uncommitted, "additions")}
 					deletions={sum(facts.uncommitted, "deletions")}
 					icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+					files={facts.uncommitted}
 					label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
-					onClick={onOpenFiles}
+					onOpenAll={onOpenFiles}
+					onOpenFile={onOpenFile ? (path) => onOpenFile({ path }) : undefined}
 				/>
 			) : null}
 			{commitsRow ? (
@@ -194,10 +216,12 @@ export function SessionBranchSummary({
 					additions={sum(facts.committed, "additions")}
 					deletions={sum(facts.committed, "deletions")}
 					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+					files={facts.committed}
 					label={commitsRow.label}
 					note={commitsRow.note}
 					noteTone={commitsRow.noteTone}
-					onClick={onOpenFiles}
+					onOpenAll={onOpenFiles}
+					onOpenFile={onOpenFile ? (path) => onOpenFile({ path }) : undefined}
 				/>
 			) : null}
 			{behind > 0 ? (
@@ -207,6 +231,12 @@ export function SessionBranchSummary({
 					note={facts.branch?.conflicts ? t("inspector.git.conflicts") : undefined}
 				/>
 			) : null}
+		</>
+	);
+	// Without a PR to hold it, the branch keeps its own git button under the rows.
+	const workRows = (
+		<>
+			{rows}
 			{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
 			{sendError ? (
 				<p className="mt-1.5 text-xs leading-normal text-error" role="status">
@@ -215,6 +245,13 @@ export function SessionBranchSummary({
 			) : null}
 		</>
 	);
+	const gitStep: BranchGitStep = {
+		primary: plan ? { kind: plan.primary, label: primaryLabel(plan.primary, openPRNumber, behindBase, t) } : undefined,
+		menu: plan ? plan.menu.map((kind) => ({ kind, label: menuLabel(kind, behindBase, t) })) : [],
+		run: (kind) => send.mutate(kind),
+		pending: pending ? pendingLabel(pending.kind, behindBase, t) : undefined,
+		error: sendError,
+	};
 	// The rows go inside the open PR new commits update, so that PR's section
 	// holds its work; folded, its header keeps the work in sight.
 	const workInPR = typeof pullRequests === "function" && openPRNumber !== undefined && (hasWork || action !== null || sendError !== null);
@@ -227,7 +264,7 @@ export function SessionBranchSummary({
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{renderCards(workInPR ? { content: workRows, note: workNote } : undefined)}
+				{renderCards(workInPR ? { content: rows, hasRows: hasWork, note: workNote, git: gitStep } : undefined)}
 				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>
@@ -246,42 +283,57 @@ function BranchLine({ base, branch, naming }: { base?: string; branch?: string; 
 	);
 }
 
+/**
+ * A row of the branch's work (uncommitted files, commits) that opens in place
+ * to its files; each opens its own diff, and the list ends with the way to
+ * the full changes view.
+ */
 function GitStatusRow({
 	additions,
 	deletions,
+	files,
 	icon,
 	label,
 	note,
 	noteTone,
-	onClick,
+	onOpenAll,
+	onOpenFile,
 }: {
 	additions: number;
 	deletions: number;
+	files: WorkspaceFileSummary[];
 	icon: ReactNode;
 	label: string;
 	note?: string;
 	noteTone?: "warn" | "muted";
-	onClick: () => void;
+	onOpenAll: () => void;
+	onOpenFile?: (path: string) => void;
 }) {
+	const [open, setOpen] = useState(false);
+	const id = useId();
+	// A row with no file list to show (a daemon that sent none) still opens the full view.
+	const opens = files.length > 0;
 	return (
-		<button
-			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-			onClick={onClick}
-			type="button"
-		>
-			{icon}
-			<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
-				<span className="truncate">{label}</span>
-				{note ? (
-					<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>
-				) : null}
-			</span>
-			<span className="inline-flex shrink-0 gap-1.5 font-mono text-xs tabular-nums">
-				<span className="text-success">+{additions}</span>
-				<span className="text-error">−{deletions}</span>
-			</span>
-			<ChevronRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />
-		</button>
+		<div className="flex min-w-0 flex-col">
+			<button
+				aria-controls={opens && open ? id : undefined}
+				aria-expanded={opens ? open : undefined}
+				className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+				onClick={() => (opens ? setOpen(!open) : onOpenAll())}
+				type="button"
+			>
+				{icon}
+				<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
+					<span className="truncate">{label}</span>
+					{note ? (
+						<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>
+					) : null}
+				</span>
+				<ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />
+				<ChevronRight aria-hidden="true" className={cn("size-icon-sm shrink-0 text-passive transition-transform motion-reduce:transition-none", opens && open && "rotate-90")} />
+			</button>
+			{opens && open ? <ChangedFilesList files={files} id={id} onOpenAll={onOpenAll} onOpenFile={onOpenFile} /> : null}
+		</div>
 	);
 }
 

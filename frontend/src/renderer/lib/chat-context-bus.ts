@@ -8,9 +8,11 @@ import { sessionUiKey } from "./hosts";
 // trees. A composer registers while it can accept a new draft; the session
 // view registers to bring the Chat surface forward when a reference arrives.
 type ReferenceListener = (reference: ChatFileReference) => boolean | void;
+type TextListener = (text: string) => boolean | void;
 type RevealListener = () => void;
 
 const composers = new Map<string, Set<ReferenceListener>>();
+const textComposers = new Map<string, Set<TextListener>>();
 const revealers = new Map<string, Set<RevealListener>>();
 const availabilityListeners = new Set<() => void>();
 
@@ -41,6 +43,38 @@ export function subscribeChatComposerReferences(sessionId: string, listener: Ref
 		remove();
 		notifyAvailability();
 	};
+}
+
+/** Registers the session's Chat composer as the destination for quoted text (a PR comment). */
+export function subscribeChatComposerText(sessionId: string, listener: TextListener): () => void {
+	const remove = add(textComposers, sessionId, listener);
+	notifyAvailability();
+	return () => {
+		remove();
+		notifyAvailability();
+	};
+}
+
+/** Text is accepted only when a listening composer adds it to its draft. */
+export function sendTextToChat(sessionId: string, text: string): boolean {
+	const listeners = textComposers.get(sessionId);
+	if (!listeners?.size) return false;
+	let accepted = false;
+	for (const listener of listeners) accepted = listener(text) !== false || accepted;
+	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
+	return accepted;
+}
+
+/**
+ * Adds text to the session's Chat composer draft, below what is already
+ * typed, so the person can say what to do with it before sending; undefined
+ * while the session has no Chat composer (a TUI session).
+ */
+export function useAddTextToChat(sessionId: string, hostId?: string): ((text: string) => boolean) | undefined {
+	const key = sessionUiKey(sessionId, hostId);
+	const getSnapshot = useCallback(() => (textComposers.get(key)?.size ?? 0) > 0, [key]);
+	const available = useSyncExternalStore(subscribeAvailability, getSnapshot, () => false);
+	return useMemo(() => (available ? (text: string) => sendTextToChat(key, text) : undefined), [available, key]);
 }
 
 /** Registers a callback that brings the session's Chat surface on screen. */
