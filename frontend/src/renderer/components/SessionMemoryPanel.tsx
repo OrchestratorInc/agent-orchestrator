@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
@@ -58,12 +58,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 // in a loop until the workspace query resolves.
 const EMPTY_WORKSPACES: readonly WorkspaceSummary[] = [];
 
-/** True once the daemon has produced an app-wide reading; gates the archive bar. */
-export function useHasAppMemory(local = true): boolean {
-	const memory = useAppMemory(local);
-	return !memory.isError && (memory.data?.app?.rssBytes ?? 0) > 0;
-}
-
 /** What the monitor knows about a session, from the board plus its reading. */
 export function toSessionFacts(session: WorkspaceSession, reading: SessionMemoryReading | undefined, now: number): ResourceSessionFacts {
 	const lastActivity = session.activity?.lastActivityAt ? Date.parse(session.activity.lastActivityAt) : Number.NaN;
@@ -102,11 +96,12 @@ function usePressureFacts(projectId?: string) {
 }
 
 /**
- * Archive-bar light: a dot, the state word, AO's size and the fix. Colour
- * means something needs doing; grey means nothing does. The tooltip holds
- * the machine figures, the window behind it everything else.
+ * The board's memory light, beside the orchestrator button: a dot and AO's
+ * size. Colour means something needs doing; grey means nothing does. The
+ * tooltip holds the machine figures, the window behind it everything else.
+ * `style` lets a window toolbar mark it clickable inside its drag region.
  */
-export function AppMemoryIndicator() {
+export function AppMemoryIndicator({ style }: { style?: CSSProperties }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const memory = useAppMemory();
@@ -131,17 +126,18 @@ export function AppMemoryIndicator() {
 				<TooltipTrigger asChild>
 					<button
 						aria-label={`${word} · ${detail}`}
-						className="inline-flex items-center gap-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
+						className="inline-flex items-center gap-2 px-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-state={state ?? "unknown"}
 						data-testid="app-memory-indicator"
 						onClick={() => setOpen(true)}
+						style={style}
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />
 						<span className={state ? stateText[state] : undefined}>{formatMemory(app.rssBytes)}</span>
 					</button>
 				</TooltipTrigger>
-				<TooltipContent side="top">{detail}</TooltipContent>
+				<TooltipContent side="bottom">{detail}</TooltipContent>
 			</Tooltip>
 			{open ? <SessionMemoryPanel onOpenChange={setOpen} open /> : null}
 		</>
@@ -163,48 +159,39 @@ function MetricCard({ children, testId, title, value }: { children: ReactNode; t
 	);
 }
 
-/** One figure in the machine strip: its name over its value. A dot ties a
- * memory figure to its part of the bar, so a colour is never the only clue. */
-function Stat({ dot, label, value }: { dot?: string; label: string; value: string }) {
+/** One part of the memory bar named with its figure, so a colour is never the only clue. */
+function LegendItem({ dot, label, value }: { dot: string; label: string; value: string }) {
 	return (
-		<div className="flex min-w-0 flex-col gap-1">
-			<dt className="flex min-w-0 items-center gap-1.5 text-xs text-settings-muted">
-				{dot ? <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dot)} /> : null}
-				<span className="truncate">{label}</span>
-			</dt>
-			<dd className="text-subtitle font-medium leading-5 tabular-nums text-settings-label">{value}</dd>
-		</div>
+		<span className="inline-flex items-center gap-1.5">
+			<span aria-hidden="true" className={cn("size-1.5 rounded-full", dot)} />
+			{label} <span className="text-settings-label">{value}</span>
+		</span>
 	);
 }
 
-/**
- * The machine's figures in one row, then AO against free as one bar. The bar
- * is scaled to those two, so there is no gap standing in for other apps.
- */
-function MachineStrip({ app, system }: { app: AppMemoryReading; system: SystemMemoryReading }) {
+/** One bar: AO against free, and nothing else, with its key under it. The bar
+ * is scaled to the two of them, so there is no gap standing in for other apps. */
+function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = app.rssBytes + system.availableBytes || 1;
 	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
 	return (
 		<div className="settings-grouped-rows" data-testid="session-memory-stacked">
-			<div className="settings-content-row flex flex-col gap-4">
-				<dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-					<Stat dot="bg-accent-strong" label={t("shell.memoryStatAO")} value={formatMemory(app.rssBytes)} />
-					<Stat dot="bg-success/70" label={t("shell.memoryLegendAvailable")} value={formatMemory(system.availableBytes)} />
-					<Stat label={t("shell.cpuStatCores")} value={String(system.cpuCount)} />
-					{/* A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number. */}
-					{system.load1 >= 0 ? <Stat label={t("shell.cpuStatLoad")} value={system.load1.toFixed(2)} /> : null}
-				</dl>
+			<div className="settings-content-row flex flex-col gap-3">
 				<div className="flex h-1.5 w-full overflow-hidden rounded-full bg-foreground/[0.06]">
 					<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(app.rssBytes) }} />
 					<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+				</div>
+				<div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs tabular-nums text-settings-muted">
+					<LegendItem dot="bg-accent-strong" label={t("shell.memoryLegendAO")} value={formatMemory(app.rssBytes)} />
+					<LegendItem dot="bg-success/70" label={t("shell.memoryLegendAvailable")} value={formatMemory(system.availableBytes)} />
 				</div>
 			</div>
 		</div>
 	);
 }
 
-/** The machine at a glance: its figures and memory bar, then the CPU graphs. */
+/** The machine's memory: AO against what is free. */
 export function MachineSection({ action }: { action?: ReactNode }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
@@ -212,9 +199,9 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 	const system = appMemory?.system;
 	return (
 		<SettingsSection title={t("shell.memorySectionMachine")} action={action}>
-			<div className="flex flex-col gap-3">
+			<div className="flex flex-col">
 				{system && app ? (
-					<MachineStrip app={app} system={system} />
+					<MemoryBar app={app} system={system} />
 				) : (
 					// Never an empty card: until the first sample lands, one row holds its place.
 					<div className="settings-grouped-rows">
@@ -226,7 +213,6 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 						</p>
 					</div>
 				)}
-				<CpuSection />
 			</div>
 		</SettingsSection>
 	);
@@ -236,15 +222,17 @@ export function MachineSection({ action }: { action?: ReactNode }) {
  * Each column's width, padding and alignment, in one place: the header and
  * every row take their classes from here, so the columns line up.
  */
-const columnWidth = { type: "w-24", pid: "w-20", cpu: "w-16", memory: "w-24", share: "w-24" } as const;
+const columnWidth = { type: "w-28", pid: "w-20", cpu: "w-20", memory: "w-24", share: "w-24" } as const;
 const cell = {
 	name: "pl-(--settings-row-inset) pr-3 text-left",
 	// One step in from the parent's title, as far as the title sits from its chevron.
 	process: "pl-13 pr-3 text-left",
 	type: "px-3 text-left",
-	pid: "px-3 text-right",
-	cpu: "px-3 text-right",
-	memory: "px-3 text-right",
+	// Figures start under their header's first letter, like every other column:
+	// right-aligned, they ended under the sort arrow instead of the word.
+	pid: "px-3 text-left",
+	cpu: "px-3 text-left",
+	memory: "px-3 text-left",
 	share: "pl-3 pr-(--settings-row-inset) text-left",
 } as const;
 
@@ -383,7 +371,7 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>
-			<tbody className="[&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
+			<tbody className="[&_tr+tr.memory-group]:border-t [&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-group]:border-(--color-border-settings-dialog-header) [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
 				{/* No "Sessions" label: the section heading above the card already says it. */}
 				{live.map((row) => (
 					<SessionRow
@@ -432,15 +420,27 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 	);
 }
 
-/** The CPU graphs, once there is a reading to draw. */
+/** The CPU: its size and load on the heading line, then the graphs. */
 export function CpuSection() {
+	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const system = appMemory?.system;
 	const cpuHistory = useCPUHistory();
 	// An unmeasured reading shows the last real point instead of a false zero.
 	const current = cpuSampleOf(system, appMemory?.app) ?? cpuHistory.at(-1);
 	if (!system || !current) return null;
-	return <CpuGraphs current={current} history={cpuHistory} />;
+	return (
+		<SettingsSection
+			title={t("shell.cpuBarTitle", { cores: system.cpuCount })}
+			testId="session-cpu-graph"
+			// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
+			action={system.load1 >= 0 ? (
+				<span className="text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
+			) : undefined}
+		>
+			<CpuGraphs current={current} history={cpuHistory} />
+		</SettingsSection>
+	);
 }
 
 /**
@@ -459,10 +459,11 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 	const scrolledPast = useScrolledPast(graphs, scroller);
 	return (
 		<>
-			<div ref={graphs}>
+			<div className="flex flex-col gap-(--size-settings-section-gap,1.5rem)" ref={graphs}>
 				<MachineSection
 					action={<CopyReportButton value={() => diagnosticsReport({ app: appMemory?.app, system: appMemory?.system }, rows, t, sessionTitles(workspaces))} />}
 				/>
+				<CpuSection />
 			</div>
 			{/* One block with the sessions, so the zero-height bar adds no section gap. */}
 			<div className="flex w-full flex-col">
@@ -564,8 +565,9 @@ export function SessionMemoryPanel({
 	);
 }
 
-/** A group label starts on the column headers' edge. The first one sits right
- * under the header rule, so it needs less space above. */
+/** A group label starts on the column headers' edge, under a rule that closes
+ * the rows above it. The first one sits right under the header rule, so it
+ * needs less space above. */
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
@@ -1078,7 +1080,7 @@ function CopyReportButton({ value }: { value: () => string }) {
 
 /**
  * A PID that copies itself. A tick for a moment says it worked. The icon
- * hangs off the PID's left edge, out of the flow: a hidden icon that still
+ * hangs off the PID's right edge, out of the flow: a hidden icon that still
  * took space pushed the PIDs off the edge their column header lines up on.
  */
 function CopyControl({
@@ -1108,12 +1110,12 @@ function CopyControl({
 		>
 			{children}
 			{copied ? (
-				<Check aria-hidden="true" className="absolute right-full mr-1 size-icon-2xs text-success" />
+				<Check aria-hidden="true" className="absolute left-full ml-1 size-icon-2xs text-success" />
 			) : (
 				// A hint that fades in on hover or focus.
 				<Copy
 					aria-hidden="true"
-					className="absolute right-full mr-1 size-icon-2xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+					className="absolute left-full ml-1 size-icon-2xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
 				/>
 			)}
 		</button>
@@ -1164,7 +1166,7 @@ function areaPoints(values: number[], ceiling: number): string {
 function CpuGraphs({ current, history }: { current: CPUSample; history: CPUSample[] }) {
 	const { t } = useTranslation();
 	return (
-		<div className="grid gap-3 sm:grid-cols-2" data-testid="session-cpu-graph">
+		<div className="grid gap-3 sm:grid-cols-2">
 			<CpuGraph
 				fill="fill-warning/15"
 				stroke="stroke-warning/80"

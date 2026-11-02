@@ -5,6 +5,8 @@ import { Archive, CalendarClock, File, Folder, LayoutDashboard, Plus } from "luc
 import { useState, type ReactNode } from "react";
 import { NotificationCenter } from "./NotificationCenter";
 import { ProjectBoardActions } from "./ProjectBoardActions";
+import { AppMemoryIndicator } from "./SessionMemoryPanel";
+import { useDiagnosticsEnabled } from "../hooks/useSessionMemory";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import {
@@ -109,6 +111,7 @@ export function ShellTopbar({
 	const hostId = params.hostId;
 	const currentSessionId = startingOrchestrator ? undefined : params.sessionId;
 	const boardActionsInPanel = usesBoardActionsInPanel();
+	const diagnostics = useDiagnosticsEnabled();
 	const paddingLeft = useTopbarPaddingLeft(embedded);
 	const workspaceQuery = useWorkspaceScope(params.projectId, params.sessionId, hostId);
 	const workspaceScope = workspaceQuery.data;
@@ -227,6 +230,10 @@ export function ShellTopbar({
 				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
+				) : null}
+				{/* The memory light reads this machine, so another machine's board shows none. */}
+				{!boardActionsInPanel && diagnostics && !hostId && (isProjectBoardRoute || isRootBoardRoute || isStandaloneBoardRoute) ? (
+					<AppMemoryIndicator style={noDragStyle} />
 				) : null}
 				{isSessionRoute ? (
 					<>

@@ -199,15 +199,18 @@ describe("AppMemoryIndicator", () => {
 		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "CPU", "Memory", "Share"]);
 		// A session is not a process: no PID, and the line under its title says what is under it.
 		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes");
+		// The memory card is the bar and its key, nothing else.
 		const machine = screen.getByTestId("session-memory-stacked");
-		expect(machine).toHaveTextContent(/AO memory\s*2\.0 GB/);
-		expect(machine).toHaveTextContent(/Available\s*20\.0 GB/);
-		expect(machine).toHaveTextContent(/CPU cores\s*8/);
-		expect(machine).toHaveTextContent(/Load \(1 min\)\s*0\.50/);
+		expect(machine).toHaveTextContent("AO 2.0 GB");
+		expect(machine).toHaveTextContent("Available 20.0 GB");
 		expect(machine).not.toHaveTextContent("In use");
 		expect(machine).not.toHaveTextContent("Other");
+		expect(machine).not.toHaveTextContent(/cores|load/i);
 		// CPU graphs: host 40% busy on 8 cores, AO's 160% of one core is 20% of the machine.
+		// The core count and load sit on the CPU heading line, above the two graphs.
 		const cpu = screen.getByTestId("session-cpu-graph");
+		expect(cpu).toHaveTextContent("CPU · 8 cores");
+		expect(cpu).toHaveTextContent("load 0.50");
 		expect(within(cpu).getByTestId("session-cpu-machine")).toHaveTextContent(/Machine CPU\s*40%/);
 		expect(within(cpu).getByTestId("session-cpu-ao")).toHaveTextContent(/AO CPU\s*20%/);
 		// Each graph tops out at the first of 10/25/50/100% that clears its peak.
@@ -297,13 +300,13 @@ describe("AppMemoryIndicator", () => {
 		expect(report.indexOf("Review of s-gone")).toBeLessThan(report.indexOf("Daemon and app"));
 	});
 
-	it("hides the load figure on a platform with no load average, in the machine figures and in the copied report", async () => {
+	it("hides the load figure on a platform with no load average, on the CPU heading and in the copied report", async () => {
 		appMemoryMock.mockReturnValue(appReading(20, 0, 2, 40, 160, -1));
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
-		const machine = await screen.findByTestId("session-memory-stacked");
-		expect(machine).toHaveTextContent(/CPU cores\s*8/);
-		expect(machine).not.toHaveTextContent(/load/i);
+		const cpu = await screen.findByTestId("session-cpu-graph");
+		expect(cpu).toHaveTextContent("CPU · 8 cores");
+		expect(cpu).not.toHaveTextContent("load");
 		await userEvent.click(screen.getByRole("button", { name: "Copy report" }));
 		const report = clipboardMock.mock.calls[0][0] as string;
 		expect(report).not.toContain("load");
