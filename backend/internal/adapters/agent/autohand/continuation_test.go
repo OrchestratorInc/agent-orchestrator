@@ -2,6 +2,8 @@ package autohand
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,9 +21,7 @@ func TestAutohandNativeContinuation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"role":"user","content":"synthetic prompt"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "metadata.json"), []byte(`{"sessionId":"`+id+`","projectPath":"/work/original"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAutohandNativeMetadata(t, filepath.Dir(path), id)
 	p := New()
 	t.Setenv("AUTOHAND_HOME", root)
 	got, err := p.NativeSessionConfigDir(context.Background(), nil)
@@ -54,9 +54,7 @@ func TestAutohandStrictResumeRefusesTornNativeHistory(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{"sessionId":"`+id+`","projectPath":"/work/original"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAutohandNativeMetadata(t, dir, id)
 	for _, body := range []string{
 		"{\"role\":\"user\",\"content\":\"kept in tolerant preview\"}\n{\"role\":",
 		`{"role":"user","content":null}`,
@@ -74,5 +72,53 @@ func TestAutohandStrictResumeRefusesTornNativeHistory(t *testing.T) {
 		if err == nil || found {
 			t.Fatalf("strict native gate accepted malformed history: %v, %v", found, err)
 		}
+	}
+}
+
+func writeAutohandNativeMetadata(t *testing.T, dir, id string) {
+	t.Helper()
+	data, err := json.Marshal(map[string]string{"sessionId": id, "projectPath": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAutohandImportedCommandValidatesOptionalStateAndNeverFallsBack(t *testing.T) {
+	for _, body := range []string{"", "{}", `{"readFileState":`, "null"} {
+		t.Run(body, func(t *testing.T) {
+			root := t.TempDir()
+			id := "11111111-2222-4333-8444-555555555555-1790000000000"
+			dir := filepath.Join(root, "sessions", id)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			writeAutohandNativeMetadata(t, dir, id)
+			if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"role":"user","content":"synthetic prompt"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if body != "" {
+				if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: t.TempDir(), Metadata: map[string]string{
+				ports.MetadataKeyAgentSessionID:       id,
+				ports.MetadataKeyImportSourceNativeID: id,
+				ports.MetadataKeyImportConfigDir:      root,
+			}}}
+			p := &Plugin{resolvedBinary: "autohand"}
+			cmd, gotID, ok, err := p.GetRestoreCommandWithSessionID(context.Background(), cfg)
+			valid := body == "" || body == "{}"
+			if valid {
+				if err != nil || !ok || gotID != id || len(cmd) == 0 {
+					t.Fatalf("valid native restore refused = %v, %q, %v, %v", cmd, gotID, ok, err)
+				}
+			} else if !errors.Is(err, ports.ErrNativeHistoryUnavailable) || ok || cmd != nil {
+				t.Fatalf("malformed state fell back = %v, %q, %v, %v", cmd, gotID, ok, err)
+			}
+		})
 	}
 }

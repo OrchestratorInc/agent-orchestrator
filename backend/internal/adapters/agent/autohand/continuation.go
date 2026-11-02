@@ -21,6 +21,7 @@ var (
 	_ ports.AgentNativeSessionProber          = (*Plugin)(nil)
 	_ ports.AgentTranscriptLocator            = (*Plugin)(nil)
 	_ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
+	_ ports.AgentNativeRestoreCommand         = (*Plugin)(nil)
 )
 
 // NativeSessionConfigDir mirrors AUTOHAND_HOME, not AUTOHAND_CONFIG (which
@@ -143,7 +144,64 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 	if count == 0 {
 		return errors.New("autohand native history is empty")
 	}
+	return validateAutohandNativeState(ctx, root, id)
+}
+
+func validateAutohandNativeState(ctx context.Context, root *os.Root, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path := filepath.Join("sessions", id, "state.json")
+	info, err := root.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 8<<20 {
+		return errors.New("autohand native state is not a bounded regular file")
+	}
+	f, err := root.Open(path)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (8<<20)+1))
+	_ = f.Close()
+	if err != nil {
+		return err
+	}
+	var state map[string]json.RawMessage
+	if len(data) > 8<<20 || json.Unmarshal(data, &state) != nil || state == nil {
+		return errors.New("autohand native state is malformed")
+	}
 	return ctx.Err()
+}
+
+// GetRestoreCommandWithSessionID makes imported history validation a hard
+// command-construction error even after adoption, when the ordinary manager
+// probe treats an error as unknown. Managed non-import recovery is unchanged.
+func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.RestoreConfig) ([]string, string, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", false, err
+	}
+	id := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]
+	if source := cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID]; source != "" {
+		expected := cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID]
+		if expected == "" {
+			expected = source
+		}
+		root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]
+		if !autohandNativeID.MatchString(id) || id != expected || !filepath.IsAbs(root) {
+			return nil, "", false, ports.ErrNativeHistoryUnavailable
+		}
+		_, found, err := p.LocateTranscript(ctx, ports.NativeSessionRef{NativeSessionID: id, ConfigDir: root})
+		if err != nil || !found {
+			return nil, "", false, errors.Join(ports.ErrNativeHistoryUnavailable, err)
+		}
+	}
+	cmd, ok, err := p.GetRestoreCommand(ctx, cfg)
+	return cmd, id, ok, err
 }
 
 // NativeConversationExists validates the exact files native resume loads.
