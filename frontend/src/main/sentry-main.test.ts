@@ -241,12 +241,12 @@ describe("Electron main Sentry configuration", () => {
 			user: { id: "spoofed", email: "private@example.test" },
 			breadcrumbs: [{ message: "private branch" }],
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
-			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "loadProject", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
+			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "ChatWorkspace", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "Renderer Error in loadProject (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_test" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "loadProject", "renderer"] });
+		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_test" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
-		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "loadProject", lineno: undefined, in_app: true });
+		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "ChatWorkspace", in_app: true });
 	});
 
 	it("groups renderer exceptions by safe type and top frame without using messages", async () => {
@@ -256,16 +256,32 @@ describe("Electron main Sentry configuration", () => {
 			transport.capture({ consentGeneration: "generation-1", kind: "exception", message, exception: { type, frames: [{ function: functionName, filename: "assets/app-A1B2C3D4.js", lineno: 42 }] } });
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
-		const first = capture("TypeError", "renderWidget", "resume agent ai-sports-coach-113");
-		const same = capture("TypeError", "renderWidget", "get project private-repo");
-		const otherType = capture("RangeError", "renderWidget", "get project private-repo");
-		const otherFrame = capture("TypeError", "loadState", "get project private-repo");
-		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "renderWidget", "renderer"]);
+		const first = capture("TypeError", "ChatWorkspace", "resume agent ai-sports-coach-113");
+		const same = capture("TypeError", "ChatWorkspace", "get project private-repo");
+		const otherType = capture("RangeError", "ChatWorkspace", "get project private-repo");
+		const otherFrame = capture("TypeError", "SessionView", "get project private-repo");
+		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "ChatWorkspace", "renderer"]);
 		expect(same.fingerprint).toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherFrame.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderWidget", filename: "assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
+	});
+
+	it("groups minified renderer functions by app chunk and line while retaining source map filenames", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const capture = (filename: string, lineno: number, functionName: string) => {
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno }] } });
+			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+		};
+		const first = capture("assets/_shell-A1B2C3D4.js", 42, "a");
+		const same = capture("assets/_shell-Z9Y8X7W6.js", 42, "b");
+		const otherLine = capture("assets/_shell-A1B2C3D4.js", 43, "a");
+		expect(first.message).toBe("Renderer TypeError in assets/_shell:42 (unknown)");
+		expect(first.fingerprint).toEqual(same.fingerprint);
+		expect(otherLine.fingerprint).not.toEqual(first.fingerprint);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, in_app: true }]);
 	});
 
 	it("titles renderer API failures with the actual allowlisted code", async () => {
@@ -288,7 +304,7 @@ describe("Electron main Sentry configuration", () => {
 		const first = mainError("TypeError", "startDaemon", "resume agent ai-sports-coach-113");
 		expect(mainError("TypeError", "startDaemon", "get project private-repo").fingerprint).toEqual(first.fingerprint);
 		expect(mainError("RangeError", "startDaemon", "other").fingerprint).not.toEqual(first.fingerprint);
-		expect(mainError("TypeError", "openWindow", "other").fingerprint).not.toEqual(first.fingerprint);
+		expect(mainError("TypeError", "initMainSentry", "other").fingerprint).not.toEqual(first.fingerprint);
 		expect(first.fingerprint).toEqual(["electron", "main_error", "unknown", "TypeError", "startDaemon", "electron-main"]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo|\/Users\/alice/);
 	});

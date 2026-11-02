@@ -87,8 +87,12 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
 		.slice(-8)
-		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), lineno: frame.lineno, in_app: true }));
-	const topFunction = frames?.at(-1)?.function ?? "unknown";
+		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), in_app: true }));
+	const topFrame = frames?.at(-1);
+	const topLocation = renderer && topFrame && "filename" in topFrame && typeof topFrame.filename === "string" && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? `${topFrame.filename.replace(/-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/, "")}:${topFrame.lineno}`
+		: undefined;
+	const topFunction = topFrame?.function === "renderer_frame" ? topLocation ?? "renderer_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const title = renderer
 		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
