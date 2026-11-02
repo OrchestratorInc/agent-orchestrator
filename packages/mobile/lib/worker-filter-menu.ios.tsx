@@ -3,7 +3,6 @@ import { Image, Menu, Section } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, accessibilityLabel, buttonStyle, contentShape, frame, menuOrder, shapes } from "@expo/ui/swift-ui/modifiers";
 import { Stack } from "expo-router";
 import { startTransition, type ReactElement } from "react";
-import { glassCircle } from "./glass";
 import { machineAppearance } from "./machineAppearance";
 import { machineMenuImage } from "./machine-menu-image";
 import { Choice } from "./model-controls.ios";
@@ -22,8 +21,9 @@ import type { WorkerFilterMenuOptions } from "./worker-filter-menu";
 export type { WorkerFilterMenuOptions } from "./worker-filter-menu";
 
 /**
- * The Workers filter on iOS: a SwiftUI menu in a 44pt glass circle, held in
- * the bar as a custom view. Not `Stack.Toolbar.Menu`: UIKit sizes a bar
+ * The Workers filter on iOS: a SwiftUI menu on a flat glyph with a 44pt target,
+ * held in the bar as a custom view. Flat, not a glass circle: DESIGN.md keeps
+ * glass out of the working UI. Not `Stack.Toolbar.Menu`: UIKit sizes a bar
  * button's frame under the touch target and offers no way to grow it. The
  * menus inside are the same as before, a Machine and a Project submenu each
  * with the system's check on the current choice.
@@ -57,7 +57,7 @@ function WorkerFilterButton({ environments, selectedEnvironmentId, onSelectEnvir
 						systemName={filtered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"}
 						size={iconSize.lg}
 						color={t.textSecondary}
-						modifiers={[frame({ width: touchTarget, height: touchTarget }), glassCircle(), contentShape(shapes.rectangle())]}
+						modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
 					/>
 				}
 				modifiers={[

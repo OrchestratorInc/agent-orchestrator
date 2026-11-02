@@ -5,7 +5,6 @@ const fixtures = vi.hoisted(() => ({ select: vi.fn() }));
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textSecondary: "#secondary" }), useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
-vi.mock("./glass", () => ({ glassCircle: () => ({ modifier: "glassCircle", args: [] }) }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios", Version: "26.0" }, StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -67,15 +66,16 @@ const modifier = (node: ReactTestInstance, name: string) =>
 	(node.props.modifiers as { modifier: string; args: unknown[] }[]).find((entry) => entry.modifier === name);
 
 // A bar button's frame is under 44pt and UIKit offers no way to grow it, so the
-// filter is our own glass circle the size of the touch target.
-it("is a 44pt glass circle in the bar, named for VoiceOver", async () => {
+// filter is our own flat glyph with a frame the size of the touch target.
+it("is a flat 44pt glyph in the bar, named for VoiceOver", async () => {
 	await act(async () => { renderer = create(workerFilterMenu(options())); });
 	expect(renderer!.root.findByType("StackToolbarView" as never).props.hidesSharedBackground).toBe(true);
 	expect(renderer!.root.findByType("Host" as never).props.style).toEqual({ width: 44, height: 44 });
 	const menu = renderer!.root.findAllByType("Menu" as never)[0];
 	expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Filter workers"]);
 	const face = menu.props.label;
-	expect(face.props.modifiers).toEqual(expect.arrayContaining([{ modifier: "frame", args: [{ width: 44, height: 44 }] }, { modifier: "glassCircle", args: [] }]));
+	expect(face.props.modifiers).toEqual(expect.arrayContaining([{ modifier: "frame", args: [{ width: 44, height: 44 }] }]));
+	expect(face.props.modifiers).not.toEqual(expect.arrayContaining([expect.objectContaining({ modifier: "glassCircle" })]));
 });
 
 it("fills the glyph and names the filters once the board is filtered", async () => {
