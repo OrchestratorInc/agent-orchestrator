@@ -1940,6 +1940,7 @@
 	"shell.memoryOwnRow": "守护进程和应用",
 	"shell.memoryReviewerRow": "{{session}} 的审查",
 	"shell.memoryColumnRss": "内存",
+	"shell.memoryColumnShare": "占比",
 	"shell.memoryEmpty": "没有可测量的运行中会话。",
 	"shell.sessionMemoryAria": "占用 {{size}} 内存",
 	"shell.sessionResourceAria": "占用 {{size}} 内存和单核的 {{cpu}}",

@@ -2880,6 +2880,7 @@
 	"shell.memoryOwnRow": "Daemon e app",
 	"shell.memoryReviewerRow": "Revisão de {{session}}",
 	"shell.memoryColumnRss": "Memória",
+	"shell.memoryColumnShare": "Proporção",
 	"shell.memoryEmpty": "Nenhuma sessão ativa para medir.",
 	"shell.sessionMemoryAria": "Usando {{size}} de memória",
 	"shell.sessionResourceAria": "Usando {{size}} de memória e {{cpu}} de um núcleo",

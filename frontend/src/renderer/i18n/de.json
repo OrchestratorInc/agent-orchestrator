@@ -2832,6 +2832,7 @@
 	"shell.memoryOwnRow": "Daemon und App",
 	"shell.memoryReviewerRow": "Review von {{session}}",
 	"shell.memoryColumnRss": "Speicher",
+	"shell.memoryColumnShare": "Anteil",
 	"shell.memoryEmpty": "Keine laufenden Sitzungen zum Messen.",
 	"shell.sessionMemoryAria": "Belegt {{size}} Speicher",
 	"shell.sessionResourceAria": "Belegt {{size}} Speicher und {{cpu}} eines Kerns",

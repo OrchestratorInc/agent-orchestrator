@@ -2347,6 +2347,7 @@
 	"shell.memoryOwnRow": "Демон и приложение",
 	"shell.memoryReviewerRow": "Ревью {{session}}",
 	"shell.memoryColumnRss": "Память",
+	"shell.memoryColumnShare": "Доля",
 	"shell.memoryEmpty": "Нет активных сессий для измерения.",
 	"shell.sessionMemoryAria": "Используется {{size}} памяти",
 	"shell.sessionResourceAria": "Используется {{size}} памяти и {{cpu}} одного ядра",

@@ -2271,6 +2271,7 @@
 	"shell.memoryOwnRow": "Daemon and app",
 	"shell.memoryReviewerRow": "Review of {{session}}",
 	"shell.memoryColumnRss": "Memory",
+	"shell.memoryColumnShare": "Share",
 	"shell.memoryEmpty": "No live sessions to measure.",
 	"shell.sessionMemoryAria": "Using {{size}} of memory",
 	"shell.sessionResourceAria": "Using {{size}} of memory and {{cpu}} of one core",

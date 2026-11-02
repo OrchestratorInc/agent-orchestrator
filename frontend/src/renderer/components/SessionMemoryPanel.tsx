@@ -148,53 +148,90 @@ export function AppMemoryIndicator() {
 	);
 }
 
+/**
+ * One machine figure as a card: its name and current value on top, the bar
+ * or graph under it, then the key. A card left on its own (CPU not measured
+ * yet) takes the whole row.
+ */
+function MetricCard({ children, testId, title, value }: { children: ReactNode; testId: string; title: string; value: string }) {
+	return (
+		<div className="settings-grouped-rows flex flex-col sm:only:col-span-2" data-testid={testId}>
+			<div className="settings-content-row flex flex-1 flex-col gap-3">
+				<div className="flex items-baseline justify-between gap-3">
+					<h3 className="min-w-0 truncate text-xs font-medium text-settings-muted">{title}</h3>
+					<span className="shrink-0 text-subtitle font-medium tabular-nums text-settings-label">{value}</span>
+				</div>
+				{children}
+			</div>
+		</div>
+	);
+}
+
+/** The key under a bar or graph: a dot, a name and its figure for each part,
+ * so a colour is never the only clue. `trailing` sits at the far end. */
+function Legend({ parts, trailing }: { parts: { key: string; label: string; value: string; className: string }[]; trailing?: ReactNode }) {
+	return (
+		<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-settings-muted">
+			{parts.map((part) => (
+				<span className="inline-flex items-center gap-1.5" key={part.key}>
+					<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+					{part.label} <span className="text-settings-label">{part.value}</span>
+				</span>
+			))}
+			{trailing ? <span className="ml-auto">{trailing}</span> : null}
+		</div>
+	);
+}
+
 /** One bar: AO against free, and nothing else. The bar is scaled to the two
  * of them, so there is no gap standing in for other apps. */
 function MachineBar({ appBytes, system }: { appBytes: number; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = appBytes + system.availableBytes || 1;
 	const pct = (bytes: number) => `${Math.min(100, (bytes / total) * 100)}%`;
-	const legend = [
-		{ key: "ao", label: t("shell.memoryLegendAO"), bytes: appBytes, className: "bg-accent-strong" },
-		{ key: "free", label: t("shell.memoryLegendAvailable"), bytes: system.availableBytes, className: "bg-success/70" },
-	];
 	return (
-		<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3" data-testid="session-memory-stacked">
-			<div className="flex h-2 w-full overflow-hidden rounded-sm bg-foreground/[0.06]">
-				<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
-				<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+		<MetricCard testId="session-memory-stacked" title={t("shell.memoryColumnRss")} value={formatMemory(appBytes)}>
+			{/* Centred in the height the CPU card's graph takes, so the two keys share a line. */}
+			<div className="flex flex-1 items-center">
+				<div className="flex h-2 w-full overflow-hidden rounded-full bg-foreground/[0.06]">
+					<div className="h-full bg-accent-strong transition-[width] duration-500" style={{ width: pct(appBytes) }} />
+					<div className="h-full bg-success/70 transition-[width] duration-500" style={{ width: pct(system.availableBytes) }} />
+				</div>
 			</div>
-			<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-				{legend.map((part) => (
-					<span className="inline-flex items-center gap-1.5" key={part.key}>
-						<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-						{part.label} <span className="text-settings-label">{formatMemory(part.bytes)}</span>
-					</span>
-				))}
-			</div>
-		</div>
+			<Legend
+				parts={[
+					{ key: "ao", label: t("shell.memoryLegendAO"), value: formatMemory(appBytes), className: "bg-accent-strong" },
+					{ key: "free", label: t("shell.memoryLegendAvailable"), value: formatMemory(system.availableBytes), className: "bg-success/70" },
+				]}
+			/>
+		</MetricCard>
 	);
 }
 
-/** The machine's own memory: AO against what is free. */
+/** The machine at a glance: AO's memory against what is free, and the CPU, side by side. */
 export function MachineSection({ action }: { action?: ReactNode }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const app = appMemory?.app;
 	const system = appMemory?.system;
 	return (
-		<SettingsSection title={t("shell.memorySectionMachine")} action={action} grouped>
-			{system && app ? (
-				<MachineBar appBytes={app.rssBytes} system={system} />
-			) : (
-				// Never an empty card: until the first sample lands, one row holds its place.
-				<p aria-busy="true" className="settings-row-bar text-sm text-settings-muted" data-testid="session-memory-loading">
-					<span className="inline-flex items-center gap-2">
-						<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
-						{t("common.loading")}
-					</span>
-				</p>
-			)}
+		<SettingsSection title={t("shell.memorySectionMachine")} action={action}>
+			<div className="grid gap-3 sm:grid-cols-2">
+				{system && app ? (
+					<MachineBar appBytes={app.rssBytes} system={system} />
+				) : (
+					// Never an empty card: until the first sample lands, one row holds its place.
+					<div className="settings-grouped-rows sm:only:col-span-2">
+						<p aria-busy="true" className="settings-row-bar text-sm text-settings-muted" data-testid="session-memory-loading">
+							<span className="inline-flex items-center gap-2">
+								<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
+								{t("common.loading")}
+							</span>
+						</p>
+					</div>
+				)}
+				<CpuSection />
+			</div>
 		</SettingsSection>
 	);
 }
@@ -203,18 +240,19 @@ export function MachineSection({ action }: { action?: ReactNode }) {
  * Each column's width, padding and alignment, in one place: the header and
  * every row take their classes from here, so the columns line up.
  */
-const columnWidth = { type: "w-24", pid: "w-28", memory: "w-28", cpu: "w-16" } as const;
+const columnWidth = { type: "w-24", pid: "w-28", memory: "w-24", cpu: "w-16", share: "w-24" } as const;
 const cell = {
 	name: "pl-(--settings-row-inset) pr-3 text-left",
 	process: "pl-12 pr-3 text-left",
 	type: "px-3 text-left",
 	pid: "px-3 text-right",
 	memory: "px-3 text-right",
-	cpu: "pl-3 pr-(--settings-row-inset) text-right",
+	cpu: "px-3 text-right",
+	share: "pl-3 pr-(--settings-row-inset) text-left",
 } as const;
 
-/** Every full-width row (group label, spacer, step heading) spans all five. */
-const columnCount = 5;
+/** Every full-width row (group label, spacer, step heading) spans all six. */
+const columnCount = 6;
 
 /**
  * Sessions by CPU alone: memory plays no part. Sessions with exactly the same
@@ -328,6 +366,7 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 				<col className={columnWidth.pid} />
 				<col className={columnWidth.memory} />
 				<col className={columnWidth.cpu} />
+				<col className={columnWidth.share} />
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
 			{/* Below the pinned summary (h-8) and, on the settings page, the window's
@@ -339,6 +378,7 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
 					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} />
 					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} />
+					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>
 			<tbody className="[&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
@@ -417,7 +457,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 	const scrolledPast = useScrolledPast(graphs, scroller);
 	return (
 		<>
-			<div className="flex flex-col gap-(--size-settings-section-gap,1.5rem)" ref={graphs}>
+			<div ref={graphs}>
 				<MachineSection
 					action={
 						<CopyControl
@@ -430,7 +470,6 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 						</CopyControl>
 					}
 				/>
-				<CpuSection />
 			</div>
 			{/* One block with the sessions, so the zero-height bar adds no section gap. */}
 			<div className="flex w-full flex-col">
@@ -441,7 +480,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 				<div
 					aria-hidden={!scrolledPast}
 					className={cn(
-						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-(--settings-row-inset) font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-(--settings-row-inset) text-xs tabular-nums text-settings-muted transition-opacity",
 						underToolbar ? "bg-(--color-bg-primary)" : "bg-popover",
 						scrolledPast ? "opacity-100" : "pointer-events-none opacity-0",
 					)}
@@ -553,23 +592,38 @@ function ProcessCountCell({ count, isExpanded }: { count: number; isExpanded: bo
 	);
 }
 
-/** Memory cell: the number over a bar scaled to the biggest row, so "which one is the pig" reads at a glance. */
-function MemoryCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone: ChipTone }) {
+/** Memory cell: the number alone, in the row's tone; its bar has a column of its own. */
+function MemoryCell({ bytes, tone }: { bytes: number; tone: ChipTone }) {
 	return (
-		<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums", cell.memory)}>
-			{/* The bar hangs under the number out of the flow, so the number sits
-			    on the row's centre line with the other cells instead of above it. */}
-			<span className="relative inline-block">
-				<span className={cn("font-medium", tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label")}>
-					{formatMemory(bytes)}
-				</span>
-				<span className="absolute right-0 top-full mt-1 block h-0.5 w-16 rounded-sm bg-foreground/[0.06]" data-testid="session-memory-share">
-					<span
-						className={cn("block h-full rounded-sm transition-[width] duration-500", tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong")}
-						style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
-					/>
-				</span>
-			</span>
+		<td
+			className={cn(
+				"whitespace-nowrap py-2 align-middle text-xs font-medium tabular-nums",
+				tone === "critical" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-settings-label",
+				cell.memory,
+			)}
+		>
+			{formatMemory(bytes)}
+		</td>
+	);
+}
+
+/**
+ * A bar scaled to the biggest row, so "which one is the pig" reads at a
+ * glance. A session or AO row takes its tone's colour; a process under it
+ * (no tone) stays grey.
+ */
+function ShareCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone?: ChipTone }) {
+	return (
+		<td className={cn("align-middle", tone ? "py-2" : "py-1", cell.share)}>
+			<div className="h-1 w-full overflow-hidden rounded-full bg-foreground/[0.06]" data-testid={tone ? "session-memory-share" : undefined}>
+				<div
+					className={cn(
+						"h-full rounded-full transition-[width] duration-500",
+						!tone ? "bg-passive" : tone === "critical" ? "bg-destructive" : tone === "warning" ? "bg-warning" : "bg-accent-strong",
+					)}
+					style={{ width: `${Math.min(100, (bytes / maxBytes) * 100)}%` }}
+				/>
+			</div>
 		</td>
 	);
 }
@@ -632,12 +686,13 @@ function SessionRow({
 					{isOrchestratorSession(session) ? t("settings.models.orchestratorRole") : t("settings.models.workerRole")}
 				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
-				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
-				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>
+				<MemoryCell bytes={reading.rssBytes} tone={chip} />
+				<td className={cn("whitespace-nowrap py-2 align-middle text-xs tabular-nums text-settings-muted", cell.cpu)}>
 					{formatCPU(reading.cpuPercent)}
 				</td>
+				<ShareCell bytes={reading.rssBytes} maxBytes={maxBytes} tone={chip} />
 			</tr>
-			{isExpanded ? <ProcessRows processes={reading.processes} /> : null}
+			{isExpanded ? <ProcessRows maxBytes={maxBytes} processes={reading.processes} /> : null}
 			{isExpanded && recent.length > 0 ? <RecentSteps steps={recent} /> : null}
 			{isExpanded ? <SpacerRow /> : null}
 		</>
@@ -802,19 +857,20 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 				const duration = step.endedAt ? Date.parse(step.endedAt) - started.getTime() : undefined;
 				return (
 					<tr className="text-xs" data-testid="session-memory-step-row" key={`${step.startedAt}-${step.tool}`}>
-						<td className={cn("py-1 font-mono", cell.process)}>
+						<td className={cn("py-1", cell.process)}>
 							<div className="flex min-w-0 items-baseline gap-3">
-								<span className="shrink-0 text-passive">{started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-								<span className={cn("min-w-0 truncate", step.failed ? "text-error" : "text-settings-label")}>{step.tool}</span>
+								<span className="shrink-0 tabular-nums text-passive">{started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+								<span className={cn("min-w-0 truncate font-mono", step.failed ? "text-error" : "text-settings-label")}>{step.tool}</span>
 								{step.failed ? <span className="shrink-0 text-error">{t("shell.memoryStepFailed")}</span> : null}
 							</div>
 						</td>
 						<td />
 						<td />
 						<td />
-						<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>
+						<td className={cn("whitespace-nowrap py-1 tabular-nums text-passive", cell.cpu)}>
 							{duration !== undefined && duration >= 1000 ? formatDuration(duration) : "·"}
 						</td>
+						<td />
 					</tr>
 				);
 			})}
@@ -862,10 +918,11 @@ function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading,
 					{type}
 				</td>
 				<ProcessCountCell count={reading.processes.length} isExpanded={isExpanded} />
-				<MemoryCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
-				<td className={cn("whitespace-nowrap py-2 align-middle font-mono text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
+				<MemoryCell bytes={reading.rssBytes} tone="neutral" />
+				<td className={cn("whitespace-nowrap py-2 align-middle text-xs tabular-nums text-settings-muted", cell.cpu)}>{formatCPU(reading.cpuPercent)}</td>
+				<ShareCell bytes={reading.rssBytes} maxBytes={maxBytes} tone="neutral" />
 			</tr>
-			{isExpanded ? <ProcessRows own={own} processes={reading.processes} /> : null}
+			{isExpanded ? <ProcessRows maxBytes={maxBytes} own={own} processes={reading.processes} /> : null}
 			{isExpanded ? <SpacerRow /> : null}
 		</>
 	);
@@ -912,7 +969,7 @@ export function processTree(processes: SessionMemoryReading["processes"]): { pro
  * the small tail summed into "N other processes". The rows add up to the
  * session; the copied report keeps every raw process instead.
  */
-function ProcessRows({ processes, own = false }: { processes: SessionMemoryReading["processes"]; own?: boolean }) {
+function ProcessRows({ maxBytes, processes, own = false }: { maxBytes: number; processes: SessionMemoryReading["processes"]; own?: boolean }) {
 	const { t } = useTranslation();
 	const { rows, other } = useMemo(() => processList(processes, { own }), [processes, own]);
 	const [showAll, setShowAll] = useState(false);
@@ -920,7 +977,7 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 	return (
 		<>
 			{[...rows, ...(showAll && other ? other.rows : [])].map((row) => (
-				<ProcessRow key={row.pid} row={row} />
+				<ProcessRow key={row.pid} maxBytes={maxBytes} row={row} />
 			))}
 			{other ? (
 				<tr
@@ -931,7 +988,7 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 					onKeyDown={toggleOnKeyDown(toggle)}
 					tabIndex={0}
 				>
-					<td className={cn("py-1 font-mono text-passive", cell.process)}>
+					<td className={cn("py-1 text-passive", cell.process)}>
 						<span className="flex min-w-0 items-center gap-1" title={showAll ? undefined : other.commands.join("\n")}>
 							<span className="truncate">{showAll ? t("shell.memoryProcessFewer") : t("shell.memoryProcessOther", { count: other.count })}</span>
 							<ChevronRight aria-hidden="true" className={cn("size-icon-2xs shrink-0 transition-transform", showAll ? "-rotate-90" : "rotate-90")} />
@@ -939,17 +996,18 @@ function ProcessRows({ processes, own = false }: { processes: SessionMemoryReadi
 					</td>
 					<td />
 					<td />
-					<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-settings-muted", cell.memory)}>{showAll ? null : formatMemory(other.bytes)}</td>
-					<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>
+					<td className={cn("whitespace-nowrap py-1 tabular-nums text-settings-muted", cell.memory)}>{showAll ? null : formatMemory(other.bytes)}</td>
+					<td className={cn("whitespace-nowrap py-1 tabular-nums text-passive", cell.cpu)}>
 						{showAll ? null : other.cpu >= 1 ? formatCPU(other.cpu) : "·"}
 					</td>
+					{showAll ? <td /> : <ShareCell bytes={other.bytes} maxBytes={maxBytes} />}
 				</tr>
 			) : null}
 		</>
 	);
 }
 
-function ProcessRow({ row }: { row: ProcessListRow }) {
+function ProcessRow({ maxBytes, row }: { maxBytes: number; row: ProcessListRow }) {
 	const { t } = useTranslation();
 	return (
 		<tr className="text-xs" data-testid="session-memory-process-row">
@@ -959,7 +1017,7 @@ function ProcessRow({ row }: { row: ProcessListRow }) {
 			<td className={cn("whitespace-nowrap py-1 text-passive", cell.type)} data-testid="session-memory-process-type">
 				<span title={t(`shell.memoryCategoryHint.${row.category}`)}>{t(`shell.memoryCategory.${row.category}`)}</span>
 			</td>
-			<td className={cn("whitespace-nowrap py-1 align-middle font-mono tabular-nums", cell.pid)}>
+			<td className={cn("whitespace-nowrap py-1 align-middle tabular-nums", cell.pid)}>
 				<CopyControl
 					copiedLabel={t("shell.memoryPidCopied", { pid: row.pid })}
 					label={t("shell.memoryCopyPid", { pid: row.pid })}
@@ -969,8 +1027,9 @@ function ProcessRow({ row }: { row: ProcessListRow }) {
 					<span>{row.pid}</span>
 				</CopyControl>
 			</td>
-			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-settings-muted", cell.memory)}>{formatMemory(row.bytes)}</td>
-			<td className={cn("whitespace-nowrap py-1 font-mono tabular-nums text-passive", cell.cpu)}>{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>
+			<td className={cn("whitespace-nowrap py-1 tabular-nums text-settings-muted", cell.memory)}>{formatMemory(row.bytes)}</td>
+			<td className={cn("whitespace-nowrap py-1 tabular-nums text-passive", cell.cpu)}>{row.cpu >= 1 ? formatCPU(row.cpu) : "·"}</td>
+			<ShareCell bytes={row.bytes} maxBytes={maxBytes} />
 		</tr>
 	);
 }
@@ -1051,13 +1110,29 @@ function CopyControl({
 const graphWidth = 600;
 const graphHeight = 56;
 
+/** Where the oldest of `count` samples sits: newest on the right edge, one step apart. */
+function graphX0(count: number): number {
+	return graphWidth - (graphWidth / (sampleHistoryLength - 1)) * (count - 1);
+}
+
+/** Each sample as an "x,y" point in graph units. */
+function graphPoints(values: number[]): string[] {
+	const step = graphWidth / (sampleHistoryLength - 1);
+	const x0 = graphX0(values.length);
+	return values.map((v, i) => `${(x0 + i * step).toFixed(1)},${(graphHeight - (Math.min(100, Math.max(0, v)) / 100) * graphHeight).toFixed(1)}`);
+}
+
 /** An SVG path along the samples, newest on the right. */
 export function linePath(values: number[]): string {
 	if (values.length === 0) return "";
-	const step = graphWidth / (sampleHistoryLength - 1);
-	const x0 = graphWidth - step * (values.length - 1);
-	const points = values.map((v, i) => `${(x0 + i * step).toFixed(1)},${(graphHeight - (Math.min(100, Math.max(0, v)) / 100) * graphHeight).toFixed(1)}`);
+	const points = graphPoints(values);
 	return points.length > 1 ? `M${points[0]} L${points.slice(1).join(" L")}` : `M${points[0]}`;
+}
+
+/** The same samples closed down to the baseline: the area under a line. */
+function areaPoints(values: number[]): string {
+	if (values.length < 2) return "";
+	return [...graphPoints(values), `${graphWidth},${graphHeight}`, `${graphX0(values.length).toFixed(1)},${graphHeight}`].join(" ");
 }
 
 /**
@@ -1068,46 +1143,38 @@ export function linePath(values: number[]): string {
 function CpuGraph({ current, history, system }: { current: CPUSample; history: CPUSample[]; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const now = current;
+	const host = history.map((s) => s.host);
+	const ao = history.map((s) => s.ao);
 	return (
-		<SettingsSection
-			title={t("shell.cpuBarTitle", { cores: system.cpuCount })}
-			testId="session-cpu-graph"
-			grouped
-			// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
-			action={system.load1 >= 0 ? (
-				<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
-			) : undefined}
-		>
-			<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">
-				<svg aria-hidden="true" className="h-14 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
-					{[25, 50, 75].map((line) => (
-						<line
-							className="stroke-foreground/[0.06]"
-							key={line}
-							strokeWidth={1}
-							x1={0}
-							x2={graphWidth}
-							y1={graphHeight - (line / 100) * graphHeight}
-							y2={graphHeight - (line / 100) * graphHeight}
-						/>
-					))}
-					<path className="fill-none stroke-warning/80" d={linePath(history.map((s) => s.host))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-					<path className="fill-none stroke-accent-strong" d={linePath(history.map((s) => s.ao))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-				</svg>
-				{/* A line's colour means nothing without a key: name each one,
-				    the same way the memory bar names its parts. */}
-				<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-					{[
-						{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: now.host },
-						{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: now.ao },
-					].map((part) => (
-						<span className="inline-flex items-center gap-1.5" key={part.key}>
-							<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-							{part.label} <span className="text-settings-label">{formatCPU(part.value)}</span>
-						</span>
-					))}
-				</div>
-			</div>
-		</SettingsSection>
+		<MetricCard testId="session-cpu-graph" title={t("shell.cpuBarTitle", { cores: system.cpuCount })} value={formatCPU(now.host)}>
+			<svg aria-hidden="true" className="h-16 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
+				{[25, 50, 75].map((line) => (
+					<line
+						className="stroke-foreground/[0.06]"
+						key={line}
+						strokeWidth={1}
+						x1={0}
+						x2={graphWidth}
+						y1={graphHeight - (line / 100) * graphHeight}
+						y2={graphHeight - (line / 100) * graphHeight}
+					/>
+				))}
+				{/* A faint fill under each line gives the graph its shape; the lines stay the reading. */}
+				<polygon className="fill-warning/10" points={areaPoints(host)} />
+				<polygon className="fill-accent-strong/[0.06]" points={areaPoints(ao)} />
+				<path className="fill-none stroke-warning/80" d={linePath(host)} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+				<path className="fill-none stroke-accent-strong" d={linePath(ao)} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+			</svg>
+			{/* A line's colour means nothing without a key: name each one,
+			    the same way the memory bar names its parts. */}
+			<Legend
+				parts={[
+					{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: formatCPU(now.host) },
+					{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: formatCPU(now.ao) },
+				]}
+				// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
+				trailing={system.load1 >= 0 ? t("shell.cpuBarLoad", { load: system.load1.toFixed(2) }) : undefined}
+			/>
+		</MetricCard>
 	);
 }

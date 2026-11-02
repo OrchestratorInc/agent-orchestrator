@@ -196,7 +196,7 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "Memory", "CPU"]);
+		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "Memory", "CPU", "Share"]);
 		// A session is not a process: its PID cell says what is under it and that the row opens.
 		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes ›");
 		expect(screen.getByTestId("session-memory-stacked")).toHaveTextContent("AO 2.0 GB");

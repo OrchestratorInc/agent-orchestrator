@@ -2832,6 +2832,7 @@
 	"shell.memoryOwnRow": "데몬 및 앱",
 	"shell.memoryReviewerRow": "{{session}} 리뷰",
 	"shell.memoryColumnRss": "메모리",
+	"shell.memoryColumnShare": "비율",
 	"shell.memoryEmpty": "측정할 실행 중인 세션이 없습니다.",
 	"shell.sessionMemoryAria": "메모리 {{size}} 사용 중",
 	"shell.sessionResourceAria": "메모리 {{size}}, 코어 하나의 {{cpu}} 사용 중",

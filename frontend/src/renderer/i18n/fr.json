@@ -2880,6 +2880,7 @@
 	"shell.memoryOwnRow": "Démon et app",
 	"shell.memoryReviewerRow": "Relecture de {{session}}",
 	"shell.memoryColumnRss": "Mémoire",
+	"shell.memoryColumnShare": "Part",
 	"shell.memoryEmpty": "Aucune session active à mesurer.",
 	"shell.sessionMemoryAria": "Utilise {{size}} de mémoire",
 	"shell.sessionResourceAria": "Utilise {{size}} de mémoire et {{cpu}} d’un cœur",
