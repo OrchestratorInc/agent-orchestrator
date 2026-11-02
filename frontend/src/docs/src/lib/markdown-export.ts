@@ -15,12 +15,16 @@ type Block = BlockContent | DefinitionContent;
 /** Matches a JSX-looking tag such as `<Card` or `<Steps>`. Exported Markdown must not contain one outside code. */
 export const JSX_TAG = /<[A-Z][A-Za-z]*[\s/>]/;
 
-/** An absolute docs URL for a site link such as `/quickstart#install`. Other links are returned unchanged. */
+/**
+ * An absolute docs URL for a site link such as `/quickstart#install`. Article
+ * paths get the trailing slash their pages have; files such as `/llms.txt`
+ * and links with a query keep their path. Other links are returned unchanged.
+ */
 export function absoluteDocsUrl(href: string): string {
   if (!href.startsWith("/") || href.startsWith("//")) return href;
-  const [path = "", hash] = href.split("#", 2);
-  const url = `${COMPANY.DOCS_URL}${withTrailingSlash(path)}`;
-  return hash === undefined ? url : `${url}#${hash}`;
+  const [, path = "", rest = ""] = href.match(/^([^?#]*)(.*)$/) ?? [];
+  const isArticle = !rest.startsWith("?") && !/\.[A-Za-z0-9]+$/.test(path);
+  return `${COMPANY.DOCS_URL}${isArticle ? withTrailingSlash(path) : path}${rest}`;
 }
 
 function attribute(node: JsxElement, name: string): string | undefined {
@@ -62,10 +66,19 @@ function card(node: JsxElement): ListItem {
   return listItem([{ type: "paragraph", children: line }, ...rest]);
 }
 
-function childElements(node: JsxElement, name: string): JsxElement[] {
-  return node.children.filter(
-    (child): child is MdxJsxFlowElement => child.type === "mdxJsxFlowElement" && child.name === name,
-  );
+function isElement(node: RootContent, name: string): node is MdxJsxFlowElement {
+  return node.type === "mdxJsxFlowElement" && node.name === name;
+}
+
+/**
+ * A list of the element's `name` children, made by `item`. Any other content
+ * between them is kept after the list.
+ */
+function listOf(node: JsxElement, name: string, ordered: boolean, item: (child: JsxElement) => ListItem): RootContent[] {
+  const children = node.children as RootContent[];
+  const items = children.filter((child) => isElement(child, name)).map(item);
+  const rest = children.filter((child) => !isElement(child, name));
+  return [{ type: "list", ordered, spread: ordered, children: items }, ...rest];
 }
 
 function downloadsTable(): RootContent {
@@ -95,18 +108,11 @@ function downloadsTable(): RootContent {
 function replacement(node: JsxElement): RootContent[] {
   switch (node.name) {
     case "Cards":
-      return [{ type: "list", ordered: false, spread: false, children: childElements(node, "Card").map(card) }];
+      return listOf(node, "Card", false, card);
     case "Card":
       return [{ type: "list", ordered: false, spread: false, children: [card(node)] }];
     case "Steps":
-      return [
-        {
-          type: "list",
-          ordered: true,
-          spread: true,
-          children: childElements(node, "Step").map((step) => ({ ...listItem(blocks(step)), spread: true })),
-        },
-      ];
+      return listOf(node, "Step", true, (step) => ({ ...listItem(blocks(step)), spread: true }));
     case "Accordion": {
       const title = attribute(node, "title");
       return [...(title ? [{ type: "paragraph" as const, children: [strong(title)] }] : []), ...blocks(node)];
@@ -145,6 +151,9 @@ function replacement(node: JsxElement): RootContent[] {
       return node.children;
   }
 }
+
+/** The options of the processed Markdown, set in `source.config.ts` and used by the tests. */
+export const PROCESSED_MARKDOWN = { headingIds: false, stringify: stringifyForExport };
 
 /**
  * The `stringify` hook of the processed Markdown: writes docs components as

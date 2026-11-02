@@ -8,7 +8,7 @@ import remarkMdx from "remark-mdx";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { describe, expect, it } from "vitest";
-import { absoluteDocsUrl, JSX_TAG, stringifyForExport } from "./markdown-export";
+import { absoluteDocsUrl, JSX_TAG, PROCESSED_MARKDOWN } from "./markdown-export";
 
 const contentDir = fileURLToPath(new URL("../../content/", import.meta.url));
 
@@ -28,7 +28,7 @@ async function exported(source: string): Promise<string> {
     .use(remarkParse)
     .use(remarkMdx)
     .use(remarkGfm)
-    .use(remarkLLMs, { headingIds: false, stringify: stringifyForExport, _data: true });
+    .use(remarkLLMs, { ...PROCESSED_MARKDOWN, _data: true });
   const file = { value: body, data: {} as { markdown?: string } };
   await processor.run(processor.parse(body), file as never);
   return file.data.markdown ?? "";
@@ -67,6 +67,12 @@ describe("Markdown export", () => {
     expect(markdown).toContain("> Read [this](https://docs.orchestrator.inc/faq/#cost).");
   });
 
+  it("keeps content placed between cards", async () => {
+    const markdown = await exported('<Cards>\n  <Card title="A" href="/a" />\n\n  Some note.\n</Cards>\n');
+    expect(markdown).toContain("[A](https://docs.orchestrator.inc/a/)");
+    expect(markdown).toContain("Some note.");
+  });
+
   it("writes the downloads as a table", async () => {
     const markdown = await exported("<InstallDownloads />\n");
     expect(markdown).toContain("| Platform");
@@ -77,5 +83,7 @@ describe("Markdown export", () => {
     expect(absoluteDocsUrl("https://orchestrator.inc/compare/")).toBe("https://orchestrator.inc/compare/");
     expect(absoluteDocsUrl("#configuration-fields")).toBe("#configuration-fields");
     expect(absoluteDocsUrl("/")).toBe("https://docs.orchestrator.inc/");
+    expect(absoluteDocsUrl("/llms-full.txt")).toBe("https://docs.orchestrator.inc/llms-full.txt");
+    expect(absoluteDocsUrl("/search?q=ci")).toBe("https://docs.orchestrator.inc/search?q=ci");
   });
 });

@@ -16,7 +16,7 @@ function isAccordion(node: RootContent): node is MdxJsxFlowElement {
  * items, as plain text for `FAQPage` structured data.
  */
 export function faqEntries(source: string): FaqEntry[] {
-  const tree = unified().use(remarkParse).use(remarkMdx).parse(source.replace(/^---\n[\s\S]*?\n---\n/, ""));
+  const tree = unified().use(remarkParse).use(remarkMdx).parse(source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, ""));
   const entries: FaqEntry[] = [];
   const visit = (nodes: RootContent[]) => {
     for (const node of nodes) {
@@ -26,7 +26,8 @@ export function faqEntries(source: string): FaqEntry[] {
         );
         const answer = node.children.map((child) => toString(child)).join(" ").replace(/\s+/g, " ").trim();
         if (typeof title?.value === "string" && answer) entries.push({ question: title.value, answer });
-      } else if ("children" in node) {
+      }
+      if ("children" in node) {
         visit(node.children as RootContent[]);
       }
     }
