@@ -20,6 +20,8 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
+export const SHARE_FEATURE = "share";
 
 export interface ResolvedCloudOffering {
 	providers: string[];
