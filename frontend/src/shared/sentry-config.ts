@@ -10,11 +10,25 @@ export const DEFAULT_DAEMON_SENTRY_DSN =
 export const DEFAULT_ELECTRON_SENTRY_DSN =
 	"https://5fe434b5838d57447e2a4b5b4e8b551a@o4511955966361600.ingest.us.sentry.io/4512334283931648";
 
+export const ELECTRON_SENTRY_ERROR_SAMPLE_RATE = 0.25;
+
 export function daemonSentryDsn(override: string | undefined, isDev: boolean): string {
 	return override ?? (isDev ? "" : DEFAULT_DAEMON_SENTRY_DSN);
 }
 
 export const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
+export const SAFE_APP_ASSET = /^assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/;
+
+// Stack text is writable by JavaScript. Only fixed names can cross the sender.
+const SAFE_FUNCTION_NAMES = new Set([
+	"ChatWorkspace", "ChatWorkspaceContent", "SessionView", "LazyChunkBoundary",
+	"TelemetryBoundary", "bindRendererErrorHandlers", "captureRendererException",
+	"initMainSentry", "startDaemon", "startDaemonInner", "startDaemonForRestart",
+]);
+
+export function safeSentryFunctionName(value: unknown, fallback: string): string {
+	return typeof value === "string" && SAFE_FUNCTION_NAMES.has(value) ? value : fallback;
+}
 
 const SAFE_EXCEPTION_TYPES = new Set([
 	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",
