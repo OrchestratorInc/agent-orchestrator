@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
@@ -99,9 +99,8 @@ function usePressureFacts(projectId?: string) {
  * The board's memory light, beside the orchestrator button: a dot and AO's
  * size. Colour means something needs doing; grey means nothing does. The
  * tooltip holds the machine figures, the window behind it everything else.
- * `style` lets a window toolbar mark it clickable inside its drag region.
  */
-export function AppMemoryIndicator({ style }: { style?: CSSProperties }) {
+export function AppMemoryIndicator() {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const memory = useAppMemory();
@@ -130,7 +129,6 @@ export function AppMemoryIndicator({ style }: { style?: CSSProperties }) {
 						data-memory-state={state ?? "unknown"}
 						data-testid="app-memory-indicator"
 						onClick={() => setOpen(true)}
-						style={style}
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />

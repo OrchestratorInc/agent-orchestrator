@@ -228,6 +228,11 @@ type RuntimeConfig struct {
 	// opened to look at: agents and scripted command terminals must start
 	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
 	StartOnAttach bool
+	// InitialCols and InitialRows, when both are set, start Argv immediately at
+	// that grid. They take precedence over StartOnAttach: a client that already
+	// knows the grid it will show need not wait for its own attach. Runtimes
+	// that cannot size at spawn ignore them.
+	InitialCols, InitialRows uint16
 	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
 	// GetStyledOutput is first called for this terminal. Rendering every byte
 	// costs CPU on heavy output; terminals nothing probes for styled output

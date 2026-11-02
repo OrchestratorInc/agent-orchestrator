@@ -2387,6 +2387,8 @@ type OpenShellTerminalRequest struct {
 	Shell         string `json:"shell,omitempty" description:"Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux."`
 	StartOnAttach bool   `json:"startOnAttach,omitempty" description:"Start the shell when the requesting client attaches with its terminal grid instead of immediately, so the shell starts at the size that client shows. Only for clients that attach as a sized viewer; omitted starts the shell immediately at the default grid."`
 	Title         string `json:"title,omitempty" description:"Tab title for the new shell, for a client that already shows its tab. Trimmed; omitted or empty numbers it after the existing shells (Terminal N)."`
+	Cols          int    `json:"cols,omitempty" description:"Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored)."`
+	Rows          int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // UpdateShellTerminalRequest is the body of PATCH /api/v1/shell-terminals/{handleId}.
