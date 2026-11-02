@@ -1,5 +1,6 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
+import { ActivityDetailProvider } from "../../hooks/useActivityDetail";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -1899,6 +1900,7 @@ function ChatWorkspaceContent({
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
+							<ActivityDetailProvider sessionId={snapshot.sessionId} hostId={activeRemoteHostId}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -1936,6 +1938,7 @@ function ChatWorkspaceContent({
 									openingStartedAt={openingStartedAt}
 									arriving={arrivingInChat}
 								/>
+							</ActivityDetailProvider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
