@@ -8,6 +8,7 @@ import { useChatMessageFocus, type ChatMessageFocusTarget } from "../../hooks/us
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
+import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
@@ -16,7 +17,6 @@ import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSe
 import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { subscribeSessionEventsBridged } from "../../lib/cloud-cp/stream-bridge";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
@@ -249,76 +249,46 @@ const STREAM_FLUSH_MS = 32;
 export const CHAT_EVENTS_SAFETY_POLL_MS = 10_000;
 /** How often they are read while the stream is down or still opening. */
 export const CHAT_EVENTS_FALLBACK_POLL_MS = 1_000;
-const STREAM_RECONNECT_MIN_MS = 1_000;
-const STREAM_RECONNECT_MAX_MS = 15_000;
 
 /**
  * Feeds a Cloud session's chat events into its cached list as the control
- * plane commits them, over the session's event stream, so a reply streams in
- * as it is written instead of a second at a time. It resumes after the newest
- * event already held and reconnects with backoff. Returns whether the stream
- * is up, from the moment it opens: an idle chat receives no event to prove
- * it, and the chat polls quickly only while the stream is down.
+ * plane commits them, over the session's shared event stream, so a reply
+ * streams in as it is written instead of a second at a time. The stream
+ * starts after the newest event the poll already loaded (it waits for the
+ * poll's first page rather than replaying the history) and reconnects with
+ * backoff. Returns whether the stream is up, from the moment it opens: an idle
+ * chat receives no event to prove it, and the chat polls quickly only while
+ * the stream is down.
  */
 function useCloudChatEventStream(orgId: string | undefined, sessionId: string, enabled: boolean): boolean {
 	const { baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
-	const [open, setOpen] = useState(false);
-	useEffect(() => {
-		setOpen(false);
-		if (!enabled || !orgId || !baseUrl) return;
-		const key = ["cloud-chat-events", orgId, sessionId];
-		const controller = new AbortController();
-		let pending: CloudCpClientEvent[] = [];
-		let flushTimer: number | undefined;
-		let reconnectTimer: number | undefined;
-		let delay = STREAM_RECONNECT_MIN_MS;
-		const flush = () => {
-			flushTimer = undefined;
-			const batch = pending;
-			pending = [];
-			if (!batch.length || controller.signal.aborted) return;
-			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], batch));
-		};
-		const connect = async () => {
-			// Resume after what the poll already loaded; before its first page
-			// there is nothing to resume from, and the poll loads the history.
-			const loaded = queryClient.getQueryData<CloudCpClientEvent[]>(key);
-			if (!loaded) {
-				reconnectTimer = window.setTimeout(() => void connect(), 250);
-				return;
-			}
-			let received = false;
-			await subscribeSessionEventsBridged({
-				baseUrl, orgId, sessionId, after: loaded.at(-1)?.sequence ?? 0, signal: controller.signal,
-				// The stream is up once it opens, before any event: an idle chat
-				// would otherwise poll every second until something happened.
-				onOpen: () => setOpen(true),
-				onEvent: (event) => {
-					if (!received) {
-						received = true;
-						delay = STREAM_RECONNECT_MIN_MS;
-						setOpen(true);
-					}
-					if (event.sessionId !== sessionId || typeof event.sequence !== "number") return;
-					pending.push(event);
-					flushTimer ??= window.setTimeout(flush, STREAM_FLUSH_MS);
-				},
-			});
-			if (controller.signal.aborted) return;
-			flush();
-			setOpen(false);
-			delay = received ? STREAM_RECONNECT_MIN_MS : Math.min(delay * 2, STREAM_RECONNECT_MAX_MS);
-			reconnectTimer = window.setTimeout(() => void connect(), delay);
-		};
-		void connect();
-		return () => {
-			controller.abort();
-			if (flushTimer !== undefined) window.clearTimeout(flushTimer);
-			if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-		};
-	}, [baseUrl, enabled, orgId, queryClient, sessionId]);
-	return open;
+	const batch = useRef<{ key: string; events: CloudCpClientEvent[]; timer?: number }>({ key: "", events: [] });
+	const streamKey = `${orgId ?? ""}|${sessionId}`;
+	useEffect(() => () => {
+		if (batch.current.timer !== undefined) window.clearTimeout(batch.current.timer);
+		batch.current = { key: "", events: [] };
+	}, [streamKey]);
+	const onEvent = useCallback((event: CloudCpClientEvent) => {
+		if (!orgId || event.sessionId !== sessionId || typeof event.sequence !== "number") return;
+		if (batch.current.key !== streamKey) batch.current = { key: streamKey, events: [] };
+		const pending = batch.current;
+		pending.events.push(event);
+		pending.timer ??= window.setTimeout(() => {
+			pending.timer = undefined;
+			const events = pending.events;
+			pending.events = [];
+			if (!events.length || batch.current !== pending) return;
+			queryClient.setQueryData<CloudCpClientEvent[]>(["cloud-chat-events", orgId, sessionId], (current) => mergeCloudEvents(current ?? [], events));
+		}, STREAM_FLUSH_MS);
+	}, [orgId, queryClient, sessionId, streamKey]);
+	// Before the poll's first page there is nothing to resume from, and the
+	// poll loads the history: the stream waits for it.
+	const resumeAfter = useCallback(() => {
+		const loaded = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", orgId ?? "", sessionId]);
+		return loaded ? loaded.at(-1)?.sequence ?? 0 : "loading" as const;
+	}, [orgId, queryClient, sessionId]);
+	return useCloudSessionEventStream({ baseUrl, orgId, sessionId, enabled, onEvent, resumeAfter });
 }
 
 export async function loadCloudChatEvents(

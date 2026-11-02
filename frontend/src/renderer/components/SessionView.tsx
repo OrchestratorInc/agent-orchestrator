@@ -75,7 +75,7 @@ import {
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { useCloudSessionEventListener } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -262,32 +262,29 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
-	useEffect(() => {
-		if (!baseUrl || !orgId || terminalOnly) return;
-		const controller = new AbortController();
-		void subscribeSessionEventsBridged({
-			baseUrl,
-			orgId,
-			sessionId,
-			after: 0,
-			signal: controller.signal,
-			onEvent: (event) => {
-				if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
-				const occurredAt = Date.parse(event.createdAt);
-				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
-				// sandbox.provisioning only marks the start of workspace creation;
-				// the workspace's completion comes from the observed state above.
-				const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
-					: event.type === "agent.ready" ? 3
-					: undefined;
-				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
-				// A connect from before this loader (allowing for clock skew) is an
-				// earlier worker's, not the one it waits for.
-				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
-			},
-		});
-		return () => controller.abort();
-	}, [baseUrl, orgId, queryClient, sessionId, terminalOnly]);
+	// The session's shared event stream, from its start: the Setup log and the
+	// stages need every event.
+	useCloudSessionEventListener({
+		baseUrl,
+		orgId,
+		sessionId,
+		enabled: !terminalOnly,
+		resumeAfter: () => 0,
+		onEvent: (event) => {
+			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			const occurredAt = Date.parse(event.createdAt);
+			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
+			// sandbox.provisioning only marks the start of workspace creation;
+			// the workspace's completion comes from the observed state above.
+			const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
+				: event.type === "agent.ready" ? 3
+				: undefined;
+			if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+			// A connect from before this loader (allowing for clock skew) is an
+			// earlier worker's, not the one it waits for.
+			if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
+		},
+	});
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);

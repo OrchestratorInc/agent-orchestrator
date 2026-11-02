@@ -3,6 +3,9 @@ import { act, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
+import { useCloudScriptRuns } from "../../hooks/useCloudScriptRuns";
+import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
+import { useSessionScmSummary } from "../../hooks/useSessionScmSummary";
 import { aoBridge } from "../../lib/bridge";
 import type { WorkspaceSession } from "../../types/workspace";
 import { CHAT_EVENTS_SAFETY_POLL_MS, CloudSessionChatSurface } from "./CloudSessionChatSurface";
@@ -39,6 +42,14 @@ const session = {
 	prs: [],
 	cloud: { orgId: "org-1" },
 } as WorkspaceSession;
+
+/** The inspector's and the header's share of an open session view. */
+function SessionViewParts() {
+	useCloudSessionLive("org-1", session.id, true);
+	useSessionScmSummary(session.id, true, "org-1");
+	useCloudScriptRuns("org-1", session.id, { lifecycle: { desiredState: "running", observedState: "running" } });
+	return null;
+}
 
 let streams: Array<{ path: string; streamId: string; closed: boolean; emit?: (event: CloudCpStreamEvent) => void }>;
 let openFails = false;
@@ -110,6 +121,24 @@ describe("CloudSessionChatSurface event stream", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(3_100); });
 		expect(cloudMocks.listChatEvents.mock.calls.length).toBeGreaterThanOrEqual(4);
 		view.unmount();
+	});
+
+	it("opens exactly one stream for a session view, resumed after the loaded chat, and closes it on leaving", async () => {
+		const view = renderView(
+			<>
+				<CloudSessionChatSurface session={session} />
+				<SessionViewParts />
+			</>,
+		);
+		await waitFor(() => expect(streams).toHaveLength(1));
+		expect(streams[0].path).toBe("/api/cloud/v1/orgs/org-1/sessions/session-1/events?after=3&live=1");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(streams).toHaveLength(1);
+
+		view.unmount();
+		expect(streams[0].closed).toBe(true);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(streams).toHaveLength(1);
 	});
 
 	it("streams events into the chat's list", async () => {

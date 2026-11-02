@@ -1,9 +1,9 @@
 import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { CloudCpError, type CloudCpClientEvent } from "../lib/cloud-cp";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { cloudSessionScriptsEnded, groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
 /**
  * A session's `workspace.script.step` events, kept apart from the chat event
@@ -139,15 +139,14 @@ export function useCloudScriptRuns(
 	// something can still change.
 	const inProgress = runs.some((run) => run.status === "running");
 	const listen = live || (fetch && !chatEvents && steps.isSuccess && (inProgress || cloudSessionDeleting(lifecycle)));
-	useEffect(() => {
-		if (!listen || !enabled || !ready || !baseUrl) return;
-		const controller = new AbortController();
-		const after = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!))?.at(-1)?.sequence;
-		void subscribeSessionEventsBridged({
-			baseUrl, orgId: orgId!, sessionId: sessionId!, after, signal: controller.signal,
-			onEvent: (event) => recordCloudScriptStepEvents(queryClient, orgId!, sessionId!, [event]),
-		});
-		return () => controller.abort();
-	}, [baseUrl, enabled, listen, orgId, queryClient, ready, sessionId]);
+	useCloudSessionEventListener({
+		baseUrl,
+		orgId,
+		sessionId,
+		enabled: listen && enabled && ready,
+		onEvent: (event) => recordCloudScriptStepEvents(queryClient, orgId!, sessionId!, [event]),
+		// After the newest step held; with none, from the session's start.
+		resumeAfter: () => queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!))?.at(-1)?.sequence ?? 0,
+	});
 	return runs;
 }
