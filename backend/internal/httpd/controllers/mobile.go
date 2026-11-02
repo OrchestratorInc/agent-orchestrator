@@ -44,6 +44,9 @@ type MobileController struct{ Bridge mobileBridge }
 type RemoteHostAccountTokenResponse struct {
 	HostID string `json:"hostId"`
 	Token  string `json:"token"`
+	// HostKey is the machine's Ed25519 public key, unpadded base64url, for
+	// the account listing: AO Cloud then needs the machine's own signature.
+	HostKey string `json:"hostKey"`
 }
 
 // IssueAccountToken returns a credential for account discovery after the caller
@@ -271,6 +274,10 @@ type BridgeService struct {
 	// until AO was restarted. Nil in tests that set Tunnel directly.
 	ResolveTunnel func() TunnelController
 
+	// ConnectorInstalling reports a cloudflared install in progress, for the
+	// status of a bridge that has no connector yet. Nil in tests.
+	ConnectorInstalling func() bool
+
 	// KeepAwake holds the machine awake while the bridge is on and the user has
 	// opted in. Nil where the platform has no way to do it (everything but
 	// macOS), which Status reports as unsupported.
@@ -334,6 +341,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	}
 	res := MobileStatusResponse{
 		Enabled:             enabled,
+		AccountLinked:       st.AccountTokenHash != "",
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),
@@ -478,7 +486,8 @@ func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
 	b.awaitBootTunnel()
 	t := b.tunnel()
 	if t == nil {
-		return mobilebridge.TunnelStatus{} // Supported stays false: nothing to run.
+		// Supported stays false: nothing to run yet.
+		return mobilebridge.TunnelStatus{Installing: b.ConnectorInstalling != nil && b.ConnectorInstalling()}
 	}
 	st := t.Status()
 	st.Supported = true
@@ -764,6 +773,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 			setter.SetAccountTokenHash(accountTokenHash)
 		}
+		b.nudgeTunnel() // the new password revoked the account link
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -846,6 +856,17 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	return nil
 }
 
+// hostPublicKey is the machine's host key for the listing, or empty when it
+// cannot be read: the listing then has none, and the machine's requests keep
+// working with the digest alone.
+func (b *BridgeService) hostPublicKey() string {
+	key, err := mobilebridge.HostPublicKey(b.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	return key
+}
+
 // IssueAccountToken returns the existing credential for a retry by the same
 // account, or replaces it after the caller proves the original pairing
 // password while linking a different account.
@@ -862,7 +883,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// A current account token is already the desired credential. Returning it
 	// makes retries safe even when the cloud registration request was lost.
 	if state.AccountToken != "" && mobilebridge.PasswordMatches(state.AccountTokenHash, password) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	if !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
 		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
@@ -875,7 +896,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// durable token. A different account intentionally rotates it.
 	if accountID != "" && accountID == state.AccountTokenOwner && state.AccountToken != "" &&
 		mobilebridge.PasswordMatches(state.AccountTokenHash, state.AccountToken) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) })
 	if !ok {
@@ -893,7 +914,20 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
-	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
+	// The connector asks AO Cloud now, so a machine another account took
+	// leaves the old account's tunnel. The device that asked lists the new
+	// token only after this returns; until then the connector reads AO
+	// Cloud's refusal as a link on its way and keeps serving.
+	b.nudgeTunnel()
+	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token, HostKey: b.hostPublicKey()}, nil
+}
+
+// nudgeTunnel has a running connector ask AO Cloud for its address now: the
+// account link it serves changed.
+func (b *BridgeService) nudgeTunnel() {
+	if n, ok := b.tunnel().(interface{ Nudge() }); ok {
+		n.Nudge()
+	}
 }
 
 // Enable generates a fresh password and starts the LAN listener. If it is
@@ -1024,9 +1058,30 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		}
 	}
 	if t := b.ensureTunnel(); t != nil {
+		// The desktop links this machine just before it asks for remote
+		// access; a connector already running can move to the address the
+		// link gave it now. Sent first: a connector Start begins asks anyway.
+		b.nudgeTunnel()
 		t.Start(b.LAN.BoundPort())
 	}
 	return b.Status(), nil
+}
+
+// ConnectorInstalled starts the connector once a cloudflared AO downloaded by
+// itself has landed, so remote access comes up without the user clicking
+// anything. It only finishes what the bridge already wanted: nothing while the
+// bridge is off or LAN-only, and the password is left alone.
+func (b *BridgeService) ConnectorInstalled() {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil || !st.Enabled || st.NoPublicTunnel || !b.LAN.Running() {
+		return
+	}
+	if t := b.ensureTunnel(); t != nil {
+		t.Start(b.LAN.BoundPort())
+	}
 }
 
 // Regenerate rotates the connection password on the running listener, which

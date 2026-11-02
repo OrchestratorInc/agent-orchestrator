@@ -1,7 +1,9 @@
 import { OrchestratorIcon, type AppIcon } from "../components/icons";
 import {
+	ArrowRight,
 	Copy,
 	File,
+	FileSearch,
 	Folder,
 	FolderPlus,
 	FileText,
@@ -11,6 +13,7 @@ import {
 	MessageSquare,
 	Settings,
 	Plus,
+	RotateCcw,
 	Sun,
 } from "lucide-react";
 import type { CommandGroupId, CommandItem } from "./command-palette";
@@ -21,7 +24,7 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-open-orchestrator": OrchestratorIcon,
 	"current-project-settings": Settings,
 	"current-copy-branch": Copy,
-	"current-search-files": Folder,
+	"current-search-files": FileSearch,
 	"global-home": House,
 	"global-new-project": FolderPlus,
 	"global-settings": Settings,
@@ -39,7 +42,15 @@ const GROUP_ICONS: Partial<Record<CommandGroupId, AppIcon>> = {
 	// Sessions / attention stay text-only, matching Cursor's "Chats" rows.
 };
 
+/** Icons for a session's actions, keyed by the action they run. */
+const SESSION_ACTION_ICONS: Partial<Record<NonNullable<CommandItem["action"]>["kind"], AppIcon>> = {
+	navigate: ArrowRight,
+	"resume-session": RotateCcw,
+	"copy-branch": Copy,
+};
+
 export function iconForCommand(item: CommandItem): AppIcon | null {
 	if (item.action?.kind === "run-shortcut") return Keyboard;
+	if (item.id.startsWith("session-action:") && item.action) return SESSION_ACTION_ICONS[item.action.kind] ?? null;
 	return COMMAND_ICONS[item.id] ?? GROUP_ICONS[item.group] ?? null;
 }

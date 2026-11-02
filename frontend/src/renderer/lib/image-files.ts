@@ -3,6 +3,11 @@ export function isRasterImagePath(path: string): boolean {
 	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
 }
 
+/** A Mermaid diagram source file, which renders as its diagram. */
+export function isMermaidPath(path: string): boolean {
+	return /\.(mmd|mermaid)$/i.test(path);
+}
+
 /** SVG is text, so it keeps its code view and gains a rendered one. */
 export function isSvgPath(path: string): boolean {
 	return /\.svg$/i.test(path);

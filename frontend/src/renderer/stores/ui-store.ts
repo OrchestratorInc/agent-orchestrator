@@ -37,6 +37,7 @@ export type GlobalSettingsSection =
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
+	| "computerUse"
 	| "diagnostics"
 	| "updates"
 	| "help";
@@ -58,6 +59,8 @@ export type SettingsModal =
 			harnessView?: "local" | "cloud";
 			/** Start focusAgentId's login flow as soon as the Harness page can. */
 			startLogin?: boolean;
+			/** Turn Connect Mobile on as the page opens: the user asked to pair a phone. */
+			startPairing?: boolean;
 			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
 			showDiagnostics?: HarnessDiagnosticsRequest;
 			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
@@ -181,12 +184,17 @@ export type UiState = {
 	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
 	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
+	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
+	renderMath: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
 	projectCreationPending: boolean;
+	// Freestyle cloud projects just created, whose board starts the orchestrator
+	// on its own instead of waiting for the Orchestrator button.
+	autoStartOrchestratorProjectIds: ReadonlySet<string>;
 	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
 	globalToasts: GlobalToast[];
@@ -236,11 +244,12 @@ export type UiState = {
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
+	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -271,6 +280,7 @@ export type UiState = {
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
+	setAutoStartOrchestrator: (projectId: string, autoStart: boolean) => void;
 	setProjectCreationPending: (pending: boolean) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
@@ -304,6 +314,7 @@ const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
+const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -402,10 +413,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
-	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
+	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
+	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
+	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
 	globalToasts: [],
@@ -470,6 +483,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(navigationGesturesStorageKey, String(navigationGestures));
 		set({ navigationGestures });
 	},
+	setRenderMath: (renderMath) => {
+		getLocalStorage()?.setItem(renderMathStorageKey, String(renderMath));
+		set({ renderMath });
+	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
@@ -489,6 +506,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
+			...(options?.startPairing && section === "mobile" ? { startPairing: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
 			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
@@ -701,6 +719,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { restartingProjectIds };
 		}),
 	setProjectCreationPending: (pending) => set({ projectCreationPending: pending }),
+	setAutoStartOrchestrator: (projectId, autoStart) =>
+		set((state) => {
+			if (state.autoStartOrchestratorProjectIds.has(projectId) === autoStart) return state;
+			const autoStartOrchestratorProjectIds = new Set(state.autoStartOrchestratorProjectIds);
+			if (autoStart) autoStartOrchestratorProjectIds.add(projectId);
+			else autoStartOrchestratorProjectIds.delete(projectId);
+			return { autoStartOrchestratorProjectIds };
+		}),
 	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);

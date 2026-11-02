@@ -3,8 +3,6 @@
 // configurable grace period. It arms only after the FIRST client ever
 // connects so a daemon started with no frontend (e.g. CLI "ao start") never
 // self-stops.
-//
-// This package is a leaf: it imports only stdlib.
 package supervisor
 
 import (
@@ -14,6 +12,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 // acceptRetryBackoff bounds the retry after a transient Accept error so a
@@ -70,6 +70,7 @@ func (s *Supervisor) Serve(ctx context.Context, ln net.Listener) error {
 
 	// Close the listener when ctx is cancelled so Accept() unblocks.
 	go func() {
+		defer sentryobs.RecoverBackground()
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
@@ -113,7 +114,7 @@ func (s *Supervisor) Serve(ctx context.Context, ln net.Listener) error {
 		s.mu.Unlock()
 
 		s.log.Debug("supervisor: client connected", "liveCount", live)
-		go s.watchConn(conn)
+		go func() { defer sentryobs.RecoverBackground(); s.watchConn(conn) }()
 	}
 }
 
@@ -148,6 +149,7 @@ func (s *Supervisor) watchConn(conn net.Conn) {
 func (s *Supervisor) armGrace() {
 	s.mu.Lock()
 	s.pendingTimer = time.AfterFunc(s.grace, func() {
+		defer sentryobs.RecoverBackground()
 		s.mu.Lock()
 		live := s.liveCount
 		s.pendingTimer = nil

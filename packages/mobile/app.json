@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "Orchestrator",
 		"slug": "ao-mobile",
-		"version": "2.1.0",
+		"version": "2.2.0",
 		"runtimeVersion": {
 			"policy": "fingerprint"
 		},
@@ -37,6 +37,12 @@
 						"NSPrivacyCollectedDataTypeLinked": false,
 						"NSPrivacyCollectedDataTypeTracking": false,
 						"NSPrivacyCollectedDataTypePurposes": ["NSPrivacyCollectedDataTypePurposeAppFunctionality"]
+					},
+					{
+						"NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeCrashData",
+						"NSPrivacyCollectedDataTypeLinked": true,
+						"NSPrivacyCollectedDataTypeTracking": false,
+						"NSPrivacyCollectedDataTypePurposes": ["NSPrivacyCollectedDataTypePurposeAppFunctionality"]
 					}
 				]
 			},
@@ -67,6 +73,7 @@
 		},
 		"plugins": [
 			"expo-router",
+			"@sentry/react-native/expo",
 			"./plugins/withCircleDashedCheck",
 			[
 				"expo-navigation-bar",

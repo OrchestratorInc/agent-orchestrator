@@ -24,6 +24,9 @@ const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
+	// firstOpenEventFile holds the install ID that ao.app.first_open was sent
+	// for, so each install ID sends it exactly once, on any build.
+	firstOpenEventFile = "telemetry_first_open_emitted"
 	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
 	// be linked to. A sign-out or account switch retires that ID.
 	boundUserFile = "telemetry_bound_user"
@@ -119,6 +122,34 @@ func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("close telemetry install event marker: %w", err)
 	}
 	i.fresh = false
+	return true, nil
+}
+
+// MarkFirstOpenEvent reserves ao.app.first_open for the current install ID.
+// Unlike ao.app.installed it does not depend on the install being fresh, so an
+// install that predates ao.app.installed (or whose CLI wrote tenure before the
+// daemon first started) is still counted once. An opted-out install reserves
+// nothing: it has never sent the event, so it sends it after opting back in.
+func (i *Identity) MarkFirstOpenEvent(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.OptedOut() {
+		return false, nil
+	}
+	path := filepath.Join(i.dataDir, firstOpenEventFile)
+	recorded, err := readTrimmed(path)
+	if err != nil {
+		return false, err
+	}
+	if recorded == i.installID {
+		return false, nil
+	}
+	if err := i.writeFile(path, []byte(i.installID+"\n")); err != nil {
+		return false, fmt.Errorf("mark telemetry first open event: %w", err)
+	}
 	return true, nil
 }
 

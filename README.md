@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<h3>Stop babysitting agents. Start merging real work.</h3>
+### Orchestrator.inc
+
+<h4>Stop babysitting agents. Start merging real work.</h4>
 
 <p>
   Run a fleet of coding agents while keeping branches, reviews, and CI failures manageable.

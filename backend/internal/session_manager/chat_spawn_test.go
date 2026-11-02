@@ -1480,7 +1480,7 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
 		}
 	}
-	if got := mgr.aoMCPServers(domain.HarnessUnreal, launcher.started[0].Env); got != nil {
+	if got := mgr.aoMCPServers(context.Background(), domain.HarnessUnreal, launcher.started[0].Env); got != nil {
 		t.Fatalf("unreal agent got tool servers %+v; its driver refuses them", got)
 	}
 }

@@ -1,0 +1,361 @@
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { WebView } from "react-native-webview";
+import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
+import { useArtifactActions } from "../../lib/artifact-menu";
+import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
+import { backOr } from "../../lib/backNavigation";
+import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
+import { useRenderTheme } from "../../lib/chat/RenderFrame";
+import { renderThemeScript, withRenderTheme } from "../../lib/chat/renderFrameModel";
+import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkdown";
+import { authHeaders, type ServerConfig } from "../../lib/config";
+import { userFacingError } from "../../lib/connectionError";
+import { sendFileFeedback } from "../../lib/files/api";
+import { ReviewTray, SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
+import { useReviewSender } from "../../lib/files/useReviewSender";
+import { haptics } from "../../lib/haptics";
+import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
+import { hostRouteMatches } from "../../lib/hostRoute";
+import { Feather } from "../../lib/icons";
+import { imageSourceForPlatform } from "../../lib/imageSource";
+import { HostScope, useApp } from "../../lib/store";
+import type { Theme } from "../../lib/theme";
+import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { font, iconSize, radius, space, type } from "../../lib/tokens";
+import { Button, EmptyState } from "../../lib/ui";
+import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
+import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
+
+// Above this, a text file shows as plain text: a full grammar pass over it
+// would stall the JS thread.
+const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
+
+/**
+ * One artifact, full screen: the phone's counterpart of the desktop's artifact
+ * viewer. Opened from the gallery, a chat's inline artifact, or a worker
+ * report's file link. A file the session does not list (the list is capped)
+ * still opens, as the page the daemon renders, without the actions menu.
+ *
+ * Asking the agent works as on desktop: text selected in a markdown or text
+ * artifact ("Add to chat" in the selection menu) opens a comment on that text,
+ * and Ask the agent comments on the whole file. A comment is sent now or added
+ * to the session's review, the same one the Files screen keeps.
+ */
+export default function ArtifactViewerScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ArtifactViewerContent /></HostScope> : <ArtifactViewerContent />;
+}
+
+function ArtifactViewerContent() {
+	// `ask` opens a comment on the whole file, from the gallery's Ask the agent.
+	const { sessionId: rawId, path: rawPath, hostId: routeHostId, ask: askParam } = useLocalSearchParams<{ sessionId: string; path?: string; hostId?: string; ask?: string }>();
+	const sessionId = String(rawId ?? "");
+	const path = String(rawPath ?? "");
+	const navigation = useNavigation();
+	const router = useRouter();
+	const { config, currentHostId, connection } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const { artifacts, loading } = useSessionArtifacts(hostMatches ? sessionId : "");
+	// A listed file's modified time, so a document's regenerated image is not served from cache.
+	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
+	const artifact = artifacts?.find((candidate) => candidate.path === path);
+	const leave = useCallback(() => backOr(router), [router]);
+	const { openMenu, menu } = useArtifactActions(sessionId, leave);
+	const openHistory = useCallback((target: SessionArtifact) => {
+		router.push({ pathname: "/sheets/artifact-history", params: { sessionId, path: target.path, name: target.name, hostId: routeHostId } });
+	}, [routeHostId, router, sessionId]);
+
+	// The open comment: on selected text (`quote`), or on the whole file. `key`
+	// remounts the composer for a new selection, which clears what was typed.
+	const [ask, setAsk] = useState<{ quote?: string; key: number } | null>(null);
+	// A selection of only whitespace (the gap between paragraphs) quotes nothing.
+	const askAbout = useCallback((quote?: string) => setAsk((current) => ({ quote: quote?.trim() || undefined, key: (current?.key ?? 0) + 1 })), []);
+	// Android keeps the keyboard up after its input unmounts, over the review tray.
+	const closeAsk = useCallback(() => {
+		Keyboard.dismiss();
+		setAsk(null);
+	}, []);
+	const askedOnOpen = useRef(false);
+	useEffect(() => {
+		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
+		askedOnOpen.current = true;
+		askAbout();
+	}, [artifact, askAbout, askParam]);
+	const reviewSessionKey = reviewKey(currentHostId ?? undefined, sessionId);
+	const review = useReviewSender(config, reviewSessionKey, sessionId);
+	const [busy, setBusy] = useState(false);
+	const [actionError, setActionError] = useState<string>();
+	const [notice, setNotice] = useState<string>();
+	useEffect(() => {
+		if (!notice) return;
+		AccessibilityInfo.announceForAccessibility(notice);
+		const timer = setTimeout(() => setNotice(undefined), 3_000);
+		return () => clearTimeout(timer);
+	}, [notice]);
+
+	const act = useCallback(async (action: ComposerAction, text: string) => {
+		if (!config || !artifact || !ask) return;
+		const feedback = text.trim();
+		const target = artifactCommentTarget(artifact, ask.quote);
+		const label = `${artifact.name} · ${ask.quote ? "Selected text" : "Whole file"}`;
+		if (action === "comment") {
+			addReviewComment(reviewSessionKey, { label, feedback, target });
+			haptics.success();
+			closeAsk();
+			setNotice("Comment added to the review.");
+			return;
+		}
+		setBusy(true);
+		setActionError(undefined);
+		try {
+			await sendFileFeedback(config, sessionId, [{ target, feedback }]);
+			addReviewComment(reviewSessionKey, { label, feedback, target, status: "sent" });
+			haptics.success();
+			closeAsk();
+			setNotice("Sent. The agent's reply appears in the session.");
+		} catch (cause) {
+			haptics.error();
+			setActionError(userFacingError(cause, "Couldn't send that to the agent."));
+		} finally {
+			setBusy(false);
+		}
+	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
+
+	useLayoutEffect(() => {
+		navigation.setOptions({
+			title: artifact?.name ?? path.split("/").pop() ?? "Artifact",
+			headerRight: artifact
+				? () => (
+					<View style={styles.headerActions}>
+						{canShowArtifactHistory(artifact) ? (
+							<Pressable accessibilityRole="button" accessibilityLabel="Version history" hitSlop={10} onPress={() => { haptics.tap(); openHistory(artifact); }} style={headerActionStyle}>
+								<Feather name="clock" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
+							</Pressable>
+						) : null}
+						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
+							<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
+						</Pressable>
+					</View>
+				)
+				: undefined,
+		});
+	}, [artifact, askAbout, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
+
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
+	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (!artifact) {
+		const url = artifactFileUrl(config, sessionId, path);
+		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(path) ? { sessionId, path } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	}
+	return (
+		<View style={styles.screen}>
+			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
+			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
+			{ask ? (
+				<SelectionComposer
+					key={ask.key}
+					label={`${artifact.name} · ${ask.quote ? "Selected text" : "Whole file"}`}
+					busy={busy}
+					error={actionError}
+					onAction={(action, text) => void act(action, text)}
+					onCopy={ask.quote ? () => void Clipboard.setStringAsync(ask.quote ?? "") : undefined}
+					onClose={() => { closeAsk(); setActionError(undefined); }}
+				/>
+			) : (
+				<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
+			)}
+			{menu}
+		</View>
+	);
+}
+
+function ArtifactBody({ config, sessionId, artifact, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+	const kind = artifactViewKind(artifact);
+	const url = artifactFileUrl(config, sessionId, artifact.path);
+	if (!url) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	// A text file too large to load into the app still shows, as the page the
+	// daemon serves.
+	const tooLargeForText = artifact.size > MAX_ARTIFACT_TEXT_BYTES;
+	if (kind === "html") return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+	if (kind === "web-media" && !showsInWebView(artifact.path, Platform.OS)) {
+		return <Unavailable title="PDFs can't be shown on Android yet" message="Open it on the machine, or ask the agent about it from the ⋯ menu." />;
+	}
+	if (kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
+		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
+	}
+	const image = kind === "image" ? artifactImageSource(config, sessionId, artifact.path, artifact.updatedAt) : undefined;
+	if (image) return <ArtifactImage source={image} name={artifact.name} />;
+	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} versionOf={versionOf} onAsk={onAsk} />;
+}
+
+function ArtifactWeb({ config, url, version, page }: {
+	config: ServerConfig;
+	url: string;
+	version: string;
+	/** An HTML page, loaded with the files it links inlined. */
+	page?: { sessionId: string; path: string };
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const web = useRef<WebView>(null);
+	const [error, setError] = useState<string>();
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
+	// An inlined page carries AO's theme bootstrap; it takes the app's live theme, as a chat frame does.
+	const theme = useRenderTheme();
+	const themeRef = useRef(theme);
+	themeRef.current = theme;
+	// Written in for first paint (a page from memory has no theme fragment); a change is posted.
+	const html = useMemo(() => inlined.html && withRenderTheme(inlined.html, themeRef.current), [inlined.html]);
+	const loaded = useRef(false);
+	useEffect(() => {
+		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
+	}, [inlined.html, theme]);
+	// Inlining failed: the page still opens from its URL.
+	if (page && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	return (
+		<View style={styles.screen}>
+			<WebView
+				// A new version of the file reloads the page.
+				key={`${version}|${inlined.html ? "inline" : "url"}`}
+				ref={web}
+				// Inlined, the page loads from memory with no origin: it needs no
+				// cookie, and it cannot reach the daemon.
+				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
+				style={styles.web}
+				startInLoadingState
+				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
+				onLoadStart={() => setError(undefined)}
+				onLoadEnd={() => {
+					loaded.current = true;
+					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
+				}}
+				onHttpError={(event) => setError(event.nativeEvent.statusCode === 404 ? "The worker no longer has this file." : "This artifact didn't load. Retry, or check it on that machine.")}
+				onError={(event) => setError(event.nativeEvent.description || "This artifact didn't load.")}
+			/>
+			{error ? (
+				<View accessibilityRole="alert" style={styles.webError}>
+					<Feather name="alert-triangle" size={iconSize.sm} color={t.red} />
+					<Text style={styles.webErrorText}>{error}</Text>
+					<Pressable onPress={() => { setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
+				</View>
+			) : null}
+		</View>
+	);
+}
+
+function ArtifactImage({ source, name }: { source: { uri: string; headers: Record<string, string> }; name: string }) {
+	const styles = useThemedStyles(makeStyles);
+	const [failed, setFailed] = useState(false);
+	const [ratio, setRatio] = useState(1);
+	useEffect(() => {
+		let live = true;
+		Image.getSizeWithHeaders(source.uri, source.headers).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
+		return () => { live = false; };
+		// The source is rebuilt on each render; its URI (with the file's version) is what changes.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [source.uri]);
+	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
+	return (
+		<ScrollView style={styles.screen} contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
+			<Image
+				source={imageSourceForPlatform(source)}
+				accessibilityLabel={name}
+				accessibilityIgnoresInvertColors
+				resizeMode="contain"
+				onError={() => setFailed(true)}
+				style={[styles.image, { aspectRatio: ratio }]}
+			/>
+		</ScrollView>
+	);
+}
+
+type TextState = { key: string; text?: string; error?: string };
+
+function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	// Re-read whenever the poll reports a newer version of the file.
+	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	const [state, setState] = useState<TextState | null>(null);
+	const [attempt, setAttempt] = useState(0);
+	// A document's own images live beside it in the artifact folder and need the
+	// connection's credential; a web image loads as it is, with no credential.
+	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => artifactMarkdownImageSource(config, sessionId, artifact.path, url, versionOf), [artifact.path, config, sessionId, versionOf]);
+	useEffect(() => {
+		const controller = new AbortController();
+		getArtifactText(config, sessionId, artifact.path, { signal: controller.signal })
+			.then((text) => setState({ key, text }))
+			.catch((cause) => { if (!controller.signal.aborted) setState({ key, error: userFacingError(cause) }); });
+		return () => controller.abort();
+	}, [artifact.path, attempt, config, key, sessionId]);
+	// The previous version stays up while the next one loads.
+	const text = state?.text;
+	if (text === undefined) {
+		if (state?.key === key && state.error) return <Unavailable title="Couldn't load the artifact" message={state.error} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} />;
+		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	}
+	if (looksBinary(text)) return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
+	// A long file shows its start: a text view is laid out whole, on Android on the UI thread.
+	const shown = shownText(text);
+	const cut = shown.truncated ? <View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
+	if (markdown) {
+		return (
+			<View style={styles.screen}>
+				{cut}
+				<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
+					{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
+					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
+				</ScrollView>
+			</View>
+		);
+	}
+	return (
+		<View style={styles.screen}>
+			{cut}
+			<ScrollView style={styles.screen} contentContainerStyle={styles.code}>
+				<HighlightedCodeText
+					code={shown.text}
+					language={artifactLanguage(artifact.path)}
+					// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
+					streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
+					style={styles.codeText}
+					onAddSelection={onAsk}
+				/>
+			</ScrollView>
+		</View>
+	);
+}
+
+function Unavailable({ title, message, action }: { title: string; message?: string; action?: ReactNode }) {
+	const styles = useThemedStyles(makeStyles);
+	return <View style={styles.center}><EmptyState icon="file" title={title} message={message} action={action} /></View>;
+}
+
+const makeStyles = (t: Theme) => StyleSheet.create({
+	screen: { flex: 1, backgroundColor: t.bgBase },
+	headerActions: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
+	web: { flex: 1, backgroundColor: t.bgBase },
+	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
+	webError: { position: "absolute", left: 12, right: 12, bottom: 16, minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: 12, borderCurve: "continuous", borderWidth: 1, borderColor: t.tintRed, backgroundColor: t.bgElevated, paddingHorizontal: space.md, paddingVertical: space.sm },
+	webErrorText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+	retryText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	imageContent: { flexGrow: 1, alignItems: "center", justifyContent: "center", padding: space.lg },
+	image: { width: "100%" },
+	document: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxxl },
+	code: { padding: space.lg, paddingBottom: space.xxxl },
+	codeText: { fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	truncated: { paddingHorizontal: space.lg, paddingVertical: space.sm, backgroundColor: t.tintAmber },
+	truncatedText: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+	notice: { position: "absolute", top: space.md, alignSelf: "center", backgroundColor: t.bgElevated, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingVertical: space.sm },
+	noticeText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
+});
+
+export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

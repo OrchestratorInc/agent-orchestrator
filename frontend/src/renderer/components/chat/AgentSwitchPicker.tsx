@@ -108,6 +108,8 @@ export interface PickerModel {
 	sendId?: string;
 	/** Other ids the agent lists this same model under, whose favourites are this row's. */
 	aliases?: string[];
+	/** Why the row cannot be picked now (the installed agent CLI is too old); shown under its name. */
+	unavailableReason?: string;
 }
 
 /** One agent's models and settings, with what each control does when used. */
@@ -343,7 +345,9 @@ export function AgentModelPicker({
 	const offered = (favorite: ModelFavorite) => {
 		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
 		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
-		return models.length === 0 || models.some((model) => names(model).includes(favorite.row) || names(model).includes(favorite.model));
+		// The id a favourite sends decides: a row it was folded into may be runnable while it is not.
+		if (models.some((model) => model.unavailableReason && (model.sendId ?? model.id) === favorite.model)) return false;
+		return models.length === 0 || models.some((model) => !model.unavailableReason && (names(model).includes(favorite.row) || names(model).includes(favorite.model)));
 	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
@@ -361,6 +365,8 @@ export function AgentModelPicker({
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const modelValue = pending ? shownModel : source.modelLabel;
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
+	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
+	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
@@ -396,7 +402,8 @@ export function AgentModelPicker({
 				)}
 				</>}
 			</OptionMenuTrigger>
-			<OptionMenuContent align={terminal ? "start" : "end"} side={terminal ? "right" : "top"} className="chat-settings-menu w-64 text-[12px]!"
+			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
+			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
@@ -410,7 +417,7 @@ export function AgentModelPicker({
 							optionId={optionID?.(row.id)}
 							active={row.harness === shownHarness && row.model.id === source.modelId}
 							searchActive={row.id === searchActiveID}
-							disabled={!pickable(row.harness)}
+							disabled={!pickable(row.harness) || Boolean(row.model.unavailableReason)}
 							onPick={pickFromSearch}
 						/>
 					)) : (
@@ -481,13 +488,13 @@ export function AgentModelPicker({
 										</span>
 									</OptionMenuItem>
 								) : null}
-								{loading && !pending ? (
+								{waiting ? (
 									<OptionMenuItem disabled className="gap-2 text-xs text-muted-foreground">
 										<Loader2 aria-hidden="true" className="size-3 animate-spin" />
 										{t("agentSwitch.loadingSettings")}
 									</OptionMenuItem>
 								) : null}
-								{settable && !(loading && !pending) && source.efforts.length > 0 ? (
+								{settable && !waiting && source.efforts.length > 0 ? (
 									<OptionMenuSub>
 										<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
 										<OptionMenuSubContent className={SUB_CLASS}>
@@ -509,9 +516,14 @@ export function AgentModelPicker({
 											))}
 										</OptionMenuSubContent>
 									</OptionMenuSub>
+								) : settable && !waiting && !modelsProblem ? (
+									// The same row, disabled, so the menu does not change shape between models.
+									<OptionMenuSub>
+										<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
+									</OptionMenuSub>
 								) : null}
 							</div>
-							{settable && !(loading && !pending) && (source.fast !== undefined || source.thinking !== undefined) ? (
+							{settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 								<div className={DIVIDER}>
 									<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={source.onToggleFast} />
 									<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={source.onToggleThinking} />
@@ -573,6 +585,7 @@ function otherAgentSource(
 			label: readableModelLabel(agentModelDisplayLabel(harness, model.label)),
 			group: modelGroupLabel(model.provider, harness),
 			hint: model.isDefault ? "default" : undefined,
+			unavailableReason: model.unavailableReason,
 		}));
 	// Two routes to one model read the same once shortened; their router tells them apart.
 	const shared = new Set(listed.filter((entry, index) => listed.findIndex((other) => other.label === entry.label) !== index).map((entry) => entry.label));
@@ -647,7 +660,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 			className="text-xs text-foreground"
 		>
 			<ProviderMark provider={row.harness} className="mr-2 size-3.5" />
-			<span className="min-w-0 truncate">{row.model.label}</span>
+			<span className="min-w-0 truncate" title={row.model.unavailableReason}>{row.model.label}</span>
 			<span className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(row.harness)}</span>
 		</OptionMenuItem>
 	);
@@ -658,7 +671,11 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 	const { t } = useTranslation();
 	const favorites = useModelFavorites();
 	return (
-		<ModelMenuChoices models={source.models} searchable={source.models.filter((model) => model.id).length > 10}>
+		<ModelMenuChoices
+			models={source.models}
+			selectedId={source.modelId}
+			searchable={source.models.filter((model) => model.id).length > 10}
+		>
 			{(matches, searchActiveID, optionID) => matches.map((model, index) => {
 				const active = model.id === source.modelId;
 				const key = model.id || "default";
@@ -672,7 +689,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							active={active}
 							searchActive={model.id === searchActiveID}
 							radio
-							disabled={!source.onPickModel}
+							disabled={!source.onPickModel || Boolean(model.unavailableReason)}
 							onSelect={(event) => {
 								// The menu stays open so effort and speed can be set too.
 								event.preventDefault();
@@ -680,7 +697,12 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							}}
 							className="group/model text-xs text-foreground"
 						>
-							<span className="min-w-0 truncate">{model.label}</span>
+							{model.unavailableReason ? (
+								<span className="min-w-0">
+									<span className="block truncate">{model.label}</span>
+									<span className="block whitespace-normal text-[10px] text-muted-foreground">{model.unavailableReason}</span>
+								</span>
+							) : <span className="min-w-0 truncate">{model.label}</span>}
 							{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint === "default" ? t("agentSwitch.defaultModel") : model.hint}</span> : null}
 							{model.id ? (() => {
 								const starredAs = favorites.find((entry) => entry.harness === harness && (entry.row === model.id || model.aliases?.includes(entry.row)));
@@ -755,7 +777,8 @@ export function ComposerErrorNotice(
 	return (
 		<div
 			role="alert"
-			className="-mb-2 flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
+			data-composer-notice
+			className="flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
 		>
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="min-w-0 flex-1">

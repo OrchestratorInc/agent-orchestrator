@@ -34,6 +34,6 @@ describe("retained-stack host routes", () => {
 			expect(route).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		}
 		expect(source("../app/review/[sessionId].tsx")).toContain("hostId: routeHostId");
-		expect(source("./PRCard.tsx")).toContain("prUrl: pr.url, hostId");
+		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, hostId)");
 	});
 });

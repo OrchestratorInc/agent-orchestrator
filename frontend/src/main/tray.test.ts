@@ -71,7 +71,7 @@ const sessionItems = (tray: { template: MenuItem[] }) =>
 	tray.template.filter(
 		(item) =>
 			typeof item.click === "function" &&
-			item.label !== "Show Agent Orchestrator" &&
+			item.label !== "Show Orchestrator" &&
 			item.label !== "Quit AO Completely",
 	);
 
@@ -98,7 +98,7 @@ describe("createTrayController", () => {
 
 	it("hands the show action to the focusWindow delegate", () => {
 		const { tray, focusWindow } = setup();
-		tray.template.find((item) => item.label === "Show Agent Orchestrator")?.click?.();
+		tray.template.find((item) => item.label === "Show Orchestrator")?.click?.();
 		expect(focusWindow).toHaveBeenCalledTimes(1);
 	});
 
@@ -169,7 +169,22 @@ describe("createTrayController", () => {
 		controller.setLocale("zh-CN");
 		expect(tray.tooltip).toBe("1 个会话需要关注");
 		expect(tray.template.some((i) => i.label === "需要你处理")).toBe(true);
-		expect(tray.template.some((i) => i.label === "显示 Agent Orchestrator")).toBe(true);
+		expect(tray.template.some((i) => i.label === "显示 Orchestrator")).toBe(true);
 		expect(tray.template.some((i) => i.label === "完全退出 AO")).toBe(true);
+	});
+
+	it("uses the Russian few and many plural forms in the tooltip", () => {
+		const { controller, tray } = setup();
+		controller.setLocale("ru");
+		const tooltipFor = (count: number) => {
+			controller.setState({ sessions: Array.from({ length: count }, (_, i) => entry({ sessionId: `s${i}` })) });
+			return tray.tooltip;
+		};
+		expect([1, 2, 5, 21].map(tooltipFor)).toEqual([
+			"1 сессия требует внимания",
+			"2 сессии требуют внимания",
+			"5 сессий требуют внимания",
+			"21 сессия требует внимания",
+		]);
 	});
 });

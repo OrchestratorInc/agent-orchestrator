@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "../ui/accordion";
 import { TurnDuration } from "./ChatTimelineItems";
 
+/** The fold for a settled turn's work: "Worked for 12s ›", opening onto the steps. */
 export function TurnWorkSummary({
 	durationMs,
 	children,
@@ -11,7 +12,7 @@ export function TurnWorkSummary({
 	onOpenChange: controlledChange,
 }: {
 	durationMs?: number;
-	children?: ReactNode;
+	children: ReactNode;
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
 }) {
@@ -19,11 +20,11 @@ export function TurnWorkSummary({
 	const [localOpen, setLocalOpen] = useState(false);
 	const open = controlledOpen ?? localOpen;
 	const onOpenChange = controlledChange ?? setLocalOpen;
-	return children ? (
+	return (
 		<Accordion
 			type="single"
 			collapsible
-			className="-mx-1 border-b border-border"
+			className="-mx-1"
 			value={open ? "worked" : ""}
 			onValueChange={(value) => onOpenChange?.(value === "worked")}
 		>
@@ -43,18 +44,11 @@ export function TurnWorkSummary({
 					</span>
 				</AccordionTrigger>
 				{/* Padding lives on the inner div: the content element's height is what animates,
-					    so any padding on it itself would stay put while it opens and closes. */}
+				    so any padding on it itself would stay put while it opens and closes. */}
 				<AccordionContent className="chat-worked-accordion-content">
 					<div className="space-y-2 px-1 pb-2 pt-1">{children}</div>
 				</AccordionContent>
 			</AccordionItem>
 		</Accordion>
-	) : (
-		<div className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
-			<span className="inline-flex w-fit items-center gap-1">
-				{t("chat.workedFor")}
-				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} inline /> : null}
-			</span>
-		</div>
 	);
 }

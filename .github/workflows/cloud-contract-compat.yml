@@ -1,0 +1,69 @@
+name: Cloud contract compatibility
+
+# contracts/cloud/openapi.yaml is the only interface between this repository
+# (desktop, mobile, @aoagents/cloud-client) and the AO Cloud control plane,
+# which is developed and deployed separately. An older desktop must keep
+# working against a newer control plane and the other way round, so contract
+# changes must be additive. This fails a PR that removes or narrows anything
+# in the contract. If a breaking change is intended and coordinated with the
+# control plane, add the "contract-breaking-change" label.
+#
+# A response that gains a variant (a new enum value or oneOf/anyOf member) or
+# loosens a bound is reported as a warning, not an error
+# (.github/cloud-contract-severity-levels.txt): no client in this repository
+# validates responses at runtime, and the desktop handles only the event types
+# and values it knows, so an older desktop ignores the new ones. Request-side
+# changes keep oasdiff's default levels.
+
+on:
+  pull_request:
+    paths:
+      - "contracts/cloud/openapi.yaml"
+      - ".github/cloud-contract-severity-levels.txt"
+      - ".github/workflows/cloud-contract-compat.yml"
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  breaking-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      - name: Install oasdiff
+        run: GOBIN="${RUNNER_TEMP}/bin" go install github.com/oasdiff/oasdiff@v1.34.1
+
+      - name: Compare with the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'contract-breaking-change') }}
+        run: |
+          git show "origin/${BASE_REF}:contracts/cloud/openapi.yaml" > "${RUNNER_TEMP}/base-openapi.yaml"
+          status=0
+          "${RUNNER_TEMP}/bin/oasdiff" breaking \
+            "${RUNNER_TEMP}/base-openapi.yaml" contracts/cloud/openapi.yaml \
+            --severity-levels .github/cloud-contract-severity-levels.txt \
+            --fail-on ERR || status=$?
+          if [[ "$status" == 0 ]]; then
+            exit 0
+          fi
+          if [[ "$status" != 1 ]]; then
+            # Not a verdict: oasdiff could not load a contract or its config.
+            echo "::error::oasdiff could not compare the contracts (exit ${status}); see its output above."
+            exit "$status"
+          fi
+          if [[ "$APPROVED" == "true" ]]; then
+            echo "::warning::Breaking contract change approved by the contract-breaking-change label."
+            exit 0
+          fi
+          echo "::error::This PR makes a breaking change to contracts/cloud/openapi.yaml. Make it additive, or add the contract-breaking-change label once the control plane change is coordinated."
+          exit 1

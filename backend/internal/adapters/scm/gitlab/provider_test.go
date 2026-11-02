@@ -3235,3 +3235,37 @@ func TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold(t *testing
 		t.Errorf("Decision = %q, want %q (cold cache must fall back to approvals)", got, want)
 	}
 }
+
+// A branch lookup asks GitLab for the open MRs from that source branch only,
+// keeping each MR's author, which decides whether AO may attach it. A fork MR
+// with the same branch name is dropped, and a kept MR names the project as
+// both head and base.
+func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
+	var query url.Values
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.Query()
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"iid": 3, "state": "opened", "web_url": "https://gitlab.com/myorg/myrepo/-/merge_requests/3",
+			"source_branch": "fix-bug", "target_branch": "main", "author": map[string]any{"username": "alice"},
+			"source_project_id": 10, "target_project_id": 10,
+		}, {
+			"iid": 4, "state": "opened", "web_url": "https://gitlab.com/myorg/myrepo/-/merge_requests/4",
+			"source_branch": "fix-bug", "target_branch": "main", "author": map[string]any{"username": "alice"},
+			"source_project_id": 99, "target_project_id": 10,
+		}})
+	})
+	_, p := testServer(t, mux)
+	repo := ports.SCMRepo{Provider: "gitlab", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
+
+	prs, err := p.ListOpenPRsByBranch(context.Background(), repo, "fix-bug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Get("source_branch") != "fix-bug" || query.Get("state") != "opened" {
+		t.Fatalf("query = %v, want source_branch=fix-bug state=opened", query)
+	}
+	if len(prs) != 1 || prs[0].Number != 3 || prs[0].SourceBranch != "fix-bug" || prs[0].Author != "alice" || prs[0].HeadRepo != "myorg/myrepo" || prs[0].BaseRepo != "myorg/myrepo" {
+		t.Fatalf("prs = %+v", prs)
+	}
+}

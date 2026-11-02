@@ -33,7 +33,7 @@ function accessRefreshIn(access: CloudArtifactAccess | undefined): number {
  * inside an HTML or Markdown file resolve against it. It is replaced shortly
  * before it expires, and on window focus once it is about to.
  */
-export function useCloudArtifactAccess(session: WorkspaceSession, enabled = true) {
+export function useCloudArtifactAccess(session: Pick<WorkspaceSession, "id" | "cloud">, enabled = true) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId ?? "";
 	return useQuery<CloudArtifactAccess, Error, string, ReturnType<typeof cloudArtifactAccessQueryKey>>({
