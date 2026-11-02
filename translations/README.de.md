@@ -182,25 +182,40 @@ Lade die App von [orchestrator.inc/download](https://orchestrator.inc/download/)
 
 ## FAQ
 
-### Was ist Orchestrator.inc?
+<details>
+<summary>Was ist Orchestrator.inc?</summary>
 
 Orchestrator.inc ist eine Open-Source-Desktop-App mit CLI, mit der du eine ganze Flotte von KI-Coding-Agenten auf einem Repository einsetzt. Ein Orchestrator-Agent des Projekts plant die Arbeit und startet Worker-Agenten, jeden in einem eigenen Git-Worktree und Branch. Danach begleitet er jeden Pull Request durch CI, Review und Merge, und alle Sessions stehen auf einem Board.
 
-### Ist Orchestrator.inc dasselbe wie Agent Orchestrator?
+</details>
+
+<details>
+<summary>Ist Orchestrator.inc dasselbe wie Agent Orchestrator?</summary>
 
 Ja. Orchestrator.inc ist der neue Name von Agent Orchestrator (AO): dasselbe Projekt, dasselbe Repository und dieselbe Apache-2.0-Lizenz. Nur der Name hat sich geändert. Der CLI-Befehl `ao` und Release-Dateinamen wie `agent-orchestrator-darwin-arm64.dmg` verwenden weiter den früheren Namen, sodass bestehende Installationen und Skripte weiter funktionieren.
 
-### Welche Coding-Agenten werden unterstützt?
+</details>
+
+<details>
+<summary>Welche Coding-Agenten werden unterstützt?</summary>
 
 Orchestrator.inc unterstützt 38 Coding-Agenten, darunter Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose und Cline. Jedes Projekt wählt seine eigenen Worker-, Orchestrator- und Reviewer-Agenten, und du wählst Agent und Modell pro Aufgabe. Die Unterstützung unterscheidet sich je nach Agent; die aktuelle Übersicht steht in den [Einrichtungsanleitungen für Agenten](https://docs.orchestrator.inc/plugins/agents).
 
-### Sendet Orchestrator.inc meinen Code irgendwohin?
+</details>
+
+<details>
+<summary>Sendet Orchestrator.inc meinen Code irgendwohin?</summary>
 
 Nein. Auf dem Desktop bleiben dein Code, deine Worktrees und deine Agenten auf deinem Rechner, und Orchestrator.inc leitet die API-Aufrufe deiner Agenten nicht über einen Proxy. Die Telemetrie umfasst nur begrenzte Nutzungs- und Zuverlässigkeitsdaten, niemals deinen Code, deine Prompts, Agenten-Konversationen oder Zugangsdaten, und du kannst sie in den Einstellungen abschalten. Code landet nur in gehosteten Workspaces, wenn du Cloud Agents wählst.
 
-### Was unterscheidet es von einem einzelnen Coding-Agenten?
+</details>
+
+<details>
+<summary>Was unterscheidet es von einem einzelnen Coding-Agenten?</summary>
 
 Ein Coding-Agent schreibt Code für eine Aufgabe in einer Session. Orchestrator.inc ist selbst kein Coding-Agent, sondern der Workspace, in dem die Agenten laufen. Es verteilt größere Arbeit auf mehrere parallel laufende Agenten, hält ihre Branches mit Git-Worktrees getrennt und gibt CI-Fehler, Review-Kommentare und Merge-Konflikte an den Agenten zurück, dem der jeweilige PR gehört.
+
+</details>
 
 ## Mitwirken
 

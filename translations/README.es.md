@@ -182,25 +182,40 @@ Abre Orchestrator.inc y selecciona el repositorio que quieres que gestione. La a
 
 ## Preguntas frecuentes
 
-### ¿Qué es Orchestrator.inc?
+<details>
+<summary>¿Qué es Orchestrator.inc?</summary>
 
 Orchestrator.inc es una app de escritorio y CLI de código abierto para ejecutar un conjunto de agentes de programación con IA sobre un mismo repositorio. Un agente orquestador del proyecto planifica el trabajo e inicia agentes worker, cada uno en su propio worktree y rama de Git. Después sigue cada pull request por la CI, la revisión y la integración, con todas las sesiones en un solo tablero.
 
-### ¿Orchestrator.inc es lo mismo que Agent Orchestrator?
+</details>
+
+<details>
+<summary>¿Orchestrator.inc es lo mismo que Agent Orchestrator?</summary>
 
 Sí. Orchestrator.inc es el nuevo nombre de Agent Orchestrator (AO): el mismo proyecto, el mismo repositorio y la misma licencia Apache-2.0. Solo cambió el nombre. El comando `ao` de la CLI y los nombres de los archivos de versión, como `agent-orchestrator-darwin-arm64.dmg`, siguen usando el nombre anterior, así que las instalaciones y los scripts existentes siguen funcionando.
 
-### ¿Qué agentes de programación admite?
+</details>
+
+<details>
+<summary>¿Qué agentes de programación admite?</summary>
 
 Orchestrator.inc es compatible con 38 agentes de programación, entre ellos Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose y Cline. Cada proyecto elige sus propios agentes worker, orquestador y revisor, y tú eliges el agente y el modelo para cada tarea. La compatibilidad varía según el agente; las [guías de configuración de agentes](https://docs.orchestrator.inc/plugins/agents) recogen la matriz actualizada.
 
-### ¿Orchestrator.inc envía mi código a algún sitio?
+</details>
+
+<details>
+<summary>¿Orchestrator.inc envía mi código a algún sitio?</summary>
 
 No. En el escritorio, tu código, los worktrees y los agentes se quedan en tu máquina, y Orchestrator.inc no hace de proxy de las llamadas a la API de tus agentes. La telemetría se limita a datos de uso y fiabilidad, nunca tu código, prompts, conversaciones con agentes ni credenciales, y puedes desactivarla en Ajustes. El código solo pasa a espacios de trabajo alojados si eliges Cloud Agents.
 
-### ¿En qué se diferencia de un único agente de programación?
+</details>
+
+<details>
+<summary>¿En qué se diferencia de un único agente de programación?</summary>
 
 Un agente de programación escribe código para una tarea en una sesión. Orchestrator.inc no es un agente de programación, sino el espacio de trabajo donde se ejecutan los agentes. Reparte el trabajo grande entre varios agentes que funcionan en paralelo, mantiene sus ramas separadas con worktrees de Git y devuelve los fallos de CI, los comentarios de revisión y los conflictos de integración al agente responsable de cada PR.
+
+</details>
 
 ## Contribuir
 

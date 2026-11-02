@@ -182,25 +182,40 @@ Orchestrator.inc を開き、管理させたいリポジトリを指定します
 
 ## よくある質問
 
-### Orchestrator.inc とは何ですか？
+<details>
+<summary>Orchestrator.inc とは何ですか？</summary>
 
 Orchestrator.inc は、1 つのリポジトリで複数の AI コーディングエージェントを動かすためのオープンソースのデスクトップアプリ兼 CLI です。プロジェクトのオーケストレーターエージェントが作業を計画し、ワーカーエージェントをそれぞれ専用の Git worktree とブランチで起動します。その後、各プルリクエストを CI、レビュー、マージまで追跡し、すべてのセッションを 1 つのボードに表示します。
 
-### Orchestrator.inc は Agent Orchestrator と同じものですか？
+</details>
+
+<details>
+<summary>Orchestrator.inc は Agent Orchestrator と同じものですか？</summary>
 
 はい。Orchestrator.inc は Agent Orchestrator（AO）の新しい名前です。プロジェクト、リポジトリ、Apache-2.0 ライセンスは同じで、変わったのは名前だけです。`ao` CLI コマンドや `agent-orchestrator-darwin-arm64.dmg` などのリリースファイル名は旧名のままなので、既存のインストールやスクリプトはそのまま使えます。
 
-### どのコーディングエージェントに対応していますか？
+</details>
+
+<details>
+<summary>どのコーディングエージェントに対応していますか？</summary>
 
 Orchestrator.inc は、Claude Code、Codex、Cursor、opencode、Aider、GitHub Copilot、Gemini CLI、Goose、Cline を含む 38 のコーディングエージェントに対応しています。プロジェクトごとにワーカー、オーケストレーター、レビュアーのエージェントを選べ、タスクごとにエージェントとモデルも選べます。対応状況はエージェントによって異なるため、最新の対応表は[エージェントのセットアップガイド](https://docs.orchestrator.inc/plugins/agents)をご覧ください。
 
-### Orchestrator.inc はコードをどこかに送信しますか？
+</details>
+
+<details>
+<summary>Orchestrator.inc はコードをどこかに送信しますか？</summary>
 
 いいえ。デスクトップでは、コード、worktree、エージェントはすべて手元のマシンにとどまり、Orchestrator.inc がエージェントの API 呼び出しを中継することもありません。テレメトリは限定的な利用状況と信頼性のデータだけで、コード、プロンプト、エージェントとの会話、認証情報は含まれず、設定でオフにできます。コードがホスト型ワークスペースに移るのは、Cloud Agents を選んだ場合だけです。
 
-### 単体のコーディングエージェントとの違いは何ですか？
+</details>
+
+<details>
+<summary>単体のコーディングエージェントとの違いは何ですか？</summary>
 
 コーディングエージェントは、1 つのセッションで 1 つのタスクのコードを書きます。Orchestrator.inc 自体はコーディングエージェントではなく、エージェントが動くワークスペースです。大きな作業を並列で動く複数のエージェントに分け、Git worktree でブランチを分離し、CI の失敗、レビューコメント、マージコンフリクトを各 PR を担当するエージェントへ戻します。
+
+</details>
 
 ## コントリビューション
 

@@ -182,25 +182,40 @@ Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 
 
 ## 자주 묻는 질문
 
-### Orchestrator.inc는 무엇인가요?
+<details>
+<summary>Orchestrator.inc는 무엇인가요?</summary>
 
 Orchestrator.inc는 하나의 저장소에서 여러 AI 코딩 에이전트를 운영하기 위한 오픈 소스 데스크톱 앱이자 CLI입니다. 프로젝트 오케스트레이터 에이전트가 작업을 계획하고 워커 에이전트를 시작하며, 각 워커는 자신의 Git worktree와 브랜치에서 작업합니다. 이후 모든 풀 리퀘스트를 CI, 리뷰, 머지까지 추적하고, 모든 세션을 하나의 보드에 보여줍니다.
 
-### Orchestrator.inc는 Agent Orchestrator와 같은 제품인가요?
+</details>
+
+<details>
+<summary>Orchestrator.inc는 Agent Orchestrator와 같은 제품인가요?</summary>
 
 네. Orchestrator.inc는 Agent Orchestrator(AO)의 새 이름입니다. 프로젝트, 저장소, Apache-2.0 라이선스는 그대로이고 이름만 바뀌었습니다. `ao` CLI 명령과 `agent-orchestrator-darwin-arm64.dmg` 같은 릴리스 파일 이름은 이전 이름을 계속 사용하므로, 기존 설치와 스크립트는 그대로 동작합니다.
 
-### 어떤 코딩 에이전트를 지원하나요?
+</details>
+
+<details>
+<summary>어떤 코딩 에이전트를 지원하나요?</summary>
 
 Orchestrator.inc는 Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose, Cline을 포함한 38개의 코딩 에이전트를 지원합니다. 프로젝트마다 워커, 오케스트레이터, 리뷰어 에이전트를 따로 고를 수 있고, 작업마다 에이전트와 모델을 선택할 수 있습니다. 지원 범위는 에이전트마다 다르며, 최신 현황은 [에이전트 설정 가이드](https://docs.orchestrator.inc/plugins/agents)에서 확인하세요.
 
-### Orchestrator.inc가 제 코드를 어딘가로 보내나요?
+</details>
+
+<details>
+<summary>Orchestrator.inc가 제 코드를 어딘가로 보내나요?</summary>
 
 아니요. 데스크톱에서는 코드, worktree, 에이전트가 모두 사용자의 컴퓨터에 머물며, Orchestrator.inc는 에이전트의 API 호출을 프록시하지 않습니다. 텔레메트리는 제한된 사용 및 안정성 데이터뿐이며 코드, 프롬프트, 에이전트 대화, 자격 증명은 절대 포함하지 않고, 설정에서 끌 수 있습니다. 코드는 Cloud Agents를 선택한 경우에만 호스팅된 워크스페이스로 옮겨집니다.
 
-### 단일 코딩 에이전트와 무엇이 다른가요?
+</details>
+
+<details>
+<summary>단일 코딩 에이전트와 무엇이 다른가요?</summary>
 
 코딩 에이전트는 하나의 세션에서 하나의 작업에 대한 코드를 작성합니다. Orchestrator.inc는 코딩 에이전트가 아니라 에이전트가 실행되는 워크스페이스입니다. 큰 작업을 병렬로 실행되는 여러 에이전트에 나누고, Git worktree로 브랜치를 분리하며, CI 실패, 리뷰 코멘트, 머지 충돌을 각 PR을 맡은 에이전트에게 돌려보냅니다.
+
+</details>
 
 ## 기여하기
 

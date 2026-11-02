@@ -182,25 +182,40 @@ Orchestrator.inc（原名 Agent Orchestrator）是一款开源（Apache-2.0）�
 
 ## 常见问题
 
-### Orchestrator.inc 是什么？
+<details>
+<summary>Orchestrator.inc 是什么？</summary>
 
 Orchestrator.inc 是一款开源桌面应用和 CLI，用于在同一个仓库上运行一组 AI 编程智能体。项目的编排智能体负责规划工作并启动 worker 智能体，每个 worker 都在自己的 Git worktree 和分支中工作。之后它会跟进每个拉取请求的 CI、评审和合并，所有会话都显示在同一个看板上。
 
-### Orchestrator.inc 和 Agent Orchestrator 是同一个产品吗？
+</details>
+
+<details>
+<summary>Orchestrator.inc 和 Agent Orchestrator 是同一个产品吗？</summary>
 
 是的。Orchestrator.inc 是 Agent Orchestrator（AO）的新名称：项目、仓库和 Apache-2.0 许可证都没有变，只是改了名字。`ao` CLI 命令和 `agent-orchestrator-darwin-arm64.dmg` 等发布文件仍沿用原来的名称，因此现有的安装和脚本可以继续使用。
 
-### 它支持哪些编程智能体？
+</details>
+
+<details>
+<summary>它支持哪些编程智能体？</summary>
 
 Orchestrator.inc 支持 38 种编程智能体，包括 Claude Code、Codex、Cursor、opencode、Aider、GitHub Copilot、Gemini CLI、Goose 和 Cline。每个项目可以分别选择自己的 worker、编排和评审智能体，你也可以为每项任务选择智能体和模型。各智能体的支持情况不同；当前的支持矩阵请查看[智能体设置指南](https://docs.orchestrator.inc/plugins/agents)。
 
-### Orchestrator.inc 会把我的代码发送到别处吗？
+</details>
+
+<details>
+<summary>Orchestrator.inc 会把我的代码发送到别处吗？</summary>
 
 不会。在桌面端，你的代码、worktree 和智能体都留在你自己的机器上，Orchestrator.inc 也不会代理智能体的 API 调用。遥测只包含有限的使用情况和可靠性数据，绝不包括你的代码、提示词、智能体对话或凭据，并且可以在设置中关闭。只有在你选择 Cloud Agents 时，代码才会进入托管工作区。
 
-### 它和单个编程智能体有什么不同？
+</details>
+
+<details>
+<summary>它和单个编程智能体有什么不同？</summary>
 
 编程智能体在一个会话中为一项任务编写代码。Orchestrator.inc 本身不是编程智能体，而是这些智能体运行的工作区。它把较大的工作拆分给多个并行运行的智能体，用 Git worktree 把它们的分支隔离开，并把 CI 失败、评审意见和合并冲突交还给负责对应 PR 的智能体。
+
+</details>
 
 ## 参与贡献
 

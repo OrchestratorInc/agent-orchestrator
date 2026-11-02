@@ -182,25 +182,40 @@ Open Orchestrator.inc and point it at the repository you want it to manage. The 
 
 ## FAQ
 
-### What is Orchestrator.inc?
+<details>
+<summary>What is Orchestrator.inc?</summary>
 
 Orchestrator.inc is an open-source desktop app and CLI for running a fleet of AI coding agents on one repository. A project orchestrator agent plans the work and starts worker agents, each in its own Git worktree and branch. It then follows every pull request through CI, review, and merge, with every session on one board.
 
-### Is Orchestrator.inc the same as Agent Orchestrator?
+</details>
+
+<details>
+<summary>Is Orchestrator.inc the same as Agent Orchestrator?</summary>
 
 Yes. Orchestrator.inc is the new name for Agent Orchestrator (AO): the same project, repository, and Apache-2.0 license. Only the name changed. The `ao` CLI command and release file names such as `agent-orchestrator-darwin-arm64.dmg` still use the former name, so existing installs and scripts keep working.
 
-### Which coding agents does it support?
+</details>
+
+<details>
+<summary>Which coding agents does it support?</summary>
 
 Orchestrator.inc supports 38 coding agents, including Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose, and Cline. Each project picks its own worker, orchestrator, and reviewer agents, and you choose the agent and model per task. Support differs by agent; the [agent setup guides](https://docs.orchestrator.inc/plugins/agents) have the current matrix.
 
-### Does Orchestrator.inc send my code anywhere?
+</details>
+
+<details>
+<summary>Does Orchestrator.inc send my code anywhere?</summary>
 
 No. On the desktop, your code, worktrees, and agents stay on your machine, and Orchestrator.inc does not proxy your agents' API calls. Telemetry is limited usage and reliability data, never your code, prompts, agent conversations, or credentials, and you can turn it off in Settings. Code moves to hosted workspaces only if you choose Cloud Agents.
 
-### How is it different from a single coding agent?
+</details>
+
+<details>
+<summary>How is it different from a single coding agent?</summary>
 
 A coding agent writes code for one task in one session. Orchestrator.inc is not a coding agent; it is the workspace the agents run in. It splits larger work across several agents running in parallel, keeps their branches apart with Git worktrees, and routes CI failures, review comments, and merge conflicts back to the agent that owns each PR.
+
+</details>
 
 ## Contributing
 
