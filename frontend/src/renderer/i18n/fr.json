@@ -167,6 +167,7 @@
 	"settings.cloudProject.title": "Projet Cloud",
 	"settings.cloudProject.signIn": "Connectez-vous pour charger les paramètres du projet Cloud.",
 	"settings.cloudProject.intakeLastError": "La réception des tickets n’a pas pu rechercher de tickets : {{error}}",
+	"settings.cloudProject.intakeDescription": "Crée automatiquement des sessions worker à partir des issues correspondantes ouvertes par les propriétaires, membres et collaborateurs du dépôt. Les issues de toute autre personne sont ignorées. Ces sessions ne reçoivent pas les variables d’environnement du projet.",
 	"settings.cloudProject.environmentReadOnly": "Seuls les propriétaires et administrateurs de l’organisation peuvent voir ou modifier leurs valeurs ici.",
 	"settings.cloudProject.environmentNote": "Chaque session de ce projet reçoit ces valeurs : toute personne qui utilise ces sessions, ainsi que l’agent, peut les lire. Ne les utilisez pas pour les connexions des agents de code.",
 	"settings.cloudProject.environmentDescription": "Variables pour les agents, terminaux et commandes de configuration des nouvelles sessions. Stockées chiffrées.",

@@ -166,6 +166,7 @@
 	"settings.cloudProject.title": "클라우드 프로젝트",
 	"settings.cloudProject.signIn": "클라우드 프로젝트 설정을 불러오려면 로그인하세요.",
 	"settings.cloudProject.intakeLastError": "이슈 수집에서 이슈를 확인하지 못했습니다: {{error}}",
+	"settings.cloudProject.intakeDescription": "저장소 소유자, 멤버, 협업자가 연 일치하는 이슈에서 워커 세션을 자동으로 시작합니다. 그 외 사람의 이슈는 건너뜁니다. 이 세션에는 프로젝트 환경 변수가 전달되지 않습니다.",
 	"settings.cloudProject.environmentReadOnly": "여기에서는 조직 소유자와 관리자만 값을 보거나 변경할 수 있습니다.",
 	"settings.cloudProject.environmentNote": "이 프로젝트의 모든 세션이 이 값을 받습니다. 해당 세션을 사용하는 모든 사람과 에이전트가 값을 읽을 수 있습니다. 코딩 에이전트 로그인에는 사용하지 마세요.",
 	"settings.cloudProject.environmentDescription": "새 세션의 에이전트, 터미널, 설정 명령에 사용되는 변수입니다. 암호화되어 저장됩니다.",

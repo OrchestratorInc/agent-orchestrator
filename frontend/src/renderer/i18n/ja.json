@@ -166,6 +166,7 @@
 	"settings.cloudProject.title": "クラウドプロジェクト",
 	"settings.cloudProject.signIn": "クラウドプロジェクト設定を読み込むにはサインインしてください。",
 	"settings.cloudProject.intakeLastError": "Issue の取り込みで Issue を確認できませんでした: {{error}}",
+	"settings.cloudProject.intakeDescription": "リポジトリのオーナー、メンバー、コラボレーターが作成した一致する Issue からワーカーセッションを自動起動します。それ以外の人の Issue はスキップされます。これらのセッションにはプロジェクトの環境変数は渡されません。",
 	"settings.cloudProject.environmentReadOnly": "ここで値を表示・変更できるのは組織のオーナーと管理者のみです。",
 	"settings.cloudProject.environmentNote": "このプロジェクトのすべてのセッションがこれらの値を受け取ります。セッションを使うすべての人とエージェントが値を読み取れます。コーディングエージェントのログインには使わないでください。",
 	"settings.cloudProject.environmentDescription": "新しいセッションのエージェント、ターミナル、セットアップコマンド用の変数です。暗号化して保存されます。",

@@ -166,6 +166,7 @@
 	"settings.cloudProject.title": "Cloud project",
 	"settings.cloudProject.signIn": "Sign in to load Cloud project settings.",
 	"settings.cloudProject.intakeLastError": "Issue intake could not check for issues: {{error}}",
+	"settings.cloudProject.intakeDescription": "Auto-spawn worker sessions from matching issues opened by the repository's owners, members and collaborators. Issues from anyone else are skipped. These sessions don't get the project's environment variables.",
 	"settings.cloudProject.environmentReadOnly": "Only organization owners and admins can see or change their values here.",
 	"settings.cloudProject.environmentNote": "Every session in this project receives these values: anyone using those sessions, and the agent, can read them. Don't use them for coding-agent logins.",
 	"settings.cloudProject.environmentDescription": "Variables for new sessions' agents, terminals and Setup commands. Stored encrypted.",

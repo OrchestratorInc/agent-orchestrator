@@ -198,6 +198,15 @@ describe("Cloud project settings", () => {
 		expect(screen.getByText("legacy")).toBeInTheDocument();
 	});
 
+	it("says issue intake takes only issues from the repository's owners, members and collaborators", async () => {
+		project.config = { trackerIntake: { enabled: true, assignee: "octo" } };
+		mount("general");
+		expect(await screen.findByText(/opened by the repository's owners, members and collaborators/)).toHaveTextContent(
+			"Issues from anyone else are skipped. These sessions don't get the project's environment variables.",
+		);
+		expect(screen.queryByText("Auto-spawn worker sessions from matching tracker issues.")).not.toBeInTheDocument();
+	});
+
 	it("refreshes the shared project list after a rename so the sidebar and board show the new name", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		const listKey = ["cloud-projects", "https://cloud.test", "org"];

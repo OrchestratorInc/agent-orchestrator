@@ -166,6 +166,7 @@
 	"settings.cloudProject.title": "云项目",
 	"settings.cloudProject.signIn": "请登录以加载云项目设置。",
 	"settings.cloudProject.intakeLastError": "问题接收无法检查问题：{{error}}",
+	"settings.cloudProject.intakeDescription": "从仓库所有者、成员和协作者创建的匹配议题自动创建工作会话。其他人的议题会被跳过。这些会话不会获得项目的环境变量。",
 	"settings.cloudProject.environmentReadOnly": "只有组织所有者和管理员可以在此查看或更改其值。",
 	"settings.cloudProject.environmentNote": "此项目中的每个会话都会获得这些值：使用这些会话的任何人以及智能体都能读取它们。请勿将其用于编码智能体的登录。",
 	"settings.cloudProject.environmentDescription": "用于新会话的智能体、终端和设置命令的变量。加密存储。",

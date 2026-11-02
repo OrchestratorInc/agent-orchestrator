@@ -166,6 +166,7 @@
 	"settings.cloudProject.title": "Cloud-Projekt",
 	"settings.cloudProject.signIn": "Melde dich an, um die Cloud-Projekteinstellungen zu laden.",
 	"settings.cloudProject.intakeLastError": "Die Issue-Übernahme konnte nicht nach Issues suchen: {{error}}",
+	"settings.cloudProject.intakeDescription": "Worker-Sitzungen automatisch aus passenden Issues starten, die Eigentümer, Mitglieder und Mitwirkende des Repositorys eröffnet haben. Issues von anderen werden übersprungen. Diese Sitzungen erhalten die Umgebungsvariablen des Projekts nicht.",
 	"settings.cloudProject.environmentReadOnly": "Nur Eigentümer und Admins der Organisation können die Werte hier sehen oder ändern.",
 	"settings.cloudProject.environmentNote": "Jede Sitzung in diesem Projekt erhält diese Werte: Alle, die diese Sitzungen nutzen, und der Agent können sie lesen. Verwende sie nicht für Anmeldungen von Coding-Agenten.",
 	"settings.cloudProject.environmentDescription": "Variablen für Agenten, Terminals und Setup-Befehle neuer Sitzungen. Verschlüsselt gespeichert.",

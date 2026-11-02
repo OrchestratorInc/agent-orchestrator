@@ -167,6 +167,7 @@
 	"settings.cloudProject.title": "Projeto Cloud",
 	"settings.cloudProject.signIn": "Entre para carregar as configurações do projeto Cloud.",
 	"settings.cloudProject.intakeLastError": "A entrada de issues não conseguiu verificar issues: {{error}}",
+	"settings.cloudProject.intakeDescription": "Inicia sessões de worker automaticamente a partir de issues correspondentes abertas pelos proprietários, membros e colaboradores do repositório. Issues de qualquer outra pessoa são ignoradas. Essas sessões não recebem as variáveis de ambiente do projeto.",
 	"settings.cloudProject.environmentReadOnly": "Somente proprietários e administradores da organização podem ver ou alterar os valores aqui.",
 	"settings.cloudProject.environmentNote": "Todas as sessões deste projeto recebem esses valores: qualquer pessoa que use essas sessões, e o agente, pode lê-los. Não os use para logins de agentes de código.",
 	"settings.cloudProject.environmentDescription": "Variáveis para agentes, terminais e comandos de configuração de novas sessões. Armazenadas com criptografia.",

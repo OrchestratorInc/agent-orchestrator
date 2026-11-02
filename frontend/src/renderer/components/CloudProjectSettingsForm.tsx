@@ -96,7 +96,9 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
 		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
-		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
+		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}
+		// The control plane takes only issues from the repository's owners, members and collaborators.
+		intakeDescription={t("settings.cloudProject.intakeDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
 }
 
