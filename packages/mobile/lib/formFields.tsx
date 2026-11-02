@@ -133,7 +133,9 @@ export function FormToggle({ label, value, onValueChange, disabled = false, test
 			testID={testID}
 			// The form's tint is the hue-less accent, which would draw an on switch
 			// near white in the dark theme; on stays the switch's green.
-			modifiers={[tint(t.green), disabledModifier(disabled)]}
+			// Named on the switch itself too, as the text fields are, so VoiceOver
+			// never lands on it without the row's title.
+			modifiers={[tint(t.green), disabledModifier(disabled), accessibilityLabel(label)]}
 		/>
 	);
 }

@@ -134,6 +134,7 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(tls.type).toBe("Toggle");
 		expect(tls.props.label).toBe("Use TLS");
 		expect(hasModifier(tls, "tint", "green")).toBe(true);
+		expect(hasModifier(tls, "accessibilityLabel", "Use TLS")).toBe(true);
 		// Nothing uppercase stands in for a label.
 		expect(renderer!.root.findAll((node) => typeof node.props.children === "string" && /^[A-Z ]{4,}$/.test(node.props.children))).toHaveLength(0);
 	});
