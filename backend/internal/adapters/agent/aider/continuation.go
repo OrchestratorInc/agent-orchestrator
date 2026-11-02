@@ -170,10 +170,10 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 // history. Explicit flags pin the file in the AO worktree, overriding config.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if id == "" {
+	if !aiderHistoryID.MatchString(id) {
 		return nil, false, ctx.Err()
 	}
-	if !aiderHistoryID.MatchString(id) || !filepath.IsAbs(cfg.Session.WorkspacePath) {
+	if !filepath.IsAbs(cfg.Session.WorkspacePath) {
 		return nil, false, ports.ErrNativeHistoryUnavailable
 	}
 	root, err := os.OpenRoot(cfg.Session.WorkspacePath)
