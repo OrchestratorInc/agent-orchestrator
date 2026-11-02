@@ -215,7 +215,14 @@ export const ChatTimeline = memo(function ChatTimeline({
 	usePreventRemove(editing, cancelEdit);
 	const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);
 	const jumpViewPosition = 0.18;
-	const scrollToLatest = (animated: boolean) => listRef.current?.scrollToEnd({ animated });
+	// The ScrollView's own end, not FlatList's: FlatList measures to the last row
+	// and footer and leaves out the content's bottom padding, so it stopped short
+	// of the newest message by the composer's height.
+	const scrollToLatest = (animated: boolean) => {
+		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
+		if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
+		else listRef.current?.scrollToEnd({ animated });
+	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
 	useEffect(() => {
@@ -275,6 +282,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
 	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		// iOS reports the end of the list's own scrolls (the opening one, each
+		// follow) as momentum ending too. Only a drag decides whether to follow;
+		// one of ours that landed short of an end still moving goes again.
+		if (!dragging.current) {
+			if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));
+			return;
+		}
 		dragging.current = false;
 		followsTail.current = atTail(event.nativeEvent);
 		setShowJump(!followsTail.current);

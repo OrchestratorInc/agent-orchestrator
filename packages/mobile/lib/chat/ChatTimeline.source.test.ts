@@ -96,6 +96,15 @@ describe("response copy control", () => {
 });
 
 describe("jump to latest", () => {
+	// FlatList's scrollToEnd leaves out the content's bottom padding (the composer).
+	it("scrolls the ScrollView to its real end", () => {
+		expect(source).toContain("listRef.current?.getNativeScrollRef()");
+		expect(source).toContain("if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });");
+	});
+	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
+	it("lets only a drag stop following the newest message", () => {
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));");
+	});
 	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
 	it("floats the native control over the list", () => {
 		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
