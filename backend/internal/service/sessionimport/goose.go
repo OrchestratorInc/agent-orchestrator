@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -22,6 +23,11 @@ func gooseRoot(home string) string {
 	}
 	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
 		return filepath.Join(root, "goose")
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "Block", "goose", "data")
+		}
 	}
 	return filepath.Join(home, ".local", "share", "goose")
 }
