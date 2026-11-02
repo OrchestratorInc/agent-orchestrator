@@ -963,6 +963,7 @@
 	"inspector.terminateOnMergeShort": "マージ時にアーカイブ",
 	"inspector.archiveShort": "アーカイブ",
 	"inspector.timeline.createdWorkspace": "ワークスペースを作成済み",
+	"inspector.timeline.createdSession": "セッションを作成済み",
 	"inspector.timeline.committed": "コミット",
 	"inspector.timeline.done": "完了",
 	"inspector.timeline.draft": "下書き",

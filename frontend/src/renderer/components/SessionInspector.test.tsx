@@ -1761,6 +1761,22 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
   });
 
+  it("calls a standalone session's creation Created session, not Created workspace", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          workspaceId: STANDALONE_WORKSPACE_ID,
+          workspaceName: "Scratchpad",
+          status: "idle",
+          createdAt: "2026-06-15T09:00:00Z",
+        })}
+      />,
+    );
+
+    expect(activitySection().getByText("Created session")).toBeInTheDocument();
+    expect(activitySection().queryByText("Created workspace")).not.toBeInTheDocument();
+  });
+
   it("timestamps the live Activity state so it participates in chronological ordering", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));

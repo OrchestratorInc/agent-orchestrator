@@ -972,6 +972,7 @@
 	"inspector.terminateOnMergeShort": "Archiver à la fusion",
 	"inspector.archiveShort": "Archiver",
 	"inspector.timeline.createdWorkspace": "Espace de travail créé",
+	"inspector.timeline.createdSession": "Session créée",
 	"inspector.timeline.committed": "Commité",
 	"inspector.timeline.done": "Terminé",
 	"inspector.timeline.draft": "Brouillon",

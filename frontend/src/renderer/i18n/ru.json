@@ -978,6 +978,7 @@
 	"inspector.terminateOnMergeShort": "Архивировать при слиянии",
 	"inspector.archiveShort": "Архивировать",
 	"inspector.timeline.createdWorkspace": "Создано рабочее пространство",
+	"inspector.timeline.createdSession": "Создана сессия",
 	"inspector.timeline.committed": "Создан коммит",
 	"inspector.timeline.done": "Готово",
 	"inspector.timeline.draft": "Черновик",
