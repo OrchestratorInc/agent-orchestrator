@@ -26,6 +26,18 @@ func copilotEvent(t *testing.T, kind, id string, data map[string]any) string {
 	return string(body) + "\n"
 }
 
+// subagentEvent is a child-agent event marked only by the top-level agentId.
+func subagentEvent(t *testing.T, kind, id, agentID string, data map[string]any) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"type": kind, "id": id, "agentId": agentID, "timestamp": time.Now().UTC().Truncate(time.Second), "data": data,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body) + "\n"
+}
+
 func copilotFixture(t *testing.T, root, id, cwd string) string {
 	t.Helper()
 	body := copilotEvent(t, "session.start", "start", map[string]any{"sessionId": id, "context": map[string]string{"cwd": cwd}}) +
@@ -262,6 +274,8 @@ func TestCopilotHidesInjectedAndSubagentMessages(t *testing.T) {
 		copilotEvent(t, "user.message", "agent", map[string]any{"content": "INTER-AGENT PROMPT", "source": "agent-research"}) +
 		copilotEvent(t, "user.message", "auto", map[string]any{"content": "AUTOPILOT CONTINUATION", "isAutopilotContinuation": true}) +
 		copilotEvent(t, "assistant.message", "child", map[string]any{"content": "CHILD RESPONSE", "parentToolCallId": "task-tool"}) +
+		subagentEvent(t, "assistant.message", "child-agent", "agent-1", map[string]any{"content": "SUBAGENT RESPONSE", "messageId": "m-child"}) +
+		subagentEvent(t, "user.message", "child-prompt", "agent-1", map[string]any{"content": "SUBAGENT PROMPT"}) +
 		copilotEvent(t, "session.title_changed", "title", map[string]any{"title": "User-visible title"}))
 	closeErr := f.Close()
 	if writeErr != nil || closeErr != nil {

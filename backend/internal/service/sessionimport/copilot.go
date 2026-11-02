@@ -78,6 +78,7 @@ type copilotRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
+	AgentID   string    `json:"agentId"`
 	Data      struct {
 		SessionID               string      `json:"sessionId"`
 		Content                 contentText `json:"content"`
@@ -207,7 +208,8 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 			recount()
 			return nil
 		case "user.message", "assistant.message":
-			if !started || r.Data.Source != "" && r.Data.Source != "user" || r.Data.IsAutopilotContinuation || r.Data.ParentToolCallID != "" {
+			// A subagent's events carry a top-level agentId; parentToolCallId is optional and deprecated.
+			if !started || r.Data.Source != "" && r.Data.Source != "user" || r.Data.IsAutopilotContinuation || r.Data.ParentToolCallID != "" || r.AgentID != "" {
 				return nil
 			}
 			text := string(r.Data.Content)
