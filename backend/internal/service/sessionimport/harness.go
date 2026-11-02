@@ -17,6 +17,13 @@ type harnessImporter struct {
 	discover func(context.Context, string) ([]sourceFiles, error)
 	read     func(context.Context, string, ...string) (transcript, error)
 	nativeID func(sourceFiles) string
+	// discoverRegistered receives only explicitly registered project/repository
+	// paths. Repo-local providers leave root nil and return a root contained in
+	// one supplied path; they must not search parents or unrelated repositories.
+	discoverRegistered func(context.Context, []string) ([]sourceFiles, error)
+	// mode can force Terminal import when a provider's Chat driver cannot load
+	// the native format being imported. Empty preserves capability selection.
+	mode domain.SessionMode
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
