@@ -164,7 +164,7 @@ func TestCopilotConfinesTranscriptAndMetadataReads(t *testing.T) {
 
 func TestCopilotOversizedRecordsKeepVisibleText(t *testing.T) {
 	oldRecord, oldString := maxRecordBytes, maxSkimString
-	maxRecordBytes, maxSkimString = 512, 1024
+	maxRecordBytes, maxSkimString = 1<<10, 256
 	t.Cleanup(func() { maxRecordBytes, maxSkimString = oldRecord, oldString })
 	root := t.TempDir()
 	path := copilotFixture(t, root, copilotTestID, t.TempDir())
