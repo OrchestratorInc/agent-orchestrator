@@ -46,6 +46,44 @@ func ClaimForHarness(ctx context.Context, dataDir, name, harness string) error {
 	return writeJSON(ctx, dataDir, harnessFilename, claims)
 }
 
+// ReleaseHarness withdraws harness's claim on the variable that would
+// override its own sign-in, once it signs in another way (a subscription,
+// a setup token, its own credential store). The newest sign-in wins, as in
+// the harness's own login menu. The saved key stays in AO's store, so other
+// harnesses keep receiving it, and its other claims are left alone.
+func ReleaseHarness(ctx context.Context, dataDir, harness string) error {
+	name := ""
+	for variable, owner := range subscriptionKeys {
+		if owner == harness {
+			name = variable
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	claims, err := loadClaims(dataDir)
+	if err != nil {
+		return err
+	}
+	kept := make([]string, 0, len(claims[name]))
+	for _, existing := range claims[name] {
+		if existing != harness {
+			kept = append(kept, existing)
+		}
+	}
+	if len(kept) == len(claims[name]) {
+		return nil
+	}
+	if len(kept) == 0 {
+		delete(claims, name)
+	} else {
+		claims[name] = kept
+	}
+	return writeJSON(ctx, dataDir, harnessFilename, claims)
+}
+
 func dropClaimsLocked(ctx context.Context, dataDir, name string) error {
 	claims, err := loadClaims(dataDir)
 	if err != nil {

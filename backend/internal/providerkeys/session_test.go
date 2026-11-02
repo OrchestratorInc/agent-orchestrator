@@ -42,3 +42,38 @@ func TestForSessionWithholdsSubscriptionKeysSavedForOtherHarnesses(t *testing.T)
 		t.Fatalf("claim survived removal: withhold=%v", withhold)
 	}
 }
+
+func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	if err := Save(ctx, dir, "ANTHROPIC_API_KEY", "ant"); err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{"claude-code", "crush"} {
+		if err := ClaimForHarness(ctx, dir, "ANTHROPIC_API_KEY", harness); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A harness that owns no subscription variable has nothing to release.
+	if err := ReleaseHarness(ctx, dir, "goose"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReleaseHarness(ctx, dir, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, withhold, _ := ForSession(dir, "claude-code"); !reflect.DeepEqual(withhold, []string{"ANTHROPIC_API_KEY"}) {
+		t.Fatalf("Claude Code still receives its released key: withhold=%v", withhold)
+	}
+	// The key stays saved, and other harnesses keep receiving it.
+	if inject, withhold, _ := ForSession(dir, "crush"); len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "ant" {
+		t.Fatalf("crush inject=%v withhold=%v", inject, withhold)
+	}
+	claims, err := loadClaims(dir)
+	if err != nil || !reflect.DeepEqual(claims["ANTHROPIC_API_KEY"], []string{"crush"}) {
+		t.Fatalf("claims=%v err=%v", claims, err)
+	}
+	// Releasing again is a no-op.
+	if err := ReleaseHarness(ctx, dir, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -191,6 +191,16 @@ func (s *Service) storeProviderKey(ctx context.Context, name, secret string, dev
 	return nil
 }
 
+// releaseSubscriptionKey stops passing agentID the variable that would
+// override its own sign-in (ANTHROPIC_API_KEY for Claude Code, and so on)
+// after it signs in another way. The key stays saved for other harnesses.
+func (s *Service) releaseSubscriptionKey(ctx context.Context, agentID string) error {
+	if strings.TrimSpace(s.dataDir) == "" {
+		return nil
+	}
+	return providerkeys.ReleaseHarness(ctx, s.dataDir, agentID)
+}
+
 // publishProviderKeys records each name as AO-published before publishing
 // it, so a key in the OS user environment is never untracked: a later
 // withdrawal or removal can always find it. It returns the names AO had not

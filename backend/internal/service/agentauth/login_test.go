@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -894,6 +895,7 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	if err := claudecode.SaveLocalOAuthToken(svc.dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
 		t.Fatal(err)
 	}
+	claimAnthropicKeyForClaude(t, svc.dataDir)
 	started, err := svc.StartLogin(t.Context(), "claude-code", "browser", "")
 	if err != nil {
 		t.Fatal(err)
@@ -918,6 +920,47 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
 	}
+	// So does an API key saved from Claude Code's panel.
+	assertClaudeKeyReleased(t, svc.dataDir)
+}
+
+// claimAnthropicKeyForClaude saves ANTHROPIC_API_KEY from Claude Code's panel,
+// as if the user had chosen the API key there before switching sign-in.
+func claimAnthropicKeyForClaude(t *testing.T, dataDir string) {
+	t.Helper()
+	if err := providerkeys.Save(t.Context(), dataDir, "ANTHROPIC_API_KEY", "sk-ant-api03-earlier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if _, withhold, _ := providerkeys.ForSession(dataDir, "claude-code"); len(withhold) != 0 {
+		t.Fatalf("claim not in effect: withhold=%v", withhold)
+	}
+}
+
+// assertClaudeKeyReleased checks that Claude Code no longer receives the key
+// while the key itself stays saved for other harnesses.
+func assertClaudeKeyReleased(t *testing.T, dataDir string) {
+	t.Helper()
+	inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code")
+	if err != nil || inject["ANTHROPIC_API_KEY"] != "" || len(withhold) != 1 || withhold[0] != "ANTHROPIC_API_KEY" {
+		t.Fatalf("Claude Code still receives ANTHROPIC_API_KEY: inject=%v withhold=%v err=%v", inject, withhold, err)
+	}
+	if keys, err := providerkeys.Load(dataDir); err != nil || keys["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" {
+		t.Fatalf("shared key was not kept: %v %v", keys, err)
+	}
+}
+
+func TestUILoginClaudeSetupTokenReleasesItsAPIKeyClaim(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	claimAnthropicKeyForClaude(t, dataDir)
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-newer-setup-token"); err != nil {
+		t.Fatal(err)
+	}
+	assertClaudeKeyReleased(t, dataDir)
 }
 
 // survivingAuthTerminals models shellterm after a daemon restart in the same

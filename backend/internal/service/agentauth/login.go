@@ -215,6 +215,13 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		if err != nil {
 			return LoginSnapshot{}, err
 		}
+		// A key in the harness's own store replaces an AO-saved key that
+		// would override it; an env_ method is that AO-saved key itself.
+		if !strings.HasPrefix(method, "env_") {
+			if err := s.releaseSubscriptionKey(ctx, agentID); err != nil {
+				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The key was saved, but AO could not stop passing this harness its earlier API key. Try again.")
+			}
+		}
 		return s.recordCompletedLogin(agentID, method)
 	}
 	s.mu.Lock()
@@ -293,6 +300,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		if op.stdin != nil {
 			_ = op.stdin.Close()
 		}
+		// A successful sign-in also replaces an AO-saved key that would
+		// override it. Do that before "succeeded" is visible, so no session
+		// started after it still gets the key. Best effort, outside s.mu.
+		if err == nil && loginCtx.Err() == nil {
+			_ = s.releaseSubscriptionKey(context.Background(), agentID)
+		}
 		s.mu.Lock()
 		if op.snapshot.Status == "running" {
 			switch {
@@ -323,6 +336,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 // renderer verifies it through the same authentication probe as other logins.
 // The caller holds s.mu. The token never enters the snapshot.
 func (s *Service) saveClaudeSetupToken(token string, expires time.Time) (LoginSnapshot, error) {
+	// Claude Code's own ANTHROPIC_API_KEY would otherwise keep winning over
+	// the token in new sessions. Release it first, so a failure leaves the
+	// previous sign-in fully in place rather than half switched.
+	if err := s.releaseSubscriptionKey(context.Background(), "claude-code"); err != nil {
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "Claude Code's saved Anthropic API key could not be switched off, so the setup token was not saved.")
+	}
 	if err := claudecode.SaveLocalOAuthToken(s.dataDir, []byte(token)); err != nil {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_SAVE_FAILED", "The setup token could not be saved.")
 	}
@@ -421,6 +440,10 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				s.mu.Unlock()
 				continue
 			}
+			// As for CLI logins, the finished sign-in replaces an AO-saved key
+			// that would override it, before "succeeded" is visible. The
+			// agent ID never changes after the operation is created.
+			_ = s.releaseSubscriptionKey(context.Background(), op.snapshot.AgentID)
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "succeeded"
