@@ -2973,6 +2973,18 @@ describe("XtermTerminal", () => {
 		expect(bubbled).toHaveBeenCalledTimes(1);
 	});
 
+	it("types a sandbox path quoted for its shell, so a file name is never run", async () => {
+		const saveDroppedFile = vi.fn().mockResolvedValue("/workspace/.ao/attachments/it's a $(id) `id`; x & y | z.txt");
+		const onInput = vi.fn();
+		const { container } = render(
+			<XtermTerminal theme="dark" saveDroppedFile={saveDroppedFile} onReady={(terminal) => terminal.onUserInput(onInput)} />,
+		);
+		const file = new File(["hello"], "it's a $(id) `id`; x & y | z.txt", { type: "text/plain" });
+
+		fireEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
+		await waitFor(() => expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/it'\\''s a $(id) `id`; x & y | z.txt' ", "paste"));
+	});
+
 	// Regression: a dropped folder is the app-wide "open as project" gesture
 	// (_shell.tsx's window-level drop handler), not a file to attach — dropping
 	// one over an active terminal pane must not be swallowed as a file-attach.

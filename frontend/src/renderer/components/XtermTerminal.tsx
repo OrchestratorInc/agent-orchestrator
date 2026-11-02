@@ -37,6 +37,7 @@ import { isDialogOrMenuOpenOutside } from "../lib/dom-selectors";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
+import { droppedPathsText } from "../lib/terminal-drop";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
 import {
@@ -68,8 +69,9 @@ export type XtermTerminalProps = {
 	ariaLabel?: string;
 	/**
 	 * Puts a file dropped on the terminal where the terminal's program can open
-	 * it and answers with that path, which is typed at the prompt. Absent, the
-	 * file is saved on this machine (a local terminal).
+	 * it and answers with that path, a POSIX sandbox path, which is typed at the
+	 * prompt quoted for its shell. Absent, the file is saved on this machine (a
+	 * local terminal).
 	 */
 	saveDroppedFile?: (file: { name: string; bytes: Uint8Array }) => Promise<string | null | undefined>;
 	className?: string;
@@ -1632,7 +1634,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// never shows the overlay.
 			void (async () => {
 				const paths: string[] = [];
-				const save = saveDroppedFileRef.current ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
+				const sandbox = saveDroppedFileRef.current;
+				const save = sandbox ?? ((dropped: { name: string; bytes: Uint8Array }) => aoBridge.terminal.saveDroppedFile(dropped));
 				for (const file of files) {
 					try {
 						const bytes = new Uint8Array(await file.arrayBuffer());
@@ -1643,7 +1646,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 					}
 				}
 				if (paths.length === 0) return;
-				pasteText(`${paths.map((p) => (/\s/.test(p) ? `'${p}'` : p)).join(" ")} `);
+				pasteText(droppedPathsText(paths, Boolean(sandbox)));
 			})();
 		};
 		shell.addEventListener("dragover", dragOverInput);
