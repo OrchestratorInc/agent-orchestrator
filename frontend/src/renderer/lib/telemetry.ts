@@ -1196,7 +1196,6 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 
 export async function initTelemetry(): Promise<boolean> {
 	if (initPromise) return initPromise;
-	bindRendererErrorHandlers();
 	const attempt = (async () => {
 		if (!POSTHOG_KEY) return false;
 		const bootstrap = await aoBridge.telemetry.getBootstrap();
@@ -1229,6 +1228,7 @@ export async function initTelemetry(): Promise<boolean> {
 			platform: bootstrap.platform,
 			distinctId: bootstrap.distinctId,
 		});
+		bindRendererErrorHandlers();
 		startDailyActiveHeartbeat({
 			storage: telemetryStorage(),
 			window,

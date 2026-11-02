@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 
+	sqlite3 "modernc.org/sqlite"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -39,7 +41,7 @@ func ErrorType(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
-	var sqliteErr interface{ Code() int }
+	var sqliteErr *sqlite3.Error
 	if errors.As(err, &sqliteErr) {
 		return "sqlite"
 	}
@@ -57,6 +59,9 @@ func ErrorType(err error) string {
 	}
 	var apiErr *apierr.Error
 	if errors.As(err, &apiErr) {
+		if apiErr.Cause != nil {
+			return "unknown"
+		}
 		return "api_error"
 	}
 	return "unknown"

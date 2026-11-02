@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { captureExceptionToSentry } from "./sentry";
+import { captureApiErrorToSentry, captureExceptionToSentry } from "./sentry";
 import { SAFE_APP_ASSET, safeSentryFunctionName } from "../../shared/sentry-config";
 
 const capture = vi.hoisted(() => vi.fn());
@@ -14,6 +14,13 @@ it("keeps real component names and built route assets without accepting arbitrar
 	expect(SAFE_APP_ASSET.test("assets/_shell.index-RzpjvxTk.js")).toBe(true);
 	expect(SAFE_APP_ASSET.test("assets/_shell.host._hostId.project._projectId_.session._sessionId-BjAotn5p.js")).toBe(true);
 	expect(SAFE_APP_ASSET.test("assets/../private-user-text.js")).toBe(false);
+});
+
+it("keeps typed daemon 503 errors as breadcrumbs while reporting untyped 503s", () => {
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 503, "WORKSPACE_GIT_BUSY");
+	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "breadcrumb" }));
+	captureApiErrorToSentry("GET /api/v1/projects", "http_5xx", 503);
+	expect(capture).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "message" }));
 });
 
 it("sends only safe renderer stack frames and a standard exception type through the bridge", () => {

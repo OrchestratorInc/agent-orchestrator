@@ -37,6 +37,7 @@ const SAFE_CODES = new Set([
 	"REPORT_LIST_FAILED", "REVIEW_OPERATION_FAILED", "WORKSPACE_GIT_READ_FAILED",
 ]);
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
+const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
@@ -61,9 +62,8 @@ async function waitForInFlightSends(inFlight: Set<Promise<unknown>>): Promise<vo
 }
 
 function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
-	if (event.tags?.["ao.category"] === "daemon_unavailable") return true;
 	const values = [event.message, ...(event.exception?.values ?? []).flatMap((value) => [value.type, value.value])];
-	return values.some((value) => typeof value === "string" && /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED|daemon not ready during startup)$/i.test(value));
+	return values.some((value) => typeof value === "string" && EXPECTED_NOISE.test(value));
 }
 
 function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent | null {
@@ -87,12 +87,16 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
 		.slice(-8)
-		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), in_app: true }));
+		.map((frame) => ({ function: safeSentryFunctionName(frame.function, renderer ? "renderer_frame" : "main_frame"), ...(renderer && typeof frame.filename === "string" && SAFE_APP_ASSET.test(frame.filename) ? { filename: frame.filename } : {}), ...(typeof frame.lineno === "number" && Number.isSafeInteger(frame.lineno) && frame.lineno >= 1 && frame.lineno <= 1_000_000 ? { lineno: frame.lineno } : {}), ...(!renderer && typeof frame.colno === "number" && Number.isSafeInteger(frame.colno) && frame.colno >= 1 && frame.colno <= 10_000_000 ? { colno: frame.colno } : {}), in_app: true }));
 	const topFrame = frames?.at(-1);
 	const topLocation = renderer && topFrame && "filename" in topFrame && typeof topFrame.filename === "string" && "lineno" in topFrame && typeof topFrame.lineno === "number"
 		? `${topFrame.filename.replace(/-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/, "")}:${topFrame.lineno}`
 		: undefined;
-	const topFunction = topFrame?.function === "renderer_frame" ? topLocation ?? "renderer_frame" : topFrame?.function ?? "unknown";
+	const mainLocation = !renderer && topFrame && "lineno" in topFrame && typeof topFrame.lineno === "number"
+		? `main:${topFrame.lineno}${"colno" in topFrame && typeof topFrame.colno === "number" ? `:${topFrame.colno}` : ""}`
+		: undefined;
+	const topFunction = topFrame?.function === "renderer_frame" ? topLocation ?? "renderer_frame"
+		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const title = renderer
 		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
@@ -162,7 +166,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		capture(request) {
 			if (!accepting) return;
 			const safe = sanitizeRendererCapture(request);
-			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i.test(safe.message)) return;
+			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || EXPECTED_NOISE.test(safe.message)) return;
 			const category = safe.tags?.category;
 			const code = safe.tags?.code;
 			Sentry.captureEvent({

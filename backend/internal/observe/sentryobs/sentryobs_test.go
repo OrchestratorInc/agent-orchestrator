@@ -68,6 +68,38 @@ func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
 	}
 }
 
+func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
+	when := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	errorBudget.Lock()
+	previousDay, previousGroups := errorBudget.day, errorBudget.groups
+	errorBudget.day = when.YearDay() + when.Year()*366
+	errorBudget.groups = make(map[string]errorBudgetGroup, maxErrorFingerprintsPerDay+1)
+	for i := range maxErrorFingerprintsPerDay {
+		errorBudget.groups[fmt.Sprintf("%016x", i)] = errorBudgetGroup{}
+	}
+	errorBudget.Unlock()
+	t.Cleanup(func() {
+		errorBudget.Lock()
+		errorBudget.day, errorBudget.groups = previousDay, previousGroups
+		errorBudget.Unlock()
+	})
+	for i := range maxErrorsPerFingerprintMinute {
+		if !allowErrorFingerprint(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), when) {
+			t.Fatalf("overflow event %d was dropped", i)
+		}
+	}
+	if allowErrorFingerprint("ffffffffffffffff", when) {
+		t.Fatal("overflow bucket admitted a sixth event in the minute")
+	}
+	errorBudget.Lock()
+	count := len(errorBudget.groups)
+	group := errorBudget.groups["unknown"]
+	errorBudget.Unlock()
+	if count != maxErrorFingerprintsPerDay+1 || group.minuteCount != maxErrorsPerFingerprintMinute {
+		t.Fatalf("overflow bucket = (%d groups, %d events), want (%d groups, %d events)", count, group.minuteCount, maxErrorFingerprintsPerDay+1, maxErrorsPerFingerprintMinute)
+	}
+}
+
 func TestInitNoDSNIsNoOp(t *testing.T) {
 	if err := Init(Config{}); err != nil {
 		t.Fatalf("Init with empty DSN: %v", err)

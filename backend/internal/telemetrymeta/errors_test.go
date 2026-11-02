@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	sqlite3 "modernc.org/sqlite"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -35,7 +37,10 @@ func TestErrorTypeUsesOnlyFixedCauseTypes(t *testing.T) {
 		err  error
 		want string
 	}{
-		{fmt.Errorf("private: %w", apierr.InternalCause("REPORT_CREATE_FAILED", "Report failed", diagnosticCodeError{})), "sqlite"},
+		{fmt.Errorf("private: %w", apierr.InternalCause("REPORT_CREATE_FAILED", "Report failed", &sqlite3.Error{})), "sqlite"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", errors.New("private path")), "unknown"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", diagnosticCodeError{}), "unknown"},
+		{apierr.Internal("INTERNAL_ERROR", "Internal error"), "api_error"},
 		{fmt.Errorf("private: %w", context.DeadlineExceeded), "context_deadline"},
 		{errors.New("private project"), "unknown"},
 	} {

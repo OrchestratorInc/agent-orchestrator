@@ -309,12 +309,28 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo|\/Users\/alice/);
 	});
 
+	it("separates minified main failures by numeric bundle location without sending paths", async () => {
+		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
+		const mainError = (colno: number, functionName: string) => beforeSend({
+			type: undefined, message: "private project",
+			exception: { values: [{ type: "TypeError", value: "private project", stacktrace: { frames: [{ function: functionName, filename: "/Users/alice/private-repo/main.js", lineno: 1, colno, in_app: true }] } }] },
+		});
+		const first = mainError(321, "a");
+		expect(mainError(321, "b").fingerprint).toEqual(first.fingerprint);
+		expect(mainError(322, "a").fingerprint).not.toEqual(first.fingerprint);
+		expect(first.message).toBe("Electron main TypeError in main:1:321");
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "main_frame", lineno: 1, colno: 321, in_app: true }]);
+		expect(JSON.stringify(first)).not.toContain("private-repo");
+	});
+
 	it("drops expected noise and groups main failures without message text", async () => {
 		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
-		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "daemon not ready during startup"]) {
+		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
 			expect(beforeSend({ type: undefined, message })).toBeNull();
 		}
+		expect(beforeSend({ type: undefined, message: "Updater failed: net::ERR_NETWORK_CHANGED" })).not.toBeNull();
 		const mainError = (message: string) => beforeSend({
 			type: undefined, message,
 				exception: { values: [{ type: "Error", value: message, mechanism: { type: "auto.node.onunhandledrejection" } }] },

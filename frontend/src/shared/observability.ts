@@ -47,7 +47,6 @@ const LEVEL: Record<Severity, SentryLevel> = { P0: "fatal", P1: "error", P2: "wa
 // and would drown the signal, so they ride as breadcrumbs unless they spike
 // (spike detection is a server-side alert rule, not a client decision).
 const TRANSIENT = new Set(["offline", "network_error", "timeout"]);
-const EXPECTED_CONFLICT_CODES = new Set(["REVIEW_ALREADY_RUNNING", "REVIEW_HEAD_ALREADY_REVIEWED", "CHAT_REQUEST_NOT_PENDING"]);
 
 type Base = { severity: Severity; owner: FaultOwner };
 
@@ -125,12 +124,9 @@ export function classifyError(input: ClassifyInput): Triage {
 	// Code override wins where present.
 	if (code && CODE[code]) base = { ...base, ...CODE[code] };
 
-	// The daemon returns SERVICE_UNAVAILABLE for retryable contention
-	// (#4325/#4334) and skips it in its own Sentry capture. Mirror that
-	// classification here so expected contention remains a breadcrumb.
-	// Only the daemon's classified SERVICE_UNAVAILABLE code is known
-	// backpressure. An unknown 503 still needs investigation.
-	const unavailable = code === "SERVICE_UNAVAILABLE";
+	// The daemon excludes its typed 503 envelopes from Sentry. Mirror that
+	// policy for API responses while keeping untyped and synthetic 503s visible.
+	const unavailable = input.httpStatus === 503 && category === "http_5xx" && !!code;
 
 	// An unhandled crash is always at least P1 (the app hit something it didn't expect).
 	let severity = base.severity;
@@ -143,8 +139,7 @@ export function classifyError(input: ClassifyInput): Triage {
 
 	const transient = (category ? TRANSIENT.has(category) : false) || unavailable;
 	// Report as an issue for P0/P1 always; for P2 unless it's transient; never for P3.
-	const expectedConflict = input.httpStatus === 409 && !!code && EXPECTED_CONFLICT_CODES.has(code);
-	const report = !expectedConflict && (severity === "P0" || severity === "P1" || (severity === "P2" && !transient));
+	const report = severity === "P0" || severity === "P1" || (severity === "P2" && !transient);
 
 	return { severity, owner: base.owner, level: LEVEL[severity], transient, report };
 }

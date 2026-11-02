@@ -43,6 +43,12 @@ var errorBudget = struct {
 	groups map[string]errorBudgetGroup
 }{groups: make(map[string]errorBudgetGroup)}
 
+const (
+	maxErrorsPerFingerprintMinute = 5
+	maxErrorsPerFingerprintDay    = 200
+	maxErrorFingerprintsPerDay    = 1024
+)
+
 type errorBudgetGroup struct {
 	minute      int64
 	minuteCount int
@@ -447,7 +453,7 @@ func allowErrorFingerprint(fingerprint string, now time.Time) bool {
 		errorBudget.groups = make(map[string]errorBudgetGroup)
 	}
 	group, known := errorBudget.groups[fingerprint]
-	if !known && len(errorBudget.groups) >= 1024 {
+	if !known && len(errorBudget.groups) >= maxErrorFingerprintsPerDay {
 		fingerprint = "unknown"
 		group = errorBudget.groups[fingerprint]
 	}
@@ -456,7 +462,7 @@ func allowErrorFingerprint(fingerprint string, now time.Time) bool {
 		group.minute = minute
 		group.minuteCount = 0
 	}
-	if group.minuteCount >= 5 || group.dayCount >= 200 {
+	if group.minuteCount >= maxErrorsPerFingerprintMinute || group.dayCount >= maxErrorsPerFingerprintDay {
 		return false
 	}
 	group.minuteCount++

@@ -47,8 +47,8 @@ Error events can include a standard exception type, bounded function names,
 line numbers, and a validated app relative JavaScript asset filename. The
 asset filename preserves the location needed for source map matching. Local
 filesystem paths, full URLs, and raw exception messages are removed before sending.
-Global renderer error handlers bind even if usage analytics is unavailable;
-Electron main still checks Share error events before sending.
+The app's global renderer error boundary binds handlers independently of
+PostHog setup. Electron main still checks Share error events before sending.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
@@ -542,15 +542,18 @@ An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. Panic events keep function and line information, but
 remove stack paths, request data, project, session, repository and branch
 names, and panic text. Electron exception titles use a standard error type and
-fixed function name; renderer API titles use a fixed error code or category.
+a fixed function name or bounded bundle location; renderer API titles use a
+fixed error code or category.
 Both have scrubbed exception values and the same
 installation ID as Sentry `user.id`.
 Canceled requests, transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
 their raw path. Every daemon Sentry event has release and environment values.
-Unknown renderer 503 responses remain reportable, while confirmed expected
-409 codes remain breadcrumbs. Renderer exception intake is capped per exception
+Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
+Sentry policy. Untyped renderer 503 responses remain reportable. The existing
+API client skips its confirmed expected 409 probes, while other 409 responses
+remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
 name at five per minute and 200 per day. The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then

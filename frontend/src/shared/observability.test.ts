@@ -30,12 +30,9 @@ describe("classifyError — severity + owner", () => {
 		}
 	});
 
-	it("daemon 503 backpressure is a breadcrumb, not a paged issue", () => {
-		// The typed SERVICE_UNAVAILABLE code, with or without the http_5xx category.
-		for (const meta of [
-			{ code: "SERVICE_UNAVAILABLE", httpStatus: 503 },
-			{ category: "http_5xx", code: "SERVICE_UNAVAILABLE", httpStatus: 503 },
-		]) {
+	it("typed daemon 503 envelopes are breadcrumbs", () => {
+		for (const code of ["SERVICE_UNAVAILABLE", "WORKSPACE_GIT_BUSY", "BROWSER_RUNTIME_RECONNECTING", "GIT_CLONE_NETWORK_FAILED", "SCM_UNAVAILABLE", "DEVICE_REGISTRY_UNAVAILABLE", "CODEX_LOGIN_TERMINAL_UNAVAILABLE", "CODEX_RESET_CREDIT_UNAVAILABLE", "RENDER_CHECK_UNAVAILABLE"]) {
+			const meta = { category: "http_5xx", code, httpStatus: 503 };
 			const t = classifyError(meta);
 			expect(t.transient).toBe(true);
 			expect(t.report).toBe(false);
@@ -43,12 +40,10 @@ describe("classifyError — severity + owner", () => {
 		}
 	});
 
-	it("reports unknown 503 failures and skips only confirmed expected conflicts", () => {
+	it("reports untyped 503 failures and keeps the existing 409 breadcrumb policy", () => {
 		expect(classifyError({ category: "http_5xx", httpStatus: 503 })).toMatchObject({ severity: "P1", report: true });
-		for (const code of ["REVIEW_ALREADY_RUNNING", "REVIEW_HEAD_ALREADY_REVIEWED", "CHAT_REQUEST_NOT_PENDING"]) {
-			expect(classifyError({ category: "conflict", httpStatus: 409, code }).report).toBe(false);
-		}
-		expect(classifyError({ category: "conflict", httpStatus: 409, code: "UNKNOWN_CONFLICT" }).report).toBe(true);
+		expect(classifyError({ category: "http_5xx", httpStatus: 503, code: "" })).toMatchObject({ severity: "P1", report: true });
+		expect(classifyError({ category: "http_4xx", httpStatus: 409, code: "CHAT_REQUEST_NOT_PENDING" }).report).toBe(false);
 	});
 
 	it("a genuinely unreachable daemon (503 synthetic) still pages as P1", () => {
