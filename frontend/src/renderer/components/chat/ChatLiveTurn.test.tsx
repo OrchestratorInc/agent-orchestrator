@@ -1,4 +1,4 @@
-import { fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -72,7 +72,13 @@ describe("settling under a reader who scrolled up", () => {
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
 	let restoreLayout: (() => void) | undefined;
-	afterEach(() => {
+	afterEach(async () => {
+		cleanup();
+		// TanStack Virtual's scroll-reset debounce survives unmount in jsdom.
+		// Drain it while window still exists, before this file's DOM is torn down.
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 200));
+		});
 		restoreLayout?.();
 		restoreLayout = undefined;
 	});
@@ -94,10 +100,12 @@ describe("settling under a reader who scrolled up", () => {
 		});
 		Object.defineProperty(log, "scrollHeight", { configurable: true, value: 3000 });
 		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
-		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: scrollTop });
+		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: log.scrollHeight });
 		restoreLayout = () => spy.mockRestore();
-		// Reading back up the turn releases the follow.
+		// Browser wheel intent precedes the viewport movement. Cancelling a recent
+		// programmatic scroll must record the old position, not the reader's destination.
 		fireEvent.wheel(log, { deltaY: -120 });
+		log.scrollTop = scrollTop;
 		fireEvent.scroll(log);
 	}
 
