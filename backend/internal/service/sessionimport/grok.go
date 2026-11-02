@@ -37,7 +37,7 @@ func discoverGrok(ctx context.Context, root string) ([]sourceFiles, error) {
 			return err
 		}
 		if walkErr != nil {
-			return nil
+			return nil //nolint:nilerr // An unreadable entry must not hide other conversations.
 		}
 		if d.IsDir() || d.Name() != "updates.jsonl" {
 			return nil
@@ -48,7 +48,7 @@ func discoverGrok(ctx context.Context, root string) ([]sourceFiles, error) {
 		}
 		info, err := d.Info()
 		if err != nil || !info.Mode().IsRegular() {
-			return nil
+			return nil //nolint:nilerr // Skip unreadable or non-regular transcript files.
 		}
 		if old, ok := byID[id]; ok && !info.ModTime().After(old.modTime) {
 			return nil
@@ -84,8 +84,8 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		return t, errors.New("summary outside provider home")
 	}
 	var summary struct {
-		Info struct{ ID, CWD string } `json:"info"`
-		Title string `json:"generated_title"`
+		Info  struct{ ID, CWD string } `json:"info"`
+		Title string                   `json:"generated_title"`
 	}
 	summaryFile, err := r.Open(rel)
 	if err != nil {
@@ -117,16 +117,16 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		var event struct {
 			Timestamp int64 `json:"timestamp"`
-			Params struct {
+			Params    struct {
 				SessionID string `json:"sessionId"`
-				Update struct {
-					Kind string `json:"sessionUpdate"`
+				Update    struct {
+					Kind    string                      `json:"sessionUpdate"`
 					Content struct{ Type, Text string } `json:"content"`
 				} `json:"update"`
 			} `json:"params"`
 		}
 		if json.Unmarshal(raw, &event) != nil || event.Params.SessionID != t.nativeID {
-			return nil
+			return nil //nolint:nilerr // Ignore torn/malformed records and updates for another session.
 		}
 		u := event.Params.Update
 		if u.Kind == "turn_completed" {

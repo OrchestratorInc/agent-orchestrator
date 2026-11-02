@@ -21,7 +21,7 @@ func TestImportRelocationKeepsSourceAndExistingCopy(t *testing.T) {
 	if err := os.MkdirAll(src, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original := `{"info":{"id":"`+id+`","cwd":"/source"},"generated_title":"Synthetic"}`
+	original := `{"info":{"id":"` + id + `","cwd":"/source"},"generated_title":"Synthetic"}`
 	for name, data := range map[string]string{"summary.json": original, "updates.jsonl": "{}\n", "chat_history.jsonl": "{}\n"} {
 		if err := os.WriteFile(filepath.Join(src, name), []byte(data), 0o600); err != nil {
 			t.Fatal(err)

@@ -26,7 +26,7 @@ func TestGrokDiscoveryAndChunks(t *testing.T) {
 		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}`,
 		`{"sessionUpdate":"turn_completed"}`,
 	} {
-		data += `{"timestamp":1790000000000,"params":{"sessionId":"`+id+`","update":`+item+"}}\n"
+		data += `{"timestamp":1790000000000,"params":{"sessionId":"` + id + `","update":` + item + "}}\n"
 	}
 	data += `{"torn":`
 	path := filepath.Join(dir, "updates.jsonl")
