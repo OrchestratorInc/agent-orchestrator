@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -97,5 +98,88 @@ func TestRepairHundredThousandDistinctTimes(t *testing.T) {
 	var bad int
 	if err := db.QueryRow(`SELECT count(*) FROM repair_times WHERE CAST(at AS TEXT) LIKE '%+0200 +0200%'`).Scan(&bad); err != nil || bad != 0 {
 		t.Fatalf("%d bad values remain: %v", bad, err)
+	}
+}
+
+// Clean rows must consume the detection budget too. LIMIT after the timestamp
+// predicate can otherwise hold the sole writer for a full clean-table scan.
+func TestTimestampDetectionPagesLargeCleanTables(t *testing.T) {
+	db := openRepairDB(t)
+	if _, err := db.Exec(`WITH RECURSIVE ids(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM ids WHERE i<100001)
+ INSERT INTO repair_times(id,at) SELECT i,'2026-10-21 16:15:40 +0000 UTC' FROM ids`); err != nil {
+		t.Fatal(err)
+	}
+	column := timestampColumn{table: "repair_times", column: "at"}
+	next, done, err := repairTimestampBatch(context.Background(), db, column, -1<<63)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done || next != 257 {
+		t.Fatalf("first clean batch returned next=%d done=%v, want next=257 done=false", next, done)
+	}
+	// A sparse bad row later in the table must still be reached after clean pages.
+	if _, err := db.Exec(`UPDATE repair_times SET at='2026-10-21 18:15:40 +0200 +0200' WHERE id=100000`); err != nil {
+		t.Fatal(err)
+	}
+	for !done {
+		previous := next
+		next, done, err = repairTimestampBatch(context.Background(), db, column, next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !done && next-previous != 256 {
+			t.Fatalf("batch examined more than its row budget: %d -> %d", previous, next)
+		}
+	}
+	var at time.Time
+	if err := db.QueryRow(`SELECT at FROM repair_times WHERE id=100000`).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 10, 21, 16, 15, 40, 0, time.UTC); !at.Equal(want) {
+		t.Fatalf("sparse repair: %v, want %v", at, want)
+	}
+}
+
+func TestTimestampRepairCancellationCanRetry(t *testing.T) {
+	db := openRepairDB(t)
+	if _, err := db.Exec(`INSERT INTO repair_times(id,at) VALUES(1,'2026-10-21 18:15:40 +0200 +0200')`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := repairTimestamps(ctx, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled repair: %v", err)
+	}
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err == nil {
+		t.Fatal("cancelled repair changed the row")
+	}
+	if err := repairOffsetOnlyTimestamps(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTimestampRepairCloseCancelsWorker(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, finished := make(chan struct{}), make(chan struct{})
+	s.StartTimestampRepair(func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	})
+	<-started
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Close returned before the repair worker finished")
 	}
 }

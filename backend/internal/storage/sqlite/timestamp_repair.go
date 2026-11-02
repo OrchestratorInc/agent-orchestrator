@@ -63,12 +63,13 @@ func repairTimestamps(ctx context.Context, db *sql.DB) error {
 
 func repairTimestampBatch(ctx context.Context, db *sql.DB, c timestampColumn, cursor int64) (int64, bool, error) {
 	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
-	// The range is indexed by rowid; LIMIT bounds results even for distinct times.
-	// Exclude canonical UTC before parsing, so clean databases only do detection.
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,CAST(%[2]s AS TEXT) FROM %[1]s
-WHERE rowid>=? AND typeof(%[2]s)='text'
+	// Clean rows also consume the scan budget, so detection cannot hold the
+	// sole writer connection for an entire clean or sparsely affected table.
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,
+CASE WHEN typeof(%[2]s)='text'
 AND ((%[2]s GLOB '* [+-][0-9][0-9][0-9][0-9] *' AND %[2]s NOT GLOB '* +0000 UTC')
-OR %[2]s GLOB '????-??-??T*') ORDER BY rowid LIMIT ?`, table, column), cursor, timestampRepairBatch)
+OR %[2]s GLOB '????-??-??T*') THEN CAST(%[2]s AS TEXT) END
+FROM %[1]s WHERE rowid>=? ORDER BY rowid LIMIT ?`, table, column), cursor, timestampRepairBatch)
 	if err != nil {
 		return 0, false, err
 	}
@@ -78,18 +79,24 @@ OR %[2]s GLOB '????-??-??T*') ORDER BY rowid LIMIT ?`, table, column), cursor, t
 		before string
 		after  time.Time
 	}
-	changes := make([]change, 0, timestampRepairBatch)
+	var changes []change
 	n, last := 0, cursor
 	for rows.Next() {
 		var id int64
-		var value string
+		var value sql.NullString
 		if err = rows.Scan(&id, &value); err != nil {
 			break
 		}
 		n++
 		last = id
-		if at, ok := legacyTimestamp(value); ok && at.String() != value {
-			changes = append(changes, change{id, value, at})
+		if !value.Valid {
+			continue
+		}
+		if at, ok := legacyTimestamp(value.String); ok && at.String() != value.String {
+			if changes == nil {
+				changes = make([]change, 0, timestampRepairBatch)
+			}
+			changes = append(changes, change{id, value.String, at})
 		}
 	}
 	if err == nil {
