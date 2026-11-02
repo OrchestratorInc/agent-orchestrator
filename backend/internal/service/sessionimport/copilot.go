@@ -133,7 +133,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 	defer func() { _ = providerRoot.Close() }()
 	metadata := readCopilotWorkspace(providerRoot, rel)
 	if metadata.ID != "" && !strings.EqualFold(metadata.ID, t.nativeID) {
-		return t, errors.New("Copilot workspace identity mismatch")
+		return t, errors.New("copilot workspace identity mismatch")
 	}
 	var nodes []copilotNode
 	seen := map[string]int{}
@@ -171,7 +171,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 		switch r.Type {
 		case "session.start":
 			if !strings.EqualFold(r.Data.SessionID, t.nativeID) {
-				return errors.New("Copilot native identity mismatch")
+				return errors.New("copilot native identity mismatch")
 			}
 			started, node.cwd = true, r.Data.Context.CWD
 		case "session.resume":
@@ -195,7 +195,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 			} else {
 				cut = seen[r.Data.UpToEventID]
 				if cut == 0 {
-					return errors.New("Copilot rewind target is missing")
+					return errors.New("copilot rewind target is missing")
 				}
 				for id, at := range seen {
 					if at >= cut {
@@ -269,7 +269,7 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 		t.cwd = metadata.CWD
 	}
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("Copilot working directory must be absolute")
+		return t, errors.New("copilot working directory must be absolute")
 	}
 	if t.last.IsZero() {
 		if info, err := os.Stat(t.path); err == nil {
