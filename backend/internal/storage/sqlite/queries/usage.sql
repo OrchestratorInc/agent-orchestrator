@@ -118,7 +118,7 @@ SELECT CAST(EXISTS (
     FROM usage_bindings ub
     JOIN sessions s ON s.id = ub.session_id
     WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-      AND ub.harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen')
+      AND ub.harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen', 'gemini')
       AND (
           ub.harness IN ('kimi', 'qwen')
           OR ub.state = 'discovering'
@@ -130,6 +130,15 @@ SELECT CAST(EXISTS (
                   FROM usage_sources source
                   WHERE source.binding_id = ub.id
                     AND source.kind = 'pi_session'
+              )
+          )
+          OR (
+              ub.harness = 'gemini'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM usage_sources source
+                  WHERE source.binding_id = ub.id
+                    AND source.kind = 'gemini_session'
               )
           )
           OR EXISTS (
@@ -195,7 +204,7 @@ SELECT ub.*
 FROM usage_bindings ub
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  AND ub.harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen')
+  AND ub.harness IN ('claude-code', 'codex', 'kimi', 'pi', 'qwen', 'gemini')
   AND (
       ub.state IN ('discovering', 'active', 'finalizing')
       OR (ub.state = 'partial' AND ub.last_error_code = 'codex_source_budget_exceeded')
@@ -218,6 +227,12 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
           WHERE us.binding_id = ub.id
             AND us.kind = 'pi_session'
       ))
+      OR (ub.harness = 'gemini' AND NOT EXISTS (
+          SELECT 1
+          FROM usage_sources us
+          WHERE us.binding_id = ub.id
+            AND us.kind = 'gemini_session'
+      ))
       OR EXISTS (
           SELECT 1
           FROM usage_sources us
@@ -225,6 +240,7 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
             AND (
                 ub.harness = 'codex' AND us.kind = 'codex_rollout'
                 OR ub.harness = 'pi' AND us.kind = 'pi_session'
+                OR ub.harness = 'gemini' AND us.kind = 'gemini_session'
             )
             AND us.state = 'error'
             AND us.last_error_code IN ('artifact_missing', 'source_read_failed')

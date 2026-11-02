@@ -50,6 +50,11 @@ func parseRecordsWithState(
 		parsePi(source, records, &result)
 	case domain.UsageSourceQwenMonthly:
 		parseQwen(source, records, &result)
+	case domain.UsageSourceGeminiSession:
+		if state.Gemini == nil {
+			state.Gemini = &geminiParserStateV1{}
+		}
+		parseGemini(source, records, state.Gemini, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -96,6 +101,7 @@ type parserStateEnvelope struct {
 	Integrity  *parserIntegrityStateV1 `json:"integrity,omitempty"`
 	Claude     *claudeParserStateV1    `json:"claude,omitempty"`
 	Codex      *codexParserStateV1     `json:"codex,omitempty"`
+	Gemini     *geminiParserStateV1    `json:"gemini,omitempty"`
 }
 
 type parserIntegrityStateV1 struct {
@@ -191,12 +197,12 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 	}
 	switch source.Kind {
 	case domain.UsageSourceClaudeMain, domain.UsageSourceClaudeSubagent:
-		if state.Claude == nil || state.Codex != nil {
+		if state.Claude == nil || state.Codex != nil || state.Gemini != nil {
 			return nil, errors.New("claude state has invalid parser payload")
 		}
 		state.Claude.LegacyProvider = ""
 	case domain.UsageSourceCodexRollout:
-		if state.Codex == nil || state.Claude != nil {
+		if state.Codex == nil || state.Claude != nil || state.Gemini != nil {
 			return nil, errors.New("codex state has invalid parser payload")
 		}
 		state.Codex.LegacyProvider = ""
@@ -213,8 +219,15 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 			return nil, err
 		}
 	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly:
-		if state.Claude != nil || state.Codex != nil {
+		if state.Claude != nil || state.Codex != nil || state.Gemini != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
+		}
+	case domain.UsageSourceGeminiSession:
+		if state.Claude != nil || state.Codex != nil {
+			return nil, errors.New("gemini state has invalid parser payload")
+		}
+		if err := validateGeminiParserState(state.Gemini); err != nil {
+			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
@@ -235,7 +248,8 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly:
+	case domain.UsageSourceKimiWire, domain.UsageSourcePiSession, domain.UsageSourceQwenMonthly,
+		domain.UsageSourceGeminiSession:
 		// These formats carry replay-stable native IDs, so no provider-specific
 		// cumulative baseline is required.
 	default:

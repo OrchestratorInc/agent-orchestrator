@@ -66,6 +66,7 @@ type SourceRoots struct {
 	KimiHome       string
 	PiSessions     string
 	QwenUsage      string
+	GeminiTmp      string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -95,6 +96,12 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if err != nil {
 		return SourceRoots{}, err
 	}
+	// Gemini CLI resolves its whole ~/.gemini tree, chat logs included, under
+	// GEMINI_CLI_HOME when that is set.
+	geminiHome := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
+	if geminiHome == "" {
+		geminiHome = home
+	}
 	return SourceRoots{
 		ClaudeProjects: filepath.Join(claudeHome, "projects"),
 		CodexSessions:  filepath.Join(codexHome, "sessions"),
@@ -102,6 +109,7 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		KimiHome:       filepath.Join(dataDir, "kimi"),
 		PiSessions:     filepath.Join(dataDir, "pi", "sessions"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
+		GeminiTmp:      filepath.Join(geminiHome, ".gemini", "tmp"),
 	}, nil
 }
 
@@ -460,7 +468,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessPi ||
-			session.Harness == domain.HarnessQwen ||
+			session.Harness == domain.HarnessQwen || session.Harness == domain.HarnessGemini ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
@@ -530,7 +538,8 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	inventoryChanged := !exists || state != existing.State
 	needsReconcile := false
 	lastErrorCode := ""
-	if (session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessPi) &&
+	if (session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessPi ||
+		session.Harness == domain.HarnessGemini) &&
 		strings.TrimSpace(signal.TranscriptPath) == "" {
 		lastErrorCode = domain.UsageErrorSourceDiscoveryPending
 	}
@@ -2452,6 +2461,12 @@ func validateSourceAttribution(
 			subagentID != "" || !qwenUsageFilename(filepath.Base(resolved)) {
 			return rejected()
 		}
+	case domain.UsageSourceGeminiSession:
+		meta, ok := readGeminiSessionMeta(ctx, resolved)
+		if binding.Harness != domain.HarnessGemini || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || !geminiSessionFilename(resolved) || !ok || meta.SessionID != nativeSessionID {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2505,6 +2520,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.PiSessions}
 	case domain.HarnessQwen:
 		return []string{c.roots.QwenUsage}
+	case domain.HarnessGemini:
+		return []string{c.roots.GeminiTmp}
 	default:
 		return nil
 	}
@@ -2522,6 +2539,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourcePiSession, true
 	case domain.HarnessQwen:
 		return domain.UsageSourceQwenMonthly, true
+	case domain.HarnessGemini:
+		return domain.UsageSourceGeminiSession, true
 	default:
 		return "", false
 	}
@@ -2575,6 +2594,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverPiPath(ctx, nativeID)
 	case domain.HarnessQwen:
 		return c.discoverQwenPath(ctx, sessionID)
+	case domain.HarnessGemini:
+		return c.discoverGeminiPath(ctx, nativeID)
 	}
 	type candidate struct {
 		path string
@@ -2739,6 +2760,86 @@ func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string
 		}
 		if meta, ok := readPiSessionMeta(ctx, path); ok && meta.ID == nativeID {
 			return path, nil
+		}
+	}
+	return "", nil
+}
+
+// geminiSessionMeta is the first line of a Gemini CLI chat log.
+type geminiSessionMeta struct {
+	SessionID   string `json:"sessionId"`
+	ProjectHash string `json:"projectHash"`
+	Kind        string `json:"kind"`
+}
+
+// geminiSessionFilename accepts only a main-session chat log,
+// <project>/chats/session-*.jsonl. Subagent logs live one directory deeper,
+// named after their own session ID.
+func geminiSessionFilename(path string) bool {
+	name := filepath.Base(path)
+	return strings.HasPrefix(name, "session-") && strings.HasSuffix(name, ".jsonl") &&
+		filepath.Base(filepath.Dir(path)) == "chats"
+}
+
+func readGeminiSessionMeta(ctx context.Context, path string) (geminiSessionMeta, bool) {
+	if ctx.Err() != nil {
+		return geminiSessionMeta{}, false
+	}
+	file, err := os.Open(path) //nolint:gosec // validated provider-owned path.
+	if err != nil {
+		return geminiSessionMeta{}, false
+	}
+	defer func() { _ = file.Close() }()
+	reader := bufio.NewReader(io.LimitReader(file, 64<<10))
+	line, err := reader.ReadBytes('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return geminiSessionMeta{}, false
+	}
+	if ctx.Err() != nil {
+		return geminiSessionMeta{}, false
+	}
+	var meta geminiSessionMeta
+	if json.Unmarshal(bytes.TrimSpace(line), &meta) != nil ||
+		!nativeUsageIDPattern.MatchString(meta.SessionID) ||
+		strings.TrimSpace(meta.ProjectHash) == "" || meta.Kind == "subagent" {
+		return geminiSessionMeta{}, false
+	}
+	return meta, true
+}
+
+// discoverGeminiPath finds the chat log Gemini CLI opened for a session. The
+// file name carries only a timestamp and the ID's first eight characters, so
+// the metadata line, not the name, is what binds it to the session.
+func (c *Collector) discoverGeminiPath(ctx context.Context, nativeID string) (string, error) {
+	if strings.TrimSpace(c.roots.GeminiTmp) == "" || len(nativeID) < 8 {
+		return "", nil
+	}
+	paths, err := filepath.Glob(filepath.Join(c.roots.GeminiTmp, "*", "chats", "session-*-"+nativeID[:8]+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	type candidate struct {
+		path string
+		mod  time.Time
+	}
+	candidates := make([]candidate, 0, len(paths))
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+			candidates = append(candidates, candidate{path: path, mod: info.ModTime()})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].mod.Equal(candidates[j].mod) {
+			return candidates[i].path > candidates[j].path
+		}
+		return candidates[i].mod.After(candidates[j].mod)
+	})
+	for _, candidate := range candidates {
+		if meta, ok := readGeminiSessionMeta(ctx, candidate.path); ok && meta.SessionID == nativeID {
+			return candidate.path, nil
 		}
 	}
 	return "", nil
