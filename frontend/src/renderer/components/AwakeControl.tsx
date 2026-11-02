@@ -43,7 +43,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 				<TooltipTrigger asChild>
 					<Button
 						variant="ghost"
-						size="icon-sm"
+						size="none"
 						type="button"
 						tabIndex={tabIndex}
 						aria-label={title}
@@ -55,7 +55,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						onClick={() => void stay.set(!stay.on)}
 						className={cn(
 							NAV_ROW_HIGHLIGHT_HOST_CLASS,
-							"size-9 rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",
+							"h-9 w-9 rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",
 							// The shared navigation highlight owns both the selected fill and hover pill.
 							stay.error ? "text-error" : stay.attention ? "text-status-needs-you"
 								: stay.active ? "text-foreground" : "text-muted-foreground",
@@ -66,7 +66,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						<span className="relative z-[1] grid place-items-center">
 							{stay.attention
 								? <TriangleAlert data-testid="awake-inactive-indicator" className="size-icon-md" aria-hidden="true" />
-								: <Coffee className="size-icon-md" aria-hidden="true" />}
+									: <Coffee className="size-icon-md" aria-hidden="true" />}
 						</span>
 					</Button>
 				</TooltipTrigger>

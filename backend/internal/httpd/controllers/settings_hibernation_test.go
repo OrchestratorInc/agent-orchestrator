@@ -109,3 +109,32 @@ func TestSettingsComputerUseRequiresBoolean(t *testing.T) {
 		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
 	}
 }
+
+type retentionSettingsService struct {
+	hibernationSettingsService
+	days int
+}
+
+func (s *retentionSettingsService) SetSessionRetentionDays(_ context.Context, days int) (settingssvc.Snapshot, error) {
+	s.days = days
+	s.calls++
+	return settingssvc.Snapshot{SessionRetentionDays: days}, nil
+}
+
+func TestSettingsSessionRetentionRequiresDays(t *testing.T) {
+	svc := &retentionSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"days":null}`, `{"days":"30"}`} {
+		w := httptest.NewRecorder()
+		c.setSessionRetention(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/session-retention", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setSessionRetention(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/session-retention", strings.NewReader(`{"days":30}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.SessionRetentionDays != 30 || svc.days != 30 {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}
