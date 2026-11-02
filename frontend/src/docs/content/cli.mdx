@@ -97,7 +97,7 @@ Agent adapters are compiled into Orchestrator. There is no plugin marketplace or
 | `ao project set-config <id>` | Update typed per-project configuration. |
 | `ao project rm <id>` | Remove a project registration. |
 
-`set-config` replaces the entire project config, even when you use a focused flag. Its JSON decoder ignores unknown keys, and it drops existing `effort` values; `ao project get --json` cannot show effort. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
+Focused `set-config` flags change only the fields they name and keep the rest of the saved config. `--config-json` replaces the entire project config, and its JSON decoder ignores unknown keys. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
 
 Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage recurring work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
 

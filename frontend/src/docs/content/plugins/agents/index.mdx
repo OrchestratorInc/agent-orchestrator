@@ -108,9 +108,9 @@ Chat registration does not imply interface handoff support. Use the switch actio
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```
 
-To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It replaces the full config, even when you use a focused flag, so read the [full-config warning](/configuration/projects#update-from-the-cli) before running it.
+To make Codex the default worker, use `ao project set-config my-app --worker-agent codex`. It changes only the worker agent and keeps the rest of the project config.
 
-`--agent` and `--harness` are aliases. The CLI's project-config mirror also omits `effort`: `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API to preserve or change effort. Use `ao project set-config --help` for supported fields.
+`--agent` and `--harness` are aliases. Use `ao project set-config --help` for supported fields.
 
 <Cards>
 	<Card title="Claude Code" description="Terminal UI and structured Chat." href="/plugins/agents/claude-code" />

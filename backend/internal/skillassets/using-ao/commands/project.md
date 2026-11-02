@@ -126,9 +126,9 @@ ao project rm agent-orchestrator -y
 
 ### ao project set-config
 
-Replace a project's saved configuration. AO reads these settings when it spawns a session. Use flags for common fields or `--config-json` for the full object. `--clear` removes all configuration.
+Update a project's saved configuration. AO reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
 
-**Warning:** This command replaces the whole config, even when you use focused flags. The CLI silently ignores unknown keys in `--config-json`, so a typo can leave the replacement empty. Its config mirror also omits `effort`; `ao project get --json` cannot show it, and a CLI configuration replacement drops existing effort values. Use Project Settings in the desktop app or the daemon API when you need to preserve or change effort. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
+**Warning:** `--config-json` replaces the whole config. The CLI silently ignores unknown keys in it, so a typo can leave the replacement empty. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
 
 **Syntax:**
 ```
@@ -162,9 +162,9 @@ ao project set-config <id> [flags]
 
 Use `--config-json` for fields without a dedicated flag, including
 `trackerIntake.provider`, `autoReview`, `containerReap.disabled`,
-`agentConfig.mode`, `worker.agentConfig.mode`, and
-`orchestrator.agentConfig.mode`. The full-config replacement warning above
-still applies.
+`agentConfig.mode`, `worker.agentConfig.mode`,
+`orchestrator.agentConfig.mode`, and `effort` under any `agentConfig`. The
+full-config replacement warning above still applies.
 
 **Examples:**
 
