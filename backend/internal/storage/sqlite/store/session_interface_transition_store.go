@@ -214,6 +214,53 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	return rows > 0, nil
 }
 
+// CompleteSessionInterfaceTransition commits a degraded handoff and its notice
+// together, so every completed handoff has an outbox entry after a restart.
+// A stale phase changes neither the transition nor the outbox.
+func (s *Store) CompleteSessionInterfaceTransition(
+	ctx context.Context,
+	id string,
+	expected domain.SessionInterfaceTransitionPhase,
+	message string,
+	now time.Time,
+) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var moved bool
+	err := s.inTx(ctx, "complete interface transition with notice", func(q *gen.Queries) error {
+		current, err := q.GetSessionInterfaceTransition(ctx, id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if current.Phase != expected || current.Phase.Terminal() {
+			return nil
+		}
+		rows, err := q.AdvanceSessionInterfaceTransition(ctx, gen.AdvanceSessionInterfaceTransitionParams{
+			Phase:                domain.SessionInterfaceTransitionCompleted,
+			NativeConversationID: current.NativeConversationID,
+			UpdatedAt:            now,
+			CompletedAt:          sql.NullTime{Time: now, Valid: true},
+			ID:                   id,
+			Phase_2:              expected,
+		})
+		if err != nil || rows == 0 {
+			return err
+		}
+		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
+			TransitionID: id, ClientMessageID: "interface-transition:" + id + ":context-boundary",
+			Message: message, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		moved = true
+		return nil
+	})
+	return moved && err == nil, err
+}
+
 // AcknowledgeSessionInterfaceTransitionNotice records that a user has seen a
 // failed or recovered transition notice. The transition remains intact as an
 // audit record, and COALESCE makes retries return the original timestamp.

@@ -46,6 +46,7 @@ type interfaceTransitionStore interface {
 	ListActiveSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	ListDeliverableSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	AdvanceSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string, time.Time) (bool, error)
+	CompleteSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, string, time.Time) (bool, error)
 	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.SessionID, string, time.Time) (domain.SessionInterfaceTransition, bool, error)
 	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time, ports.MessageDeliveryOptions) error
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
@@ -709,10 +710,6 @@ func (m *Manager) runInterfaceTransition(
 			"sessionID", rec.ID, "transitionID", transition.ID, "error", err)
 		return
 	}
-	// Queue the boundary marker only once completion is durable, so a failed or
-	// rolled-back handoff never delivers it into a restored source controller.
-	// A no-op for transitions without a degraded kind.
-	m.enqueueDegradedHandoffMarker(transition)
 }
 
 // hermesNativeConversationID reads the native state.db session id the
@@ -842,29 +839,6 @@ func (m *Manager) hermesNativeTerminalResumeID(ctx context.Context, rec domain.S
 		return "", false
 	}
 	return nativeID, true
-}
-
-// enqueueDegradedHandoffMarker queues the fresh-start boundary turn through the
-// transition outbox. settleTransitionMessages delivers it into the new Chat
-// controller after activation, so the marker rides the same durable machinery
-// as every other transition message.
-func (m *Manager) enqueueDegradedHandoffMarker(transition domain.SessionInterfaceTransition) {
-	if transition.DegradedKind == "" {
-		return
-	}
-	store, ok := m.store.(interfaceTransitionStore)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
-	defer cancel()
-	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		ctx, transition.ID, "interface-transition:"+m.newLaunchID(), degradedHandoffMarkerTextFor(transition),
-		m.clock(), ports.MessageDeliveryOptions{},
-	); err != nil {
-		m.logger.Error("interface transition: queue degraded handoff marker",
-			"transitionID", transition.ID, "error", err)
-	}
 }
 
 // nativeConversationID resolves the adapter's native conversation id for the
@@ -1616,8 +1590,16 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 		if nativeConversationID == "" {
 			nativeConversationID = current.NativeConversationID
 		}
-		moved, err := store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
-			nativeConversationID, errorCode, errorDetail, m.clock())
+		var moved bool
+		if next == domain.SessionInterfaceTransitionCompleted && current.DegradedKind != "" {
+			// Completion and the boundary notice share one transaction. The outbox
+			// dispatcher can therefore recover every completed degraded handoff.
+			moved, err = store.CompleteSessionInterfaceTransition(ctx, id, current.Phase,
+				degradedHandoffMarkerTextFor(current), m.clock())
+		} else {
+			moved, err = store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
+				nativeConversationID, errorCode, errorDetail, m.clock())
+		}
 		if err != nil {
 			return err
 		}
