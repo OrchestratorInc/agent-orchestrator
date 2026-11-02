@@ -1,9 +1,8 @@
 // Package coderagents is the Chat driver for Coder Agents. Inference and the
 // chat loop run in the user's Coder deployment; every file and command tool
 // is a client-executed tool (`unsafe_dynamic_tools`) that AO runs in the
-// local session worktree, behind AO's own approvals. AO never lets the chat
-// bind or create a Coder workspace: such a chat would act on a remote
-// filesystem, not on the AO worktree.
+// local session worktree. The public driver remains unavailable because the
+// supported Coder API cannot disable its built-in remote workspace tools.
 package coderagents
 
 import (
@@ -41,12 +40,41 @@ type Driver struct {
 	log    *slog.Logger
 }
 
-// New creates the Coder Agents Chat driver.
-func New(plugin plugin, log *slog.Logger) *Driver {
+// New keeps Chat unavailable until Coder provides a server-enforced local-only
+// tool policy. Dynamic tools are additive; observing and interrupting a built-in
+// tool call cannot prevent its remote side effects.
+func New(plugin plugin, log *slog.Logger) ports.ChatDriver {
+	return &unavailableDriver{Driver: newDriver(plugin, log)}
+}
+
+// newDriver constructs the adapter internals for contract tests. Production
+// registration must use New, which enforces the compatibility boundary.
+func newDriver(plugin plugin, log *slog.Logger) *Driver {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Driver{plugin: plugin, log: log}
+}
+
+type unavailableDriver struct{ *Driver }
+
+func localOnlyUnavailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: Coder Agents Chat requires a server-enforced local-only tool policy; the supported Coder API cannot disable built-in workspace tools", ports.ErrChatDriverIncompatible)
+}
+
+func (*unavailableDriver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
+	return nil, localOnlyUnavailable(ctx)
+}
+
+func (*unavailableDriver) Start(ctx context.Context, _ ports.ChatStartConfig) (ports.ChatConversation, error) {
+	return nil, localOnlyUnavailable(ctx)
+}
+
+func (*unavailableDriver) Resume(ctx context.Context, _ ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	return nil, localOnlyUnavailable(ctx)
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)

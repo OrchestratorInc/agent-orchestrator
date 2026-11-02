@@ -17,7 +17,7 @@ import (
 func startConversation(t *testing.T, f *fakeCoder, permissions ports.PermissionMode) (ports.ChatConversation, string) {
 	t.Helper()
 	worktree := t.TempDir()
-	conv, err := New(f, nil).Start(context.Background(), ports.ChatStartConfig{
+	conv, err := newDriver(f, nil).Start(context.Background(), ports.ChatStartConfig{
 		SessionID: "s1", DataDir: t.TempDir(), WorkspacePath: worktree,
 		Permissions: permissions, SystemPrompt: "AO STANDING INSTRUCTIONS",
 	})
@@ -236,7 +236,7 @@ func TestInterruptCallsCoderAndSettlesWaitingRun(t *testing.T) {
 func TestResumeRefusesMissingForeignOrWorkspaceBoundChats(t *testing.T) {
 	key := "8f9d2f8a-3a43-4a5c-9b0e-1f1f2a3b4c5d"
 	resume := func(f *fakeCoder, prior bool) error {
-		_, err := New(f, nil).Resume(context.Background(), ports.ChatResumeConfig{
+		_, err := newDriver(f, nil).Resume(context.Background(), ports.ChatResumeConfig{
 			SessionID: "s1", ProviderConversationID: key, DataDir: t.TempDir(),
 			WorkspacePath: t.TempDir(), HasPriorTurns: prior,
 		})
@@ -258,7 +258,7 @@ func TestResumeRefusesMissingForeignOrWorkspaceBoundChats(t *testing.T) {
 	if err := resume(bound, true); !errors.Is(err, ports.ErrChatResumeFailed) {
 		t.Fatalf("workspace-bound chat = %v", err)
 	}
-	if _, err := New(newFakeCoder(t), nil).Resume(context.Background(), ports.ChatResumeConfig{
+	if _, err := newDriver(newFakeCoder(t), nil).Resume(context.Background(), ports.ChatResumeConfig{
 		SessionID: "s1", ProviderConversationID: "not-a-key", WorkspacePath: t.TempDir(),
 	}); !errors.Is(err, ports.ErrChatResumeFailed) {
 		t.Fatalf("malformed key = %v", err)
@@ -271,7 +271,7 @@ func TestResumeReattachesToOwnChat(t *testing.T) {
 	f.chats["c"] = &coderapi.Chat{ID: "c", OwnerID: "u1", Status: coderapi.ChatStatusWaiting,
 		Labels: map[string]string{labelConversation: key, labelSession: "s1"}}
 	f.history = []coderapi.ChatMessage{{ID: 9, Role: coderapi.RoleAssistant}, {ID: 4, Role: coderapi.RoleUser}}
-	conv, err := New(f, nil).Resume(context.Background(), ports.ChatResumeConfig{
+	conv, err := newDriver(f, nil).Resume(context.Background(), ports.ChatResumeConfig{
 		SessionID: "s1", ProviderConversationID: key, DataDir: t.TempDir(), WorkspacePath: t.TempDir(), HasPriorTurns: true,
 	})
 	if err != nil {
@@ -289,7 +289,7 @@ func TestResumeReattachesToOwnChat(t *testing.T) {
 
 func TestStartRejectsAutoModeAndUnknownModel(t *testing.T) {
 	f := newFakeCoder(t)
-	d := New(f, nil)
+	d := newDriver(f, nil)
 	if d.SupportsPermissionMode(ports.PermissionModeAuto) {
 		t.Fatal("auto mode offered without a sandbox")
 	}
@@ -310,7 +310,7 @@ func TestStartRejectsAutoModeAndUnknownModel(t *testing.T) {
 func TestStartReportsDeploymentWithoutChatsAPI(t *testing.T) {
 	f := newFakeCoder(t)
 	f.noChatsAPI = true
-	_, err := New(f, nil).Start(context.Background(), ports.ChatStartConfig{SessionID: "s1", WorkspacePath: t.TempDir()})
+	_, err := newDriver(f, nil).Start(context.Background(), ports.ChatStartConfig{SessionID: "s1", WorkspacePath: t.TempDir()})
 	if !errors.Is(err, ports.ErrChatDriverIncompatible) {
 		t.Fatalf("Start = %v, want ErrChatDriverIncompatible", err)
 	}

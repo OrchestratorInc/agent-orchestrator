@@ -1,5 +1,19 @@
 # Coder Agents Adapter
 
+## Current availability
+
+Install, login and native model discovery are available. **Chat start and resume
+are currently blocked** with a compatibility error, before any provider request.
+Coder v2.37.9 adds client-executed dynamic tools alongside built-in server-side
+workspace tools; it offers no server-enforced local-only tool policy. An
+asynchronous interrupt cannot guarantee that those tools have not already acted.
+This applies to every approval mode, including bypass, read-only and text-only
+conversations. Connected account status does not imply Chat compatibility.
+
+The adapter internals and contract tests below are retained for future native
+compatibility work. They do not enable Chat in the shipped driver. Chat must stay
+blocked until the deployment can enforce the local-only tool boundary.
+
 AO runs [Coder Agents](https://coder.com/docs/ai-coder/agents) — the agent
 built into a Coder deployment — as a structured Chat harness. Inference and the
 chat loop run in your Coder deployment. Every file and command tool is a
