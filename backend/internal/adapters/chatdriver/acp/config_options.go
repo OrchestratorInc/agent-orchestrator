@@ -65,6 +65,11 @@ func (c *conversation) SetConfigOption(
 	if option == nil {
 		return nil, fmt.Errorf("%w: unknown ACP session config option %q", ports.ErrChatConfigOptionInvalid, id)
 	}
+	if id == "model" && value.Boolean == nil {
+		if err := c.checkModelSwitch(ctx, value.Select); err != nil {
+			return nil, err
+		}
+	}
 	if id == "model" && legacyModel {
 		if value.Boolean != nil || !choiceOffered(option.Choices, value.Select) {
 			return nil, fmt.Errorf("%w: ACP session config option %q does not offer value %q", ports.ErrChatConfigOptionInvalid, id, value.Select)
@@ -213,6 +218,11 @@ func (c *conversation) configOptionValueNamed(id, name string) string {
 func (c *conversation) configOptionCurrent(id string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.configOptionCurrentLocked(id)
+}
+
+// configOptionCurrentLocked is configOptionCurrent for a caller holding c.mu.
+func (c *conversation) configOptionCurrentLocked(id string) string {
 	for i := range c.configOptions {
 		if c.configOptions[i].ID == id && c.configOptions[i].Type == ports.ChatConfigOptionSelect {
 			return c.configOptions[i].Current.Select

@@ -23,7 +23,7 @@ Use these files to inspect the approved references. They show current behavior a
 
 | Surface | Primary reference files |
 | --- | --- |
-| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [topbar](frontend/src/renderer/components/ShellTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
+| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [page topbar](frontend/src/renderer/components/PageTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
 | Home landing | [HomePage](frontend/src/renderer/components/HomePage.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [topbar button](frontend/src/renderer/components/TopbarButton.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Shell resize grips | [ResizeHandle](frontend/src/renderer/components/ResizeHandle.tsx), [useResizable](frontend/src/renderer/hooks/useResizable.ts) |
@@ -229,7 +229,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Board action: 30–36px.
 - Minimum pointer target for an ordinary row: 32px; use 36px when the interaction is high-frequency or imprecise.
 - Default sidebar: 240px; icon rail: 48px; mobile overlay: 288px.
-- Standard topbar row: 36px; Windows shell topbar: 56px.
+- Page and session topbar row: 36px on every platform. Windows adds its own 36px window titlebar above the panel.
 
 ### Radius and borders
 
@@ -326,8 +326,8 @@ Motion is functional and modest.
 
 ## 11. Platform and responsive behavior
 
-- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. The shell topbar may be hidden when session-local chrome owns orientation.
-- **Windows/Linux:** shell topbar spans above the sidebar; preserve native/window-titlebar accommodations.
+- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. Page and session headers are the drag region; controls inside them opt out.
+- **Windows/Linux:** each page renders its own header inside the center panel; preserve the Windows titlebar and Linux native frame and collapsed-sidebar inset.
 - **Narrow center panels:** compact secondary actions, then inspector content, before hiding the task itself.
 - **Sidebar:** may collapse to its icon rail or an overlay; every icon must remain labeled through tooltip and accessible name.
 - **Inspector:** collapses to zero without reflowing the active terminal/chat into an unusable transient width.
