@@ -19,7 +19,7 @@ var vibeSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 // Vibe's explicit --resume ID searches the global store without a cwd filter.
 // Older releases call the metadata file meta.json, newer ones metadata.json.
 func vibeRoot(home string) string {
-	if root := strings.TrimSpace(os.Getenv("VIBE_HOME")); len(root) > 0 {
+	if root := strings.TrimSpace(os.Getenv("VIBE_HOME")); root != "" {
 		return root
 	}
 	return filepath.Join(home, ".vibe")
@@ -85,7 +85,7 @@ func discoverVibe(ctx context.Context, root string) ([]sourceFiles, error) {
 		}
 		rel := filepath.Join("logs", "session", entry.Name())
 		meta, metaPath, err := readVibeMetadata(provider, rel)
-		if err != nil || !vibeSessionID.MatchString(meta.ID) || len(meta.Parent) > 0 {
+		if err != nil || !vibeSessionID.MatchString(meta.ID) || meta.Parent != "" {
 			continue
 		}
 		messages := filepath.Join(rel, "messages.jsonl")
@@ -123,7 +123,7 @@ func readVibeTranscript(ctx context.Context, root string, paths ...string) (tran
 	if err != nil {
 		return t, err
 	}
-	if !vibeSessionID.MatchString(meta.ID) || len(meta.Parent) > 0 || !filepath.IsAbs(meta.Env.CWD) {
+	if !vibeSessionID.MatchString(meta.ID) || meta.Parent != "" || !filepath.IsAbs(meta.Env.CWD) {
 		return t, errors.New("invalid vibe conversation metadata")
 	}
 	t.nativeID, t.cwd, t.title, t.path, t.paths = meta.ID, meta.Env.CWD, meta.Title, paths[0], paths
@@ -144,13 +144,13 @@ func readVibeTranscript(ctx context.Context, root string, paths ...string) (tran
 			Content contentText `json:"content"`
 		}
 		if json.Unmarshal(line, &message) != nil || (message.Role != "user" && message.Role != "assistant") {
-			return nil
+			return nil //nolint:nilerr // Skip torn or non-conversation records without discarding readable history.
 		}
 		text := string(message.Content)
 		if strings.Contains(text, omittedText) {
 			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
 		}
-		if len(strings.TrimSpace(text)) > 0 {
+		if strings.TrimSpace(text) != "" {
 			items = append(items, tagged{Message: Message{Role: domain.MessageRole(message.Role), Text: text, At: t.last}, kind: "vibe"})
 			before := len(items)
 			items = trimVisible(items)
@@ -165,7 +165,7 @@ func readVibeTranscript(ctx context.Context, root string, paths ...string) (tran
 	for _, item := range items {
 		hasUser = hasUser || item.Role == domain.MessageRoleUser
 		t.messages = append(t.messages, item.Message)
-		if len(t.title) == 0 && item.Role == domain.MessageRoleUser {
+		if t.title == "" && item.Role == domain.MessageRoleUser {
 			t.title = item.Text
 		}
 	}

@@ -32,7 +32,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 
 // ProbeNativeSession treats only a readable native transcript as available.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+	if strings.TrimSpace(ref.ConfigDir) == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	_, ok, err := p.LocateTranscript(ctx, ref)
@@ -51,7 +51,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
-	if !vibeNativeID.MatchString(ref.NativeSessionID) || len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+	if !vibeNativeID.MatchString(ref.NativeSessionID) || strings.TrimSpace(ref.ConfigDir) == "" {
 		return "", false, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)
