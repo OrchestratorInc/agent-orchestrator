@@ -61,7 +61,8 @@ func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreCo
 	if err != nil {
 		return nil, false, err
 	}
-	cmd := []string{binary, "chat", "--cli", "--resume", id, "--no-restore-cwd", "--in", cfg.Session.WorkspacePath}
+	cmd := make([]string, 0, 16)
+	cmd = append(cmd, binary, "chat", "--cli", "--resume", id, "--no-restore-cwd", "--in", cfg.Session.WorkspacePath)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
 	return append(cmd, permissionArgs(cfg.Permissions)...), true, nil
