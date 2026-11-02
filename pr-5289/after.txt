@@ -1,0 +1,9 @@
+session repo-3
+MAIN  api turn: {"providerTurnId": "codex:41:acfaab6e-a43c-4c87-ae11-3d6965a523fb:rootfake-turn-2b5bbc60", "state": "failed", "errorMessage": "stream disconnected before completion (SIMULATED by fake app-server for #5289)"}
+MAIN  error activities: ["stream disconnected before completion (SIMULATED by fake app-server for #5289)"]
+SIDE  api turn: {"state": "failed", "errorMessage": "stream disconnected before completion (SIMULATED by fake app-server for #5289)"}
+SIDE  error activities: []
+DB    conversation_turns: ('codex:41:2758a742-52de-47a5-b3c1-dcbaf1f62b16:rootfake-turn-31fe94b8', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
+DB    conversation_turns: ('codex:41:ba87e20b-b9bc-41fd-bcd5-c27f4d2c654e:rootfake-turn-ec3b254a', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
+DB    conversation_turns: ('codex:41:acfaab6e-a43c-4c87-ae11-3d6965a523fb:rootfake-turn-2b5bbc60', 'failed', "'stream disconnected before completion (SIMULATED by fake app-server for #5289)'")
+SID repo-3 SIDE 6e207c2a-78b4-4f24-88da-00481fe77d2c
