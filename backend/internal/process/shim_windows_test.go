@@ -45,6 +45,61 @@ const yarnCmdShim = `@IF EXIST "%~dp0\node.exe" (
 )
 `
 
+// bunCmdShim is the shape cmd-shim writes for an entry whose shebang picks a
+// non-Node interpreter: the `%_prog%` machinery is identical to npm's, but the
+// ELSE branch assigns `bun` (or `sh`, `deno`, ...). Starting the entry under
+// Node would run it with the wrong runtime, so the shim must be declined.
+const bunCmdShim = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\bun.exe" (
+  SET "_prog=%dp0%\bun.exe"
+) ELSE (
+  SET "_prog=bun"
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\pkg\cli.ts" %*
+`
+
+// pnpmCmdShim carries the NODE_PATH assignment pnpm writes before its launch
+// line. Starting the target directly would drop that value, so the shim must
+// be declined even though its launch line itself parses cleanly.
+const pnpmCmdShim = `@ECHO off
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+@SET "NODE_PATH=%dp0%\store\node_modules"
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\pkg\bin\cli.js" %*
+`
+
+// nodeCmdShim is Node's own bundled npm.cmd, trimmed to the load-bearing lines:
+// it assigns NODE_EXE/NPM_CLI_JS and forwards through them. This package can
+// neither follow the unexpanded variables nor carry the assignments into a
+// direct launch, so the shim keeps its caller's ComSpec /d /s /c launch.
+const nodeCmdShim = `@ECHO off
+SETLOCAL
+
+SET "NODE_EXE=%~dp0\node.exe"
+IF NOT EXIST "%NODE_EXE%" (
+  SET "NODE_EXE=node"
+)
+SET "NPM_CLI_JS=%~dp0\node_modules\npm\bin\npm-cli.js"
+"%NODE_EXE%" "%NPM_CLI_JS%" %*
+`
+
 // codexHooksFlag is the argument that started #7212: a quote followed by `&`
 // inside one -c value, which cmd.exe splits no matter how it is escaped.
 const codexHooksFlag = `hooks.SessionStart=[{hooks=[{type="command",command="& \"C:\\Program Files\\AO\\ao.exe\" hooks codex session-start",timeout=5}]}]`
@@ -144,6 +199,14 @@ func TestShimTargetArgvRejectsShimsItCannotFollow(t *testing.T) {
 		{"missing entry script", `"%dp0%\node.exe" "%dp0%\missing.js" %*`},
 		{"redirection", `"%dp0%\node.exe" "%dp0%\run.js" > log.txt %*`},
 		{"unbalanced quotes", `"%dp0%\node.exe "%dp0%\run.js" %*`},
+		// cmd-shim writes the entry point's shebang interpreter into _prog; a
+		// bun entry must keep its shim launch rather than run under Node.
+		{"non-node interpreter", bunCmdShim},
+		// pnpm assigns NODE_PATH before the launch line; the unwrap would drop it.
+		{"unknown SET variable", pnpmCmdShim},
+		// Node's bundled npm.cmd forwards through NODE_EXE/NPM_CLI_JS variables
+		// this rewrite does not carry; it keeps its ComSpec launch.
+		{"node's bundled npm.cmd", nodeCmdShim},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			shim := writeShimFixture(t, dir, "tool.cmd", tc.content)
@@ -151,6 +214,45 @@ func TestShimTargetArgvRejectsShimsItCannotFollow(t *testing.T) {
 				t.Fatalf("shimTargetArgv(%q) unwrapped a shim it cannot follow", shim)
 			}
 		})
+	}
+}
+
+// TestShimTargetArgvRejectsBatchLauncher covers shims whose launch line runs
+// another batch file (yarn v1 global bins chain this way): starting that target
+// would put a .cmd back in argv[0], and the line would be handed to cmd.exe
+// again, reintroducing the #7212 quoting bug.
+func TestShimTargetArgvRejectsBatchLauncher(t *testing.T) {
+	dir := t.TempDir()
+	inner := writeShimFixture(t, dir, "inner.cmd", "@echo off\r\n")
+	shim := writeShimFixture(t, dir, "outer.cmd", "@ECHO off\r\n\""+inner+"\" %*\r\n")
+
+	if _, ok := shimTargetArgv(shim, []string{"arg"}); ok {
+		t.Fatalf("shimTargetArgv(%q) unwrapped a launch line that runs another batch file", shim)
+	}
+}
+
+// TestShimTargetArgvRejectsNodeShimOnPath covers version managers that install
+// a node.cmd: with no bundled node.exe the shim's `node` fallback resolves to a
+// batch file, and unwrapping to it would start a batch file again.
+func TestShimTargetArgvRejectsNodeShimOnPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "entry.js"), []byte("// entry"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeShimFixture(t, dir, "node.cmd", "@echo off\r\n")
+	shim := writeShimFixture(t, dir, "tool.cmd", `@ECHO off
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\entry.js" %*
+`)
+	t.Setenv("PATH", dir+`;`+os.Getenv("PATH"))
+
+	if _, ok := shimTargetArgv(shim, []string{"arg"}); ok {
+		t.Fatalf("shimTargetArgv(%q) unwrapped to a node.cmd batch file", shim)
 	}
 }
 
@@ -176,8 +278,13 @@ func TestShimArgvEchoHelper(t *testing.T) {
 // TestCommandContextStartsShimTargetWithExactArgv is the #7212 regression: the
 // hook override with its embedded quote, `&` and spaces must reach the child
 // byte for byte, and the child must be the shim's target rather than cmd.exe.
+// The shim directory contains a space, which the unwrapped CreateProcess launch
+// handles without any quoting.
 func TestCommandContextStartsShimTargetWithExactArgv(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "ao tools")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	node := writeNodeFixture(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "entry.js"), []byte("// entry"), 0o600); err != nil {
 		t.Fatal(err)
@@ -217,8 +324,12 @@ func TestCommandContextStartsShimTargetWithExactArgv(t *testing.T) {
 }
 
 // TestCommandContextKeepsUnfamiliarShim verifies the fallback: a shim this
-// package cannot parse keeps its previous cmd.exe path, and plain arguments
-// (no quotes) survive it.
+// package cannot parse is left untouched, so the launch is the one this package
+// had before the unwrap attempt — Go's default, which hands the batch file to
+// cmd.exe itself (hence cmd.Path still being the shim). Plain arguments (no
+// quotes) survive that launch. A quoted shim path together with a quoted
+// argument does not, which is why systemexec and previewserver keep their
+// explicit ComSpec /d /s /c launch for shims this package declines.
 func TestCommandContextKeepsUnfamiliarShim(t *testing.T) {
 	dir := t.TempDir()
 	shim := writeShimFixture(t, dir, "tool.cmd", "@echo off\r\necho %~1\r\n")

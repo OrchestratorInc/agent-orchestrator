@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -15,14 +17,59 @@ import (
 )
 
 func previewCommand(name string, args ...string) *exec.Cmd {
-	// aoprocess starts batch shims' targets directly, so argv never goes through
-	// cmd.exe quoting (issue #7212).
-	cmd := aoprocess.Command(name, args...)
+	if resolved, err := exec.LookPath(name); err == nil && isWindowsBatchFile(resolved) {
+		// An npm-style shim is started as the target its own launch line names,
+		// so preview argv never goes through cmd.exe quoting (issue #7212).
+		if argv, ok := aoprocess.ResolveBatchShim(resolved, args); ok {
+			return withPreviewProcessGroup(aoprocess.Command(argv[0], argv[1:]...))
+		}
+		// A shim this package cannot follow keeps its previous launch: cmd.exe
+		// with /d /s /c, which can still carry a quoted shim path together with
+		// a quoted argument (`C:\Program Files\nodejs\npm.cmd --userconfig=...`
+		// would fail under Go's default batch launch).
+		shell := strings.TrimSpace(os.Getenv("COMSPEC"))
+		if shell == "" {
+			shell = "cmd.exe"
+		}
+		cmd := aoprocess.Command(shell) //nolint:gosec // COMSPEC is the OS-selected command interpreter for .cmd/.bat shims
+		cmd.Args = nil
+		if cmd.SysProcAttr == nil {
+			cmd.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
+		return withPreviewProcessGroup(cmd)
+	}
+	return withPreviewProcessGroup(aoprocess.Command(name, args...))
+}
+
+func withPreviewProcessGroup(cmd *exec.Cmd) *exec.Cmd {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 	return cmd
+}
+
+func isWindowsBatchFile(path string) bool {
+	extension := filepath.Ext(path)
+	return strings.EqualFold(extension, ".cmd") || strings.EqualFold(extension, ".bat")
+}
+
+// cmd.exe uses different quoting rules from native Windows executables. The
+// outer quotes are consumed by /s /c; each token remains quoted for paths and
+// arguments containing spaces. Doubling embedded quotes preserves them for the
+// batch shim instead of allowing them to terminate the command early.
+func windowsBatchCommandLine(executable string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, quoteWindowsBatchArg(executable))
+	for _, arg := range args {
+		parts = append(parts, quoteWindowsBatchArg(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteWindowsBatchArg(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 // errStalePreviewPID reports that a recorded preview PID could not be

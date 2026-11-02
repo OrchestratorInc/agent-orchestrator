@@ -14,8 +14,8 @@ import (
 // larger is not a shim worth parsing.
 const maxShimSize = 64 << 10
 
-// resolveShimArgv rewrites a command whose program resolves to a Windows batch
-// shim so the shim's own target is started directly.
+// ResolveBatchShim rewrites a launch argv whose program is a Windows batch shim
+// so the shim's own target is started directly.
 //
 // Windows cannot start a .cmd/.bat itself: CreateProcess rejects it, so every
 // runtime that "runs" one (Go included) hands the whole line to cmd.exe. That
@@ -31,19 +31,31 @@ const maxShimSize = 64 << 10
 // (issue #7212). Starting the target directly removes cmd.exe from the path, so
 // argv reaches the harness byte for byte and no quoting is involved at all.
 //
-// The rewrite is deliberately conservative: the command is returned unchanged
-// unless the shim matches a shape this package understands and every path it
-// names exists, so an unfamiliar or broken shim keeps its previous behaviour.
-func resolveShimArgv(name string, args []string) (string, []string) {
-	resolved, err := exec.LookPath(name)
-	if err != nil || !isBatchFile(resolved) {
-		return name, args
+// The shim path must already be resolved by the caller (exec.LookPath or
+// exec.Command have both). The rewrite is deliberately conservative: false is
+// returned unless the shim matches a shape this package understands and every
+// path it names exists. Callers keep their previous launch for a shim that is
+// not a batch file, does not match, or cannot be followed — that previous
+// launch (a ComSpec `/d /s /c` line or Go's default batch handling) still
+// reports the shim's own failures instead of this rewrite inventing new ones.
+func ResolveBatchShim(shim string, args []string) ([]string, bool) {
+	if !isBatchFile(shim) {
+		return nil, false
 	}
-	argv, ok := shimTargetArgv(resolved, args)
+	return shimTargetArgv(shim, args)
+}
+
+// rewriteBatchShim starts a command whose program resolved to a Windows batch
+// shim as the shim's own target instead, rewriting cmd in place. exec.Command
+// has already resolved cmd.Path, so no extra PATH scan is spent on launches
+// that are not shims.
+func rewriteBatchShim(cmd *exec.Cmd) {
+	argv, ok := ResolveBatchShim(cmd.Path, cmd.Args[1:])
 	if !ok {
-		return name, args
+		return
 	}
-	return argv[0], argv[1:]
+	cmd.Path = argv[0]
+	cmd.Args = argv
 }
 
 func isBatchFile(path string) bool {
@@ -66,12 +78,20 @@ func shimTargetArgv(shim string, args []string) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
+	// A shim that assigns variables this rewrite does not carry into the child
+	// (pnpm's NODE_PATH, for example) would lose them when its target is
+	// started directly, so it keeps the shim launch that applies them.
+	text := string(content)
+	if setsUnknownVariables(text) {
+		return nil, false
+	}
+	interpreter := shimInterpreter(text)
 	dir := filepath.Dir(shim)
-	for _, line := range strings.Split(string(content), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		if !strings.Contains(line, "%*") {
 			continue
 		}
-		if argv, ok := shimLineArgv(line, dir, args); ok {
+		if argv, ok := shimLineArgv(line, dir, interpreter, args); ok {
 			return argv, true
 		}
 	}
@@ -81,7 +101,7 @@ func shimTargetArgv(shim string, args []string) ([]string, bool) {
 // shimLineArgv parses one shim line that forwards `%*`. npm chains its setup and
 // the real launch onto a single line with `&`; yarn and pnpm put the launch on
 // its own line, which the same parse handles because there is nothing to split.
-func shimLineArgv(line, dir string, args []string) ([]string, bool) {
+func shimLineArgv(line, dir, interpreter string, args []string) ([]string, bool) {
 	line = strings.TrimPrefix(strings.TrimSpace(line), "@")
 	if i := strings.LastIndex(line, "&"); i >= 0 {
 		line = line[i+1:]
@@ -101,7 +121,7 @@ func shimLineArgv(line, dir string, args []string) ([]string, bool) {
 		return nil, false
 	}
 	argv := tokens[:len(tokens)-1]
-	program, ok := shimProgram(argv[0], dir)
+	program, ok := shimProgram(argv[0], dir, interpreter)
 	if !ok {
 		return nil, false
 	}
@@ -123,13 +143,23 @@ func shimLineArgv(line, dir string, args []string) ([]string, bool) {
 
 // shimProgram resolves the shim's launcher. npm picks the Node bundled next to
 // the shim when it exists and falls back to `node` on PATH; both are tried.
-func shimProgram(token, dir string) (string, bool) {
+//
+// `%_prog%` is only followed when the shim's ELSE branch assigns Node to it:
+// cmd-shim writes the entry point's shebang interpreter there (`bun`, `sh`,
+// `deno`, ...), and starting such an entry under Node would run it with the
+// wrong runtime. A launcher that is itself a batch file is declined too —
+// chaining would hand the line back to cmd.exe and reintroduce the #7212
+// quoting bug for that layout.
+func shimProgram(token, dir, interpreter string) (string, bool) {
 	if token == "%_prog%" {
+		if !isNodeInterpreter(interpreter) {
+			return "", false
+		}
 		if bundled := filepath.Join(dir, "node.exe"); fileExists(bundled) {
 			return bundled, true
 		}
 		node, err := exec.LookPath("node")
-		if err != nil {
+		if err != nil || isBatchFile(node) {
 			return "", false
 		}
 		return node, true
@@ -139,16 +169,98 @@ func shimProgram(token, dir string) (string, bool) {
 	}
 	if !strings.ContainsAny(token, `\/`) {
 		resolved, err := exec.LookPath(token)
-		if err != nil {
+		if err != nil || isBatchFile(resolved) {
 			return "", false
 		}
 		return resolved, true
 	}
 	cleaned := filepath.Clean(token)
-	if !fileExists(cleaned) {
+	if !fileExists(cleaned) || isBatchFile(cleaned) {
 		return "", false
 	}
 	return cleaned, true
+}
+
+// isNodeInterpreter reports whether name is a Node runtime. Only Node-backed
+// shims are unwrapped; any other interpreter keeps its shim launch.
+func isNodeInterpreter(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "node", "nodejs":
+		return true
+	default:
+		return false
+	}
+}
+
+// shimInterpreter recovers the interpreter cmd-shim assigns to `_prog` when the
+// runtime bundled beside the shim is missing. cmd-shim writes the candidates in
+// an IF/ELSE pair — a `.exe` beside the shim, then the bare interpreter name —
+// and the ELSE branch holds that name (`node` for npm CLIs, the entry point's
+// shebang interpreter otherwise).
+func shimInterpreter(content string) string {
+	const elseMarker = ") ELSE ("
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if !strings.HasPrefix(strings.ToUpper(line), elseMarker) {
+			continue
+		}
+		for _, next := range lines[i+1:] {
+			next = strings.TrimSpace(strings.TrimSuffix(next, "\r"))
+			name, ok := strings.CutPrefix(next, `SET "_prog=`)
+			if !ok {
+				continue
+			}
+			return strings.Trim(strings.TrimSuffix(name, `"`), `"`)
+		}
+	}
+	return ""
+}
+
+// setsUnknownVariables reports whether the shim assigns an environment variable
+// other than the ones the launch line itself depends on. pnpm's shims, for
+// example, run `@SET "NODE_PATH=<store>\node_modules"` before the launch line;
+// starting their target directly would drop that value and break CLIs that
+// resolve dependencies through it. Only dp0, _prog and PATHEXT — assigned by
+// every npm/yarn shape this package follows — are recognised.
+func setsUnknownVariables(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		name, ok := assignedVariable(line)
+		if !ok {
+			continue
+		}
+		switch name {
+		case "DP0", "_PROG", "PATHEXT":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// assignedVariable extracts the variable name a batch `SET` line assigns, with
+// the same case-insensitivity cmd.exe applies. Lines that do not assign
+// anything (SETLOCAL, echoes, control flow) are not SET lines.
+func assignedVariable(line string) (string, bool) {
+	line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	line = strings.TrimSpace(strings.TrimPrefix(line, "@"))
+	upper := strings.ToUpper(line)
+	var rest string
+	switch {
+	case strings.HasPrefix(upper, "SET "):
+		rest = strings.TrimSpace(line[len("SET "):])
+	case strings.HasPrefix(upper, `SET"`):
+		rest = strings.TrimPrefix(line[len("SET"):], `"`)
+	default:
+		return "", false
+	}
+	rest = strings.TrimPrefix(rest, `"`)
+	name, _, _ := strings.Cut(rest, "=")
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
+		return "", false
+	}
+	return name, true
 }
 
 // shimPathToken accepts the remaining tokens of a launch line: bare flags pass

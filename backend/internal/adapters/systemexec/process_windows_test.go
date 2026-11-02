@@ -12,9 +12,13 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+// A shim this package cannot follow keeps its previous ComSpec /d /s /c launch,
+// which carries a quoted shim path together with a quoted argument. The spaced
+// shim name is load-bearing: Go's default batch launch would fail this exact
+// case with `'...\agent' is not recognized`.
 func TestCommandContextRunsBatchShim(t *testing.T) {
 	dir := t.TempDir()
-	shim := filepath.Join(dir, "agent-tool.cmd")
+	shim := filepath.Join(dir, "agent tool.cmd")
 	if err := os.WriteFile(shim, []byte("@echo off\r\necho %~1\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -34,9 +38,13 @@ func TestCommandContextRunsBatchShim(t *testing.T) {
 }
 
 // An npm-shaped shim is unwrapped to its target, so its arguments never pass
-// through cmd.exe quoting (issue #7212).
+// through cmd.exe quoting (issue #7212). The shim directory contains a space,
+// which the unwrapped CreateProcess launch handles without any quoting.
 func TestCommandContextUnwrapsNPMLikeShim(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "ao tools")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
