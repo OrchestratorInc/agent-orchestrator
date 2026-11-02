@@ -2863,7 +2863,7 @@ describe("Sidebar", () => {
 		// A working agent spins even when its PR has a state to flag.
 		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
 		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
-		expect(sessionDot("review task")).toHaveClass("lucide-eye", "text-status-in-review");
+		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
 		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
 		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
 		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
@@ -2987,11 +2987,10 @@ describe("Sidebar", () => {
 		expect(card.className).toMatch(/bg-popover|var\(--popover\)/);
 		expect(card).not.toHaveClass("border", "border-status-needs-you");
 		expect(card.querySelector(".border-t")).toBeNull();
-		// The first preview fades in; it never zooms, and closing is instant.
+		// The first preview appears instantly: no fade or zoom in, and none out.
 		const content = card.closest('[data-slot="hover-card-content"]');
 		expect(content).not.toBeNull();
-		expect(content?.className).toMatch(/animate-in/);
-		expect(content?.className).not.toMatch(/zoom-|animate-out/);
+		expect(content?.className).not.toMatch(/animate-in|zoom-|animate-out/);
 
 		await user.unhover(screen.getByLabelText("Open preview task"));
 		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
@@ -3083,7 +3082,7 @@ describe("Sidebar", () => {
 		expect(cards[0]).toHaveTextContent("sweep c");
 	});
 
-	it("goes back to a delayed, animated first preview after the pointer has left every row", async () => {
+	it("goes back to a delayed first preview after the pointer has left every row", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
@@ -3102,7 +3101,7 @@ describe("Sidebar", () => {
 		await user.hover(row);
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 		const card = await screen.findByTestId("board-session-card");
-		expect(card.closest('[data-slot="hover-card-content"]')?.className).toMatch(/animate-in/);
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
 	});
 
 	it("lists sessions that need input above the rest", () => {

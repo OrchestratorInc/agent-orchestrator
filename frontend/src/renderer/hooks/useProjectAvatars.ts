@@ -114,7 +114,12 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 	const settled = details.every((query) => !query.isPending);
 	const urlsJson = JSON.stringify(Object.fromEntries(urls));
 	useEffect(() => {
-		if (enabled && settled) window.localStorage.setItem(urlsKey, urlsJson);
+		if (!enabled || !settled) return;
+		try {
+			window.localStorage.setItem(urlsKey, urlsJson);
+		} catch {
+			// A full localStorage only costs the instant first paint.
+		}
 	}, [enabled, settled, urlsJson]);
 
 	useEffect(() => {
