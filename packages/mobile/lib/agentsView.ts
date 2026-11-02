@@ -7,6 +7,7 @@
 // same "PR #12, #13 open" phrasing. The board's order is mobile's own — see
 // groupSessions.
 import type { DashboardPR, DashboardSession, KanbanColumn } from "./api";
+import { compareArchived } from "./archive/archiveOrder";
 import { relativeTime } from "./notificationView";
 import { prLifecycle, type Tone } from "./prView";
 import { attentionOf, sessionTitle } from "./sessionStatus";
@@ -217,10 +218,6 @@ export function workerRowPresentation(
 	};
 }
 
-function comparePinned(a: DashboardSession, b: DashboardSession): number {
-	return Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
-}
-
 // Compared as instants: the daemon emits RFC 3339 with variable fractional
 // digits, which do not sort as strings ("10:00:00.5Z" < "10:00:00Z").
 function compareEvent(a: DashboardSession, b: DashboardSession, newestFirst: boolean): number {
@@ -260,8 +257,9 @@ export function groupSessions(
 		.map((zone) => ({ zone, ...sectionMeta(t, zone), data: zone === "needs_you" ? needsYou : recent }))
 		.filter((section) => section.data.length > 0);
 
-	// Pin history deliberately kept close, then show the newest remaining history.
-	archived.sort((a, b) => comparePinned(a, b) || compareEvent(a, b, true));
+	// Pin history deliberately kept close, then the most recently updated: the
+	// order a paging daemon serves its archive in, so both kinds of machine agree.
+	archived.sort(compareArchived);
 	return { pinned, sections, archived };
 }
 

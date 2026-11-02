@@ -66,8 +66,7 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 	}
 	srv.http = &http.Server{
 		Handler: NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
-			RequestShutdown:   srv.requestShutdown,
-			AgentSwitchPolicy: deps.AgentSwitchPolicy,
+			RequestShutdown: srv.requestShutdown,
 		}),
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
@@ -109,6 +108,7 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 		Owner:                 os.Getenv("AO_OWNER"),
 		AppRunID:              s.cfg.AppRunID,
 		BrowserRuntimeAddress: os.Getenv("AO_BROWSER_RUNTIME_ADDRESS"),
+		BrowserStreamAddress:  os.Getenv("AO_BROWSER_STREAM_ADDRESS"),
 	}
 	if err := runfile.Write(s.cfg.RunFilePath, info); err != nil {
 		_ = s.listen.Close()

@@ -11,6 +11,7 @@ import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
@@ -320,7 +321,7 @@ function WorkerRowContents({
 						onChangeText={onRenameTitleChange}
 						placeholder="Worker name"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						{...textSelectionColors(t)}
 						maxLength={120}
 						returnKeyType="done"
 						onSubmitEditing={onRenameSave}

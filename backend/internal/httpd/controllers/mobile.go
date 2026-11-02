@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,8 @@ type mobileBridge interface {
 	StartRemoteAccess() (MobileStatusResponse, error)
 	SetSecurePairing(on bool) (MobileStatusResponse, error)
 	SetKeepAwake(on bool) (MobileStatusResponse, error)
+	SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error)
+	SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error)
 }
 
 // MobileController exposes the Connect Mobile bridge control endpoints
@@ -41,6 +44,9 @@ type MobileController struct{ Bridge mobileBridge }
 type RemoteHostAccountTokenResponse struct {
 	HostID string `json:"hostId"`
 	Token  string `json:"token"`
+	// HostKey is the machine's Ed25519 public key, unpadded base64url, for
+	// the account listing: AO Cloud then needs the machine's own signature.
+	HostKey string `json:"hostKey"`
 }
 
 // IssueAccountToken returns a credential for account discovery after the caller
@@ -162,9 +168,32 @@ func (c *MobileController) KeepAwake(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "invalid_request", "MOBILE_KEEP_AWAKE", "invalid body", nil)
 		return
 	}
-	res, err := c.Bridge.SetKeepAwake(body.Enabled)
+	var res MobileStatusResponse
+	var err error
+	if body.LidClosed != nil {
+		res, err = c.Bridge.SetKeepAwakeLid(body.Enabled, *body.LidClosed)
+	} else {
+		res, err = c.Bridge.SetKeepAwake(body.Enabled)
+	}
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_KEEP_AWAKE", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
+}
+
+// BrowserRemoteAccess turns paired-device browser viewing and control on or
+// off. Like the other mobile control routes, the LAN listener blocks this
+// route so a phone cannot grant itself access.
+func (c *MobileController) BrowserRemoteAccess(w http.ResponseWriter, r *http.Request) {
+	var body SetBrowserRemoteAccessRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "invalid_request", "MOBILE_BROWSER_CONTROL", "invalid body", nil)
+		return
+	}
+	res, err := c.Bridge.SetBrowserRemoteAccess(body.Enabled)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_BROWSER_CONTROL", err.Error(), nil)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
@@ -201,6 +230,8 @@ type KeepAwakeController interface {
 	Stop()
 	Active() bool
 	HasBattery() bool
+	ConfigureLid(on, allowSetup bool) error
+	LidStatus() (supported, active bool, reason string)
 }
 
 // BridgeService is the production mobileBridge. It persists state and drives
@@ -243,10 +274,19 @@ type BridgeService struct {
 	// until AO was restarted. Nil in tests that set Tunnel directly.
 	ResolveTunnel func() TunnelController
 
+	// ConnectorInstalling reports a cloudflared install in progress, for the
+	// status of a bridge that has no connector yet. Nil in tests.
+	ConnectorInstalling func() bool
+
 	// KeepAwake holds the machine awake while the bridge is on and the user has
 	// opted in. Nil where the platform has no way to do it (everything but
 	// macOS), which Status reports as unsupported.
 	KeepAwake KeepAwakeController
+
+	// OnBrowserRemoteAccessDisabled synchronously revokes live streams when the
+	// desktop turns the additional browser-access gate off. It is nil until the
+	// browser-live service is wired.
+	OnBrowserRemoteAccessDisabled func()
 
 	// transitionMu serializes every operation that changes persisted bridge
 	// state, listener state, or connector state. Status deliberately does not
@@ -255,6 +295,9 @@ type BridgeService struct {
 
 	// Guards Tunnel, which ensureTunnel may replace while HTTP handlers read it.
 	tunnelMu sync.RWMutex
+	// tunnelResolving is closed once ResolveTunnelInBackground's lookup ends.
+	// Nil when no background lookup was started.
+	tunnelResolving chan struct{}
 
 	// stateMu protects only the short-lived in-memory status snapshot below. No
 	// listener, filesystem, or connector call may run while it is held.
@@ -297,13 +340,15 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		lan, ts = nil, nil
 	}
 	res := MobileStatusResponse{
-		Enabled:        enabled,
-		LoopbackOnly:   st.LoopbackOnly,
-		NoPublicTunnel: st.NoPublicTunnel,
-		Host:           first(lan),
-		TailscaleHost:  first(ts),
-		Port:           b.LAN.BoundPort(),
-		Warning:        mobileUnencryptedWarning,
+		Enabled:             enabled,
+		AccountLinked:       st.AccountTokenHash != "",
+		LoopbackOnly:        st.LoopbackOnly,
+		NoPublicTunnel:      st.NoPublicTunnel,
+		Host:                first(lan),
+		TailscaleHost:       first(ts),
+		Port:                b.LAN.BoundPort(),
+		Warning:             mobileUnencryptedWarning,
+		BrowserRemoteAccess: st.BrowserRemoteAccess,
 		Endpoints: mobilebridge.Endpoints(mobilebridge.EndpointInputs{
 			LANHosts:       lan,
 			TailscaleHosts: ts,
@@ -323,8 +368,27 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	if st.ServeCleanupPending && res.SecurePairing.Reason == "" {
 		res.SecurePairing.Reason = "clear_failed"
 	}
-	res.KeepAwake = b.keepAwakeStatus(st.KeepAwake)
+	res.KeepAwake = b.keepAwakeStatus(st.KeepAwake, st.KeepAwakeLid)
 	return res
+}
+
+// SetBrowserRemoteAccess persists the explicit browser-content opt-in. Turning
+// it off revokes existing streams before the successful response is returned.
+func (b *BridgeService) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return MobileStatusResponse{}, err
+	}
+	st.BrowserRemoteAccess = on
+	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if !on && b.OnBrowserRemoteAccessDisabled != nil {
+		b.OnBrowserRemoteAccessDisabled()
+	}
+	return b.Status(), nil
 }
 
 // AdvertisedEndpoints reports how this daemon can currently be reached, for
@@ -354,6 +418,7 @@ func (b *BridgeService) tunnel() TunnelController {
 // Called where a connector is about to be needed, not on every read: probing
 // the filesystem to answer a status poll would be wasteful.
 func (b *BridgeService) ensureTunnel() TunnelController {
+	b.awaitBootTunnel()
 	if t := b.tunnel(); t != nil {
 		return t
 	}
@@ -375,6 +440,40 @@ func (b *BridgeService) ensureTunnel() TunnelController {
 	return b.Tunnel
 }
 
+// ResolveTunnelInBackground runs the boot-time connector lookup off the
+// daemon's startup path. Until it finishes, status reads and ensureTunnel wait
+// for its answer, so nothing reports remote access as unavailable, or looks up
+// a second connector, in the moment before it lands.
+func (b *BridgeService) ResolveTunnelInBackground(resolve func() TunnelController) {
+	done := make(chan struct{})
+	b.tunnelMu.Lock()
+	b.tunnelResolving = done
+	b.tunnelMu.Unlock()
+	go func() {
+		defer close(done)
+		t := resolve()
+		if t == nil {
+			return
+		}
+		b.tunnelMu.Lock()
+		defer b.tunnelMu.Unlock()
+		if b.Tunnel == nil {
+			b.Tunnel = t
+		}
+	}()
+}
+
+// awaitBootTunnel blocks until the boot-time lookup, if any, has finished. The
+// lookup is bounded by the cloudflared version probe's timeout.
+func (b *BridgeService) awaitBootTunnel() {
+	b.tunnelMu.RLock()
+	done := b.tunnelResolving
+	b.tunnelMu.RUnlock()
+	if done != nil {
+		<-done
+	}
+}
+
 func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 	t := b.tunnel()
 	if t == nil {
@@ -384,9 +483,11 @@ func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 }
 
 func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
+	b.awaitBootTunnel()
 	t := b.tunnel()
 	if t == nil {
-		return mobilebridge.TunnelStatus{} // Supported stays false: nothing to run.
+		// Supported stays false: nothing to run yet.
+		return mobilebridge.TunnelStatus{Installing: b.ConnectorInstalling != nil && b.ConnectorInstalling()}
 	}
 	st := t.Status()
 	st.Supported = true
@@ -473,27 +574,36 @@ func (b *BridgeService) securePairingStatus(on, bridgeUp bool) SecurePairingStat
 	return sp
 }
 
-func (b *BridgeService) keepAwakeStatus(on bool) KeepAwakeStatus {
+func (b *BridgeService) keepAwakeStatus(on, lidClosed bool) KeepAwakeStatus {
 	if b.KeepAwake == nil {
 		return KeepAwakeStatus{}
 	}
-	return KeepAwakeStatus{
+	res := KeepAwakeStatus{
 		Supported:  true,
 		Enabled:    on,
 		Active:     b.KeepAwake.Active(),
 		HasBattery: b.KeepAwake.HasBattery(),
 	}
+	res.LidClosed = lidClosed
+	res.LidSupported, res.LidActive, res.LidReason = b.KeepAwake.LidStatus()
+	return res
 }
 
 // applyKeepAwakeLocked holds the machine awake only while the user opted in
 // and the bridge is actually serving: there is no phone to stay reachable for
 // otherwise. The caller owns transitionMu.
-func (b *BridgeService) applyKeepAwakeLocked(on bool) error {
+func (b *BridgeService) applyKeepAwakeLocked(on, lidClosed bool) error {
 	if b.KeepAwake == nil {
 		return nil
 	}
 	if on && b.LAN.Running() {
-		return b.KeepAwake.Start()
+		if err := b.KeepAwake.Start(); err != nil {
+			return err
+		}
+		// Idle wake succeeded. Native lid failures are reported in LidReason,
+		// and must not turn that success into an HTTP error.
+		_ = b.KeepAwake.ConfigureLid(lidClosed, false)
+		return nil
 	}
 	b.KeepAwake.Stop()
 	return nil
@@ -507,12 +617,52 @@ func (b *BridgeService) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	if b.KeepAwake == nil {
 		return MobileStatusResponse{}, errors.New("keeping this machine awake is only supported on macOS")
 	}
-	st, _ := mobilebridge.Load(b.ConfigPath)
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil && !os.IsNotExist(err) {
+		return MobileStatusResponse{}, err
+	}
 	st.KeepAwake = on
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on); err != nil {
+	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, err
+	}
+	return b.Status(), nil
+}
+
+// SetKeepAwakeLid is desktop-local like the existing mobile control endpoint.
+// Older requests omit lidClosed and retain the separately saved lid preference.
+func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	if b.KeepAwake == nil {
+		return MobileStatusResponse{}, errors.New("keeping this machine awake is only supported on macOS")
+	}
+	if lidClosed {
+		supported, _, reason := b.KeepAwake.LidStatus()
+		if !supported {
+			if reason == "isolated_data_dir" {
+				return MobileStatusResponse{}, errors.New("closed-lid wakefulness is disabled for custom or isolated AO_DATA_DIR directories; use the default ~/.ao/data directory to enable it")
+			}
+			return MobileStatusResponse{}, errors.New("closed-lid wakefulness requires a supported Apple Silicon MacBook (macOS 13–27) and the desktop helper")
+		}
+	}
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil && !os.IsNotExist(err) {
+		return MobileStatusResponse{}, err
+	}
+	// Register before committing a new opt-in; failure preserves both preferences.
+	if lidClosed && !st.KeepAwakeLid {
+		if err := b.KeepAwake.ConfigureLid(false, true); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	st.KeepAwake, st.KeepAwakeLid = on, lidClosed
+	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
 		return MobileStatusResponse{}, err
 	}
 	return b.Status(), nil
@@ -604,7 +754,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		accountToken = ""
 		accountTokenOwner = ""
 	}
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, BrowserRemoteAccess: prevSt.BrowserRemoteAccess, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
 		// Persist failed after the listener came up. A running listener still
 		// serves the old hash; a fresh enable must tear the listener back down.
@@ -623,6 +773,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 			setter.SetAccountTokenHash(accountTokenHash)
 		}
+		b.nudgeTunnel() // the new password revoked the account link
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -644,7 +795,7 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 	}
 	// Best-effort like the proxy: a failed caffeinate leaves the bridge up and
 	// Status reports the assertion as inactive.
-	_ = b.applyKeepAwakeLocked(st.KeepAwake)
+	_ = b.applyKeepAwakeLocked(st.KeepAwake && st.Enabled, st.KeepAwakeLid)
 	// Point the connector at the port Start actually bound, not DefaultPort:
 	// Start falls back to an ephemeral port when the default is taken, and a
 	// connector aimed at the wrong port tunnels nothing. Start is idempotent
@@ -705,6 +856,17 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	return nil
 }
 
+// hostPublicKey is the machine's host key for the listing, or empty when it
+// cannot be read: the listing then has none, and the machine's requests keep
+// working with the digest alone.
+func (b *BridgeService) hostPublicKey() string {
+	key, err := mobilebridge.HostPublicKey(b.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	return key
+}
+
 // IssueAccountToken returns the existing credential for a retry by the same
 // account, or replaces it after the caller proves the original pairing
 // password while linking a different account.
@@ -721,7 +883,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// A current account token is already the desired credential. Returning it
 	// makes retries safe even when the cloud registration request was lost.
 	if state.AccountToken != "" && mobilebridge.PasswordMatches(state.AccountTokenHash, password) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	if !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
 		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
@@ -734,7 +896,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// durable token. A different account intentionally rotates it.
 	if accountID != "" && accountID == state.AccountTokenOwner && state.AccountToken != "" &&
 		mobilebridge.PasswordMatches(state.AccountTokenHash, state.AccountToken) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) })
 	if !ok {
@@ -752,7 +914,20 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
-	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
+	// The connector asks AO Cloud now, so a machine another account took
+	// leaves the old account's tunnel. The device that asked lists the new
+	// token only after this returns; until then the connector reads AO
+	// Cloud's refusal as a link on its way and keeps serving.
+	b.nudgeTunnel()
+	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token, HostKey: b.hostPublicKey()}, nil
+}
+
+// nudgeTunnel has a running connector ask AO Cloud for its address now: the
+// account link it serves changed.
+func (b *BridgeService) nudgeTunnel() {
+	if n, ok := b.tunnel().(interface{ Nudge() }); ok {
+		n.Nudge()
+	}
 }
 
 // Enable generates a fresh password and starts the LAN listener. If it is
@@ -883,9 +1058,30 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		}
 	}
 	if t := b.ensureTunnel(); t != nil {
+		// The desktop links this machine just before it asks for remote
+		// access; a connector already running can move to the address the
+		// link gave it now. Sent first: a connector Start begins asks anyway.
+		b.nudgeTunnel()
 		t.Start(b.LAN.BoundPort())
 	}
 	return b.Status(), nil
+}
+
+// ConnectorInstalled starts the connector once a cloudflared AO downloaded by
+// itself has landed, so remote access comes up without the user clicking
+// anything. It only finishes what the bridge already wanted: nothing while the
+// bridge is off or LAN-only, and the password is left alone.
+func (b *BridgeService) ConnectorInstalled() {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil || !st.Enabled || st.NoPublicTunnel || !b.LAN.Running() {
+		return
+	}
+	if t := b.ensureTunnel(); t != nil {
+		t.Start(b.LAN.BoundPort())
+	}
 }
 
 // Regenerate rotates the connection password on the running listener, which

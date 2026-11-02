@@ -13,7 +13,8 @@ func TestCursorCLIAuthStatusAuthorizedFromStatus(t *testing.T) {
 	restore := stubCursorAuthCommand(t, []string{"status"}, []byte("✓ Logged in as user@example.com\n"), nil)
 	defer restore()
 
-	status, err := cursorCLIAuthStatus(context.Background(), "cursor-agent")
+	t.Setenv("CURSOR_API_KEY", "")
+	status, err := (&Plugin{resolvedBinary: "cursor-agent"}).AuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +27,8 @@ func TestCursorCLIAuthStatusUnknownFromKeychainError(t *testing.T) {
 	restore := stubCursorAuthCommand(t, []string{"status"}, []byte("ERROR: SecItemCopyMatching failed -50\n"), assertErr("exit status 139"))
 	defer restore()
 
-	status, err := cursorCLIAuthStatus(context.Background(), "cursor-agent")
+	t.Setenv("CURSOR_API_KEY", "")
+	status, err := (&Plugin{resolvedBinary: "cursor-agent"}).AuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { TooltipProvider } from "../ui/tooltip";
 import { MarkdownFileView } from "./MarkdownFileView";
 
 const { baseUrlForHostMock } = vi.hoisted(() => ({ baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined) }));
@@ -27,17 +28,41 @@ afterEach(() => {
 
 function view(content: string, filePath = "docs/README.md", truncated = false) {
 	return (
-		<MarkdownFileView
-			content={content}
-			filePath={filePath}
-			sessionId="sess-1"
-			truncated={truncated}
-			version={7}
-		/>
+		<TooltipProvider>
+			<MarkdownFileView
+				content={content}
+				filePath={filePath}
+				sessionId="sess-1"
+				truncated={truncated}
+				version={7}
+			/>
+		</TooltipProvider>
 	);
 }
 
 describe("MarkdownFileView", () => {
+	it("omits opening frontmatter in both document and thumbnail views", () => {
+		const content = "---\ntitle: Internal metadata\n---\n# Field guide\n\nReadable body.";
+		const { container, rerender } = render(view(content));
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Field guide");
+		expect(container).not.toHaveTextContent("Internal metadata");
+		rerender(<MarkdownFileView content={content} filePath="guide.md" presentation="thumbnail" sessionId="sess-1" truncated={false} version={7} />);
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Field guide");
+		expect(container).not.toHaveTextContent("Internal metadata");
+	});
+
+	it("keeps thumbnail formatting, images, and diagrams without nested controls", async () => {
+		const content = "# Overview\n\n[Docs](https://example.com)\n\n> [!NOTE]\n> Read this.\n\n![Chart](./chart.png)\n\n```ts\nconst ready = true;\n```\n\n```mermaid\nflowchart TD\n A --> B\n```";
+		const { container } = render(<MarkdownFileView artifactOrigin="http://artifact.localhost" content={content} filePath="reports/guide.md" presentation="thumbnail" sessionId="sess-1" truncated={false} version={7} />);
+		expect(container.querySelector(".markdown-body h1")).toHaveTextContent("Overview");
+		expect(container.querySelector(".markdown-alert-note")).toHaveTextContent("Read this.");
+		expect(container.querySelector("img")).toHaveAttribute("src", "http://artifact.localhost/reports/chart.png");
+		expect(container.querySelector("pre.markdown-code")).toHaveTextContent("const ready = true;");
+		expect(await screen.findByTestId("mermaid-diagram")).toBeInTheDocument();
+		expect(container.querySelector("button, a")).toBeNull();
+		expect(container.querySelector("[inert]")).not.toBeNull();
+	});
+
 	it("renders GFM, GitHub alerts, and highlighted fenced code", async () => {
 		const { container } = render(
 			view(
@@ -53,9 +78,23 @@ describe("MarkdownFileView", () => {
 		);
 	});
 
+	it("copies each fenced code block's source from its copy button", async () => {
+		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		render(view("```ts\nconst ready = true;\n```\n\n```\nplain text\n```"));
+
+		const buttons = screen.getAllByRole("button", { name: "Copy code" });
+		expect(buttons).toHaveLength(2);
+		expect(buttons[0]).toHaveTextContent("");
+		fireEvent.click(buttons[1]!);
+
+		await waitFor(() => expect(writeText).toHaveBeenCalledWith("plain text"));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+	});
+
 	it("resolves relative images through the workspace blob route without double encoding", () => {
 		render(view("![Flow diagram](./assets/flow%20chart.png)", "docs/README.md"));
 
+		expect(screen.getByRole("img", { name: "Flow diagram" })).toHaveAttribute("crossorigin", "anonymous");
 		const src = screen.getByRole("img", { name: "Flow diagram" }).getAttribute("src");
 		const url = new URL(src!);
 		expect(url.searchParams.get("path")).toBe("docs/assets/flow chart.png");

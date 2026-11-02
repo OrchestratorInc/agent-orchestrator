@@ -55,7 +55,7 @@ function DialogContent({
 			<DialogPrimitive.Content
 				data-slot="dialog-content"
 				className={cn(
-					"fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] flex flex-col gap-4 bg-background shadow-lg data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none border p-4 sm:rounded-lg",
+					"fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] flex flex-col gap-4 bg-overlay shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none border border-(--color-border-overlay) p-4 sm:rounded-lg",
 					className,
 				)}
 				{...props}
@@ -118,7 +118,7 @@ export {
 // spacing, and typography. Every value resolves to a
 // design token; no raw pixel values here.
 export const settingsDialogSurfaceClass =
-	"flex max-h-[min(var(--size-settings-dialog-max-h),calc(100svh-var(--space-8)))] w-[min(var(--size-settings-dialog),calc(100vw-var(--space-8)))] max-w-none flex-col gap-0 overflow-hidden rounded-(--radius-settings-dialog-lg) border border-[var(--color-border-settings-dialog)] bg-popover p-0 text-settings-label shadow-[var(--shadow-settings-dialog)]";
+	"flex max-h-[min(var(--size-settings-dialog-max-h),calc(100svh-var(--space-8)))] w-[min(var(--size-settings-dialog),calc(100vw-var(--space-8)))] max-w-none flex-col gap-0 overflow-hidden rounded-(--radius-settings-dialog-lg) border border-[var(--color-border-settings-dialog)] bg-overlay p-0 text-settings-label shadow-[var(--shadow-settings-dialog)]";
 
 export const settingsDialogContentClass = `z-overlay ${settingsDialogSurfaceClass}`;
 

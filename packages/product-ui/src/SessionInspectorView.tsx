@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -43,6 +43,7 @@ export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
 export function SessionInspectorShellView({
 	activeView,
 	ariaLabel,
+	artifactsView,
 	browserPoppedOut,
 	browserView,
 	sideChatView,
@@ -57,6 +58,7 @@ export function SessionInspectorShellView({
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
+	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
 	sideChatView?: ReactNode;
@@ -190,8 +192,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && inspectorScrollableBodyClass,
-					activeView === "sideChat" && "p-0 overflow-hidden",
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -204,6 +206,7 @@ export function SessionInspectorShellView({
 				{activeView === "browser" ? browserView : null}
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
+				{activeView === "artifacts" ? artifactsView : null}
 			</div>
 		</aside>
 	);
@@ -211,15 +214,18 @@ export function SessionInspectorShellView({
 
 export function InspectorSection({
 	children,
+	defaultOpen = true,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
+	/** Off for reference detail the reader opens on demand (a Setup log). */
+	defaultOpen?: boolean;
 	surface?: boolean;
 	title: string;
 }) {
 	const contentId = useId();
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(defaultOpen);
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
@@ -269,6 +275,7 @@ export function SessionInspectorSummaryView({
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
+	scripts,
 	usage,
 	workers,
 }: {
@@ -284,6 +291,8 @@ export function SessionInspectorSummaryView({
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
 	reviews?: ReactNode;
+	/** The project's Setup and Cleanup runs (Cloud sessions), just before the activity. */
+	scripts?: ReactNode;
 	usage?: ReactNode;
 	/**
 	 * The sessions this orchestrator spawned. Rendered first: for an
@@ -308,6 +317,7 @@ export function SessionInspectorSummaryView({
 			) : null}
 			{reviews}
 			{completion}
+			{scripts}
 			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
 			{usage}
 		</div>
@@ -323,6 +333,8 @@ export type InspectorPullRequest = PRSummaryMetadata & {
 	state: InspectorPullRequestState;
 	stateLabel: string;
 	title?: string;
+	/** owner/name, shown before the number when a session's PRs span several repositories. */
+	repositoryLabel?: string;
 	reviewDetailsAction?: ReactNode;
 };
 
@@ -340,6 +352,7 @@ export function InspectorPullRequestCardView({
 	mergeAction,
 	mergeError,
 	openLabel,
+	openedViaLabel,
 	pr,
 	pullRequestIcon,
 	statusNotice,
@@ -350,6 +363,7 @@ export function InspectorPullRequestCardView({
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
+	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
 	statusNotice?: ReactNode;
@@ -371,7 +385,7 @@ export function InspectorPullRequestCardView({
 					href={pr.href}
 				>
 					{pullRequestIcon ?? <GitPullRequestIcon className="size-icon-sm shrink-0" />}
-					<span>PR #{pr.number}</span>
+					<span className="truncate">{pr.repositoryLabel ? `${pr.repositoryLabel} ` : ""}PR #{pr.number}</span>
 					{externalIcon ?? <ArrowUpRightIcon className="size-icon-2xs shrink-0" />}
 				</ExternalLink>
 				<span
@@ -390,6 +404,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
 			{pr.state !== "merged" ? (
@@ -535,6 +550,8 @@ export type InspectorReviewGroup = {
 	};
 	meta: string;
 	number: number;
+	/** Unique per PR; a multi-repository session can repeat a number across repositories. Defaults to the number. */
+	key?: string;
 	title: string;
 	verdict?: InspectorVerdict;
 };
@@ -617,7 +634,7 @@ export function InspectorReviewsView({
 				{groups.map((group) => (
 					<ReviewDisclosure
 						defaultOpen={false}
-						key={group.number}
+						key={group.key ?? group.number}
 						meta={group.meta}
 						title={group.title}
 						verdict={group.verdict}

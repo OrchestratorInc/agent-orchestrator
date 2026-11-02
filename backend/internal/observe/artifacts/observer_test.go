@@ -27,6 +27,29 @@ func (f *fakeSink) ReconcileSessionOutputType(_ context.Context, id domain.Sessi
 	return f.err
 }
 
+type fakeVersions struct {
+	captured []domain.SessionID
+	err      error
+}
+
+func (f *fakeVersions) CaptureSession(_ context.Context, sess domain.SessionRecord) error {
+	f.captured = append(f.captured, sess.ID)
+	return f.err
+}
+
+func TestPoll_CapturesVersionsForLiveSessionsEvenWhenReconcileFails(t *testing.T) {
+	sessions := fakeSessions{rows: []domain.SessionRecord{{ID: "a"}, {ID: "terminated", IsTerminated: true}, {ID: "b"}}}
+	versions := &fakeVersions{err: errors.New("boom")}
+	o := New(sessions, &fakeSink{err: errors.New("reconcile boom")}, versions, Config{})
+
+	if err := o.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(versions.captured) != 2 || versions.captured[0] != "a" || versions.captured[1] != "b" {
+		t.Fatalf("captured = %v, want [a b]", versions.captured)
+	}
+}
+
 func TestPoll_SkipsTerminatedButRescansArtifactSessionsForRemovals(t *testing.T) {
 	sessions := fakeSessions{rows: []domain.SessionRecord{
 		{ID: "live"},
@@ -36,7 +59,7 @@ func TestPoll_SkipsTerminatedButRescansArtifactSessionsForRemovals(t *testing.T)
 		{ID: "already-pr-and-artifact", OutputType: domain.SessionOutputPRAndArtifact},
 	}}
 	sink := &fakeSink{}
-	o := New(sessions, sink, Config{})
+	o := New(sessions, sink, nil, Config{})
 
 	if err := o.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -55,7 +78,7 @@ func TestPoll_SkipsTerminatedButRescansArtifactSessionsForRemovals(t *testing.T)
 func TestPoll_ReconcileFailurePerSessionDoesNotStopTheRest(t *testing.T) {
 	sessions := fakeSessions{rows: []domain.SessionRecord{{ID: "a"}, {ID: "b"}}}
 	sink := &fakeSink{err: errors.New("boom")}
-	o := New(sessions, sink, Config{})
+	o := New(sessions, sink, nil, Config{})
 
 	if err := o.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -67,7 +90,7 @@ func TestPoll_ReconcileFailurePerSessionDoesNotStopTheRest(t *testing.T) {
 
 func TestPoll_PropagatesListSessionsError(t *testing.T) {
 	sessions := fakeSessions{err: errors.New("db down")}
-	o := New(sessions, &fakeSink{}, Config{})
+	o := New(sessions, &fakeSink{}, nil, Config{})
 
 	if err := o.Poll(context.Background()); err == nil {
 		t.Fatal("want error from ListAllSessions to propagate")

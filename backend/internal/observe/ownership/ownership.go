@@ -9,8 +9,7 @@ type Owner string
 
 // Owner values identify the layer responsible for reporting a failure.
 const (
-	OwnerHTTP            Owner = "http"
-	OwnerAgentSwitchSaga Owner = "agent_switch_saga"
+	OwnerHTTP Owner = "http"
 )
 
 // OwnedError wraps an error with its observability reporting owner.
@@ -76,5 +75,5 @@ func Preserve(original, mapped error) error {
 
 // Valid reports whether owner is one of the closed wire-safe values.
 func (owner Owner) Valid() bool {
-	return owner == OwnerHTTP || owner == OwnerAgentSwitchSaga
+	return owner == OwnerHTTP
 }

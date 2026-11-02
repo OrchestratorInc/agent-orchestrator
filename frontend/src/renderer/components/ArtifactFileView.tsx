@@ -1,48 +1,78 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
+import { isDelimitedTextPath } from "../lib/delimited-text";
+import { isMermaidPath, isSvgPath } from "../lib/image-files";
+import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
+import { fileMediaKind } from "../lib/file-media";
+import { cn } from "../lib/utils";
 
-// Mirrors FileContentPane's own canRenderMarkdown extension check: a markdown
-// artifact should open already rendered, the same way GitHub opens a README,
-// rather than making the reader click over to the "Rendered" tab themselves.
+// Mirrors FileContentPane's own canRender* extension checks: a markdown, SVG,
+// CSV/TSV or Mermaid artifact opens already rendered, the same way GitHub
+// opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) ? "rendered" : "file";
+	return isMarkdownPreviewPath(path) || isSvgPath(path) || isDelimitedTextPath(path) || isMermaidPath(path) ? "rendered" : "file";
 }
 
 /**
  * Content view for one file in a session's artifact directory, reusing the
  * same `FileContentPane` the workspace/PR Files flow uses (source-agnostic:
- * dispatches on `source.kind`). Artifacts fetch raw content from `rawUrl`,
- * the artifact preview origin's raw-bytes URL (a distinct host from the
- * workspace preview origin, so it can never resolve to a workspace file of
- * the same path), rather than the workspace-diff machinery, since artifacts
+ * dispatches on `source.kind`). Local artifacts fetch raw content through the
+ * daemon API with the artifact root selected; remote and cloud artifacts keep
+ * their provided content URL. Neither uses the workspace-diff machinery, since artifacts
  * live outside the git workspace and have no diff/status.
  *
- * Read-only for now: `WorkspaceFileDetail.editable`/`fileFingerprint` are
- * unset for the artifact source (see `fetchSessionArtifactFile`), which is
- * exactly the signal `FileContentPane` already uses to hide its edit
- * affordance for any source. Wiring up editing later is then a matter of
- * adding a write endpoint and setting those two fields — no new UI.
+ * One view, no display mode switch: a markdown artifact renders, any other
+ * text file shows as code, a CSV/TSV file as a table, a Mermaid file as its
+ * diagram, media streams through native image/player elements, and a PDF
+ * renders its pages. A complete text file can be edited (saved through the
+ * artifact write endpoint) unless `readOnly`. Text selected in the rendered
+ * markdown, a table, or a PDF page can be sent to the worker.
  */
 export function ArtifactFileView({
 	artifactName,
 	feedbackRequestKey,
+	initialEditing = false,
 	hostId,
 	onFeedbackRequestConsumed,
 	path,
 	rawUrl,
+	readOnly = false,
+	cloud = false,
+	artifactRoot,
+	onAccessRefused,
+	sendMessage,
 	sessionId,
+	toolbarHost,
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
+	initialEditing?: boolean;
 	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	path: string;
 	rawUrl?: string;
+	/** Hides the edit action, as for a cloud session's artifacts. */
+	readOnly?: boolean;
+	/** Fetches rawUrl through the cloud control-plane bridge. */
+	cloud?: boolean;
+	/** The URL the file's relative links resolve against. */
+	artifactRoot?: string;
+	/** Called when a cloud media file fails to load, to take a fresh link. */
+	onAccessRefused?: () => void;
+	/** Sends feedback to the worker; without it feedback goes through the daemon. */
+	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
+	/** The header the pane renders its mode and action buttons into. */
+	toolbarHost?: HTMLElement | null;
 }) {
-	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
-	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl }), [rawUrl]);
+	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
+	const source = useMemo(
+		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused }),
+		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused],
+	);
+	const scrollRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
@@ -54,10 +84,12 @@ export function ArtifactFileView({
 	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
 
 	return (
-		<div className="flex h-full min-h-0 flex-col bg-background">
-			<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} />
+		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
+			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
+			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
+				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
 			</div>
+			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>
 	);
 }

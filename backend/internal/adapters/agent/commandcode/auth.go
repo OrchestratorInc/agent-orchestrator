@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -37,7 +38,11 @@ func commandCodeAuthStatus(ctx context.Context, binary string) (ports.AgentAuthS
 	// `cmd status` may exit non-zero when signed out, so classify whatever text
 	// it printed instead of treating the exit code as a probe failure.
 	out, _ := authprobe.CmdRunner(runCtx, binary, "status")
-	return commandCodeAuthStatusFromOutput(string(out)), nil
+	status := commandCodeAuthStatusFromOutput(string(out))
+	if status.HasCredential() {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "status"))
+	}
+	return status, nil
 }
 
 // commandCodeAuthStatusFromOutput classifies `cmd status` output. Command Code

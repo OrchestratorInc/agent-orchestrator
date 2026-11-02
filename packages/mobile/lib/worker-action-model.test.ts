@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	ARCHIVE_SESSION_HINT,
-	archiveSessionMessage,
+	ARCHIVE_SESSION_CONFIRM,
 	hasWorkerActionDrawable,
 	workerActionGlyph,
 	workerActionSymbol,
@@ -73,12 +73,13 @@ describe("workerContextActions", () => {
 		}
 	});
 
-	it("tells the user Archive deletes a clean worktree but keeps what Restore needs", () => {
-		const message = archiveSessionMessage("Fix login");
-		expect(message).toContain("Fix login");
-		expect(message).toMatch(/worktree folder is deleted unless it has uncommitted changes/);
-		expect(message).toMatch(/conversation and committed work on its branch are kept/);
-		expect(message).not.toMatch(/worktree (is|are) preserved/);
+	it("confirms Archive with desktop's wording", () => {
+		expect(ARCHIVE_SESSION_CONFIRM).toEqual({
+			title: "Are you sure you want to archive this session?",
+			message: "You can always restore it from the Archive section later.",
+			cancel: "No",
+			confirm: "Confirm",
+		});
 		expect(ARCHIVE_SESSION_HINT).toMatch(/Deletes the worktree folder unless it has uncommitted changes/);
 	});
 

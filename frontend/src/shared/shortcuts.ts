@@ -55,6 +55,7 @@ export type AppShortcutId =
 	| "open-in-editor"
 	| "copy-session-path"
 	| "model-picker"
+	| "open-orchestrator"
 	| "toggle-browser-devtools";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session" | "Panels";
@@ -104,6 +105,7 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "open-in-editor", label: "Open in editor", category: "Session" },
 	{ id: "copy-session-path", label: "Copy session path", category: "Session" },
 	{ id: "model-picker", label: "Choose model", category: "Session" },
+	{ id: "open-orchestrator", label: "Open orchestrator", category: "Session" },
 	{ id: "toggle-sidebar", label: "Toggle sidebar", category: "Panels" },
 	{ id: "toggle-inspector", label: "Toggle inspector", category: "Panels" },
 	{ id: "toggle-terminal", label: "Toggle terminal", category: "Panels" },
@@ -197,6 +199,10 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
+		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
+		// readline), so that platform takes G for "go to orchestrator".
+		case "open-orchestrator":
+			return [isMac ? binding("o", { meta: true, shift: true }) : binding("g", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
 			return [isMac ? binding("i", { meta: true, alt: true }) : binding("i", { ctrl: true, shift: true })];
 	}
@@ -360,6 +366,12 @@ export function shortcutBindingLabel(binding: ShortcutBinding, isMac: boolean): 
 // renderer can all reference one constant without crossing bundle boundaries.
 export const NEW_SESSION_SHORTCUT_CHANNEL = "app:new-session";
 export const KEYBOARD_SHORTCUTS_HELP_CHANNEL = "app:keyboard-shortcuts-help";
+// ⌘Q on macOS: main asks the shell to show the quit confirm, and the shell
+// answers on the result channel with true (quit) or false (cancelled).
+export const QUIT_CONFIRM_REQUEST_CHANNEL = "app:quit-confirm-request";
+/** keepsRunning: quitting only closes the window; AO stays in the menu bar. */
+export type QuitConfirmRequest = { keepsRunning: boolean };
+export const QUIT_CONFIRM_RESULT_CHANNEL = "app:quit-confirm-result";
 export const NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:new-shell-terminal";
 export const CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:close-shell-terminal";
 export const OPEN_SETTINGS_SHORTCUT_CHANNEL = "app:open-settings";

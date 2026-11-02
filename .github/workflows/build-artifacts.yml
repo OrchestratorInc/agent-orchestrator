@@ -93,6 +93,18 @@ jobs:
           BUILD_VERSION: ${{ inputs.version }}
         run: |
           node -e "const v=process.env.BUILD_VERSION.split('+')[0]; const fs=require('fs'); const p=require('./package.json'); p.version=v; fs.writeFileSync('./package.json', JSON.stringify(p,null,'\t')+'\n');"
+      # Electron 44's V8 headers put [[deprecated]] before __attribute__ in a
+      # class head, which Ubuntu 22.04's GCC 11 rejects when node-gyp rebuilds
+      # better-sqlite3, and need std::source_location, which 22.04's libstdc++
+      # offers only to a compiler with __builtin_source_location (clang 15+;
+      # the runner's default clang is 14). Only C++ changes, so tmux and every
+      # C build keep GCC, and the 22.04 libstdc++ and glibc baseline stays.
+      - name: Use clang++-15 for native modules
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          command -v clang++-15
+          echo "CXX=clang++-15" >> "$GITHUB_ENV"
       - name: Build (unsigned, no publish)
         shell: bash
         env:

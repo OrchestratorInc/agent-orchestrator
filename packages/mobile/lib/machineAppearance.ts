@@ -52,3 +52,19 @@ export function machineAppearance(machine: MachineIdentity): MachineAppearance {
 	const symbols = machineAppearancePalette.symbols;
 	return { symbol: symbols[identityHash(machine.id || machine.name) % symbols.length] };
 }
+
+/** Icons that more than one machine uses; those machines need their name beside the icon. */
+export function sharedMachineSymbols(machines: readonly MachineIdentity[]): ReadonlySet<MachineSymbol> {
+	const counts = new Map<MachineSymbol, number>();
+	for (const machine of machines) {
+		const { symbol } = machineAppearance(machine);
+		counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
+	}
+	return new Set([...counts].filter(([, count]) => count > 1).map(([symbol]) => symbol));
+}
+
+/** The preferred icon unless another machine already has it; then the first free one. */
+export function unusedMachineSymbol(preferred: MachineSymbol, taken: ReadonlySet<MachineSymbol>): MachineSymbol {
+	if (!taken.has(preferred)) return preferred;
+	return machineAppearancePalette.symbols.find((symbol) => !taken.has(symbol)) ?? preferred;
+}

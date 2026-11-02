@@ -19,6 +19,7 @@ vi.mock("react-native-gesture-handler", () => ({ GestureHandlerRootView: "Gestur
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardProvider: "KeyboardProvider" }));
 vi.mock("react-native-safe-area-context", () => ({ SafeAreaProvider: "SafeAreaProvider" }));
 vi.mock("./ThemeProvider", () => ({ ThemeProvider: "ThemeProvider", useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
+vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "system", style: "orchestrate" }) }));
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
@@ -34,7 +35,7 @@ import RootLayout from "../app/_layout";
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Settings sheet visible viewport", () => {
-	it.each(["android", "ios"])("keeps the fixed editor footer inside every allowed %s sheet height", (platform) => {
+	it.each(["android", "ios"])("keeps the fixed editor footer inside every allowed %s sheet height", async (platform) => {
 		fixtures.platform.OS = platform;
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		const error = console.error;
@@ -43,7 +44,8 @@ describe("Settings sheet visible viewport", () => {
 			error(...args);
 		});
 		let renderer!: ReturnType<typeof create>;
-		act(() => { renderer = create(<RootLayout />); });
+		// The root holds its first frame until the stored theme is read.
+		await act(async () => { renderer = create(<RootLayout />); });
 		try {
 			const settings = renderer.root.findByProps({ name: "settings" }).props.options;
 			const naming = renderer.root.findByProps({ name: "sheets/machine-name" }).props.options;

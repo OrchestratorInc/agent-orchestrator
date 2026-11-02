@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { APP_LOCALES, coerceLocale, DEFAULT_LOCALE } from "./locales";
-import { createAppI18n, type TranslationCatalogs } from "./instance";
+import { createAppI18n as createBaseAppI18n, createLazyAppI18n, loadLocaleCatalog, type TranslationCatalogs } from "./instance";
+import { createFullAppI18n as createAppI18n } from "./all-messages";
 import {
 	deMessages,
 	enMessages,
@@ -9,8 +10,9 @@ import {
 	jaMessages,
 	koMessages,
 	ptBRMessages,
+	ruMessages,
 	zhCNMessages,
-} from "./messages";
+} from "./all-messages";
 
 const allCatalogs = {
 	en: enMessages,
@@ -21,6 +23,7 @@ const allCatalogs = {
 	fr: frMessages,
 	de: deMessages,
 	"pt-BR": ptBRMessages,
+	ru: ruMessages,
 } as const;
 
 function emptyCatalogs(): TranslationCatalogs {
@@ -37,6 +40,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("fr")).toBe("fr");
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
+		expect(coerceLocale("ru")).toBe("ru");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -81,6 +85,7 @@ describe("app i18next instance", () => {
 			fr: "settings.language.fr",
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
+			ru: "settings.language.ru",
 		} as const;
 		const expected = {
 			en: "English",
@@ -91,6 +96,7 @@ describe("app i18next instance", () => {
 			fr: "Français",
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
+			ru: "Русский",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -136,6 +142,18 @@ describe("app i18next instance", () => {
 		const keys = ["pr.progress.open", "pr.progress.draft", "pr.progress.closed"] as const;
 		expect(keys.map((key) => instance.t(key, { count: 1 }))).toEqual(singular);
 		expect(keys.map((key) => instance.t(key, { count: 2 }))).toEqual(plural);
+	});
+
+	it("renders the Russian one, few, and many plural forms", () => {
+		const instance = createAppI18n("ru");
+		expect([1, 2, 5, 21, 22, 25].map((count) => instance.t("pr.progress.draft", { count }))).toEqual([
+			"1 черновик",
+			"2 черновика",
+			"5 черновиков",
+			"21 черновик",
+			"22 черновика",
+			"25 черновиков",
+		]);
 	});
 
 	it("provides Chinese copy for the remaining audited shell surfaces", () => {
@@ -196,9 +214,12 @@ describe("app i18next instance", () => {
 			if (locale === "en") continue;
 			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
-				expect(variables(catalog[key]), `${locale} placeholder mismatch for ${key}`).toEqual(
-					variables(enMessages[key]),
-				);
+				const english = variables(enMessages[key]);
+				// i18next always passes count to plural keys, so a locale may add it where English
+				// hardcodes "1" (Russian uses the one form for 21, 31, ...). It may never drop it.
+				const mayAddCount = /_(zero|one|two|few|many|other)$/.test(key) && !english.includes("count");
+				const actual = variables(catalog[key]).filter((name) => !(mayAddCount && name === "count"));
+				expect(actual, `${locale} placeholder mismatch for ${key}`).toEqual(english);
 			}
 		}
 	});
@@ -221,5 +242,46 @@ describe("app i18next instance", () => {
 				}
 			}
 		}
+	});
+
+	it("resolves AO action counts with the Spanish, French, and Brazilian Portuguese many forms", () => {
+		const count = 1_000_000;
+		const bases = Object.keys(enMessages)
+			.filter((key) => key.startsWith("chat.action.") && key.endsWith("_one"))
+			.map((key) => key.slice(0, -"_one".length));
+		for (const locale of ["es", "fr", "pt-BR"] as const) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string | string[]>;
+			const instance = createAppI18n(locale);
+			expect(new Intl.PluralRules(locale).select(count)).toBe("many");
+			for (const base of bases) {
+				const template = catalog[`${base}_many`];
+				expect(instance.t(base, base, { count }), `${locale} ${base}`).toBe(
+					String(template).replace("{{count}}", String(count)),
+				);
+			}
+		}
+	});
+});
+
+describe("lazy locale catalogs", () => {
+	it("loads a locale's catalog when the app instance changes language", async () => {
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
+		expect(instance.language).toBe("ja");
+	});
+
+	it("can warm a catalog before switching", async () => {
+		const instance = createLazyAppI18n();
+		await loadLocaleCatalog("fr", instance);
+		expect(instance.getResource("fr", "translation", "settings.general")).toBe(frMessages["settings.general"]);
+	});
+
+	it("loads into an instance without the lazy backend", async () => {
+		const instance = createBaseAppI18n("en");
+		await loadLocaleCatalog("ja", instance);
+		await instance.changeLanguage("ja");
+		expect(instance.t("settings.general")).toBe(jaMessages["settings.general"]);
 	});
 });

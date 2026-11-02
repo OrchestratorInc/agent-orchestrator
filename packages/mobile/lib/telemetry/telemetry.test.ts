@@ -6,11 +6,17 @@ import { createMobileTelemetry, type MobileTelemetryClient } from "./telemetry";
 function fakeClient() {
 	const captures: Array<{ event: string; props?: Record<string, unknown> }> = [];
 	const registered: Record<string, unknown>[] = [];
+	const calls: string[] = [];
 	const client: MobileTelemetryClient = {
 		capture: (event, props) => captures.push({ event, props }),
 		register: (props) => void registered.push(props),
+		identify: (id) => void calls.push(`identify:${id}`),
+		reset: () => void calls.push("reset"),
+		unregister: (name) => void calls.push(`unregister:${name}`),
+		optOut: () => void calls.push("optOut"),
+		optIn: () => void calls.push("optIn"),
 	};
-	return { client, captures, registered };
+	return { client, captures, registered, calls };
 }
 
 function memory(initial?: Record<string, string>) {
@@ -40,7 +46,7 @@ describe("createMobileTelemetry", () => {
 		expect(captures).toEqual([
 			{
 				event: MOBILE_EVENTS.featureUsed,
-				props: { feature: "spawn", outcome: "succeeded", $process_person_profile: false },
+				props: { feature: "spawn", outcome: "succeeded", ao_cloud_user_id: null, github_actor: null, $process_person_profile: false },
 			},
 		]);
 	});
@@ -94,5 +100,275 @@ describe("createMobileTelemetry", () => {
 		const t = createMobileTelemetry(client, {});
 		await t.active(store, new Date("2026-08-06T01:00:00Z"));
 		expect(await store.getItem(ACTIVE_STORAGE_KEY)).toBe("2026-08-06");
+	});
+
+	describe("desktop identity", () => {
+		it("holds capture until a legacy identity is cleared", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			t.resetPhoneIdentity();
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+		it("does not consume the daily heartbeat before migration completes", async () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			const store = memory();
+			const now = new Date("2026-08-06T01:00:00Z");
+			await t.active(store, now);
+			expect(await store.getItem(ACTIVE_STORAGE_KEY)).toBeNull();
+			t.releasePhoneIdentity();
+			await t.active(store, now);
+			expect(captures).toHaveLength(1);
+		});
+		it("resets a legacy desktop distinct id without changing the phone installation ID", () => {
+			const { client, calls, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });
+			t.resetPhoneIdentity();
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual(["reset", "optIn"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.install_id).toBe("phone_install");
+			expect(calls.some((call) => call.startsWith("identify:"))).toBe(false);
+		});
+		it("keeps the phone identity and stamps only the authenticated paired install", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });
+			const desktop = "ins_123e4567-e89b-12d3-a456-426614174000";
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", installId: desktop, optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr", paired_install_id: "spoofed" });
+			expect(captures.at(-1)?.props?.paired_install_id).toBe(desktop);
+			expect(captures.at(-1)?.props?.install_id).toBe("phone_install");
+			expect(calls).not.toContain("identify:user_A");
+			t.adoptDesktopIdentity(null);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures).toHaveLength(2);
+		});
+		it("registers desktop account properties without changing the phone identity", () => {
+			const { client, captures, registered, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
+			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual([]);
+			expect(registered.at(-1)).toEqual({});
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures[0].props?.$process_person_profile).toBe(false);
+			expect(captures[0].props).toMatchObject({ ao_cloud_user_id: "user_01H", github_actor: "octocat" });
+			// Email never reaches the phone or its events.
+			expect(JSON.stringify([registered, captures])).not.toContain("@");
+		});
+
+		it("stays anonymous when the desktop reports no identity", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual([]);
+			expect(captures[0].props?.$process_person_profile).toBe(false);
+		});
+
+		it("restores paired attribution after an incomplete identity refresh", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			const desktop = {
+				distinctId: "user_A",
+				cloudUserId: "user_A",
+				githubLogin: "octocat",
+				installId: "ins_123e4567-e89b-12d3-a456-426614174000",
+				optedOut: false,
+			};
+			t.adoptDesktopIdentity(desktop);
+			t.adoptDesktopIdentity({ optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures.at(-1)?.props?.ao_cloud_user_id).toBeNull();
+
+			t.adoptDesktopIdentity(desktop);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({
+				paired_install_id: desktop.installId,
+				ao_cloud_user_id: "user_A",
+				github_actor: "octocat",
+			});
+		});
+
+		it("keeps the phone anonymous across a desktop Cloud sign-in", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(calls).not.toContain("identify:ins_abc");
+			expect(captures[0].props?.$process_person_profile).toBe(false);
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "octocat", optedOut: false });
+			expect(calls).not.toContain("identify:user_A");
+		});
+
+		it("opt-out stops capture, resets the SDK, persists, and is lifted by an opted-in desktop", () => {
+			const { client, captures, calls } = fakeClient();
+			const persisted: boolean[] = [];
+			const t = createMobileTelemetry(client, {}, { onOptOutChange: (v) => persisted.push(v) });
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
+			t.adoptDesktopIdentity({ optedOut: true });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["reset", "optOut"]);
+
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(2)).toEqual(["optIn"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+			expect(persisted).toEqual([true, false]);
+		});
+
+		it("a daemon whose sign-out rotation failed resets and silences the phone until it recovers", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			// Adopted while account A was signed in on the desktop.
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "alice", optedOut: false });
+			// The daemon could not retire the install ID: the response carries the
+			// suppressing state and no identifiers.
+			t.adoptDesktopIdentity({ optedOut: true });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["reset", "optOut"]);
+
+			// A later sync after the daemon recovers adopts the replacement ID.
+			t.adoptDesktopIdentity({ distinctId: "ins_new", optedOut: false });
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(2)).toEqual(["optIn"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
+		it("drops everything until the saved preference loads, then re-applies a saved opt-out to the SDK", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+
+			t.setOptedOut(true);
+			// reset() clears the SDK's own opt-out flag, so optOut() must follow it.
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual(["reset", "optOut"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+		});
+
+		it("does not let a late saved preference overwrite a newer desktop opt-out", () => {
+			const { client, captures, calls } = fakeClient();
+			const persisted: boolean[] = [];
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true, onOptOutChange: (v) => persisted.push(v) });
+			// The desktop answers before the storage read returns (and the read finds nothing).
+			t.adoptDesktopIdentity({ optedOut: true });
+			t.restoreOptOut(false);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			expect(calls).not.toContain("optIn");
+			expect(persisted).toEqual([true]);
+		});
+
+		it("a live opt-in clears a previous run's SDK opt-out and saved marker, and a late saved opt-out cannot undo it", () => {
+			const { client, captures, calls } = fakeClient();
+			const persisted: boolean[] = [];
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true, onOptOutChange: (v) => persisted.push(v) });
+			// The previous run left the SDK and the marker opted out; the opted-in
+			// desktop answers first, then the marker read returns "1".
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			t.restoreOptOut(true);
+			expect(calls).toContain("optIn");
+			expect(persisted).toEqual([false]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+			// Later opted-in syncs keep it that way.
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			expect(calls.filter((c) => c === "optOut")).toEqual([]);
+		});
+
+		it("a late saved opt-in does not override a newer desktop opt-in either", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			t.restoreOptOut(true); // stale saved opt-out loses to the live desktop state
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
+		it("restoreOptOut applies the saved value when no desktop has answered", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.restoreOptOut(true);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+		});
+
+		it("releases capture when the saved preference is opted in", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.setOptedOut(false);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
+		it("removes the previous identity properties when the new identity lacks them", () => {
+			const { client, calls, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
+			calls.length = 0;
+			// Signed out: install id only, no user id, GitHub login still known.
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			expect(calls).not.toContain("reset");
+			expect(calls).not.toContain("identify:ins_abc");
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.$process_person_profile).toBe(false);
+			expect(captures.at(-1)?.props).toMatchObject({ ao_cloud_user_id: null, github_actor: "octocat" });
+			// A desktop with no GitHub login at all clears the old handle too.
+			calls.length = 0;
+			t.adoptDesktopIdentity({ distinctId: "ins_def", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({ ao_cloud_user_id: null, github_actor: null });
+		});
+
+		it("clears the previous account's properties without identifying the phone", () => {
+			const live: Record<string, unknown> = {};
+			const captures: Record<string, unknown>[] = [];
+			const identifyPayloads: string[] = [];
+			const client: MobileTelemetryClient = {
+				capture: (_event, props) => void captures.push(props ?? {}),
+				register: (p) => void Object.assign(live, p),
+				unregister: (name) => void delete live[name],
+				identify: (id) => void identifyPayloads.push(id),
+				reset: () => undefined,
+				optOut: () => undefined,
+				optIn: () => undefined,
+			};
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "alice", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			t.adoptDesktopIdentity({ distinctId: "user_B", cloudUserId: "user_B", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(identifyPayloads).toEqual([]);
+			expect(live).toEqual({});
+			expect(captures[0]).toMatchObject({ ao_cloud_user_id: "user_A", github_actor: "alice" });
+			expect(captures[1]).toMatchObject({ ao_cloud_user_id: "user_B", github_actor: null });
+		});
+
+		it("re-registers when only the GitHub login changes for the same distinct id", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.github_actor).toBe("octocat");
+		});
+
+		it("restores a persisted opt-out before anything is sent", async () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.restoreOptOut(true);
+			await t.active(memory(), new Date("2026-08-06T01:00:00Z"));
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+		});
 	});
 });

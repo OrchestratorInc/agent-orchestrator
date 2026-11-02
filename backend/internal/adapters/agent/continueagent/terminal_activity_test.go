@@ -98,3 +98,17 @@ func TestComposerIsEmpty(t *testing.T) {
 		t.Fatal("ComposerIsEmpty(draft) = true, want false")
 	}
 }
+
+func TestDetectTerminalActivityContinue15PlaceholderComposer(t *testing.T) {
+	plugin := New()
+	box := "╭────╮\n│ ● ▋Ask anything, @ for context, / for slash commands, ! for shell mode │\n╰────╯\n◉ Continue CLI\n"
+	if state, ok := plugin.DetectTerminalActivity("● Write a story\n ⣿⣿⣿  ( 4s • esc to interrupt )\n" + box); !ok || state != domain.ActivityActive {
+		t.Fatalf("working = (%q, %v), want active", state, ok)
+	}
+	if state, ok := plugin.DetectTerminalActivity("  ~300 words\n" + box); !ok || state != domain.ActivityIdle {
+		t.Fatalf("finished = (%q, %v), want idle", state, ok)
+	}
+	if !plugin.ComposerIsEmpty(box) {
+		t.Fatal("the placeholder composer is empty")
+	}
+}

@@ -217,14 +217,16 @@ describe("Android native compatibility boundaries", () => {
 
 	it("pins conversation actions to one Android detent on first open", () => {
 		const layout = source("../app/_layout.tsx");
-		expect(layout).toContain('name === "sheets/conversation-actions" && Platform.OS === "android"');
-		expect(layout).toContain("sheetAllowedDetents: [0.6]");
+		expect(layout).toContain('{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
+		expect(layout).toContain('Platform.OS === "android" && androidDetents ? [...androidDetents]');
 	});
 
-	it("keeps Android review actions at the 60% detent with a visible native drag handle", () => {
+	// With two detents Material only hid the sheet after a drag past half its
+	// height, so a normal swipe down snapped back and closing felt random.
+	it("pins Android review actions to one 60% detent so a swipe down closes it", () => {
 		const layout = source("../app/_layout.tsx");
 		const actions = source("../app/sheets/review-actions.tsx");
-		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95] }');
+		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
 		expect(layout).toContain("sheetInitialDetentIndex: 0");
 		expect(layout).toContain("sheetGrabberVisible: true");
 		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);

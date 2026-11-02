@@ -51,7 +51,6 @@ describe("groupArtifactsByProject", () => {
 			projectId: "ao",
 			kind: "html",
 			previewUrl: "http://preview/flow.html",
-			generating: false,
 		});
 		expect(artifactCount(groups)).toBe(4);
 	});
@@ -80,28 +79,29 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[0].projectId).toBeUndefined();
 	});
 
-	it("skips orchestrators, cloud projects, remote hosts, and PR-only output", () => {
+	it("skips orchestrators, remote hosts, and PR-only output", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-orchestrator", [artifact("orch.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator" }),
 				session("ao-1", [artifact("pr-only.md", "2026-10-09T10:00:00Z")], { outputType: "pr" }),
 			]),
-			workspace("cloud", "cloud-project", [session("c-1", [artifact("cloud.md", "2026-10-09T10:00:00Z")])], { kind: CLOUD_PROJECT_KIND }),
 			workspace("remote", "remote-project", [session("r-1", [artifact("remote.md", "2026-10-09T10:00:00Z")])], { hostId: "host-2" }),
 		]);
 
 		expect(groups).toEqual([]);
 	});
 
-	it("marks rows from a working session as generating", () => {
+	it("includes cloud projects' artifacts", () => {
 		const [group] = groupArtifactsByProject([
-			workspace("ao", "agent-orchestrator", [
-				session("ao-1", [artifact("draft.md", "2026-10-09T10:00:00Z")], { activity: { state: "active", lastActivityAt: "2026-10-09T10:00:00Z" } }),
-			]),
+			workspace("cloud", "cloud-project", [
+				session("c-1", [artifact("cloud.md", "2026-10-09T10:00:00Z")], { cloud: { orgId: "org-1" } }),
+			], { kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1" }),
 		]);
 
-		expect(group.rows[0].generating).toBe(true);
+		expect(group).toMatchObject({ id: "cloud", isScratchpad: false });
+		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud", cloud: { orgId: "org-1" } });
 	});
+
 });
 
 describe("filterArtifactGroups", () => {

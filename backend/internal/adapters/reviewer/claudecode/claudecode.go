@@ -32,6 +32,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerClaudeCode
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
@@ -133,6 +141,8 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 		Config:        inv.Config,
 		SessionID:     workeragent.SessionUUID(inv.ReviewerID),
 		WorkspacePath: inv.WorkspacePath,
+		// The mode ReviewCommand launches with.
+		Permissions: ports.PermissionModeAuto,
 	})
 }
 

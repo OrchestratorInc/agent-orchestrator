@@ -10,7 +10,11 @@ dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`)
 Never write AO state to `~/Library/Application Support` or any other OS-default
 app-data location. The sole read exception is an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
-without modifying them and keep snapshots and results under `~/.ao`.
+without modifying them and keep snapshots and results under `~/.ao`. The sole
+write exception is Chrome mode's native-messaging host manifest, which Chrome
+only reads from its own `NativeMessagingHosts` directory: written only by an
+explicit `ao browser chrome setup`, removed by `remove`, pointing at a wrapper
+under `~/.ao` and holding no AO state.
 `frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 
@@ -27,9 +31,9 @@ targeted migration when an existing mismatch needs broader work.
 
 When showing or demoing frontend changes, run `ao preview [url]` from inside the
 session so the change renders in the desktop browser panel (the inspector rail's
-Browser tab); do not just describe it. `ao preview` updates the panel without
-disrupting the current view. It does not steal focus or force the Browser tab open
-if the user is looking at something else. It only badges the tab as unseen. If the
-Browser tab isn't already the one
-the user has open, say so in your reply (e.g. "check the Browser tab") so the change
-doesn't go unnoticed behind the badge.
+Browser tab); do not just describe it. A new `ao preview` target, `ao browser open`,
+or `ao browser tab new` reveals Browser for the session being viewed. Revealing
+opens the inspector and selects Browser without changing the routed session,
+project, or OS window focus. Passive browser activity (`snapshot`, `click`,
+`fill`, `errors`, etc.) only badges a hidden Browser tab as unseen. Mention
+"check the Browser tab" when passive activity is the only update.

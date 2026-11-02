@@ -51,10 +51,19 @@ export type PRCardPresentation = {
 	};
 };
 
+/** The person behind a pull request AO opened through its GitHub App. */
+export type PROpener = {
+	name: string;
+	githubLogin?: string;
+	avatarUrl?: string;
+};
+
 export type PRSummaryMetadata = {
 	provider: string;
 	author?: string;
 	authorAvatarUrl?: string;
+	/** Set when AO's GitHub App opened the PR, so `author` is its bot account. */
+	openedBy?: PROpener;
 	sourceBranch?: string;
 	targetBranch?: string;
 	changedFiles: number;

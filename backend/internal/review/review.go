@@ -35,7 +35,17 @@ var (
 	// ErrPROwnedElsewhere means a named PR belongs to another active session,
 	// which a review trigger never takes over.
 	ErrPROwnedElsewhere = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
+	// ErrHarnessInstallActive means the reviewer's harness is being installed,
+	// updated or removed, so a reviewer cannot start on it now.
+	ErrHarnessInstallActive = fmt.Errorf("%w: reviewer harness is being updated", ErrConflict)
 )
+
+// HarnessUseGate keeps reviewer launches from racing a harness update. The
+// release must be called once the reviewer's handle is recorded, so an update
+// that starts afterwards sees the reviewer as live.
+type HarnessUseGate interface {
+	TryBeginHarnessUse(harness domain.AgentHarness) (release func(), ok bool)
+}
 
 // Store is the persistence surface the engine needs. *sqlite.Store satisfies it
 // in production; tests use a fake.
@@ -83,11 +93,13 @@ type Projects interface {
 
 // Deps wires the engine.
 type Deps struct {
-	Store    Store
-	Sessions Sessions
-	PRs      PRs
-	Projects Projects
-	Launcher Launcher
+	// HarnessUse, when set, is held across each reviewer launch.
+	HarnessUse HarnessUseGate
+	Store      Store
+	Sessions   Sessions
+	PRs        PRs
+	Projects   Projects
+	Launcher   Launcher
 	// ChatRecoveryDone gates operations that could mistake a recovering reviewer for an exited one.
 	ChatRecoveryDone <-chan struct{}
 
@@ -98,13 +110,14 @@ type Deps struct {
 
 // Engine is the core code-review engine.
 type Engine struct {
-	store    Store
-	sessions Sessions
-	prs      PRs
-	projects Projects
-	launcher Launcher
-	clock    func() time.Time
-	newID    func() string
+	harnessUse HarnessUseGate
+	store      Store
+	sessions   Sessions
+	prs        PRs
+	projects   Projects
+	launcher   Launcher
+	clock      func() time.Time
+	newID      func() string
 
 	chatRecoveryDone <-chan struct{}
 
@@ -129,6 +142,7 @@ func New(d Deps) *Engine {
 	}
 	return &Engine{
 		store:        d.Store,
+		harnessUse:   d.HarnessUse,
 		sessions:     d.Sessions,
 		prs:          d.PRs,
 		projects:     d.Projects,
@@ -250,6 +264,10 @@ type TriggerOptions struct {
 	// The same reviewer is never started twice on one head at the same time:
 	// a person's rerun reuses that running pass, an agent's rerun is told so.
 	Rerun bool
+	// BranchPRLookupFoundNone reports that the caller looked up open PRs from
+	// the worker's branch just before this trigger and found none, so a
+	// no-PR error may say so.
+	BranchPRLookupFoundNone bool
 }
 
 // TriggerWithOptions starts reviews for every PR on the worker session that needs review.
@@ -321,7 +339,13 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, err
 	}
 	if len(prs) == 0 {
-		return TriggerResult{}, fmt.Errorf("%w: AO is not tracking a PR for worker %q yet; if you just opened one, run `ao review trigger --pr <url>`", ErrInvalid, workerID)
+		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone))
+	}
+	// Only closed or merged PRs are tracked: say so the same way, not just
+	// that no PR head is open, unless the caller named one of them.
+	noOpenPR := ""
+	if strings.TrimSpace(opts.PRURL) == "" && !hasOpenPR(prs) {
+		noOpenPR = noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone)
 	}
 	if want := strings.TrimSpace(opts.PRURL); want != "" {
 		// A targeted pass reviews only the named PR, matched by API or web URL.
@@ -420,7 +444,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			// A person's rerun reuses the pass already running for this reviewer;
 			// an agent asked for new work and must hear that none started.
 			if opts.Rerun && source == domain.ReviewTriggerAgent {
-				return TriggerResult{}, nothingToReviewError(reviews, runs, harness, true)
+				return TriggerResult{}, nothingToReviewError(reviews, runs, harness, true, noOpenPR)
 			}
 			return TriggerResult{
 				Run:              firstReusableRun(reviews),
@@ -538,7 +562,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ControllerGeneration = ""
 		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
-			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun)
+			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun, noOpenPR)
 		}
 		return TriggerResult{Run: firstReusableRun(reviews), ReviewerHandleID: legacyReviewerHandle(reviewRow), Created: false, Reviews: reviews, Runs: runs, ReviewerSurface: reviewerSurface(reviewRow)}, nil
 	}
@@ -613,6 +637,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if handleID == "" {
 		// Each pass gets a fresh reviewer process on the same stable terminal
 		// handle when there is no resumable live agent session to notify.
+		releaseHarness, err := e.beginHarnessUse(harness)
+		if err != nil {
+			return TriggerResult{}, failRuns(0, err)
+		}
+		defer releaseHarness()
 		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
 		}
@@ -753,6 +782,17 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 	}
 }
 
+// noTrackedPRMessage explains a trigger with no PR to review and gives the
+// exact retry command, since the PR may simply not be discovered yet. It says
+// the worker's branch has no open PR only when a lookup found none.
+func noTrackedPRMessage(worker domain.SessionRecord, branchLookupFoundNone bool) string {
+	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
+	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" && branchLookupFoundNone {
+		return fmt.Sprintf("AO is not tracking an open PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
+	}
+	return fmt.Sprintf("AO is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
+}
+
 // headHasReview reports whether any reviewer has a running or completed pass
 // on the PR head. Failed and cancelled passes never produced a review.
 func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
@@ -778,8 +818,9 @@ func headRunningForHarness(runs []domain.ReviewRun, prURL, targetSHA string, har
 
 // nothingToReviewError explains why a trigger that asked not to reuse silently
 // started nothing. It names the first reviewable PR head, so the caller sees
-// which commit is already covered and what to do next.
-func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harness domain.ReviewerHarness, rerun bool) error {
+// which commit is already covered and what to do next. noOpenPR, when set,
+// explains a session whose tracked PRs are all closed or merged.
+func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harness domain.ReviewerHarness, rerun bool, noOpenPR string) error {
 	for _, review := range reviews {
 		if review.Status == ReviewStateIneligible {
 			continue
@@ -799,7 +840,20 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 		}
 		return fmt.Errorf("%w: PR #%d head %s was already reviewed (%s); push new commits, or pass --rerun to review this commit again. If you just pushed, wait a few seconds and run it again", ErrHeadAlreadyReviewed, review.PRNumber, sha, verdict)
 	}
+	if noOpenPR != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, noOpenPR)
+	}
 	return fmt.Errorf("%w: no open PR head to review", ErrInvalid)
+}
+
+// hasOpenPR reports whether any of prs is neither closed nor merged.
+func hasOpenPR(prs []domain.PullRequest) bool {
+	for _, pr := range prs {
+		if !pr.Merged && !pr.Closed {
+			return true
+		}
+	}
+	return false
 }
 
 func shortSHA(sha string) string {
@@ -1056,6 +1110,11 @@ func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker d
 	if err != nil {
 		return RestoreReviewerResult{}, err
 	}
+	releaseHarness, err := e.beginHarnessUse(review.Harness)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	defer releaseHarness()
 	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{ReviewSessionID: review.ID, LaunchID: launchID, WorkerID: worker.ID, ProjectID: worker.ProjectID, ProjectEnv: projectEnv, Harness: review.Harness, WorkspacePath: worker.Metadata.WorkspacePath, AgentSessionID: review.AgentSessionID, ProviderConversationID: review.ProviderConversationID, PreviousRuns: previousRuns, InterfaceMode: review.InterfaceMode})
 	if err != nil {
 		return RestoreReviewerResult{}, fmt.Errorf("restore reviewer: %w", err)
@@ -1175,6 +1234,11 @@ func (e *Engine) restoreReviewerLocked(
 	if err != nil {
 		return RestoreReviewerResult{}, err
 	}
+	releaseHarness, err := e.beginHarnessUse(harness)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	defer releaseHarness()
 	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{
 		ReviewSessionID:      reviewRow.ID,
 		LaunchID:             launchID,
@@ -1994,4 +2058,17 @@ func (e *Engine) stopReviewChatWork(ctx stdctx.Context, review domain.Review) er
 		return fmt.Errorf("stop previous reviewer Chat: %w", err)
 	}
 	return e.store.SettleReviewChatWork(ctx, review.ID, e.clock())
+}
+
+// beginHarnessUse holds the harness against updates until the caller records
+// the reviewer it launches.
+func (e *Engine) beginHarnessUse(harness domain.ReviewerHarness) (func(), error) {
+	if e.harnessUse == nil {
+		return func() {}, nil
+	}
+	release, ok := e.harnessUse.TryBeginHarnessUse(domain.AgentHarness(harness))
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrHarnessInstallActive, harness)
+	}
+	return release, nil
 }

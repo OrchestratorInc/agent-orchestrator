@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -89,6 +91,50 @@ func TestClaudeACPLaunchEnvPreservesInvalidModelConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClaudeACPLaunchEnvEnablesTodoToolsByDefault(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+	env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+	if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+		t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want 1 so Claude has a to-do tool", got)
+	}
+}
+
+func TestClaudeACPLaunchEnvTreatsBlankTodoToolsValueAsNoChoice(t *testing.T) {
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+		env := claudeACPLaunchEnv(
+			map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": "  "}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the default 1 for a blank value", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "  ")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the default 1 for a blank value", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvKeepsConfiguredTodoToolsChoice(t *testing.T) {
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+		env := claudeACPLaunchEnv(
+			map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": "0"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "0" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the project's value kept", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; set {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the inherited value left alone", got)
+		}
+	})
 }
 
 func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {
@@ -184,7 +230,48 @@ func TestClaudeACPModelConfigSkipsDiscoveryWhenUserConfigurationMustBePreserved(
 	}
 }
 
+func TestClaudeSessionMetaAddsPlanGuidanceWhenTodoToolsAreEnabled(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+	appended := func(cfg acpdriver.LaunchConfig) string {
+		t.Helper()
+		prompt, ok := claudeSessionMeta(cfg)["systemPrompt"].(map[string]any)
+		if !ok {
+			t.Fatalf("no systemPrompt for %+v", cfg)
+		}
+		return prompt["append"].(string)
+	}
+	if got := appended(acpdriver.LaunchConfig{}); got != claudePlanGuidance {
+		t.Fatalf("append = %q, want just the plan guidance", got)
+	}
+	if got := appended(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"}); got != "AO standing instructions\n\n"+claudePlanGuidance {
+		t.Fatalf("append = %q, want the standing instructions then the plan guidance", got)
+	}
+}
+
+func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
+	for _, off := range []string{"0", "false", "No", "OFF"} {
+		t.Run("project env "+off, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+			env := map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": off}
+			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got != nil {
+				t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+			}
+			prompt := claudeSessionMeta(acpdriver.LaunchConfig{Env: env, SystemPrompt: "AO standing instructions"})["systemPrompt"].(map[string]any)
+			if prompt["append"] != "AO standing instructions" {
+				t.Fatalf("append = %q, want only the standing instructions", prompt["append"])
+			}
+		})
+	}
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
+			t.Fatalf("meta = %#v, want none: the to-do tools are off", got)
+		}
+	})
+}
+
 func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
 	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
 		t.Fatalf("empty prompt metadata = %#v", got)
 	}
@@ -196,9 +283,43 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	if prompt["type"] != "preset" || prompt["preset"] != "claude_code" || prompt["append"] != "AO standing instructions" {
 		t.Fatalf("systemPrompt = %#v", prompt)
 	}
+	if options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options"); options["tools"] != nil {
+		t.Fatalf("ordinary session received a tool restriction: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+	for _, window := range []string{"", "50000"} {
+		t.Run("compact window "+window, func(t *testing.T) {
+			meta := claudeSessionMeta(acpdriver.LaunchConfig{
+				SystemPrompt: "Return only task title and slug JSON.", DisableTools: true,
+				Env: map[string]string{claudeAutoCompactWindowEnv: window},
+			})
+			prompt := meta["systemPrompt"].(map[string]any)
+			if prompt["append"] != "Return only task title and slug JSON." {
+				t.Fatalf("text-only task received tool-use guidance: %#v", prompt)
+			}
+			options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+			tools, ok := options["tools"].([]string)
+			if !ok || tools == nil || len(tools) != 0 {
+				t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+			}
+			if options["strictMcpConfig"] != true || !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+				t.Fatalf("background task can inherit MCP tools: %#v", options)
+			}
+			if window != "" {
+				env, ok := options["env"].(map[string]string)
+				if !ok || env[claudeAutoCompactWindowEnv] != window {
+					t.Fatalf("lost compaction environment: %#v", options)
+				}
+			}
+		})
+	}
 }
 
 func TestClaudeSessionMetaNeverIncludesReplayContext(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})
 	prompt := meta["systemPrompt"].(map[string]any)
 	if strings.Contains(prompt["append"].(string), "replayed-conversation") {
@@ -225,6 +346,22 @@ func TestClaudeSessionOptionsUseACPConfigIDs(t *testing.T) {
 	want := []acpdriver.SessionOption{{ID: "model", Value: "sonnet"}, {ID: "effort", Value: "high"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeSessionOptionsNeverSwapAFullIDForAnAlias(t *testing.T) {
+	got := claudeSessionOptions(ports.ChatTurnSettings{Model: "claude-haiku-5-5"})
+	want := []acpdriver.SessionOption{{ID: "model", Value: "claude-haiku-5-5", Optional: true, Name: "Haiku 5.5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeModelNameReadsTheVersion(t *testing.T) {
+	for id, want := range map[string]string{"claude-opus-5-5": "Opus 5.5", "claude-sonnet-5": "Sonnet 5", "claude-opus-4-5-20251101": "Opus 4.5", "opus": ""} {
+		if got := claudeModelName(id); got != want {
+			t.Errorf("claudeModelName(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 
@@ -321,7 +458,7 @@ func TestClaudePromptResponseFailureRequiresStructuredLoginAction(t *testing.T) 
 		}}},
 	}
 
-	err := claudePromptResponseFailure(response)
+	err := claudePromptResponseFailure(response, "")
 	if !errors.Is(err, ports.ErrChatAuthRequired) {
 		t.Fatalf("error = %v, want ErrChatAuthRequired", err)
 	}
@@ -332,7 +469,7 @@ func TestClaudePromptResponseFailureIgnoresAssistantAuthProse(t *testing.T) {
 		StopReason: acpsdk.StopReasonEndTurn,
 		Meta:       map[string]any{"assistantMessage": "Your OAuth token has expired; please run /login."},
 	}
-	if err := claudePromptResponseFailure(response); err != nil {
+	if err := claudePromptResponseFailure(response, ""); err != nil {
 		t.Fatalf("assistant prose classified as terminal auth failure: %v", err)
 	}
 }
@@ -343,5 +480,60 @@ func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
 	callback()
 	if called != 1 {
 		t.Fatalf("daemon callback calls = %d, want 1", called)
+	}
+}
+
+func TestClaudePromptResponseFailureRecordsVersionTooOld(t *testing.T) {
+	claudecode.ConfigureModelVersionRequirements("")
+	t.Cleanup(func() { claudecode.ConfigureModelVersionRequirements("") })
+	response := acpsdk.PromptResponse{
+		StopReason: acpsdk.StopReasonEndTurn,
+		Meta: map[string]any{"jetbrains": map[string]any{"air": map[string]any{
+			"version": float64(1),
+			"sessionFailure": map[string]any{
+				"id": "bad-request", "severity": "error", "category": "bad_request",
+				"title": `API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.239 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.","details":{"error_code":"claude_code_version_too_old"}}}`,
+			},
+		}}},
+	}
+
+	err := claudePromptResponseFailure(response, "us.anthropic.claude-opus-5-5-v1:0")
+	if !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if !strings.Contains(err.Error(), "2.1.280") || !strings.Contains(err.Error(), "claude update") || strings.Contains(err.Error(), "API Error") {
+		t.Fatalf("error text = %q, want the remedy instead of the raw API error", err.Error())
+	}
+	if got, ok := claudecode.DefaultModelVersionRequirements().Required("us.anthropic.claude-opus-5-5-v1:0"); !ok || got != "2.1.280" {
+		t.Fatalf("recorded requirement = %q, %v", got, ok)
+	}
+
+	if err := claudePromptResponseFailure(response, "opus"); !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("alias error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if _, ok := claudecode.DefaultModelVersionRequirements().Required("opus"); ok {
+		t.Fatal("recorded a version requirement for an alias")
+	}
+}
+
+func TestClaudeServedModelOnlyReportsAliases(t *testing.T) {
+	configDir := t.TempDir()
+	sessionID := "8320947f-5806-4579-943f-b23a943bac1f"
+	projectDir := filepath.Join(configDir, "projects", "-work")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"assistant","message":{"model":"claude-opus-4-8"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := acpdriver.LaunchConfig{Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
+
+	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
+	if served != "claude-opus-4-8" || !strings.Contains(reason, "opus") {
+		t.Fatalf("served = %q, reason = %q", served, reason)
+	}
+	if served, _ := claudeServedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
+		t.Fatalf("concrete model reported as rerouted to %q", served)
 	}
 }

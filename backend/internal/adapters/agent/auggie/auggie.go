@@ -138,7 +138,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd = []string{binary, "--print"}
+	cmd = []string{binary}
 	if cfg.SystemPromptFile != "" {
 		cmd = append(cmd, "--rules", cfg.SystemPromptFile)
 	}
@@ -205,4 +205,12 @@ func (p *Plugin) auggieBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

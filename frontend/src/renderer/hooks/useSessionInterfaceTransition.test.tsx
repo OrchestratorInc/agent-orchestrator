@@ -881,8 +881,8 @@ describe("interface switch readiness", () => {
 		bRefresh.resolve();
 	});
 
-	it.each(["NATIVE_SESSION_MISSING", "NATIVE_SESSION_UNVERIFIED"])(
-		"rechecks transient native-session readiness (%s) until the switch becomes supported",
+	it.each(["NATIVE_SESSION_MISSING", "NATIVE_SESSION_UNVERIFIED", "WORKSPACE_UNAVAILABLE"])(
+		"rechecks transient switch readiness (%s) until the switch becomes supported",
 		async (reasonCode) => {
 			getMock
 				.mockResolvedValueOnce({

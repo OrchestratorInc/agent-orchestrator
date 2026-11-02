@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { createContext, useCallback, type PointerEvent } from "react";
 
 /**
  * Focus hand-off between a menu that is closing and the surface its selected
@@ -168,4 +168,39 @@ export function composeMenuCloseAutoFocus(handler?: (event: Event) => void) {
 		const menu = event.currentTarget ?? event.target;
 		if (menu instanceof HTMLElement) publishMenuTeardownComplete(menu);
 	};
+}
+
+/**
+ * Pointer-leave for a menu row. Radix moves focus to the menu itself when the
+ * pointer leaves a row and then on to the next row, so going from one row to the
+ * next changes focus twice, and each change restyles the page. Going straight to
+ * a sibling row skips the first: that row's own hover takes focus.
+ */
+export function skipFocusHopToSibling(event: PointerEvent<HTMLElement>) {
+	const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest('[role^="menuitem"]') : null;
+	if (next && next !== event.currentTarget && next.closest('[role="menu"]') === event.currentTarget.closest('[role="menu"]')) {
+		event.preventDefault();
+	}
+}
+
+/**
+ * Set by a menu root that is non-modal only to spare the page a restyle, not to
+ * let clicks through. Its content then makes an outside click do what a modal
+ * menu's would: close the menu and nothing else.
+ */
+export const ShieldOutsideClick = createContext(false);
+
+/** Swallows the click that follows an outside pointerdown which closed a menu. */
+export function swallowClickAfter(event: CustomEvent<{ originalEvent: globalThis.PointerEvent }>) {
+	if (event.defaultPrevented || event.detail.originalEvent.button !== 0) return;
+	const listening = new AbortController();
+	const swallow = (click: MouseEvent) => {
+		click.preventDefault();
+		click.stopPropagation();
+	};
+	// The click, if any, is dispatched right after pointerup; stop listening once it has had its turn.
+	const release = () => setTimeout(() => listening.abort());
+	document.addEventListener("click", swallow, { capture: true, signal: listening.signal });
+	document.addEventListener("pointerup", release, { capture: true, once: true, signal: listening.signal });
+	document.addEventListener("pointercancel", release, { capture: true, once: true, signal: listening.signal });
 }

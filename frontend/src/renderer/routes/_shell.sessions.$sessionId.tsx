@@ -1,13 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { SessionView } from "../components/SessionView";
-import { useCloudOrg } from "../hooks/useCloudOrg";
+import { loadSessionView } from "../lib/session-view-chunk";
 
+// SessionView renders from LocalSessionHost in the shell so switching between
+// project sessions and scratchpads reuses one mounted instance. The route only
+// loads its chunk: with no pending screen the previous page stays up until the
+// session can paint, and the host owns the error panel if the chunk fails.
 export const Route = createFileRoute("/_shell/sessions/$sessionId")({
-	component: SessionRoute,
+	loader: async () => {
+		await loadSessionView();
+	},
+	pendingMs: Number.POSITIVE_INFINITY,
+	errorComponent: () => null,
 });
-
-function SessionRoute() {
-	const { sessionId } = Route.useParams();
-	const { org } = useCloudOrg();
-	return <SessionView sessionId={sessionId} cloudOrgId={org?.id} />;
-}

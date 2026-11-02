@@ -134,6 +134,17 @@ npm run lint
 
 ### Code generation
 
+Create new SQLite migrations from the repository root:
+
+```bash
+npm run migration:create -- add_reports
+```
+
+The command creates a Goose SQL template with a UTC `YYYYMMDDHHMMSSsss` ID.
+Fill in its SQL and append the generated ID and filename to `shippedMigrations`
+in `backend/internal/storage/sqlite/migrate_burned_versions_test.go`.
+Keep existing migration IDs, filenames, and SQL unchanged.
+
 ```bash
 # Regenerate sqlc code after editing queries or schema
 npm run sqlc
@@ -281,8 +292,7 @@ The diff check should pass after committing the regenerated files. Do not edit
 `gen/` by hand or use a different sqlc version; the version in `package.json` is
 authoritative. Review any unexpected query or generated type changes before
 committing. The storage tests also check that the config is valid YAML and keeps
-the boolean overrides for `agent_switch_failure_policy.enabled` and
-`app_settings.cloud_offering`.
+the boolean override for `app_settings.cloud_offering`.
 
 If CI fails on the `api-drift` check, the OpenAPI-generated files are out of sync with source. Regenerate them locally and commit the updated files:
 

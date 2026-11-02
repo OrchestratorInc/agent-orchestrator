@@ -106,6 +106,12 @@ func TestReconcileSchemaRepairsMissingConversationCurrentSessionID(t *testing.T)
 		id TEXT PRIMARY KEY,
 		conversation_id TEXT NOT NULL
 	)`)
+	// Production has conversation_messages too; leave continuation absent so its
+	// repair also replays.
+	mustExec(t, db, `CREATE TABLE conversation_messages (
+		id TEXT PRIMARY KEY,
+		conversation_id TEXT NOT NULL
+	)`)
 	mustExec(t, db, `INSERT INTO conversations (id, scope, project_id, session_id, latest_sequence, created_at, updated_at)
 		VALUES ('conv-1', 'session', 'p1', 'ao-1', 0, '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z')`)
 

@@ -1,6 +1,7 @@
 import { Feather } from "./icons";
 import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { useTheme } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { workerDockVisibility } from "./worker-dock-layout";
 import type { WorkerDockProps } from "./worker-dock";
 import { iconSize, radius, space, type } from "./tokens";
@@ -34,7 +35,7 @@ export function WorkerDock({
 						onChangeText={onQueryChange}
 						placeholder="Search workers"
 						placeholderTextColor={t.textTertiary}
-						selectionColor={t.accent}
+						{...textSelectionColors(t)}
 						autoFocus
 						autoCapitalize="none"
 						autoCorrect={false}

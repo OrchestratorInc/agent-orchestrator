@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -28,25 +29,42 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// gitHubCLITokenEnvVars take precedence over the GitHub CLI's stored
+// credentials for github.com, in this order.
+var gitHubCLITokenEnvVars = []string{"GH_TOKEN", "GITHUB_TOKEN"}
+
 var copilotTokenEnvVars = []string{
 	"COPILOT_GITHUB_TOKEN",
 	"GH_TOKEN",
 	"GITHUB_TOKEN",
 }
 
+// copilotLocalAuthStatus follows Copilot CLI's own credential order: token
+// environment variables first (one silently overrides a stored login), then
+// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	for _, name := range copilotTokenEnvVars {
 		if copilotUsableToken(os.Getenv(name)) {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	status, ok, err := copilotStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
+	}
 	if copilotBYOKConfigured() {
+		// A bring-your-own provider; its API key, if any, is optional.
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL"))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
 
+func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -56,8 +74,10 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	}
 	// Copilot credentials can come from several independent sources. A corrupt
 	// config file must not prevent the documented GitHub CLI token fallback.
-	configStatus, configOK, _ := copilotConfigAuthStatus(filepath.Join(copilotHomeDir(home), "config.json"))
+	configPath := filepath.Join(copilotHomeDir(home), "config.json")
+	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
 	if configOK {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		return configStatus, true, nil
 	}
 	if status, ok, err := copilotGHAuthStatus(ctx); err != nil || ok {
@@ -120,11 +140,72 @@ func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
 	}
 	if err == nil && copilotUsableToken(string(out)) {
+		// GH_TOKEN and GITHUB_TOKEN override the GitHub CLI's stored login, and
+		// `gh auth token` then prints that token; hosts.yml's user is not its owner.
+		for _, name := range gitHubCLITokenEnvVars {
+			if copilotUsableToken(os.Getenv(name)) {
+				ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
+				return ports.AgentAuthStatusAuthorized, true, nil
+			}
+		}
+		evidence := domain.CommandSource("gh", "auth", "token").WithMethod(domain.AgentAccountMethodAccount)
+		evidence.Name = gitHubCLIUser(ctx)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	// GitHub CLI state is only one Copilot credential source. A negative result
 	// cannot rule out Copilot's own stored OAuth or token credentials.
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// gitHubCLIUser returns the github.com login the GitHub CLI is signed in as,
+// read from its hosts.yml (GH_CONFIG_DIR, then XDG_CONFIG_HOME, then
+// ~/.config/gh). Tokens in the file are never read.
+func gitHubCLIUser(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	dir := strings.TrimSpace(os.Getenv("GH_CONFIG_DIR"))
+	if dir == "" {
+		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+			dir = filepath.Join(xdg, "gh")
+		} else if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dir = filepath.Join(home, ".config", "gh")
+		}
+	}
+	if dir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "hosts.yml")) //nolint:gosec // GitHub CLI's own config
+	if err != nil {
+		return ""
+	}
+	inGitHub := false
+	childIndent := -1
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent == 0 {
+			inGitHub = strings.TrimSuffix(trimmed, ":") == "github.com"
+			childIndent = -1
+			continue
+		}
+		if !inGitHub {
+			continue
+		}
+		// The active account is the host's own "user:" entry, at the indent of
+		// the host's first child; logins listed under "users:" sit deeper.
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent == childIndent && strings.HasPrefix(trimmed, "user:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "user:")), `"'`)
+		}
+	}
+	return ""
 }
 
 func copilotUsableToken(value string) bool {

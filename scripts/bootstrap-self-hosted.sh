@@ -2,6 +2,9 @@
 # Fresh Ubuntu x64 entry point. The lower-level installer owns AO releases and service setup.
 set -euo pipefail
 
+# Braced so bash reads the whole script before running any of it: a download
+# cut off mid-way by `curl ... | bash` runs nothing.
+{
 usage() {
 	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
 	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
@@ -51,7 +54,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 installer="$stage/setup-self-hosted.sh"
 if [[ -z "$source_ref" ]]; then
-	curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
+	curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
 else
 	sudo apt-get install -y build-essential pkg-config xz-utils
 	tools="$HOME/.local/ao-build-tools"
@@ -70,7 +73,7 @@ else
 		tar -xJf "$stage/node.tar.xz" -C "$tools"
 	fi
 	export PATH="$tools/go/bin:$tools/node-v22.23.2-linux-x64/bin:$PATH"
-	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/Untrivial-ai/agent-orchestrator.git "$stage/source"
+	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/OrchestratorInc/agent-orchestrator.git "$stage/source"
 	(
 		cd "$stage/source/frontend"
 		export GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=1536
@@ -94,3 +97,4 @@ bash "$installer" "${args[@]}"
 
 printf '\nDay-two commands: %s\n' "$HOME/.ao/host/current/resources/daemon/ao remote-host status"
 printf 'Service logs: journalctl --user -u ao-self-hosted.service -n 100 --no-pager\n'
+}

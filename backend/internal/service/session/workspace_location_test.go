@@ -103,3 +103,43 @@ func assertAPIErrorCode(t *testing.T, err error, code string) {
 		t.Fatalf("error = %v, want API code %s", err, code)
 	}
 }
+
+func TestArtifactLocationReturnsTheStoredArtifactDirectory(t *testing.T) {
+	artifactDir := t.TempDir()
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{ArtifactDir: artifactDir}}
+
+	got, err := (&Service{store: store, dataDir: t.TempDir()}).ArtifactLocation(context.Background(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactDir {
+		t.Fatalf("ArtifactLocation() = %q, want %q", got, artifactDir)
+	}
+}
+
+func TestArtifactLocationFallsBackToTheDataDirLayout(t *testing.T) {
+	dataDir := t.TempDir()
+	artifactDir := filepath.Join(dataDir, "artifacts", "ao-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1"}
+
+	got, err := (&Service{store: store, dataDir: dataDir}).ArtifactLocation(context.Background(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactDir {
+		t.Fatalf("ArtifactLocation() = %q, want %q", got, artifactDir)
+	}
+}
+
+func TestArtifactLocationRejectsAMissingDirectory(t *testing.T) {
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "gone")}}
+
+	_, err := (&Service{store: store}).ArtifactLocation(context.Background(), "ao-1")
+	assertAPIErrorCode(t, err, "SESSION_ARTIFACTS_NOT_FOUND")
+}

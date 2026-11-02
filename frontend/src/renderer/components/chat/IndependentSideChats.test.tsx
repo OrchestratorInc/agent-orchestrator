@@ -20,11 +20,14 @@ const side = {
 function renderSideComposer(
 	draft = emptySideChatDraft(),
 	flags: { sending?: boolean; ready?: boolean; deliveryPending?: boolean } = {},
+	canCreate = true,
+	skills = [{ name: "review", displayName: "review", source: "repo" }],
 ) {
 	const onSend = vi.fn();
 	const onFocusSide = vi.fn();
 	const onCompact = vi.fn();
 	const onNavigate = vi.fn();
+	const onRemoveAllReferences = vi.fn();
 	render(
 		<SideComposer
 			draft={draft}
@@ -39,11 +42,12 @@ function renderSideComposer(
 			sending={false}
 			{...flags}
 			models={[]}
-			skills={[{ name: "review", displayName: "review", source: "repo" }]}
+			skills={skills}
 			side={side}
 			onSettings={vi.fn()}
 			onRemoveReference={vi.fn()}
-			onFocusSide={onFocusSide}
+			onRemoveAllReferences={onRemoveAllReferences}
+			onFocusSide={canCreate ? onFocusSide : undefined}
 			onCompact={onCompact}
 			onNavigate={onNavigate}
 			focusKey={0}
@@ -54,24 +58,50 @@ function renderSideComposer(
 		onFocusSide,
 		onCompact,
 		onNavigate,
+		onRemoveAllReferences,
 		field: screen.getByLabelText("Side chat question") as HTMLElement,
 	};
 }
 
 describe("side composer slash menu", () => {
-	it("shows provider skills and opens /btw without sending", async () => {
+	it("preserves provider commands when a new side cannot open", async () => {
+		const { onSend, onFocusSide, field } = renderSideComposer(emptySideChatDraft(), {}, false);
+		await typeInLexicalEditor(field, "/btw");
+		expect(screen.queryByRole("option", { name: /\/btw/ })).not.toBeInTheDocument();
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
+	});
+	it("keeps a provider's side command alongside description-matched /btw", async () => {
+		const {field} = renderSideComposer(emptySideChatDraft(), {}, true, [{name:"side",displayName:"side",source:"provider"}]);
+		await typeInLexicalEditor(field, "/side");
+		expect(screen.getByRole("option", {name:/\/side/})).toBeInTheDocument();
+		expect(screen.getByRole("option", {name:/\/btw/})).toBeInTheDocument();
+	});
+	it("shows provider skills and inserts /btw without creating or sending", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/");
 		expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
 		expect(screen.getByRole("option", { name: /\/compact/ })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("option", { name: /\/btw/ }));
-		await waitFor(() => expect(onFocusSide).toHaveBeenCalled());
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
+	});
+	it("discovers /btw through /side and inserts it on Enter before writing a prompt", async () => {
+		const { onSend, onFocusSide, field } = renderSideComposer();
+		await typeInLexicalEditor(field, "/side");
+		expect(screen.getByRole("option", { name: /\/btw/ })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: /^\/side\b/ })).not.toBeInTheDocument();
+		fireEvent.keyDown(field, { key:"Enter" });
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onSend).not.toHaveBeenCalled(); expect(onFocusSide).not.toHaveBeenCalled();
 	});
 
 	it("shows ordered references in a removable compact summary", async () => {
 		const draft = {
 			...emptySideChatDraft(),
+			attachments: [{ id: "image", path: ".ao/attachments/shot.png", name: "shot.png", mimeType: "image/png", bytes: 4 }],
 			references: [
 				{
 					id: "one",
@@ -91,17 +121,25 @@ describe("side composer slash menu", () => {
 				},
 			],
 		};
-		renderSideComposer(draft);
+		const { onRemoveAllReferences, onNavigate } = renderSideComposer(draft);
+		const row = screen.getByTestId("side-chat-attachments-and-annotations");
+		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		expect(row).toContainElement(screen.getByRole("button", { name: "2 annotations" }));
+		expect(row).toContainElement(screen.getByRole("button", { name: "Remove shot.png" }));
 		await userEvent.click(screen.getByRole("button", { name: "2 annotations" }));
 		expect(screen.getByRole("button", { name: "sun" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: /Remove annotation/ })).toHaveLength(2);
+		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));
+		expect(onRemoveAllReferences).toHaveBeenCalledOnce();
+		expect(onNavigate).not.toHaveBeenCalled();
 	});
 
 	it("keeps a typed bare /btw in this side without sending", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/btw");
 		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(onFocusSide).toHaveBeenCalled());
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
 	});
 

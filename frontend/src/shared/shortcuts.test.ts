@@ -158,6 +158,7 @@ describe("default shortcuts", () => {
 		["open-in-editor", chord({ key: "o", meta: true })],
 		["copy-session-path", chord({ key: "C", meta: true, shift: true })],
 		["model-picker", chord({ key: "M", meta: true, shift: true })],
+		["open-orchestrator", chord({ key: "O", meta: true, shift: true })],
 	] as const)("macOS binds %s to its chord", (id, pressed) => {
 		expect(matchesAppShortcut(id, pressed, true)).toBe(true);
 	});
