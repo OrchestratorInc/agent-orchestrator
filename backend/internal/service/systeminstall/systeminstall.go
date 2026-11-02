@@ -113,15 +113,6 @@ var agentTargetSet = func() map[Target]bool {
 	return out
 }()
 
-const openCodeV2ReplacementNotice = "Installing OpenCode 2 at the default location replaces the default OpenCode 1 `opencode` executable; the two majors are not installed side by side by default."
-
-func installNotice(target Target) string {
-	if target == TargetOpencodeV2 {
-		return openCodeV2ReplacementNotice
-	}
-	return ""
-}
-
 // systemTargetSet is the stable contract of the legacy /system/install route.
 // Agent-only targets use /agents/{agent}/install instead.
 var systemTargetSet = map[Target]bool{
@@ -188,7 +179,11 @@ type Plan struct {
 	// Homebrew's metadata so `brew upgrade` sees the release AO announced. A
 	// failed step is noted in the output; Command still runs and post-update
 	// verification decides the outcome.
-	Prepare             [][]string
+	Prepare [][]string
+	// Cleanup runs after Command with the same environment, whether or not
+	// Command succeeded, e.g. restoring a Homebrew link Prepare removed. After
+	// a successful Command, a failed step fails the operation.
+	Cleanup             [][]string
 	Script              *ports.InstallScriptCommand
 	Package             string
 	PackagePrefix       string
@@ -219,6 +214,13 @@ type Plan struct {
 	// migration. Method and Package always describe what the operation runs.
 	sourceMethod  string
 	sourcePackage string
+	// alsoChanges are other harnesses whose executable the run makes
+	// unavailable for a while (Prepare unlinks it, Cleanup restores it). The
+	// run holds each one's harness gate throughout, so its launches wait and
+	// its own install, reinstall or update is refused meanwhile.
+	alsoChanges []Target
+	// homebrewV1Prefix defers the v1 linked-state check until its gate is held.
+	homebrewV1Prefix string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -323,6 +325,14 @@ const maxOutputBytes = 4000
 // realistic expected duration.
 const defaultInstallTimeout = 15 * time.Minute
 
+// cleanupTimeout bounds each of a plan's Cleanup steps, which still run after
+// the install itself timed out.
+const cleanupTimeout = 2 * time.Minute
+
+// otherHarnessHoldWait is how long a run waits for launches of a harness in
+// Plan.alsoChanges to release it before failing.
+const otherHarnessHoldWait = 10 * time.Second
+
 // defaultPersistenceTimeout keeps best-effort worker state writes from
 // consuming the daemon's entire shutdown drain budget behind a blocked DB.
 const defaultPersistenceTimeout = 2 * time.Second
@@ -396,6 +406,10 @@ type Deps struct {
 	// while they run (AO_UPDATE_WHEN_IDLE).
 	UpdateWhenIdle     bool
 	PrivateNPMPrefixes map[Target]string
+	// PrivateInstallerHomes is the HOME a target's official installer runs
+	// with, for installers that write only under $HOME and would otherwise
+	// replace another harness's executable there (OpenCode 2 over OpenCode 1).
+	PrivateInstallerHomes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -409,18 +423,19 @@ type Service struct {
 	harnessGatesMu    sync.Mutex
 	harnessGates      map[domain.AgentHarness]*sync.RWMutex
 
-	executables         ports.ExecutableFinder
-	commands            ports.CommandRunner
-	installCommands     ports.InstallCommandRunner
-	installScripts      ports.InstallScriptRunner
-	managedBinaries     ports.ManagedBinaryInstaller
-	installCapabilities ports.InstallCapabilityProbe
-	pathWritable        ports.PathWritableProbe
-	privateNPMPrefixes  map[Target]string
-	jobStore            ports.AgentInstallJobStore
-	verifier            HarnessVerifier
-	sessions            SessionLister
-	reviewers           ReviewerLister
+	executables           ports.ExecutableFinder
+	commands              ports.CommandRunner
+	installCommands       ports.InstallCommandRunner
+	installScripts        ports.InstallScriptRunner
+	managedBinaries       ports.ManagedBinaryInstaller
+	installCapabilities   ports.InstallCapabilityProbe
+	pathWritable          ports.PathWritableProbe
+	privateNPMPrefixes    map[Target]string
+	privateInstallerHomes map[Target]string
+	jobStore              ports.AgentInstallJobStore
+	verifier              HarnessVerifier
+	sessions              SessionLister
+	reviewers             ReviewerLister
 	// goos selects the platform branch in planFor. Real use is always
 	// runtime.GOOS; tests override it to exercise every OS branch from one
 	// machine, the same seam lookPath provides for PATH probing.
@@ -431,6 +446,9 @@ type Service struct {
 	// override it with a short duration to exercise the timeout path without
 	// a real multi-minute wait.
 	installTimeout time.Duration
+	// cleanupStepLimit bounds each Cleanup step; zero means cleanupTimeout.
+	// Tests shorten it.
+	cleanupStepLimit time.Duration
 	// persistenceTimeout bounds worker-owned transition and terminal writes.
 	persistenceTimeout   time.Duration
 	onSucceeded          func(Target)
@@ -563,6 +581,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		updateAdvisoryCalls:        make(map[Target]*updateAdvisoryCall),
 		pathWritable:               pathWritable,
 		privateNPMPrefixes:         deps.PrivateNPMPrefixes,
+		privateInstallerHomes:      deps.PrivateInstallerHomes,
 	}
 }
 
@@ -922,6 +941,14 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
 	}
+	if !requiresHarnessGate && s.changing[target] {
+		// Another run holds this harness (e.g. OpenCode 2's Homebrew install
+		// has OpenCode 1 unlinked); installing it now would race that run.
+		// Checked under the same lock that registers this job, and that
+		// holdOtherHarnesses reserves under, so exactly one of them proceeds.
+		s.mu.Unlock()
+		return Job{}, ErrInstallActive
+	}
 	previous, hadPrevious := s.jobs[target]
 	status := StatusInstalling
 	finishedAt := (*time.Time)(nil)
@@ -1159,7 +1186,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	previous, hadPrevious := s.jobs[target]
 	now := time.Now().UTC()
-	job := &Job{Target: target, Status: StatusVerifying, Notice: installNotice(target), StartedAt: &now, UpdatedAt: &now}
+	job := &Job{Target: target, Status: StatusVerifying, StartedAt: &now, UpdatedAt: &now}
 	if current, ok := s.jobs[target]; ok {
 		job.Method = current.Method
 		job.Command = current.Command
@@ -1200,6 +1227,23 @@ func (s *Service) beginWorker() bool {
 	}
 	s.workers.Add(1)
 	return true
+}
+
+// ShutdownTimeout reserves time for both Homebrew cleanup steps, a pending
+// harness hold, command termination delays, and terminal state persistence. The daemon
+// must drain for at least this long so normal shutdown cannot skip v1 relinking.
+func (s *Service) ShutdownTimeout() time.Duration {
+	return shutdownTimeoutForCleanup(s.cleanupStepTimeout())
+}
+
+// DefaultShutdownTimeout is the installer drain budget available before the
+// service is constructed, so a replacement daemon can wait for its predecessor.
+func DefaultShutdownTimeout() time.Duration {
+	return shutdownTimeoutForCleanup(cleanupTimeout)
+}
+
+func shutdownTimeoutForCleanup(stepTimeout time.Duration) time.Duration {
+	return 2*stepTimeout + otherHarnessHoldWait + 2*defaultPersistenceTimeout + 30*time.Second
 }
 
 // Close cancels and drains daemon-owned harness installation work.
@@ -1339,6 +1383,16 @@ func (s *Service) systemTargetInstalled(ctx context.Context, target Target) bool
 }
 
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
+	release, err := s.holdOtherHarnesses(plan.alsoChanges)
+	if err != nil {
+		s.finishAgentJob(job, StatusFailed, "", err.Error(), "")
+		return
+	}
+	defer release()
+	plan = plan.withLinkedOpenCodeV1()
+	s.mu.Lock()
+	job.Command = displayCommand(plan)
+	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
@@ -1378,19 +1432,33 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Method == "official-installer" {
 			env = append(env, vendorUpdateEnv[plan.Target]...)
 		}
-		runCommand := func(argv []string) error {
+		runCommand := func(ctx context.Context, argv []string) error {
 			if s.installCommands != nil {
 				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, progress, progress)
 			}
 			return s.commands.Run(ctx, argv, progress, progress)
 		}
 		for _, argv := range plan.Prepare {
-			if err := runCommand(argv); err != nil && ctx.Err() == nil {
+			if err := runCommand(ctx, argv); err != nil && ctx.Err() == nil {
 				_, _ = fmt.Fprintf(out, "\n%s failed (%v); continuing.\n", strings.Join(argv, " "), err)
 			}
 		}
 		if ctx.Err() == nil {
-			runErr = runCommand(plan.Command)
+			runErr = runCommand(ctx, plan.Command)
+		}
+		// Cleanup undoes what Prepare changed, so it runs even after a timeout
+		// or a failed Command. Each step has its own deadline: one that hangs
+		// must not leave the next (restoring another harness) without time.
+		for _, argv := range plan.Cleanup {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupStepTimeout())
+			err := runCommand(cleanupCtx, argv)
+			cancelCleanup()
+			if err != nil {
+				_, _ = fmt.Fprintf(out, "\n%s failed (%v).\n", strings.Join(argv, " "), err)
+				if runErr == nil && ctx.Err() == nil {
+					runErr = fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+				}
+			}
 		}
 	}
 	stopProgress()
@@ -1620,7 +1688,7 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 	return Job{
 		Target: Target(record.Target), Status: Status(record.Status), Method: record.Method,
 		Command: record.Command, ExpectedDestination: record.ExpectedDestination,
-		Output: record.Output, Error: record.Error, Notice: installNotice(Target(record.Target)), StartedAt: &startedAt,
+		Output: record.Output, Error: record.Error, StartedAt: &startedAt,
 		FinishedAt: record.FinishedAt, UpdatedAt: &updatedAt,
 	}
 }
@@ -1663,11 +1731,15 @@ func displayCommand(plan Plan) string {
 	if plan.NeedsRoot && len(argv) > 0 {
 		argv = append([]string{"sudo"}, argv...)
 	}
-	steps := make([]string, 0, len(plan.Prepare)+1)
+	steps := make([]string, 0, len(plan.Prepare)+1+len(plan.Cleanup))
 	for _, prepare := range plan.Prepare {
 		steps = append(steps, strings.Join(prepare, " "))
 	}
-	return strings.Join(append(steps, strings.Join(argv, " ")), "; ")
+	steps = append(steps, strings.Join(argv, " "))
+	for _, cleanup := range plan.Cleanup {
+		steps = append(steps, strings.Join(cleanup, " "))
+	}
+	return strings.Join(steps, "; ")
 }
 
 // capturedOutput is an io.Writer that keeps only the last max bytes written,

@@ -235,3 +235,49 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 		t.Fatalf("split agent = %+v, %q", got, rest)
 	}
 }
+
+func TestHostStartGrid(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		opts       HostOptions
+		cols, rows uint16
+		deferred   bool
+	}{
+		{name: "explicit grid starts now", opts: HostOptions{StartOnAttach: true, Cols: 146, Rows: 37}, cols: 146, rows: 37},
+		{name: "start-on-attach waits for the viewer", opts: HostOptions{StartOnAttach: true}, deferred: true},
+		{name: "one-sided grid still waits", opts: HostOptions{StartOnAttach: true, Cols: 146}, deferred: true},
+		{name: "default starts now at the default grid", opts: HostOptions{}, cols: initialConPTYColumns, rows: initialConPTYRows},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols, rows, deferred := hostStartGrid(tc.opts)
+			if cols != tc.cols || rows != tc.rows || deferred != tc.deferred {
+				t.Fatalf("hostStartGrid(%+v) = (%d, %d, %v), want (%d, %d, %v)", tc.opts, cols, rows, deferred, tc.cols, tc.rows, tc.deferred)
+			}
+		})
+	}
+}
+
+func TestPtyHostArgsCarryInitialGrid(t *testing.T) {
+	argv := []string{"/bin/zsh"}
+	opts := HostOptions{StartOnAttach: true, LazySurface: true, Cols: 146, Rows: 37}
+	shell := ptyHostArgs("shellterm-1", "/tmp/ws", argv, opts)
+	if want := []string{"pty-host", "--start=attach", "--surface=lazy", "--size=146x37", "shellterm-1", "/tmp/ws", "/bin/zsh"}; !slices.Equal(shell, want) {
+		t.Fatalf("shell args = %q, want %q", shell, want)
+	}
+	got, rest := splitHostOptionArgs(shell[1:])
+	if got != opts || !slices.Equal(rest, shell[4:]) {
+		t.Fatalf("split shell = %+v, %q", got, rest)
+	}
+
+	// A one-sided grid is no grid: the host keeps start-on-attach.
+	half := ptyHostArgs("shellterm-2", "/tmp/ws", argv, HostOptions{StartOnAttach: true, Cols: 146})
+	if want := []string{"pty-host", "--start=attach", "shellterm-2", "/tmp/ws", "/bin/zsh"}; !slices.Equal(half, want) {
+		t.Fatalf("one-sided grid args = %q, want %q", half, want)
+	}
+
+	// A malformed size is ignored rather than taken as the session id.
+	got, rest = splitHostOptionArgs([]string{"--size=wide", "shellterm-3", "/tmp/ws", "/bin/zsh"})
+	if got != (HostOptions{}) || !slices.Equal(rest, []string{"shellterm-3", "/tmp/ws", "/bin/zsh"}) {
+		t.Fatalf("split malformed size = %+v, %q", got, rest)
+	}
+}

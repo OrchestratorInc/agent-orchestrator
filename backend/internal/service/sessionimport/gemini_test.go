@@ -2,6 +2,8 @@ package sessionimport
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,6 +81,46 @@ func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
 	got, err := readGeminiTranscript(context.Background(), root, path)
 	if err != nil || got.cwd != cwd || len(got.messages) != 2 {
 		t.Fatalf("legacy = %#v, %v", got, err)
+	}
+}
+
+func TestGeminiLegacyHashResolvesOnlyRegisteredProjectsWithoutMetadata(t *testing.T) {
+	root, cwd := t.TempDir(), canonical(t.TempDir())
+	sum := sha256.Sum256([]byte(cwd))
+	hash := hex.EncodeToString(sum[:])
+	dir := filepath.Join(root, "tmp", hash, "chats")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "session-2026-11-02T08-00-33333333.json")
+	body, err := json.Marshal(map[string]any{"sessionId": "33333333-3333-4333-8333-333333333333", "projectHash": hash, "messages": []map[string]string{{"id": "u", "type": "user", "content": "synthetic legacy prompt"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readGeminiTranscript(context.Background(), root, path); err == nil {
+		t.Fatal("unregistered hash was guessed")
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "legacy", Path: cwd}}}
+	svc := New(st, "", nil)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessGemini: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].ProjectID != "legacy" {
+		t.Fatalf("legacy preview = %#v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("legacy import = %#v, %v", results, err)
+	}
+	if err := svc.RefreshArchive(context.Background(), st.sessions[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, metadata := range []string{filepath.Join(root, "projects.json"), filepath.Join(filepath.Dir(dir), ".project_root")} {
+		if _, err := os.Stat(metadata); !os.IsNotExist(err) {
+			t.Fatalf("discovery wrote provider metadata %s: %v", metadata, err)
+		}
 	}
 }
 
