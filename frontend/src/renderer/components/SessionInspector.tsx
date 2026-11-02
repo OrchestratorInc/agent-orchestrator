@@ -837,7 +837,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
-			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			if (isStandaloneSession) {
 				void navigate({ to: "/" });
 				return;
 			}
@@ -1129,11 +1129,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
 	};
 	const createdAt = session.createdAt ?? session.updatedAt;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const creationLabel = appI18n.t(isStandalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace");
 
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t(session.workspaceId === STANDALONE_WORKSPACE_ID ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace")}</>,
+			content: <>{creationLabel}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
