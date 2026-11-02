@@ -185,7 +185,7 @@ func (p isolatedAccountProvider) LoginArgv(context.Context) ([]string, error) {
 	return []string{"codex", "login"}, nil
 }
 func (isolatedAccountProvider) Logout(context.Context, string) error { return nil }
-func (isolatedAccountProvider) Prepare(string) error               { return nil }
+func (isolatedAccountProvider) Prepare(string) error                 { return nil }
 func (p isolatedAccountProvider) LaunchEnv(home string) map[string]string {
 	if p.provider == domain.AgentAccountProviderClaude {
 		return map[string]string{"CLAUDE_CONFIG_DIR": home}
