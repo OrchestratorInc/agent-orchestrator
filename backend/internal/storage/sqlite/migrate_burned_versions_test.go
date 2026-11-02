@@ -237,6 +237,7 @@ var shippedMigrations = map[int64]string{
 	20261030234657125: "20261030234657125_app_settings_limit_history.sql",
 	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",
 	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
+	20261102174444568: "20261102174444568_allow_pi_usage.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
