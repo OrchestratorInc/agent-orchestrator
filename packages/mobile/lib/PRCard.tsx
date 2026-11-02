@@ -1,9 +1,11 @@
 import { memo } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
+import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { haptics } from "./haptics";
+import { LongPressMenu, type LongPressMenuAction } from "./long-press-menu";
 import { openGitHub } from "./openGitHub";
 import type { Theme } from "./theme";
 import {
@@ -16,8 +18,20 @@ import {
 	toneColor,
 	type PRLifecycle,
 } from "./prView";
+import { reviewRouteForPR, workerRouteForSession } from "./reviewView";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space, type } from "./tokens";
+
+type PRCardAction = "worker" | "pr" | "github";
+
+// A tap opens the PR page; the long-press skips it for the worker or GitHub.
+// iOS menus take SF Symbols only, and none matches the Feather pull-request
+// glyph; two joined points is the nearest to its two-circle shape.
+const PR_CARD_ACTIONS: readonly LongPressMenuAction<PRCardAction>[] = [
+	{ id: "worker", title: "Open worker", icon: "message-square", systemImage: "bubble.left" },
+	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "point.topleft.down.to.point.bottomright.curvepath" },
+	{ id: "github", title: "Open on GitHub", icon: "external-link", systemImage: "arrow.up.right.square" },
+];
 
 /** A pull-request row with the same hierarchy and density as WorkerListRow. */
 export const PRCard = memo(function PRCard({
@@ -36,6 +50,7 @@ export const PRCard = memo(function PRCard({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
+	const router = useRouter();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
@@ -51,18 +66,28 @@ export const PRCard = memo(function PRCard({
 	const status = atoms[0] ?? { text: state.label, tone: "passive" as const };
 	const blockers = summary ? prBlockerLine(summary) : null;
 
+	const githubUrl = summary?.htmlUrl || summary?.url || pr.url;
+	const openPR = () => openPage(reviewRouteForPR(session.id, pr, hostId));
+	// The menu gives the haptic for its own items.
+	const runAction = (action: PRCardAction) => {
+		if (action === "worker") router.push(workerRouteForSession(session, hostId));
+		else if (action === "pr") openPR();
+		else void openGitHub(githubUrl);
+	};
+
 	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
+		<LongPressMenu
+			actions={PR_CARD_ACTIONS}
+			onAction={runAction}
 			onPress={() => {
 				haptics.tap();
-				openPage({
-					pathname: "/review/[sessionId]",
-					params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId },
-				});
+				openPR();
 			}}
-			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+			accessibilityLabel={`${title}. ${projectLabel}. Pull request ${pr.number}. ${status.text}.`}
+			accessibilityHint="Long press to open the worker or GitHub."
+			style={styles.row}
+			pressedStyle={styles.rowPressed}
+			testID="pr-card"
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
@@ -82,7 +107,7 @@ export const PRCard = memo(function PRCard({
 					onPress={(event) => {
 						event.stopPropagation();
 						haptics.tap();
-						void openGitHub(summary?.htmlUrl || summary?.url || pr.url);
+						void openGitHub(githubUrl);
 					}}
 					style={({ pressed }) => [styles.external, pressed && styles.externalPressed]}
 				>
@@ -91,7 +116,7 @@ export const PRCard = memo(function PRCard({
 			</View>
 
 			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
-		</Pressable>
+		</LongPressMenu>
 	);
 });
 

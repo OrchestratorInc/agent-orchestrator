@@ -281,6 +281,35 @@ func TestLaunchEnvOverridesCredentialEnv(t *testing.T) {
 	}
 }
 
+// TestClaudeDeviceIdentitySeesSavedSetupToken pins that the computer's own
+// account is checked with the setup token AO gives its sessions: on a computer
+// with no native Claude login that token is the only sign-in, and reading the
+// account as signed out would refuse every new Claude session.
+func TestClaudeDeviceIdentitySeesSavedSetupToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the CLI")
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	bin := filepath.Join(t.TempDir(), "claude")
+	write(t, bin, "#!/bin/sh\nif [ -n \"$CLAUDE_CODE_OAUTH_TOKEN\" ]; then printf '{\"loggedIn\":true,\"authMethod\":\"oauth_token\"}'; else printf '{\"loggedIn\":false,\"authMethod\":\"none\"}'; fi\n")
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{
+		Binary:    func(context.Context) (string, error) { return bin, nil },
+		DeviceEnv: func() map[string]string { return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"} },
+	}
+	device, err := c.Identity(context.Background(), "")
+	if err != nil || !device.SignedIn {
+		t.Fatalf("device identity = %+v, %v, want signed in with the saved token", device, err)
+	}
+	// An account folder signs in with its own login only.
+	account, err := c.Identity(context.Background(), t.TempDir())
+	if err != nil || account.LoggedIn {
+		t.Fatalf("account identity = %+v, %v, want the folder's own (signed-out) login", account, err)
+	}
+}
+
 // TestClaudeIdentityCountsSubscriptionLogins pins which `claude auth status`
 // reports are signed in: a claude.ai login, and a CLAUDE_CODE_OAUTH_TOKEN login
 // (the long-lived subscription token from `claude setup-token`), which carries

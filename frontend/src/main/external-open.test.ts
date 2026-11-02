@@ -14,6 +14,13 @@ describe("isAllowedAppExternalURL", () => {
 		expect(isAllowedAppExternalURL("javascript:alert(1)")).toBe(false);
 	});
 
+	it("allows only the exact macOS privacy settings pane", () => {
+		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")).toBe(true);
+		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")).toBe(true);
+		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security")).toBe(false);
+		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.Sharing-Settings.extension")).toBe(false);
+	});
+
 	it("opens allowed URLs through the native shell opener", async () => {
 		const openExternal = vi.fn().mockResolvedValue(undefined);
 

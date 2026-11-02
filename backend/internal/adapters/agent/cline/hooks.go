@@ -60,7 +60,7 @@ type clineHookSpec struct {
 // clineManagedHooks is the source of truth for the hooks AO installs. The
 // native Cline events are mapped onto AO's fixed sub-command names so activity
 // derivation stays uniform across adapters:
-//   - TaskStart        -> session-start       (a new task begins: active)
+//   - TaskStart/Resume -> session-start       (a task begins or resumes: active)
 //   - UserPromptSubmit -> user-prompt-submit  (user message submitted: active)
 //   - PreToolUse       -> permission-resolved (approval answered: active work)
 //   - TaskCancel       -> stop                (task cancelled/aborted: idle)
@@ -82,10 +82,11 @@ type clineHookSpec struct {
 // terminal detector instead (see activity.go).
 var clineManagedHooks = []clineHookSpec{
 	{Event: "TaskStart", Subcommand: "session-start"},
+	{Event: "TaskResume", Subcommand: "session-start"},
 	{Event: "UserPromptSubmit", Subcommand: "user-prompt-submit"},
 	{Event: "PreToolUse", Subcommand: "permission-resolved"},
-	{Event: "TaskCancel", Subcommand: "stop"},
 	{Event: "TaskComplete", Subcommand: "stop"},
+	{Event: "TaskCancel", Subcommand: "stop"},
 }
 
 // GetAgentHooks installs AO's Cline hook scripts into the worktree-local

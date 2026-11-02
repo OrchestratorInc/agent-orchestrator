@@ -145,6 +145,9 @@ func TestLauncherSpawnPinsPATHToAOExecutable(t *testing.T) {
 	if len(parts) < 2 || parts[0] != aoDir || parts[1] != "/reviewer/bin" {
 		t.Fatalf("reviewer PATH = %q, want AO dir before adapter PATH", rt.createCfg.Env["PATH"])
 	}
+	if env := rt.createCfg.Env; runtime.GOOS != "windows" && (env["AO_PATH_PIN"] != aoDir || env["ZDOTDIR"] == "" || env["BASH_ENV"] == "") {
+		t.Fatalf("reviewer env = %v, want the login-shell re-pin for %s", env, aoDir)
+	}
 }
 
 func TestLauncherSpawnCreatesAOShimWhenExecutableIsNotNamedAO(t *testing.T) {

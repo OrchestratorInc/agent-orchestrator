@@ -1004,6 +1004,9 @@ func TestOrdinaryResumeRejectsProviderHandleOutsideActiveBranch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("ordinary resume error = %v, want active-branch handle mismatch", err)
 	}
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("mismatch error = %v, want ErrChatResumeFailed so the API answers 409", err)
+	}
 	if resumeCalls != 0 {
 		t.Fatalf("driver resume calls = %d, want mismatch rejected before provider launch", resumeCalls)
 	}
@@ -3425,6 +3428,30 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+func TestProviderPromptFailurePersistsConfigurationCodeWithoutReauth(t *testing.T) {
+	h := newHarness(t)
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "missing-key-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("ACP internal detail"),
+		FailureCode: domain.ConversationFailureProviderKeyMissing,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureProviderKeyMissing {
+		t.Fatalf("failure code = %q", got)
+	}
+	if snapshot.Turns[0].ErrorMessage != "ACP internal detail" || snapshot.Conversation.Account != nil && snapshot.Conversation.Account.ReauthRequiredAt != nil {
+		t.Fatalf("turn/account = %+v / %+v", snapshot.Turns[0], snapshot.Conversation.Account)
 	}
 }
 

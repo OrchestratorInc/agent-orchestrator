@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -27,6 +28,7 @@ type Store interface {
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
+	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -39,7 +41,10 @@ type Snapshot struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran (Settings, General). On by default.
 	VersionRefresh bool
-	UpdatedAt      time.Time
+	// ComputerUse gives new chat sessions the computer-use tools and their
+	// standing instruction (Settings, Computer use agents). Off by default.
+	ComputerUse bool
+	UpdatedAt   time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -98,6 +103,17 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
+	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
+	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
+}
+
+// errCuaDriverMissing refuses turning computer use on without Cua Driver.
+var errCuaDriverMissing = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Install Cua Driver in Settings > Computer use agents before letting agents use this computer.", nil)
+
+// SetCuaDriverInstalled supplies the check SetComputerUse runs before turning
+// computer use on.
+func (s *Service) SetCuaDriverInstalled(installed func(context.Context) (bool, error)) {
+	s.cuaInstalled.Store(&installed)
 }
 
 // New builds the service.
@@ -155,6 +171,32 @@ func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot
 		return Snapshot{}, err
 	}
 	s.cacheVersionRefresh(enabled)
+	return s.Get(ctx)
+}
+
+// ComputerUseEnabled reports the user's "Let agents use this computer"
+// toggle. It is read once per session spawn, so it goes to the store each
+// time; an unreadable store counts as off.
+func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.ComputerUse
+}
+
+// SetComputerUse changes whether new chat sessions get the computer-use tools.
+// Turning it on needs Cua Driver installed; turning it off always works.
+func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
+	if installed := s.cuaInstalled.Load(); enabled && installed != nil {
+		ok, err := (*installed)(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if !ok {
+			return Snapshot{}, errCuaDriverMissing
+		}
+	}
+	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
 	return s.Get(ctx)
 }
 

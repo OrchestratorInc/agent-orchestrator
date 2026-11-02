@@ -182,7 +182,7 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		pendingPreview:      make(map[domain.SessionID]string),
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
-		executable:          os.Executable,
+		executable:          agentlaunch.Executable,
 		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
 	}
@@ -194,7 +194,15 @@ func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
 		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+	child := map[string]string{"PATH": path}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, projectEnv, s.dataDir)
+	if err != nil {
+		s.log.Warn("shell terminal startup files may put another ao first on PATH", "err", err)
+	}
+	for key, value := range loginEnv {
+		child[key] = value
+	}
+	return agentlaunch.MergeEnv(projectEnv, child)
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -444,6 +452,7 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
+	readiness.env["AO_CUE_COMMAND"] = ""
 	env = agentlaunch.MergeEnv(env, readiness.env)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
@@ -456,8 +465,16 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
 		return ShellTerminal{}, err
 	}
-	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
+	delivery, err := prepareCueCommand(s.dataDir, argv, in.Command)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer delivery.cleanup()
+	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, delivery.input); err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
+	}
+	if err := waitForCueCommandConsumed(ctx, delivery.file); err != nil {
+		return ShellTerminal{}, err
 	}
 	return terminal, nil
 }
@@ -520,6 +537,37 @@ func MatchInitialInputReadyState(output string, readyStates []InitialInputReadyS
 	return nil
 }
 
+func (s *Service) initialInputReadyState(ctx context.Context, handle ports.RuntimeHandle, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
+	if err != nil {
+		return nil
+	}
+	ready := MatchInitialInputReadyState(output, readyStates)
+	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+			if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
+				return renderedReady
+			}
+		}
+	}
+	return ready
+}
+
+func (s *Service) waitForInitialInputReadyState(ctx context.Context, handle ports.RuntimeHandle, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	ticker := time.NewTicker(initialInputPollInterval)
+	defer ticker.Stop()
+	for {
+		if ready := s.initialInputReadyState(ctx, handle, readyStates); ready != nil {
+			return ready
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
 // sendInitialInputAfterTimeout delivers the reviewed input once the ready
 // wait has expired without a marker, as long as the terminal is still alive.
 func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input string) {
@@ -537,49 +585,41 @@ func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input
 }
 
 func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
-	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
-	defer cancel()
-	ticker := time.NewTicker(initialInputPollInterval)
-	defer ticker.Stop()
-	for {
-		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
-		if err == nil {
-			ready := MatchInitialInputReadyState(output, readyStates)
-			if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
-				if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
-					if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
-						ready = renderedReady
-					}
-				}
-			}
-			if ready != nil && ready.SkipInput {
-				return
-			}
-			if ready == nil {
-				goto wait
-			}
-			if ready.RawPrefix != "" {
-				if err := s.runtime.SendInput(ctx, handle, ready.RawPrefix); err != nil {
-					s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
-					return
-				}
-			}
-			if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
-				s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
-			}
+	readyCtx, cancelReady := context.WithTimeout(ctx, s.initialInputTimeout)
+	defer cancelReady()
+	ready := s.waitForInitialInputReadyState(readyCtx, handle, readyStates)
+	if ready == nil {
+		if sendOnTimeout {
+			s.sendInitialInputAfterTimeout(handle, input)
 			return
 		}
-	wait:
-		select {
-		case <-ctx.Done():
-			if sendOnTimeout {
-				s.sendInitialInputAfterTimeout(handle, input)
-				return
-			}
-			s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+		s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+		return
+	}
+	if ready.SkipInput {
+		return
+	}
+	inputCtx := readyCtx
+	if ready.RawPrefix != "" {
+		if err := s.runtime.SendInput(inputCtx, handle, ready.RawPrefix); err != nil {
+			s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
 			return
-		case <-ticker.C:
 		}
+	}
+	if ready.SubmitReadyText != "" {
+		// Startup and command completion each receive a full bounded wait.
+		completionCtx, cancelCompletion := context.WithTimeout(ctx, s.initialInputTimeout)
+		defer cancelCompletion()
+		inputCtx = completionCtx
+		if s.waitForInitialInputReadyState(completionCtx, handle, []InitialInputReadyState{{Text: ready.SubmitReadyText}}) == nil {
+			// The prefix is already in the editor. Without the reviewed completion
+			// marker, Enter could send it as a prompt to the model.
+			s.log.Warn("authentication terminal initial input completion did not appear", "handleId", handle.ID)
+			return
+		}
+	}
+	if err := s.runtime.SendMessage(inputCtx, handle, input); err != nil {
+		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
 	}
 }
 
@@ -706,6 +746,9 @@ func validateOpenCommandTerminalInput(in OpenCommandTerminalInput) error {
 	for _, state := range in.InitialInputReadyStates {
 		if strings.TrimSpace(state.Text) == "" {
 			return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed readiness marker is required for automatic terminal input", nil)
+		}
+		if state.SubmitReadyText != "" && strings.TrimSpace(state.SubmitReadyText) == "" {
+			return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed submission marker must not be whitespace", nil)
 		}
 	}
 	return nil

@@ -808,6 +808,17 @@ export class CloudClient {
     return response.providerConnections;
   }
 
+  listUserAgentModels(
+    orgId: string,
+    provider: "claude-code" | "codex" | "cursor" | "opencode",
+    options: RequestOptions = {},
+  ): Promise<ChatModelsResponse> {
+    return this.request(
+      this.orgPath(orgId, `/providers/${encodeURIComponent(provider)}/models`),
+      options,
+    );
+  }
+
   putAgentProviderConnection(
     orgId: string,
     provider: "claude-code" | "codex" | "cursor",

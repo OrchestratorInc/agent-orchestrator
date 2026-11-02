@@ -7,7 +7,7 @@
  * that: only for the latest turn that still counts, only once it was stopped.
  */
 
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace } from "./ChatWorkspace";
@@ -24,7 +24,12 @@ function stoppedSnapshot(change: (turns: ConversationTurn[]) => ConversationTurn
 				? { ...turn, state: "completed" as const, completedAt: turn.requestedAt }
 				: turn,
 	);
-	return { ...chatFixture, controller: { state: "ready" }, turns: change(turns), continueTurnId: "turn-2" };
+	// The fixture steers mid-turn, which splits the turn in two; these tests read
+	// the stopped answer as the turn's last reply, so they leave the steer out.
+	const items = chatFixture.items
+		.filter((item) => item.id !== "a-steer-1")
+		.map((item) => (item.kind === "message" && item.id === "m-5" ? { ...item, streaming: false } : item));
+	return { ...chatFixture, controller: { state: "ready" }, turns: change(turns), items, continueTurnId: "turn-2" };
 }
 
 const continueButton = () => screen.queryByRole("button", { name: "Continue turn" });
@@ -40,6 +45,19 @@ describe("ChatWorkspace continue", () => {
 
 		expect(onContinueTurn).toHaveBeenCalledTimes(1);
 		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("ends a stopped turn on its outcome, which carries the answer's copy and undo", () => {
+		render(<ChatWorkspace snapshot={stoppedSnapshot()} onRollback={vi.fn()} />);
+
+		const outcome = document.querySelector<HTMLElement>('[data-turn-outcome="interrupted"]')!;
+		expect(outcome).toHaveTextContent("The agent was interrupted by you");
+		expect(within(outcome).getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+		expect(within(outcome).getByRole("button", { name: "Roll back to here" })).toBeInTheDocument();
+
+		// The stopped answer hands its actions down rather than drawing a second row.
+		const answer = screen.getByText(/Tests are still running/).closest<HTMLElement>(".group\\/message")!;
+		expect(within(answer).queryByRole("button")).toBeNull();
 	});
 
 	it("uses daemon eligibility instead of a swept queued turn", () => {

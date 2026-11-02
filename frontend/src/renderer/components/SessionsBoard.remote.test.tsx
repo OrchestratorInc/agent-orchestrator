@@ -35,6 +35,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useRemoteProjectQuery: (hostId: string) => ({
 		data: mocks.workspaces[hostId], isError: false, isSuccess: Boolean(mocks.workspaces[hostId]),
 	}),
+	useCloudProjectsQuery: () => ({ data: undefined }),
 }));
 vi.mock("../hooks/useBoardPresentation", () => ({
 	useBoardPresentation: () => ({ showStartup: true, showWelcome: false, showProjectEmpty: false, workspaceStartupState: "error" }),
@@ -74,7 +75,10 @@ vi.mock("../stores/ui-store", () => {
 		setProjectRestarting: vi.fn(),
 		setOrchestratorStartupError: vi.fn(),
 	};
-	return { useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }) };
+	return {
+		sidebarOccupiesLayout: () => true,
+		useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }),
+	};
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));

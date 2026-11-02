@@ -4,6 +4,54 @@ import { describe, expect, it, vi } from "vitest";
 import { BrowserDownloadsList } from "./BrowserDownloadsList";
 
 describe("BrowserDownloadsList", () => {
+	it.each([
+		["progressing", true, true, "Cancel report.txt", "cancel"],
+		["paused", true, true, "Cancel report.txt", "cancel"],
+		["interrupted", true, false, "Cancel report.txt", "cancel"],
+		["blocked", false, false, "Dismiss report.txt", "remove"],
+		["completed", false, true, "Delete report.txt from computer", "remove"],
+		["completed", false, false, "Remove report.txt from history", "remove"],
+		["cancelled", false, false, "Remove report.txt from history", "remove"],
+		["interrupted", false, false, "Remove report.txt from history", "remove"],
+	] as const)("labels %s (active %s, removable %s) honestly", async (status, active, fileRemovable, label, action) => {
+		const onAction = vi.fn();
+		render(<BrowserDownloadsList downloads={[{
+			id: "download-1", fileName: "report.txt", receivedBytes: 50, totalBytes: 100,
+			status, active, startedAt: 1, updatedAt: 2, ...{ fileRemovable },
+		}]} onAction={onAction} />);
+		await userEvent.click(screen.getByRole("button", { name: label }));
+		expect(onAction).toHaveBeenCalledExactlyOnceWith("download-1", action);
+	});
+
+	it.each([
+		["cancelled", "Remove report.txt from history"],
+		["interrupted", "Remove report.txt from history"],
+		["completed", "Delete report.txt from computer"],
+	] as const)("describes the removal effect for a %s download", async (status, label) => {
+		const onAction = vi.fn();
+		render(
+			<BrowserDownloadsList
+				downloads={[{
+					id: "download-1",
+					fileName: "report.txt",
+					receivedBytes: 100,
+					totalBytes: 100,
+					status,
+					active: false,
+					startedAt: 1,
+					updatedAt: 2,
+				}]}
+				onAction={onAction}
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: label }));
+		expect(onAction).toHaveBeenCalledExactlyOnceWith("download-1", "remove");
+		expect(screen.queryByRole("button", {
+			name: status === "completed" ? "Remove report.txt from history" : "Delete report.txt from computer",
+		})).not.toBeInTheDocument();
+	});
+
 	it("uses folder icons for opening a completed download and revealing it in Explorer", () => {
 		render(
 			<BrowserDownloadsList

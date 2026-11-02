@@ -87,6 +87,33 @@ describe("cloud control-plane Coder template parameters", () => {
 	});
 });
 
+describe("cloud control-plane new-task model catalogs", () => {
+	it("loads the agent's catalog from the encoded organization route", async () => {
+		const catalog = { models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }], source: "release", cliVersion: "2.1.287" };
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+
+		await expect(client.listUserAgentModels("org/a", "claude-code")).resolves.toEqual(catalog);
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/providers/claude-code/models",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+
+	// The composer tells an older control plane (no route, no envelope) from a
+	// handler's own 404 and from an agent with no Cloud catalog by these fields.
+	it.each([
+		{ status: 409, body: JSON.stringify({ error: "Conflict", code: "MODEL_CATALOG_UNAVAILABLE", message: "No catalog" }), code: "MODEL_CATALOG_UNAVAILABLE" },
+		{ status: 404, body: JSON.stringify({ error: "Not Found", code: "not_found", message: "Organization not found" }), code: "not_found" },
+		{ status: 404, body: "404 page not found", code: undefined },
+	])("reports a $status catalog failure with code $code", async ({ status, body, code }) => {
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(body, { status }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+
+		await expect(client.listUserAgentModels("org", "opencode")).rejects.toMatchObject({ name: "CloudCpError", status, code });
+	});
+});
+
 describe("cloud control-plane session lifecycle", () => {
 	it("uses the cloud review endpoints for an encoded session", async () => {
 		const fetchMock = vi.fn(

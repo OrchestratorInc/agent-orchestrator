@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { TextInput } from "react-native";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true, requestAnimationFrame: (cb: () => void) => { cb(); return 1; } });
-const { request, storage } = vi.hoisted(() => ({ request: vi.fn(), storage: { getItem: vi.fn(async (_key: string) => null as string | null), setItem: vi.fn(async (_key: string, _value: string) => {}), removeItem: vi.fn(async (_key: string) => {}) } }));
+const { request, storage, paste } = vi.hoisted(() => ({ paste: { handler: null as null | ((assets: unknown[]) => void) }, request: vi.fn(), storage: { getItem: vi.fn(async (_key: string) => null as string | null), setItem: vi.fn(async (_key: string, _value: string) => {}), removeItem: vi.fn(async (_key: string) => {}) } }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: storage }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "ios" },
@@ -29,6 +29,7 @@ vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./chatSheetRegistry", () => ({ chatSheetRoute: vi.fn() }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
@@ -184,4 +185,17 @@ it("clears only what a send submitted, keeping a photo attached in a reopened co
 	await act(async () => finish("send-id"));
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove a.jpg" })).toHaveLength(0);
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove b.jpg" })).toHaveLength(1);
+});
+
+it("attaches an image pasted into the field and sends it with the reply", async () => {
+	const p = props();
+	p.sessionId = "paste-session";
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	act(() => paste.handler?.([{ uri: "paste-1", fileName: "Pasted image", mimeType: "image/png", fileSize: 5, base64: "aGVsbG8=" }]));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove Pasted image" })).toHaveLength(1);
+	act(() => paste.handler?.([{ uri: "paste-2", fileName: "Pasted image", mimeType: "image/png", fileSize: 11 * 1024 * 1024 }]));
+	expect(renderer.root.findByProps({ accessibilityRole: "alert" }).props.children).toBe("Each image must be under 10 MB.");
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove Pasted image" })).toHaveLength(1);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
+	expect(p.onSend).toHaveBeenCalledWith("", [{ mimeType: "image/png", data: "aGVsbG8=" }], undefined, undefined);
 });

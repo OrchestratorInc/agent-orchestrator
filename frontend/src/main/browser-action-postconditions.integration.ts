@@ -4,6 +4,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { app, BrowserWindow, WebContentsView } from "electron";
+import type { ChromeApi } from "../browser-extension/chrome-api";
+import { TrustedInput } from "../browser-extension/trusted-input";
 import { AgentBrowserRuntime } from "./agent-browser-runtime";
 import { createBrowserViewHost } from "./browser-view-host";
 import type { BrowserTabsState } from "./browser-view-host";
@@ -17,6 +19,127 @@ function requiredEnvironmentVariable(name: string): string {
 const fixturePath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_FIXTURE");
 const userDataPath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_USER_DATA");
 app.setPath("userData", userDataPath);
+
+// Exercise the extension's actual input loop against Chromium, rather than a
+// fake that cannot observe click default actions such as form submission.
+async function testCancelledTrustedClick(): Promise<void> {
+	const window = new BrowserWindow({ show: false, width: 500, height: 400 });
+	try {
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{width:100vw;height:100vh}</style>
+			<form><button>Submit</button></form><script>
+			window.events = [];
+			for (const type of ["mousedown","mouseup","click","submit"]) {
+				document.addEventListener(type, event => {
+					if (event.target.closest("form")) window.events.push(type);
+					if (type === "submit") event.preventDefault();
+				});
+			}
+		</script>`)}`);
+		const debuggerApi = window.webContents.debugger;
+		let controller = new AbortController();
+		let cancelOnPress = false;
+		let cancelOnMove = false;
+		let valueAtCancel: number | undefined;
+		let unobservedChild = false;
+		const chrome = {
+			scripting: {
+				executeScript: async ({ func, args }: { func: (...args: never[]) => unknown; args: unknown[] }) => {
+					type FrameTree = { frame: { id: string }; childFrames?: FrameTree[] };
+					const { frameTree } = await debuggerApi.sendCommand("Page.getFrameTree") as { frameTree: FrameTree };
+					const frames = (tree: FrameTree): string[] => [tree.frame.id, ...(tree.childFrames ?? []).flatMap(frames)];
+					const results = await Promise.all(frames(frameTree).map(async (frameId) => {
+						const { executionContextId } = await debuggerApi.sendCommand("Page.createIsolatedWorld", { frameId, worldName: "ao-test-input" }) as { executionContextId: number };
+						const result = await debuggerApi.sendCommand("Runtime.evaluate", {
+							contextId: executionContextId, expression: `(${func.toString()})(...${JSON.stringify(args)})`, returnByValue: true,
+						}) as { result: { value?: unknown }; exceptionDetails?: unknown };
+						if (result.exceptionDetails) throw new Error("Isolated capture cleanup failed");
+						return { result: result.result.value };
+					}));
+					if (args[0] === "observed" && results.length > 1) {
+						unobservedChild = results.some(({ result }) => typeof result === "number") && results.some(({ result }) => result === "idle");
+					}
+					return results;
+				},
+			},
+			debugger: {
+				attach: async () => debuggerApi.attach("1.3"),
+				detach: async () => debuggerApi.detach(),
+				onEvent: { addListener() {}, removeListener() {} },
+				onDetach: { addListener() {}, removeListener() {} },
+				sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+					const result = await debuggerApi.sendCommand(method, params);
+					if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && cancelOnPress) controller.abort();
+					if (cancelOnMove && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.buttons === 1 && Number(params.x) >= 150) {
+						const value = await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value");
+						assert.ok(typeof value === "number");
+						valueAtCancel = value;
+						await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.cancelled = true");
+						controller.abort();
+					}
+					return result;
+				},
+			},
+		} as unknown as ChromeApi;
+		const input = new TrustedInput(chrome);
+		// Sanity check: normal trusted input activates the full-viewport button.
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown"]);
+		// Pointer capture routes releases back to the button even outside its box.
+		await window.webContents.executeJavaScript(`
+			document.querySelector("button").addEventListener("pointerdown", event => {
+				event.target.setPointerCapture(event.pointerId);
+			});
+			window.events = [];
+		`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		const capturedEvents = await window.webContents.executeJavaScript("window.events") as string[];
+		assert.equal(capturedEvents.includes("click"), false, "cancelled captured pointer must not click");
+		assert.equal(capturedEvents.includes("submit"), false, "cancelled captured pointer must not submit");
+		// Cleanup must not leave the browser's mouse button stuck down.
+		controller = new AbortController();
+		cancelOnPress = false;
+		await window.webContents.executeJavaScript("window.events = []");
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{position:absolute;left:0;top:0;width:60px;height:60px}iframe{position:absolute;left:100px;top:100px;width:200px;height:200px;border:0}</style>
+			<button>Origin</button><iframe srcdoc='<style>html,body{margin:0;width:100%;height:100%}</style><script>
+			window.value=70;window.afterCancel=[];
+			window.addEventListener("pointermove",event=>{
+				if(!event.buttons)return;
+				event.target.setPointerCapture(event.pointerId);
+				window.value=Math.max(0,event.clientX);
+				if(window.cancelled)window.afterCancel.push(event.clientX);
+				event.stopImmediatePropagation();
+			},true);
+			</script>'></iframe>`)}`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		cancelOnMove = true;
+		await assert.rejects(input.drag(1, { x: 20, y: 20 }, { x: 170, y: 170 }, false, controller.signal),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.equal(typeof valueAtCancel, "number");
+		assert.equal(unobservedChild, true, "the child's early listener must suppress AO's local pointer observer");
+		assert.equal(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value"), valueAtCancel);
+		assert.deepEqual(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.afterCancel"), []);
+		process.stdout.write("cancelled trusted click does not activate its target in Chromium\n");
+	} finally {
+		window.destroy();
+	}
+}
 
 async function run(): Promise<void> {
 	await app.whenReady();
@@ -93,6 +216,7 @@ async function run(): Promise<void> {
 	const fixtureURL = `http://127.0.0.1:${address.port}/fixture`;
 
 	const window = new BrowserWindow({ show: true, width: 800, height: 600 });
+	await testCancelledTrustedClick();
 	// Initialize the owning window before attaching a WebContentsView. On
 	// Windows and Xvfb, a never-navigated BrowserWindow can leave the child
 	// renderer unscheduled even though the native view is marked visible.

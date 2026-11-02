@@ -421,11 +421,35 @@ func TestTriggerPRURLReviewsOnlyTheNamedPR(t *testing.T) {
 	}
 }
 
+// With no PR tracked, the error names the worker's branch and the exact retry
+// command for this worker, so any caller can attach a PR AO has not picked up.
 func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
-	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
-	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "ao review trigger --pr <url>") {
-		t.Fatalf("err = %v, want a pointer to --pr for a PR AO has not picked up", err)
+	worker := liveWorker()
+	worker.Metadata.Branch = "ao/mer-1/fix"
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: worker, ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, BranchPRLookupFoundNone: true})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") || !strings.Contains(err.Error(), `found no open PR from its branch "ao/mer-1/fix"`) {
+		t.Fatalf("err = %v, want the branch and the exact --pr retry for a PR AO has not picked up", err)
+	}
+
+	// Without a lookup (an automatic pass, or no branch listing) the error
+	// does not claim the branch has no open PR.
+	_, err = eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "found no open PR") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want the exact --pr retry without a claim about the branch", err)
+	}
+}
+
+// A session whose only tracked PR is closed gets the same explanation and
+// retry command, not just "no open PR head".
+func TestTriggerWithOnlyAClosedTrackedPRPointsAtThePRFlag(t *testing.T) {
+	worker := liveWorker()
+	worker.Metadata.Branch = "ao/mer-1/fix"
+	prs := fakePRs{prs: []domain.PullRequest{{URL: "https://github.com/o/r/pull/8", Number: 8, HeadSHA: "abc", Closed: true}}}
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: worker, ok: true}, prs, fakeProjects{}, &fakeLauncher{})
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "not tracking an open PR") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want the no-open-PR explanation with the exact --pr retry", err)
 	}
 }
 
