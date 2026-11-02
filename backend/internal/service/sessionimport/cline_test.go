@@ -91,7 +91,7 @@ func TestClineTerminalImportAndFirstOpenRefresh(t *testing.T) {
 	path := clineFixture(t, root, cwd, `{"sessionId":"`+clineTestID+`","messages":[{"role":"user","content":"first"}]}`)
 	store := &importStore{}
 	svc := New(store, "", nil)
-	svc.home = cwd
+	svc.home = canonical(cwd)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCline: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
