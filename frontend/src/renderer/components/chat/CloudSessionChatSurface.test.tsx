@@ -1,17 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference } from "../../../shared/chat-file-reference";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { sessionUiKey } from "../../lib/hosts";
-import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, loadCloudChatEvents, mergeCloudEvents, planRefusalCode, toSnapshot } from "./CloudSessionChatSurface";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
 const cloudMocks = vi.hoisted(() => ({
@@ -26,13 +28,21 @@ const cloudMocks = vi.hoisted(() => ({
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
+const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true } }));
+vi.mock("../../lib/cloud-telemetry", async (original) => ({
+	...await original<typeof import("../../lib/cloud-telemetry")>(),
+	reportPlanRefusal: vi.fn(),
+}));
+vi.mock("../../hooks/useCloudBilling", () => ({
+	useCloudBilling: () => ({ data: { plan: "starter" }, offering: billing.offering }),
+}));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks }),
 }));
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
 		cloudMocks.chatProps(props);
-		return <div data-testid="cloud-chat" />;
+		return <div data-testid="cloud-chat">{(props as { composerNotice?: ReactNode }).composerNotice}</div>;
 	},
 }));
 // What the composer's agent and model picker is given, for the settings bar drawn from the chat's props.
@@ -70,6 +80,8 @@ const session = {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		vi.mocked(reportPlanRefusal).mockClear();
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
@@ -1619,6 +1631,154 @@ describe("CloudSessionChatSurface", () => {
 		const merged = appendCloudEvents(existing, [event(500), event(501)]);
 		expect(merged.map((item) => item.sequence)).toEqual([1, 500, 501]);
 		expect(merged.at(-1)?.sequence).toBe(501);
+	});
+
+	it("explains a plan refusal in the chat only for a tool that fails with one while the chat is open", async () => {
+		const activity = (sequence: number, id: string, status: string, detail: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail } },
+		});
+		const refusal = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			// History: an old refusal must not prompt.
+			.mockResolvedValueOnce(page(activity(1, "old", "failed", { output: refusal })))
+			// A successful grep that prints the code is not a refusal.
+			.mockResolvedValueOnce(page(activity(2, "grep", "completed", { output: "WORKER_SLOTS_FULL" })))
+			// A refusal streamed in two chunks across polls, then failed.
+			.mockResolvedValueOnce(page(activity(3, "spawn", "running", { outputDelta: "All your plan's running sessions are in use. (WORKER_" })))
+			.mockResolvedValueOnce(page(activity(4, "spawn", "failed", { outputDelta: "SLOTS_FULL)" })))
+			.mockResolvedValue(page());
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		const view = (id: string) => <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, id, cloud: { orgId: "org-1" } }} /></QueryClientProvider>;
+		const { rerender } = render(view(session.id));
+		// Each poll's events have reached the rendered chat before the next one.
+		const shown = (count: number) => waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(count));
+		await shown(1);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(2);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(3);
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		const notice = await screen.findByRole("alert");
+		expect(notice.textContent).toContain("all running sessions on your plan are in use.");
+		// The plan sits on its own line, so no language needs a joining space.
+		expect(screen.getByText("You're on the Starter plan.").tagName).toBe("SPAN");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		const originalOpenGlobalSettings = useUiStore.getState().openGlobalSettings;
+		const openGlobalSettings = vi.fn();
+		useUiStore.setState({ openGlobalSettings });
+		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
+		expect(reportPlanRefusal).toHaveBeenLastCalledWith("WORKER_SLOTS_FULL", true, "chat");
+		useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings });
+		// A member cannot buy a plan, so the notice sends them to an admin instead.
+		billing.offering = { selfServeBilling: true, canManageBilling: false };
+		rerender(view(session.id));
+		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).toContain("Contact your organization's admin to raise it.");
+		// A guest's shared session runs on its owner's plan: not the guest org's plan, and no link to its billing.
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", shared: true } }} /></QueryClientProvider>);
+		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).not.toContain("Starter");
+		expect(screen.getByRole("alert").textContent).toContain("Ask them to raise it.");
+		rerender(view(session.id));
+		// The same surface shows another chat and comes back: the old notice stays gone.
+		rerender(view("session-2"));
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		rerender(view(session.id));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("does not report Upgrade opening when a plan notice is dismissed", async () => {
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			}], hasMore: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+	});
+
+	it("reads a plan refusal only in the shape the control plane reports it", () => {
+		const tool = (activityKind: string, status: string, detail: Record<string, unknown>) =>
+			({ kind: "activity", id: "a", activityKind, status, detail }) as unknown as Parameters<typeof planRefusalCode>[0];
+		const refused = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		expect(planRefusalCode(tool("command", "failed", { output: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("command", "failed", { output: `{"code": "WORKER_SLOTS_FULL"}` }))).toBe("WORKER_SLOTS_FULL");
+		// A failing test or grep that only mentions the code is not a refusal.
+		expect(planRefusalCode(tool("command", "failed", { output: "FAIL plan-refusal.test.ts: expected WORKER_SLOTS_FULL" }))).toBeUndefined();
+		expect(planRefusalCode(tool("command", "completed", { output: refused }))).toBeUndefined();
+		// An MCP tool reports its failure in `error`, even when its status is not "failed".
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: false, error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: true, result: refused }))).toBeUndefined();
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: "WORKER_SLOTS_FULL" }))).toBeUndefined();
+	});
+
+	it("treats a refusal from while the chat was closed as history on reopen", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "completed", detail: { success: false, error: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
+		});
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("waits for opening history while streamed replay arrives in separate batches", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+		});
+		const replay = [failed(2), failed(3)];
+		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; nextAfter: number }) => void;
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishHistory = resolve; }))
+			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 3 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		for (const event of replay) {
+			await act(async () => {
+				queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [event]));
+			});
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(event.sequence));
+		}
+		expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		await act(async () => finishHistory({ events: replay, hasMore: false, nextAfter: 3 }));
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		expect(screen.queryByRole("alert")).toBeNull();
+		// A refusal arriving after the opening history completed is still new.
+		await act(async () => {
+			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [failed(4)]));
+		});
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
 	});
 
 	it("opens a file the agent linked by its sandbox path as the workspace file", async () => {

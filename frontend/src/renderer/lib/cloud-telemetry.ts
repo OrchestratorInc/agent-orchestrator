@@ -104,10 +104,15 @@ const LIMIT_CODES = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** The control plane refused a request for plan reasons; `shown` is whether Upgrade opened. */
-export function reportPlanRefusal(code: string, shown: boolean): void {
+/**
+ * The control plane refused a request for plan reasons; `shown` is whether
+ * Upgrade opened. `source` is "chat" for a refusal read from an agent's tool
+ * output, which the desktop never saw itself, so it stays out of the rate of
+ * refusals the desktop's own requests turned into an Upgrade prompt.
+ */
+export function reportPlanRefusal(code: string, shown: boolean, source?: "chat"): void {
 	const event = LIMIT_CODES.has(code) ? "ao.renderer.cloud_limit_reached" : "ao.renderer.cloud_plan_refusal_shown";
-	void captureRendererEvent(event, { code, shown });
+	void captureRendererEvent(event, source ? { code, shown, source } : { code, shown });
 }
 
 function storage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | undefined {

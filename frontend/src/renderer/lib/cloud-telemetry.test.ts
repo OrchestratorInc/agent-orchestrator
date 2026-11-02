@@ -187,9 +187,11 @@ describe("cloud funnel telemetry", () => {
 	it("splits plan refusals from limits", () => {
 		reportPlanRefusal("PLAN_REQUIRED", true);
 		reportPlanRefusal("WEEKLY_LIMIT_REACHED", false);
+		reportPlanRefusal("WORKER_SLOTS_FULL", false, "chat");
 		expect(captured).toEqual([
 			{ event: "ao.renderer.cloud_plan_refusal_shown", properties: { code: "PLAN_REQUIRED", shown: true } },
 			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WEEKLY_LIMIT_REACHED", shown: false } },
+			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" } },
 		]);
 	});
 
