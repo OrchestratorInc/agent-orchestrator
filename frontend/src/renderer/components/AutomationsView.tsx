@@ -5,7 +5,8 @@ import { useTranslation } from "react-i18next";
 import { CalendarClock, ChevronRight, Clock3, History, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import {
 	Dialog,
 	DialogClose,
@@ -61,7 +62,6 @@ import {
 } from "../lib/onboarding-ui";
 import { automationPromptLengthBucket, captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
-import { hidesShellTopbar } from "../lib/platform";
 
 function displayTime(value?: string, locale?: string) {
 	if (!value) return "—";
@@ -71,7 +71,6 @@ function displayTime(value?: string, locale?: string) {
 export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
-	const showPageTitle = hidesShellTopbar();
 	const workspaces = useWorkspaceQuery().data ?? [];
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
@@ -88,15 +87,15 @@ export function AutomationsView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-2">
-				<div className="flex min-w-0 items-center gap-2">
-					<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>{showPageTitle ? <CalendarClock className="size-icon-md" aria-hidden="true" /> : null}{t("automations.title")}</h1>
-					{!showPageTitle ? <p className="truncate text-xs text-muted-foreground">{t("automations.description")}</p> : null}
-				</div>
-				<div className="workspace-topbar-actions flex shrink-0 items-center">
-					<TopbarButton variant="primary" className="topbar-control--labeled" onClick={() => setCreateOpen(true)}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>
-				</div>
-			</header>
+			<PageTopbar
+				lead={
+					<>
+						<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>
+						<p className="hidden min-w-0 truncate text-xs text-muted-foreground @2xl:block">{t("automations.description")}</p>
+					</>
+				}
+				actions={<TopbarButton variant="primary" className="topbar-control--labeled" onClick={() => setCreateOpen(true)}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>}
+			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
