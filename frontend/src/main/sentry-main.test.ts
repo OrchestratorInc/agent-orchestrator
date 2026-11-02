@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
-import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN, ELECTRON_SENTRY_ERROR_SAMPLE_RATE } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
 import { clearMainSentryCache, electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
 
@@ -28,7 +28,8 @@ vi.mock("@sentry/electron/main", () => ({
 }));
 vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn().mockResolvedValue("ins_test") }));
 
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true); });
+beforeEach(() => { vi.spyOn(Math, "random").mockReturnValue(0); });
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true); });
 
 describe("Electron main Sentry configuration", () => {
 	it("keeps Electron and daemon overrides separate and leaves development empty", () => {
@@ -62,6 +63,31 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.childProcessIntegration).toHaveBeenCalledWith({ breadcrumbs: false, events: ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] });
 		expect(sdk.setUser).toHaveBeenCalledWith({ id: "ins_test" });
 		expect(sdk.makeElectronOfflineTransport).toHaveBeenCalledOnce();
+	});
+
+	it("samples regular main and renderer errors once while retaining fatal crashes", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const options = sdk.init.mock.calls[0]?.[0];
+		const beforeSend = options.beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const random = vi.mocked(Math.random);
+		expect(ELECTRON_SENTRY_ERROR_SAMPLE_RATE).toBe(0.25);
+		// The SDK's own rate must stay at one: it runs after beforeSend and
+		// would otherwise drop fatal events too.
+		expect(options.sampleRate).toBe(1);
+		random.mockReturnValueOnce(0.24).mockReturnValueOnce(0.25);
+		expect(beforeSend({ type: undefined, message: "ordinary main error" })).not.toBeNull();
+		expect(beforeSend({ type: undefined, message: "another main error" })).toBeNull();
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [] } });
+		expect(sdk.captureEvent).toHaveBeenCalledOnce();
+		random.mockReturnValueOnce(0.25);
+		expect(beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent)).toBeNull();
+		expect(random).toHaveBeenCalledTimes(3);
+		random.mockClear();
+		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", value: "private", mechanism: { type: "generic" } }] } })).not.toBeNull();
+		expect(beforeSend({ type: undefined, level: "fatal", message: "'renderer' process exited with 'crashed'" })).not.toBeNull();
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "fatal", exception: { type: "TypeError", frames: [] } });
+		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).not.toBeNull();
+		expect(random).not.toHaveBeenCalled();
 	});
 
 	it("matches daemon Sentry environments for stable, nightly, and development versions", async () => {

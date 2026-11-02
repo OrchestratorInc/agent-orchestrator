@@ -32,6 +32,7 @@ default DSN is distinct from the daemon project; Electron main uses
 builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
+Desktop error reports are sampled at 25%. Fatal crashes are kept at full rate.
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;

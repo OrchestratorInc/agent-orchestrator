@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/electron/main";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
-import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN, ELECTRON_SENTRY_ERROR_SAMPLE_RATE, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 
@@ -156,10 +156,17 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
+		// The SDK samples after beforeSend, including fatal events. Sample regular
+		// errors below so main crashes and renderer fatal events always survive.
+		sampleRate: 1,
 		tracesSampleRate: 0,
 		skipOpenTelemetrySetup: true,
 		beforeBreadcrumb: () => null,
-		beforeSend: (event) => scrubMainSentryEvent(event, installId, version, environment),
+		beforeSend: (event) => {
+			const safe = scrubMainSentryEvent(event, installId, version, environment);
+			if (!safe || (safe.level !== "fatal" && Math.random() >= ELECTRON_SENTRY_ERROR_SAMPLE_RATE)) return null;
+			return safe;
+		},
 	});
 	const uncaughtListeners = process.listeners("uncaughtException").filter((listener) => !priorUncaught.has(listener));
 	const rejectionListeners = process.listeners("unhandledRejection").filter((listener) => !priorRejections.has(listener));
