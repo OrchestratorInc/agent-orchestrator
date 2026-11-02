@@ -183,6 +183,7 @@ describe("Android spawn selectors", () => {
 		expect(text(trigger(root, "spawn-host"))).toBe("Alpha");
 		expect(modifier(trigger(root, "spawn-host"), "semantics")?.args).toEqual([{ contentDescription: "Run on Alpha" }]);
 		expect(text(trigger(root, "spawn-project"))).toBe("Project");
+		expect(modifier(trigger(root, "spawn-project"), "semantics")?.args).toEqual([{ contentDescription: "Project, Project" }]);
 		expect(String(trigger(root, "spawn-approval").type)).toBe("IconButton");
 		expect(trigger(root, "spawn-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto");
 		// No inline option list: the choices live in the menus, closed until asked for.

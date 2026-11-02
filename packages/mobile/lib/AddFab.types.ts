@@ -1,5 +1,5 @@
 export type AddFabProps = {
-	/** What the button does. It shows only a glyph, so this is what screen readers say. */
+	/** What the button does, shown beside the glyph and said by screen readers. */
 	label: string;
 	onPress: () => void;
 	/**

@@ -150,7 +150,7 @@ export function SpawnComposerControls({
 								    also where the task's agent is switched. */}
 								<Menu
 									label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
-									modifiers={useTriggerModifiers({ label: `${harnessLabel}, ${modelLabel}`, id: "spawn-harness", disabled: busy })}
+									modifiers={useTriggerModifiers({ label: agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}`, id: "spawn-harness", disabled: busy })}
 								>
 									{agents.map((agent) => (
 										<Menu

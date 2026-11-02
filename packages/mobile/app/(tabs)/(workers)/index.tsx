@@ -272,7 +272,7 @@ export default function FleetScreen() {
 				<BoardHeaderItems unread={0} notifications={false} />
 			) : (
 				<>
-					<AddFab expanded={fab.expanded} label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />
+					<AddFab expanded={fab.expanded} label="New task" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />
 					{/* New task is the tab bar's own round button on iOS and the
 					    floating New button on Android; the header keeps settings and
 					    alerts. */}

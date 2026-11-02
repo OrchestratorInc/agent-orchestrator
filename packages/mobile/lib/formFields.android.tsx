@@ -97,7 +97,9 @@ export function FormToggle({ label, value, onValueChange, disabled = false, test
 		>
 			<ListItem.HeadlineContent><Text>{label}</Text></ListItem.HeadlineContent>
 			<ListItem.TrailingContent>
-				<Switch value={value} enabled={!disabled} onCheckedChange={onValueChange} />
+				{/* Compose keeps the switch its own focus stop, so it carries the
+				    row's name rather than reading as an unlabeled switch. */}
+				<Switch value={value} enabled={!disabled} onCheckedChange={onValueChange} modifiers={[semantics({ contentDescription: label })]} />
 			</ListItem.TrailingContent>
 		</ListItem>
 	);

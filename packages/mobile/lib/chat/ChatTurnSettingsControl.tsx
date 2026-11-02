@@ -115,7 +115,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
 						<DropdownMenu.Trigger>
 							<IconButton onClick={() => setOpenMenu("approval")} enabled={!off} colors={{ contentColor: t.textSecondary }} modifiers={[testID("chat-approval")]}>
-								<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`${approvalRow.label}, ${approvalRow.value}`} />
+								<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`Approval, ${approvalRow.value}`} />
 							</IconButton>
 						</DropdownMenu.Trigger>
 						<DropdownMenu.Items>

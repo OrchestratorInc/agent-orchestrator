@@ -77,7 +77,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				{approvalRow ? (
 					<ApprovalMenu
 						key={`approval-${generation}`}
-						title={approvalRow.label}
 						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
 						onChoose={(value) => choose(approvalRow, value)}
 						disabled={off}

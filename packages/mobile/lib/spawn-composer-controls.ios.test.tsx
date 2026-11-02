@@ -215,11 +215,12 @@ describe("iOS spawn selectors", () => {
 			renderer = undefined;
 			return { texts, mark, label };
 		};
-		expect(await shown(baseProps({ modelLabel: "Default model" }))).toEqual({ texts: ["Codex"], mark: "HarnessLogo-codex", label: "Codex, Default model" });
+		expect(await shown(baseProps({ modelLabel: "Default model" }))).toEqual({ texts: ["Codex"], mark: "HarnessLogo-codex", label: "Codex" });
 		expect(await shown(baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false }))).toEqual({ texts: ["GPT-5"], mark: "HarnessLogo-codex", label: "Codex, GPT-5" });
 		// On its default, the trigger names the model the catalog marks as it.
 		const named = { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
-		expect((await shown(baseProps({ modelLabel: "Default model", agentModels: named }))).texts).toEqual(["GPT-6.1-Sol"]);
+		// VoiceOver says the model the capsule shows, not the generic "Default model".
+		expect(await shown(baseProps({ modelLabel: "Default model", agentModels: named }))).toMatchObject({ texts: ["GPT-6.1-Sol"], label: "Codex, GPT-6.1-Sol" });
 		// A model the project pins is named, though nothing was picked here.
 		expect((await shown(baseProps({ modelLabel: "GPT-5", usesDefaultModel: false }))).texts).toEqual(["GPT-5"]);
 	});

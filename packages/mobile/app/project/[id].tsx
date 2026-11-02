@@ -107,7 +107,7 @@ function ProjectScreenContent() {
 						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
 					</Stack.Toolbar.View>
 				) : null}
-				{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Spawn worker" onPress={startTask} /> : null}
+				{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="New task" onPress={startTask} /> : null}
 			</Stack.Toolbar>
 		) : null,
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- the indicator reads only the machine's name and symbol from hostStates
@@ -181,7 +181,7 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
-			{canStartTask ? <AddFab expanded={fab.expanded} label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
+			{canStartTask ? <AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
 		</View>
 	);
 }

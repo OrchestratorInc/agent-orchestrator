@@ -72,7 +72,9 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 					icon={NOTIFICATIONS_ICON}
 					hidesSharedBackground
 					// iOS draws bar-item badges only from iOS 26, so the count is in the label too.
-					accessibilityLabel={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
+					// Android's toolbar reads the badge after the label itself, so
+					// there the label only says what the number counts.
+					accessibilityLabel={unread > 0 ? (ios ? `Notifications, ${unread} unread` : "Unread notifications") : "Notifications"}
 					onPress={() => router.navigate("/notifications")}
 				>
 					{unread > 0 ? <Stack.Toolbar.Badge>{unread > MAX_BADGE ? `${MAX_BADGE}+` : String(unread)}</Stack.Toolbar.Badge> : null}

@@ -151,7 +151,7 @@ describe("Android chat controls row", () => {
 
 	it("offers the approval modes from the shield", () => {
 		render();
-		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approvals, Ask when unsure");
+		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Ask when unsure");
 		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
 	});
 

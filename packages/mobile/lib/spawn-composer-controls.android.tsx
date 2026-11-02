@@ -123,6 +123,7 @@ export function SpawnComposerControls({
 					<SelectorMenu
 						{...menu("project")}
 						label={projectLabel}
+						accessibilityLabel={`Project, ${projectLabel}`}
 						leading={<ProjectGlyph project={selectedProject} />}
 						options={projects.map((project) => ({ ...project, leading: <ProjectGlyph project={project} /> }))}
 						selectedId={projectId}

@@ -214,6 +214,16 @@ describe("Workers header", () => {
 		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
 	});
 
+	// Android's toolbar reads the badge after the label, so the count is said once.
+	it("leaves the count to the badge on Android", () => {
+		fixtures.platform = "android";
+		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
+		act(() => { renderer = create(<FleetScreen />); });
+		const notifications = renderer.root.findAllByType("StackToolbarButton" as never).find((node) => node.props.icon === "bell")!;
+		expect(notifications.props.accessibilityLabel).toBe("Unread notifications");
+		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
+	});
+
 	// Settings is where pairing starts, so an unpaired board still offers it, and
 	// there is nothing yet to search, filter or spawn.
 	it("keeps Settings alone in the header before a machine is paired", () => {
@@ -372,7 +382,7 @@ describe("Workers spawn action", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Notifications"]);
 		const fab = renderer.root.findByType("AddFab" as never);
-		expect(fab.props).toMatchObject({ label: "Spawn worker", bottomInset: 0, testID: "spawn-worker" });
+		expect(fab.props).toMatchObject({ label: "New task", bottomInset: 0, testID: "spawn-worker" });
 		expect(renderer.root.findByType(WorkerBoardList).props.contentBottomInset).toBe(72 + 24);
 		act(() => fab.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });

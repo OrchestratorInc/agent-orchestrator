@@ -20,7 +20,7 @@ export const addFabClearance = FAB_SIZE + FAB_MARGIN;
 
 /**
  * A screen's create action as Material 3's extended floating action button: the
- * add symbol and "New", with Compose's ripple, elevation and semantics.
+ * add symbol and what it makes, with Compose's ripple, elevation and semantics.
  *
  * Tonal, on the raised card surface, rather than the accent fill: the near-white
  * accent made it the loudest thing on a quiet board, where iOS's New task is a
@@ -45,11 +45,12 @@ export function AddFab({ label, onPress, bottomInset, expanded = true, testID }:
 				<ExtendedFloatingActionButton.Icon>
 					{/* Set outright: the card surface is not one of the Material
 					    scheme's container roles, so Compose has no content colour
-					    to pair with it. */}
-					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.textPrimary} contentDescription={label} />
+					    to pair with it. Named by the text beside it, and by itself
+					    only once the button folds to the glyph. */}
+					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.textPrimary} contentDescription={expanded ? undefined : label} />
 				</ExtendedFloatingActionButton.Icon>
 				<ExtendedFloatingActionButton.Text>
-					<Text color={t.textPrimary} style={{ typography: "labelLarge", fontFamily: font.semibold }}>New</Text>
+					<Text color={t.textPrimary} style={{ typography: "labelLarge", fontFamily: font.semibold }}>{label}</Text>
 				</ExtendedFloatingActionButton.Text>
 			</ExtendedFloatingActionButton>
 		</Host>
