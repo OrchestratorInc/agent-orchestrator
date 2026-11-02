@@ -36,7 +36,8 @@ type ShellTerminal struct {
 // ProjectID opens the shell in the daemon's data dir instead of a project root,
 // which is what the topbar action does when no project is selected. SessionID
 // scopes the shell to an agent session so it appears only in that session's tab
-// strip; an empty SessionID makes it a standalone shell on the /terminals screen.
+// strip; an empty SessionID makes it a standalone shell, which no client shows
+// (ReapShellTerminalsFromPreviousAppRuns destroys it on the next launch).
 type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`

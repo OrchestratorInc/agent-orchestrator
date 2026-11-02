@@ -865,8 +865,10 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 }
 
 // ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
-// destroys abandoned trusted auth terminals. Live or unknown user runtimes
-// are preserved with their original associations and attach handles.
+// destroys abandoned trusted auth terminals. Live or unknown session shells
+// are preserved with their original associations and attach handles. A user
+// shell with no session is destroyed even when alive: clients show shells
+// only in a session's tab strip, so nothing could show or close it.
 func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (int64, error) {
 	orphans, err := s.store.SelectShellTerminalsFromPreviousAppRuns(ctx, s.appRunID)
 	if err != nil {
@@ -874,7 +876,7 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 	}
 	var cleared int64
 	for _, rec := range orphans {
-		if !rec.Transient {
+		if !rec.Transient && rec.SessionID != "" {
 			alive, probeErr := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 			if probeErr != nil {
 				s.log.Warn("shell terminal liveness probe failed; keeping row", "handleId", rec.HandleID, "error", probeErr)
