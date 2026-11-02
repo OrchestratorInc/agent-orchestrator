@@ -580,7 +580,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
+	projects := s.registeredDiscoveryRoots(dests)
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi, domain.HarnessKimi}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
@@ -594,9 +595,10 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		var files []sourceFiles
 		var err error
 		if importer.discoverRegistered != nil {
-			roots := s.registeredDiscoveryRoots(dests)
-			files, err = importer.discoverRegistered(ctx, roots)
-			files = registeredSources(files, roots)
+			files, err = importer.discoverRegistered(ctx, projects)
+			files = registeredSources(files, projects)
+		} else if importer.discoverWithProjects != nil {
+			files, err = importer.discoverWithProjects(ctx, root, projects)
 		} else {
 			files, err = s.discover(ctx, harness, root)
 		}
@@ -628,7 +630,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				continue
 			}
 			group.Go(func() error {
-				source, err := readTranscript(groupCtx, harness, file.root, file.paths...)
+				source, err := readTranscriptForProjects(groupCtx, harness, file.root, projects, file.paths...)
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
@@ -704,7 +706,11 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
+	dests, err := s.destinations(ctx)
+	if err != nil {
+		return err
+	}
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, s.registeredDiscoveryRoots(dests), paths...)
 	if err != nil {
 		return err
 	}
@@ -807,7 +813,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			}
 			group.Go(func() error {
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-				reads[i].source, reads[i].err = readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
+				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, s.registeredDiscoveryRoots(dests), item.source.paths...)
 				return nil
 			})
 		}
