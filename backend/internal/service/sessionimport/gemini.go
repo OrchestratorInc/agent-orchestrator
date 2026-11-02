@@ -73,7 +73,7 @@ func geminiText(raw json.RawMessage) string {
 
 func geminiPrompt(text string) string {
 	trimmed := strings.TrimSpace(text)
-	for _, prefix := range []string{"<environment_context", "<system-reminder", "<system_instruction", "This is the Gemini CLI.", "--- Context from:", "# GEMINI.md"} {
+	for _, prefix := range []string{"<session_context>", "<hook_context>", "<environment_context", "<system-reminder", "<system_instruction", "This is the Gemini CLI.", "--- Context from:", "# GEMINI.md"} {
 		if strings.HasPrefix(trimmed, prefix) {
 			return ""
 		}
