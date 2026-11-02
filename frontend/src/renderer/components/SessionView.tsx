@@ -25,7 +25,6 @@ import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
-import { NotificationCenter } from "./NotificationCenter";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
@@ -40,7 +39,8 @@ import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
-import { ShellTopbar } from "./ShellTopbar";
+import { SessionTopbarActions } from "./SessionTopbarActions";
+import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -63,6 +63,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
 	refetchCloudProjectsForUnknownSessions,
+	refreshCloudSessionLifecycle,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
 	useRemoteSessionProjectKind,
@@ -71,7 +72,7 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { latestScriptRun } from "../lib/cloud-script-runs";
@@ -211,9 +212,8 @@ type SessionViewProps = {
 	hostId?: string;
 };
 
-// The session detail screen: terminal + git rail. On Win/Linux the shell owns
-// ShellTopbar above this view; when the platform hides the shell topbar
-// (macOS), the same topbar mounts here so the outer panel stays full-height.
+// The session detail screen: terminal + git rail, with shared tab-strip chrome
+// and session actions inside the center panel on every desktop platform.
 // Rendered by both the project-scoped and cross-project session routes.
 // The persistent shell cache owns terminal lifetime by logical session + handle:
 // route switches retain the xterm instance and latest output, while a replacement
@@ -247,6 +247,12 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	// The loader comes down once the sessions list says the worker connected.
+	// Its own stream and poll learn that first, and refresh the list then
+	// instead of leaving the loader up until the list's next poll.
+	const listedConnected = useRef(workerConnected);
+	listedConnected.current = workerConnected;
+	const mountedAt = useRef(Date.now());
 	// The loader's own poll learns the workspace link as soon as the workspace
 	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
@@ -269,6 +275,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					: event.type === "agent.ready" ? 3
 					: undefined;
 				if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
+				// A connect from before this loader (allowing for clock skew) is an
+				// earlier worker's, not the one it waits for.
+				if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
 			},
 		});
 		return () => controller.abort();
@@ -285,6 +294,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
 				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
+				if (session.runtimeConnected && !listedConnected.current) void refreshCloudSessionLifecycle(queryClient);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
@@ -747,7 +757,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudResumeRef = useRef("");
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
-		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
+		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
 		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
@@ -760,7 +770,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// failure card's Retry runs it again.
 		const problem = cloudStartupProblem(session);
 		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
-		void requestCloudResume(!setupFailed).catch(() => {
+		// Only a connected worker can prepare its workspace again. A session
+		// still waking has none (the request is refused), and the worker it
+		// wakes prepares the workspace as it starts. A recorded checkout failure
+		// still asks, in case the list has not yet seen its worker connect.
+		const workerCanPrepare = session.runtimeConnected === true || (problem?.phase === "failed" && isWorkspaceStartupError(problem.code));
+		void requestCloudResume(!setupFailed && workerCanPrepare).catch(() => {
 			// Keep the paused lifecycle projection visible. A later message, shell
 			// open, or route visit can issue a fresh explicit resume intent.
 		});
@@ -1536,7 +1551,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					canShare={session.cloud.orgId === cloudOrgId}
 				/>
 			) : null}
-			<ShellTopbar embedded />
+			<SessionTopbarActions />
 		</div>
 	);
 	// While an interface switch runs, its status replaces the tab menu and stays visible.
@@ -1930,8 +1945,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
-			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-				{remoteError ?? t("session.notFound")}
+			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
+				<PageTopbar />
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
+					{remoteError ?? t("session.notFound")}
+				</div>
 			</div>
 		);
 	}
@@ -1967,7 +1985,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				>
 					<div className="relative flex h-full min-h-0 flex-col">
 						<SessionTopbarHost
-							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
+							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1">
@@ -2229,47 +2247,43 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					</SessionInspectorRail>
 				) : null}
 			</div>
-			{hasInspector ? (
-				<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<TopbarButton
-								aria-label={
-									browserOnly
-										? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-										: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-								}
-								aria-pressed={isInspectorOpen}
-								onClick={handleToggleInspector}
-								style={noDragStyle}
-								variant="icon"
-							>
-								{browserOnly ? (
-									<span className="relative inline-flex">
-										<BrowserIcon aria-hidden="true" className="size-icon-md" />
-										{!isInspectorOpen && browserUnseen ? (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-												data-testid="orchestrator-browser-unseen-indicator"
-											/>
-										) : null}
-									</span>
-								) : (
-									<PanelRight className="size-icon-md" aria-hidden="true" />
-								)}
-							</TopbarButton>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">
-							{browserOnly
-								? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-								: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
-						</TooltipContent>
-					</Tooltip>
-					{/* Keep the global notification action trailing at the window edge. */}
-					<NotificationCenter style={noDragStyle} />
-				</div>
-			) : null}
+			<PageTopbarTrailingAction>
+				{hasInspector ? <Tooltip>
+					<TooltipTrigger asChild>
+						<TopbarButton
+							aria-label={
+								browserOnly
+									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
+							}
+							aria-pressed={isInspectorOpen}
+							onClick={handleToggleInspector}
+							style={noDragStyle}
+							variant="icon"
+						>
+							{browserOnly ? (
+								<span className="relative inline-flex">
+									<BrowserIcon aria-hidden="true" className="size-icon-md" />
+									{!isInspectorOpen && browserUnseen ? (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+											data-testid="orchestrator-browser-unseen-indicator"
+										/>
+									) : null}
+								</span>
+							) : (
+								<PanelRight className="size-icon-md" aria-hidden="true" />
+							)}
+						</TopbarButton>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{browserOnly
+							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+					</TooltipContent>
+				</Tooltip> : null}
+			</PageTopbarTrailingAction>
 			{interfaceUi.cloudLoader
 				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
 				: showLifecycleLoader || showCompletedLoader

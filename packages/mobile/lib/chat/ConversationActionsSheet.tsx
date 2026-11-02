@@ -28,6 +28,7 @@ export function ConversationActionsSheet({ entry, snapshot, onAction }: { entry:
 			case "files": return { icon: "file-diff" as const, label: "Review changes", run: entry.onFiles };
 			case "shell": return { icon: "terminal" as const, label: entry.openingShell ? "Opening shell…" : "Open worktree shell", disabled: entry.openingShell, run: entry.onOpenShell };
 			case "preview": return { icon: "globe" as const, label: "Open preview", run: entry.onPreview };
+			case "artifacts": return { icon: "layers" as const, label: "Artifacts", value: entry.artifactCount ? String(entry.artifactCount) : undefined, run: entry.onArtifacts };
 			case "pull_requests": return { icon: "git-pull-request" as const, label: "PR Review", run: entry.onPullRequests };
 			case "map": return { icon: "list" as const, label: "Conversation history", run: entry.onMap };
 			case "refresh": return { icon: "refresh-cw" as const, label: entry.refreshing ? "Refreshing conversation…" : "Refresh conversation", disabled: entry.refreshing, run: entry.onRefresh };

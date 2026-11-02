@@ -36,6 +36,8 @@ const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.
     cloudCpMock: {
       cancelSessionReviews: vi.fn(),
       getSessionReviewState: vi.fn(),
+      // Pending unless a test answers: most suites never read a Cloud files count.
+      getWorkspaceReview: vi.fn(() => new Promise(() => {})),
       inspectSessionReviewerHarnesses: vi.fn(),
       installSessionReviewerHarness: vi.fn(),
       listChatEvents: vi.fn(),
@@ -4268,6 +4270,27 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  it("surfaces the stored reason of a failed manual review", async () => {
+    const failedManualReview = {
+      ...failedReview,
+      triggerSource: "manual",
+      body: "launch reviewer: reviewer replace stale pane: no such session",
+    };
+    mockCommonGets([], "", [
+      {
+        ...reviewState(3, "needs_review", "abc123"),
+        latestRun: failedManualReview,
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+    );
+  });
+
   it("hides Reviews and the review preference when the session has no PR", async () => {
     mockCommonGets();
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
@@ -4684,6 +4707,30 @@ describe("SessionInspector Cloud reviews", () => {
       handleId: "cloud-reviewer-7",
       harness: "claude-code",
     });
+  });
+  it("does not ask a waking session's absent worker for its files count", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
+    cloudCpMock.getWorkspaceReview.mockResolvedValue({
+      workspaceVersion: "v1", files: [], truncated: false, commits: [],
+      sections: { staged: [], unstaged: [], untracked: [], committed: [] },
+      summary: { files: 2, additions: 3, deletions: 1 },
+    });
+    try {
+      const waking = session([], { cloud: { orgId: "org-1" }, runtimeConnected: false });
+      const view = renderWithQuery(<SessionInspector session={waking} />);
+      await waitFor(() => expect(cloudCpMock.listChatEvents).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(cloudCpMock.getWorkspaceReview).not.toHaveBeenCalled();
+      // Its worker is back: the count is read.
+      view.rerender(
+        <QueryClientProvider client={view.queryClient}>
+          <TooltipProvider><SessionInspector session={{ ...waking, runtimeConnected: true }} /></TooltipProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(cloudCpMock.getWorkspaceReview).toHaveBeenCalledWith("org-1", "sess-1"));
+    } finally {
+      cloudCpMock.getWorkspaceReview.mockReset().mockImplementation(() => new Promise(() => {}));
+    }
   });
 });
 

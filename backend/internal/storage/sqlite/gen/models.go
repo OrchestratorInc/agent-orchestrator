@@ -165,13 +165,14 @@ type AgentSwitchFailureReceipt struct {
 }
 
 type AppSetting struct {
-	ID                 int64
-	DefaultSessionMode domain.SessionMode
-	UpdatedAt          time.Time
-	CloudOffering      bool
-	HarnessDefaults    string
-	VersionRefresh     bool
-	ComputerUse        bool
+	ID                   int64
+	DefaultSessionMode   domain.SessionMode
+	UpdatedAt            time.Time
+	CloudOffering        bool
+	HarnessDefaults      string
+	VersionRefresh       bool
+	ComputerUse          bool
+	SessionRetentionDays int64
 }
 
 type Automation struct {
@@ -357,6 +358,7 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+	AuthoredByUser      int64
 }
 
 type ConversationMessagesFt struct {
@@ -419,6 +421,7 @@ type ConversationTurn struct {
 	UsageLimitResumeError string
 	BatchedInput          int64
 	ProviderInputText     string
+	FailureCode           string
 }
 
 type Cue struct {
@@ -430,6 +433,16 @@ type Cue struct {
 	Prompt    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type DeletedSessionAccountUsage struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
 }
 
 type ManagedHarnessRelease struct {
@@ -741,6 +754,7 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+	TerminatedAt                     sql.NullTime
 }
 
 type SessionAgentAccount struct {
@@ -773,6 +787,7 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+	ReportOnly           bool
 }
 
 type SessionHarnessRelease struct {
@@ -810,6 +825,18 @@ type SessionInterfaceTransitionMessage struct {
 	ClientMessageID string
 	SenderSessionID string
 	AuthoredByUser  bool
+}
+
+type SessionNumFloor struct {
+	IDPrefix string
+	MaxNum   int64
+}
+
+type SessionTelemetry struct {
+	SessionID         string
+	CreatedBy         string
+	WaitingInputCount int64
+	EndClaimed        int64
 }
 
 type SessionTerminalTurn struct {
@@ -889,6 +916,11 @@ type UsageMessageSummary struct {
 	PendingCount int64
 	FirstAt      sql.NullTime
 	LastAt       sql.NullTime
+	SteerCount   int64
+	SendCount    int64
+	DesktopCount int64
+	MobileCount  int64
+	CliCount     int64
 }
 
 type UsagePRMeasurement struct {
@@ -898,6 +930,8 @@ type UsagePRMeasurement struct {
 	HistoricalMerged   int64
 	AssociatedReported int64
 	MergedReported     int64
+	ClosedReported     int64
+	MergedVia          string
 }
 
 type UsageProjectIdentity struct {

@@ -164,7 +164,7 @@ describe("Electron main Sentry configuration", () => {
 			const queuePath = path.join(cacheRoot, "sentry", "queue");
 			await mkdir(queuePath, { recursive: true });
 			await writeFile(path.join(queuePath, "queued-before-opt-out"), "synthetic queued event");
-			let snapshot = { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-10-29T00:00:00.000Z", acknowledged: true, consentRenewalRequired: false };
+			let snapshot = { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-10-29T00:00:00.000Z", acknowledged: true };
 			const authority = {
 				durabilitySupported: true,
 				load: async () => snapshot,
@@ -196,7 +196,7 @@ describe("Electron main Sentry configuration", () => {
 		const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "ao-sentry-consent-"));
 		try {
 			let generation = 0;
-			let snapshot = { eventsEnabled: false, consentGeneration: "generation-0", updatedAt: "2026-10-29T00:00:00.000Z", acknowledged: true, consentRenewalRequired: false };
+			let snapshot = { eventsEnabled: false, consentGeneration: "generation-0", updatedAt: "2026-10-29T00:00:00.000Z", acknowledged: true };
 			const authority = {
 				durabilitySupported: true,
 				load: async () => snapshot,

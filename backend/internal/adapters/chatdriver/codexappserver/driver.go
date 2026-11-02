@@ -115,8 +115,7 @@ var _ ports.ChatDriver = (*Driver)(nil)
 // Harness reports which agent this driver serves.
 func (d *Driver) Harness() domain.AgentHarness { return domain.HarnessCodex }
 
-// capabilities is what a Codex app-server of a supported version provides. Each
-// entry here was exercised against a live app-server rather than read off a doc.
+// capabilities is what a Codex app-server of a supported version provides.
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
 		ports.ChatCapabilityStreaming:   true,
@@ -130,6 +129,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityPlans:       true,
 		ports.ChatCapabilityPlanMode:    true,
 		ports.ChatCapabilityInteractive: true,
+		ports.ChatCapabilityElicitation: true,
 		ports.ChatCapabilityModels:      true,
 		// The account's quota position is both pushed (account/rateLimits/updated)
 		// and readable on demand (account/rateLimits/read), verified against a live
@@ -811,7 +811,7 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	if _, ok := overlay["PATH"]; !ok {
 		overlay["PATH"] = os.Getenv("PATH")
 	}
-	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
+	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(agentlaunch.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
 }
 

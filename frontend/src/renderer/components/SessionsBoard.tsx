@@ -11,9 +11,11 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
+	STANDALONE_PROJECT_KIND,
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
 	newestActiveOrchestrator,
@@ -26,6 +28,7 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -33,13 +36,12 @@ import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { TopbarButton } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
-import { isLinuxPlatform, isMacPlatform, usesBoardActionsInPanel } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
@@ -52,7 +54,7 @@ import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { ProjectTerminationFeedback } from "./ShellTopbar";
+import { ProjectTerminationFeedback } from "./SessionTopbarActions";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
@@ -81,10 +83,6 @@ function isArchivedSession(session: WorkspaceSession): boolean {
 	);
 }
 
-const isMac = isMacPlatform();
-const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
-const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
-
 export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -98,10 +96,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
-	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
-	const boardActionsInPanel = usesBoardActionsInPanel();
-	/** Bell lives in the board action row when the shell topbar does not host it. */
-	const boardOwnsNotificationCenter = isLinuxPlatform() || boardActionsInPanel;
 	const all = localWorkspaceQuery.data ?? [];
 	const workspaces = hostId
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
@@ -153,6 +147,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	useSessionShortcut("open-orchestrator", () => {
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND) return;
+		projectActions.openOrchestrator();
+	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
@@ -254,14 +252,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
-			{boardOwnsNotificationCenter ? (
-				<>
-					<NotificationCenter />
-				</>
-			) : null}
 		</>
-	) : boardOwnsNotificationCenter ? (
-		<NotificationCenter />
 	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
@@ -274,34 +265,17 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
-			{/* macOS: shell topbar is hidden on board routes, so the project/"Board"
-			    crumb + New task / Orchestrator / bell live in this in-panel row.
-			    Win/Linux keep the crumb and actions in the framed ShellTopbar.
-			    Welcome skips the row — a dangling "Board" above the import
-			    chooser was review feedback on #2432. */}
-			{!showWelcome && boardActionsInPanel && (boardLabel || actions) ? (
-				<div
-					className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center gap-2 border-b border-border-strong pr-1"
-					style={dragStyle}
-				>
-					{boardLabel ? (
-						<span
-							className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}
-							data-testid="board-topbar-label"
-						>
-							<LayoutDashboard aria-hidden="true" className="size-icon-md" />
-							{boardLabel}
-							{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
-						</span>
-					) : null}
-					<div className="min-w-0 flex-1" />
-					{actions ? (
-						<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
-							{actions}
-						</div>
-					) : null}
-				</div>
-			) : null}
+			<PageTopbar
+				lead={showWelcome ? undefined : (
+					<PageTopbarTitle
+						data-testid="board-topbar-label"
+					>
+						{boardLabel}
+						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+					</PageTopbarTitle>
+				)}
+				actions={showWelcome ? undefined : actions}
+			/>
 			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
 			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}

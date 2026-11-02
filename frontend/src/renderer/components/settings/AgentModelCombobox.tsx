@@ -440,16 +440,23 @@ export function AgentModelCombobox({
 									compact ? (
 										<DropdownMenuItem
 											key={item.id}
+											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
-											<span className="truncate text-settings-label">{item.label}</span>
+											<div className="min-w-0 flex-1">
+												<span className="truncate text-settings-label">{item.label}</span>
+												{item.model.unavailableReason && (
+													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+												)}
+											</div>
 											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
 											key={item.id}
+											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
 										>
@@ -458,6 +465,9 @@ export function AgentModelCombobox({
 												<span className="truncate text-settings-label">{item.label}</span>
 													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
 														<p className="truncate text-xs text-settings-muted">{item.id}</p>
+													)}
+													{item.model.unavailableReason && (
+														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 													)}
 												</div>
 												{group.kind !== "provider" && item.provider !== "Other" && (

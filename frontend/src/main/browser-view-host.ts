@@ -873,7 +873,9 @@ export function clampBoundsToWindow(
   return {
     x,
     y,
-    width: Math.min(rounded.width, Math.max(0, maxX - x)),
+    // The inspector slides beyond the window's right edge. Let the native
+    // window clip it rather than resizing the page to the visible slice.
+    width: Math.min(rounded.width, maxX),
     height: Math.min(rounded.height, Math.max(0, maxY - y)),
   };
 }
@@ -1051,10 +1053,17 @@ export function createBrowserViewHost(
     view: BrowserViewLike,
     bounds: BrowserRect,
     visible?: boolean,
-  ): void => {
-    view.setBounds(bounds);
+  ): BrowserRect => {
+    // Parking a hidden page must only move it: the default offscreen size
+    // would reflow it on every inspector close, session switch, and tab switch.
+    const current = bounds === OFFSCREEN_BOUNDS ? view.getBounds?.() : undefined;
+    const applied = current && current.width > 0 && current.height > 0
+      ? { ...bounds, width: current.width, height: current.height }
+      : bounds;
+    view.setBounds(applied);
     if (visible !== undefined) view.setVisible?.(visible);
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
+    return applied;
   };
   const pushDevToolsState = (
     session: BrowserSessionEntry,
@@ -2671,10 +2680,10 @@ export function createBrowserViewHost(
         // Show the native view before moving it so Chromium updates its bounds,
         // but keep it completely outside the window while mobile is watching.
         entry.view.setVisible?.(true);
-        applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS);
+        const parkingBounds = applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS);
         const parked = entry.view.getBounds?.();
-        if (parked && (parked.x !== OFFSCREEN_BOUNDS.x || parked.y !== OFFSCREEN_BOUNDS.y ||
-          parked.width !== OFFSCREEN_BOUNDS.width || parked.height !== OFFSCREEN_BOUNDS.height)) {
+        if (parked && (parked.x !== parkingBounds.x || parked.y !== parkingBounds.y ||
+          parked.width !== parkingBounds.width || parked.height !== parkingBounds.height)) {
           entry.view.setVisible?.(false);
           session.live.sink.error("BROWSER_CAPTURE_UNAVAILABLE", "Browser capture could not be parked outside the desktop window");
         }

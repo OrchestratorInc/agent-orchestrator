@@ -729,6 +729,25 @@ describe("provider catalog controller epochs", () => {
 });
 
 describe("useConversation snapshot mapping", () => {
+	it("passes a typed DeepSeek key failure from the API to the timeline snapshot", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				...WIRE,
+				turns: [{
+					...WIRE.turns[0],
+					state: "failed",
+					errorMessage: "ACP internal detail",
+					failureCode: "provider_key_missing",
+				}],
+			},
+			error: undefined,
+		});
+
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper });
+		await waitFor(() => expect(result.current.snapshot?.turns[0]?.failureCode).toBe("provider_key_missing"));
+		expect(result.current.snapshot?.turns[0]?.errorMessage).toBe("ACP internal detail");
+	});
+
 	it("maps branch metadata and lightweight prompt content", async () => {
 		getMock.mockResolvedValue({
 			data: {
