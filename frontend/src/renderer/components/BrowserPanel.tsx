@@ -1,3 +1,5 @@
+import { sessionBrowserUnavailable } from "../lib/artifact-preview";
+import { BrowserIcon } from "./icons";
 import {
 	memo,
 	useCallback,
@@ -45,7 +47,6 @@ import {
 	Download,
 	Eye,
 	ExternalLink,
-	Globe2,
 	Maximize2,
 	Minimize2,
 	RotateCcw,
@@ -386,6 +387,8 @@ export function BrowserPanel({
 		poppedOut,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
+		terminated: sessionBrowserUnavailable(session),
+		sessionEnded: session.isTerminated,
 	});
 	const annotationQueue = useBrowserAnnotationQueue({
 		sessionId: session.id,
@@ -415,6 +418,7 @@ export function BrowserPanelView({
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
+	const browserUnavailable = sessionBrowserUnavailable(session);
 	const {
 		viewId,
 		navState,
@@ -985,6 +989,7 @@ export function BrowserPanelView({
 							aria-haspopup="listbox"
 							aria-label={t("browser.url")}
 							className="browser-panel__url-input h-browser-url text-xs"
+							disabled={browserUnavailable}
 							onBlur={endUrlEditing}
 							onChange={(event) => handleURLChange(event.target.value)}
 							onClick={() => urlInputRef.current?.select()}
@@ -1135,6 +1140,7 @@ export function BrowserPanelView({
 					<button
 						aria-label={t("browser.openNewTab")}
 						className={cn("browser-panel__tab-new", draggedTopTabId && "browser-panel__tab-new--dragging")}
+						disabled={browserUnavailable}
 						onClick={() => void handleOpenTab()}
 						type="button"
 					>
@@ -1318,7 +1324,7 @@ export function BrowserPanelView({
 							<Button
 								aria-label={t("browser.back")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoBack}
+								disabled={!navState.canGoBack || browserUnavailable}
 								onClick={() => void goBack()}
 								size="icon-sm"
 								type="button"
@@ -1333,7 +1339,7 @@ export function BrowserPanelView({
 							<Button
 								aria-label={t("browser.forward")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoForward}
+								disabled={!navState.canGoForward || browserUnavailable}
 								onClick={() => void goForward()}
 								size="icon-sm"
 								type="button"
@@ -1346,6 +1352,7 @@ export function BrowserPanelView({
 				<BrowserControlTooltip label={navState.isLoading ? t("browser.stop") : t("browser.reload")}>
 					<Button
 							aria-label={navState.isLoading ? t("browser.stop") : t("browser.reload")}
+							disabled={browserUnavailable}
 							className="browser-panel__navigation-btn"
 							onClick={() => void (navState.isLoading ? stop() : reload())}
 							size="icon-sm"
@@ -1457,19 +1464,17 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
-				{poppedOut ? (
-					<BrowserControlTooltip label={t("browser.returnToPanel")}>
-						<Button
-							aria-label={t("browser.returnToPanel")}
-							onClick={() => onTogglePopOut(false)}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<Minimize2 aria-hidden="true" className="size-icon-base" />
-						</Button>
-					</BrowserControlTooltip>
-				) : null}
+				<BrowserControlTooltip label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}>
+					<Button
+						aria-label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}
+						onClick={() => onTogglePopOut(!poppedOut)}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						{poppedOut ? <Minimize2 aria-hidden="true" className="size-icon-base" /> : <Maximize2 aria-hidden="true" className="size-icon-base" />}
+					</Button>
+				</BrowserControlTooltip>
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
@@ -1615,18 +1620,6 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
-								{!poppedOut ? (
-									<>
-										<DropdownMenuItem
-											className="gap-2"
-											onSelect={() => onTogglePopOut(true)}
-										>
-										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-											<span className="flex-1">{t("browser.popOut")}</span>
-										</DropdownMenuItem>
-										<div className="my-1 h-px bg-border" role="separator" />
-									</>
-								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {
@@ -1800,7 +1793,7 @@ export function BrowserPanelView({
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
 						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
-							<p>{t("browser.emptyUrl")}</p>
+							<p>{browserUnavailable ? t("browser.sessionEnded") : t("browser.emptyUrl")}</p>
 						</div>
 					) : null}
 					{navState.error ? (
@@ -1883,7 +1876,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					{tab.favicon ? (
 						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 					) : (
-						<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 					)}
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
@@ -1918,7 +1911,7 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				{tab.favicon ? (
 					<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 				) : (
-					<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+					<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
@@ -2038,7 +2031,7 @@ function BrowserSuggestionIcon({ cachedFavicon, url, viewId }: { cachedFavicon?:
 		};
 	}, [cachedFavicon, directFavicon, nativeCompositionEnabled, url, viewId]);
 	if (!favicon) {
-		return <Globe2 aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
+		return <BrowserIcon aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
 	}
 	return (
 		<img

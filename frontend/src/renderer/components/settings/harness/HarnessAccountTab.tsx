@@ -11,8 +11,9 @@ import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
-import type { HarnessDetails } from "./describe-harness";
+import { installStage, showsInstallProgress, type HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
+import { HarnessInstallProgress, useInstallJustFinished } from "./HarnessInstallProgress";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harness-ui";
 
 const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
@@ -51,6 +52,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	// readiness then speaks for that account, not for the CLI's own login.
 	const accountsPreview = useUiStore((state) => state.developerMode);
 	const accountProvider = (accountsPreview || followsSavedAccount(details.readinessAgent)) && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	// The running job's steps stay in the Installation card until it finishes on Done.
+	const justFinished = useInstallJustFinished(job);
+	const stage = justFinished ? "done" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
@@ -86,7 +90,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 		) : null;
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
-		: details.needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
+		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
 		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={ACTION_CLASS} disabled={authWorkflowActive} onClick={onLogin}>
@@ -104,6 +108,7 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
+			{job && (justFinished || showsInstallProgress(job)) ? <HarnessInstallProgress job={job} stage={stage} label={justFinished ? t("settings.harness.progress.done") : details.progressLabel} /> : null}
 			{isInstalled && details.updatedAt ? <HarnessDetailRow label={t("settings.harness.lastUpdated")}>
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}

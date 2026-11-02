@@ -73,13 +73,13 @@ type SessionTeardowner interface {
 
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
-	store               Store
-	sessions            SessionTeardowner
-	clock               func() time.Time
-	telemetry           ports.EventSink
-	defaultHarness      domain.AgentHarness
-	logger              *slog.Logger
-	onModelScopeChanged func(projectID string)
+	store          Store
+	sessions       SessionTeardowner
+	clock          func() time.Time
+	telemetry      ports.EventSink
+	milestones     ports.InstallMilestones
+	defaultHarness domain.AgentHarness
+	logger         *slog.Logger
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -100,12 +100,12 @@ type Deps struct {
 	Sessions       SessionTeardowner
 	Clock          func() time.Time
 	Telemetry      ports.EventSink
+	// Milestones durably records the install's first added project, so
+	// ao.projects.created carries first_for_install. Left nil, it is omitted.
+	Milestones ports.InstallMilestones
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
-	// OnModelScopeChanged schedules non-blocking model-catalog invalidation
-	// after a project is created or its agent-relevant config changes.
-	OnModelScopeChanged func(projectID string)
 }
 
 // New returns a project service backed by the given durable store.
@@ -120,13 +120,13 @@ func NewWithDeps(d Deps) *Service {
 		defaultHarness = domain.AgentHarness(config.DefaultAgent)
 	}
 	s := &Service{
-		store:               d.Store,
-		sessions:            d.Sessions,
-		clock:               d.Clock,
-		telemetry:           d.Telemetry,
-		defaultHarness:      defaultHarness,
-		logger:              d.Logger,
-		onModelScopeChanged: d.OnModelScopeChanged,
+		store:          d.Store,
+		sessions:       d.Sessions,
+		clock:          d.Clock,
+		telemetry:      d.Telemetry,
+		milestones:     d.Milestones,
+		defaultHarness: defaultHarness,
+		logger:         d.Logger,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -216,6 +216,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}
 
 	projectCountBefore := len(activeProjects)
+	// first_for_install must also see archived rows: Remove archives, so an
+	// install upgraded after removing its projects is not on its first project.
+	// A failed count only omits the durable flag; it never fails the add.
+	allProjectsBefore, countErr := m.store.CountProjectsIncludingArchived(ctx)
+	prior := priorProjects{none: countErr == nil && allProjectsBefore == 0, known: countErr == nil}
 
 	name := string(id)
 	if in.Name != nil {
@@ -312,11 +317,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if err := m.store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
 			return Project{}, apierr.Internal("PROJECT_ADD_FAILED", "Failed to register workspace project")
 		}
-		m.modelScopeChanged(row.ID)
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
 		}
-		m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+		m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 		p := m.projectFromRow(ctx, row)
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 		return p, nil
@@ -364,8 +368,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
-	m.modelScopeChanged(row.ID)
-	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+	m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -576,7 +579,20 @@ func nestedGitRepositoryPaths(root string) ([]string, error) {
 	return nested, nil
 }
 
-func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool) {
+// priorProjects is whether any project row, archived included, existed before
+// an add; known is false when that could not be read.
+type priorProjects struct{ none, known bool }
+
+// emitProjectAdded reports an add. firstProject (no active projects before)
+// drives the deprecated first_project_added event; prior drives the durable
+// first_for_install flag.
+func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool, prior priorProjects) {
+	// Claimed even when telemetry is off: the marker describes the install. An
+	// unreadable prior count leaves the marker unclaimed and the flag omitted.
+	var firstForInstall, firstKnown bool
+	if prior.known {
+		firstForInstall, firstKnown = ports.FirstForInstall(m.milestones, "project_added", prior.none)
+	}
 	if m.telemetry == nil {
 		return
 	}
@@ -598,6 +614,11 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 	if owner := githubOwner(row.RepoOriginURL); owner != "" {
 		payload["github_org"] = owner
 	}
+	// Only ao.projects.created allowlists first_for_install; the deprecated
+	// first_project_added event below drops it at export.
+	if firstKnown {
+		payload["first_for_install"] = firstForInstall
+	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.projects.created",
 		Source:     "project_service",
@@ -607,6 +628,9 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		RequestID:  reqid.FromContext(ctx),
 		Payload:    payload,
 	})
+	// Deprecated: first_project_added fires whenever the projects table is
+	// empty. Use ao.projects.created with first_for_install=true. Kept for
+	// dashboard continuity.
 	if !firstProject {
 		return
 	}
@@ -743,14 +767,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	}
 	row.DisplayName = inDisplayName
 	row.Config = in.Config
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
-}
-
-func (m *Service) modelScopeChanged(projectID string) {
-	if m.onModelScopeChanged != nil {
-		m.onModelScopeChanged(projectID)
-	}
 }
 
 // SetConfig replaces the project's stored config. The typed config is validated
@@ -781,7 +798,6 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	m.modelScopeChanged(row.ID)
 	return m.projectFromRow(ctx, row), nil
 }
 

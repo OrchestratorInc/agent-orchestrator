@@ -3,7 +3,7 @@ import { useCallback } from "react";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import type { ApprovalMode } from "../types/conversation";
-import type { SessionKind } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type SessionKind } from "../types/workspace";
 import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 type ProjectPermissionsConfig = {
@@ -17,13 +17,15 @@ type ProjectPermissionsConfig = {
 /**
  * The project's remembered permission mode, and saving or forgetting it. Only an
  * explicit toggle writes it; selecting a session mode is separate. `null` forgets.
+ * A Scratchpad session has no project to read.
  */
 export function useRememberProjectPermissions(projectId: string, sourceHarness?: string, hostId?: string, kind?: SessionKind) {
 	const queryClient = useQueryClient();
+	const hasProject = Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectKey = hostId ? ["project", projectId, hostId] : ["project", projectId];
 	const project = useQuery({
 		queryKey: projectKey,
-		enabled: Boolean(projectId),
+		enabled: hasProject,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },

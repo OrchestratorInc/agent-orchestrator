@@ -46,7 +46,7 @@ describe("createMobileTelemetry", () => {
 		expect(captures).toEqual([
 			{
 				event: MOBILE_EVENTS.featureUsed,
-				props: { feature: "spawn", outcome: "succeeded", $process_person_profile: false },
+				props: { feature: "spawn", outcome: "succeeded", ao_cloud_user_id: null, github_actor: null, $process_person_profile: false },
 			},
 		]);
 	});
@@ -103,15 +103,60 @@ describe("createMobileTelemetry", () => {
 	});
 
 	describe("desktop identity", () => {
-		it("identifies with the desktop distinct id once, registers github/cloud ids, and lifts the anonymous flag", () => {
+		it("holds capture until a legacy identity is cleared", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			t.resetPhoneIdentity();
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+		it("does not consume the daily heartbeat before migration completes", async () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitIdentityMigration: true });
+			const store = memory();
+			const now = new Date("2026-08-06T01:00:00Z");
+			await t.active(store, now);
+			expect(await store.getItem(ACTIVE_STORAGE_KEY)).toBeNull();
+			t.releasePhoneIdentity();
+			await t.active(store, now);
+			expect(captures).toHaveLength(1);
+		});
+		it("resets a legacy desktop distinct id without changing the phone installation ID", () => {
+			const { client, calls, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });
+			t.resetPhoneIdentity();
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual(["reset", "optIn"]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.install_id).toBe("phone_install");
+			expect(calls.some((call) => call.startsWith("identify:"))).toBe(false);
+		});
+		it("keeps the phone identity and stamps only the authenticated paired install", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { phoneInstallId: () => "phone_install" });
+			const desktop = "ins_123e4567-e89b-12d3-a456-426614174000";
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", installId: desktop, optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr", paired_install_id: "spoofed" });
+			expect(captures.at(-1)?.props?.paired_install_id).toBe(desktop);
+			expect(captures.at(-1)?.props?.install_id).toBe("phone_install");
+			expect(calls).not.toContain("identify:user_A");
+			t.adoptDesktopIdentity(null);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures).toHaveLength(2);
+		});
+		it("registers desktop account properties without changing the phone identity", () => {
 			const { client, captures, registered, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
-			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:user_01H"]);
-			expect(registered.at(-1)).toEqual({ github_actor: "octocat", ao_cloud_user_id: "user_01H" });
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual([]);
+			expect(registered.at(-1)).toEqual({});
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
-			expect(captures[0].props).not.toHaveProperty("$process_person_profile");
+			expect(captures[0].props?.$process_person_profile).toBe(false);
+			expect(captures[0].props).toMatchObject({ ao_cloud_user_id: "user_01H", github_actor: "octocat" });
 			// Email never reaches the phone or its events.
 			expect(JSON.stringify([registered, captures])).not.toContain("@");
 		});
@@ -121,11 +166,36 @@ describe("createMobileTelemetry", () => {
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ optedOut: false });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
-			expect(calls).toEqual([]);
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual([]);
 			expect(captures[0].props?.$process_person_profile).toBe(false);
 		});
 
-		it("keeps an install ID anonymous so a later Cloud sign-in can merge its history", () => {
+		it("restores paired attribution after an incomplete identity refresh", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			const desktop = {
+				distinctId: "user_A",
+				cloudUserId: "user_A",
+				githubLogin: "octocat",
+				installId: "ins_123e4567-e89b-12d3-a456-426614174000",
+				optedOut: false,
+			};
+			t.adoptDesktopIdentity(desktop);
+			t.adoptDesktopIdentity({ optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).not.toHaveProperty("paired_install_id");
+			expect(captures.at(-1)?.props?.ao_cloud_user_id).toBeNull();
+
+			t.adoptDesktopIdentity(desktop);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({
+				paired_install_id: desktop.installId,
+				ao_cloud_user_id: "user_A",
+				github_actor: "octocat",
+			});
+		});
+
+		it("keeps the phone anonymous across a desktop Cloud sign-in", () => {
 			const { client, captures, calls } = fakeClient();
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
@@ -133,7 +203,7 @@ describe("createMobileTelemetry", () => {
 			expect(calls).not.toContain("identify:ins_abc");
 			expect(captures[0].props?.$process_person_profile).toBe(false);
 			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "octocat", optedOut: false });
-			expect(calls).toContain("identify:user_A");
+			expect(calls).not.toContain("identify:user_A");
 		});
 
 		it("opt-out stops capture, resets the SDK, persists, and is lifted by an opted-in desktop", () => {
@@ -163,11 +233,11 @@ describe("createMobileTelemetry", () => {
 			t.adoptDesktopIdentity({ optedOut: true });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);
-			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:user_A", "reset", "optOut"]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["reset", "optOut"]);
 
 			// A later sync after the daemon recovers adopts the replacement ID.
 			t.adoptDesktopIdentity({ distinctId: "ins_new", optedOut: false });
-			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn"]);
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(2)).toEqual(["optIn"]);
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toHaveLength(1);
 		});
@@ -180,7 +250,7 @@ describe("createMobileTelemetry", () => {
 
 			t.setOptedOut(true);
 			// reset() clears the SDK's own opt-out flag, so optOut() must follow it.
-			expect(calls).toEqual(["reset", "optOut"]);
+			expect(calls.filter((call) => !call.startsWith("unregister:"))).toEqual(["reset", "optOut"]);
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);
 		});
@@ -241,53 +311,55 @@ describe("createMobileTelemetry", () => {
 		});
 
 		it("removes the previous identity properties when the new identity lacks them", () => {
-			const { client, calls, registered, captures } = fakeClient();
+			const { client, calls, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
 			calls.length = 0;
 			// Signed out: install id only, no user id, GitHub login still known.
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
-			expect(calls).toContain("reset");
+			expect(calls).not.toContain("reset");
 			expect(calls).not.toContain("identify:ins_abc");
-			expect(calls).toContain("unregister:ao_cloud_user_id");
-			expect(calls).not.toContain("unregister:github_actor");
-			expect(registered.at(-1)).toEqual({ github_actor: "octocat" });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures.at(-1)?.props?.$process_person_profile).toBe(false);
+			expect(captures.at(-1)?.props).toMatchObject({ ao_cloud_user_id: null, github_actor: "octocat" });
 			// A desktop with no GitHub login at all clears the old handle too.
 			calls.length = 0;
 			t.adoptDesktopIdentity({ distinctId: "ins_def", optedOut: false });
-			expect(calls).toEqual(expect.arrayContaining(["unregister:github_actor", "unregister:ao_cloud_user_id"]));
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props).toMatchObject({ ao_cloud_user_id: null, github_actor: null });
 		});
 
-		it("identifies with the new account's properties registered, not the previous account's", () => {
-			// Model the SDK: identify() snapshots whatever is registered at that moment.
+		it("clears the previous account's properties without identifying the phone", () => {
 			const live: Record<string, unknown> = {};
-			const identifyPayloads: Array<{ id: string; props: Record<string, unknown> }> = [];
+			const captures: Record<string, unknown>[] = [];
+			const identifyPayloads: string[] = [];
 			const client: MobileTelemetryClient = {
-				capture: () => undefined,
+				capture: (_event, props) => void captures.push(props ?? {}),
 				register: (p) => void Object.assign(live, p),
 				unregister: (name) => void delete live[name],
-				identify: (id) => void identifyPayloads.push({ id, props: { ...live } }),
+				identify: (id) => void identifyPayloads.push(id),
 				reset: () => undefined,
 				optOut: () => undefined,
 				optIn: () => undefined,
 			};
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "alice", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			t.adoptDesktopIdentity({ distinctId: "user_B", cloudUserId: "user_B", optedOut: false });
-			expect(identifyPayloads).toEqual([
-				{ id: "user_A", props: { github_actor: "alice", ao_cloud_user_id: "user_A" } },
-				{ id: "user_B", props: { ao_cloud_user_id: "user_B" } },
-			]);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(identifyPayloads).toEqual([]);
+			expect(live).toEqual({});
+			expect(captures[0]).toMatchObject({ ao_cloud_user_id: "user_A", github_actor: "alice" });
+			expect(captures[1]).toMatchObject({ ao_cloud_user_id: "user_B", github_actor: null });
 		});
 
 		it("re-registers when only the GitHub login changes for the same distinct id", () => {
-			const { client, registered } = fakeClient();
+			const { client, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
-			expect(registered.at(-1)).toEqual({ github_actor: "octocat" });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.github_actor).toBe("octocat");
 		});
 
 		it("restores a persisted opt-out before anything is sent", async () => {

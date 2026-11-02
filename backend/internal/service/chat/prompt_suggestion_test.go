@@ -347,7 +347,9 @@ func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 		}
 		return `{"prompt":"Run the tests."}`, nil
 	})
-	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 4 {
+	// Activity does not count toward a page, so the read and its revalidation
+	// each take one bounded page despite the 205 late activities.
+	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 2 {
 		t.Fatalf("paged suggestion: prompt=%q err=%v reads=%d", prompt, err, reads)
 	}
 }

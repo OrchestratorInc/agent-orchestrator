@@ -119,6 +119,7 @@ function ImageDiffPane({
 					<p className="text-center text-xs text-muted-foreground">{t("files.imagePreviewFailed")}</p>
 				) : (
 					<img
+						crossOrigin="anonymous"
 						alt={t("files.imageAlt", { file: path, side: label })}
 						className="max-h-[420px] max-w-full object-contain"
 						onError={() => setFailed(true)}

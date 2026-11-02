@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -166,6 +167,29 @@ func canonicalTempDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestSessionHookFlagsRunTheAppImageLink covers an AppImage daemon: hooks run
+// the link under the data dir instead of this launch's /tmp/.mount_* path, so
+// a Codex session that outlives an app restart still reaches the running AO.
+func TestSessionHookFlagsRunTheAppImageLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AppImage is Linux-only")
+	}
+	dataDir := t.TempDir()
+	t.Cleanup(func() { _ = agentlaunch.UseStableExecutable(dataDir, func(string) string { return "" }) })
+	appImage := func(key string) string { return map[string]string{"AO_APPIMAGE": "/home/me/AO.AppImage"}[key] }
+	if err := agentlaunch.UseStableExecutable(dataDir, appImage); err != nil {
+		t.Fatal(err)
+	}
+	var cmd []string
+	if err := appendSessionHookFlags(&cmd); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dataDir, "runtime", "ao-current", "ao")
+	if len(cmd) < 2 || !strings.Contains(cmd[1], "'"+link+"' hooks codex session-start") {
+		t.Fatalf("hook flags = %q, want hooks to run %s", cmd, link)
+	}
 }
 
 // sessionHookFlags mirrors the `-c` hook config appendSessionHookFlags emits,
@@ -1160,5 +1184,33 @@ func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
 	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, map[string]string{"CODEX_HOME": account})
 	if err != nil || !exists {
 		t.Fatalf("rollout through a linked sessions folder: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestAuthStatusFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\nscript=$1\nshift\nexec /bin/sh \"$script\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\necho 'Logged in using ChatGPT'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	status, err := (&Plugin{resolvedBinary: launcher}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("AuthStatus = %q, %v; want authorized", status, err)
 	}
 }

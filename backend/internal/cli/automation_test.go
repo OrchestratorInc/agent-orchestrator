@@ -40,7 +40,7 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 					}
 					page := automationListDTO{Automations: []automationDTO{}}
 					for i := start; i < min(start+100, 101); i++ {
-						page.Automations = append(page.Automations, automationDTO{ID: fmt.Sprintf("automation-%03d", i), ProjectID: "project & one", DisplayName: "Morning"})
+						page.Automations = append(page.Automations, automationDTO{ID: fmt.Sprintf("automation-%03d", i), ProjectID: "project & one", DisplayName: "Morning", Model: "capable", Effort: "high"})
 					}
 					if start+100 < 101 {
 						page.NextCursor = fmt.Sprintf("opaque+/%d=", start+100)
@@ -74,6 +74,9 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 						t.Fatal(err)
 					}
 					for _, item := range items {
+						if item.Model != "capable" || item.Effort != "high" {
+							t.Fatalf("model settings lost: %#v", item)
+						}
 						ids = append(ids, item.ID)
 					}
 				} else {

@@ -170,7 +170,7 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	now := base.Add(5 * time.Hour)
 	store := newSchedulerStore()
-	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", DisplayName: "Hourly", Prompt: "Review", Kind: domain.KindWorker, RRuleText: "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: base}
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", DisplayName: "Hourly", Prompt: "Review", Model: "gpt-5", Effort: "high", Mode: "agent", Kind: domain.KindWorker, RRuleText: "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: base}
 	spawner := &recordingSpawner{store: store}
 	sequence := 0
 	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }, NewID: func() string { sequence++; return string(rune('a' + sequence - 1)) }})
@@ -183,6 +183,9 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	}
 	if got := store.automations["automation-1"].NextRunAt; !got.Equal(base.Add(6 * time.Hour)) {
 		t.Fatalf("next run = %s, want %s", got, base.Add(6*time.Hour))
+	}
+	if got := spawner.calls[0].AgentConfig; got.Model != "gpt-5" || got.Effort != "high" || got.Mode != "agent" {
+		t.Fatalf("agent config = %#v", got)
 	}
 	if spawner.calls[0].AutomationRunID == nil || store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor != base {
 		t.Fatalf("spawn config = %#v, want oldest occurrence", spawner.calls[0])

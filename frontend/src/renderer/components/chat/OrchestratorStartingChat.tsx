@@ -1,5 +1,5 @@
 import type { SessionProvisionStep } from "../../types/workspace";
-import { ShellTopbar } from "../ShellTopbar";
+import { SessionTopbarActions } from "../SessionTopbarActions";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { CloudSessionStartupLoader } from "../CloudSessionStartupLoader";
@@ -15,17 +15,24 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 
 const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
 
-export function OrchestratorStartingChat({ steps, cloud = false, coderWorkspaceUrl }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean; coderWorkspaceUrl?: string }) {
-	if (cloud) return <CloudSessionStartupLoader coderWorkspaceUrl={coderWorkspaceUrl} />;
+/**
+ * The orchestrator's view while it is being created. A Freestyle cloud
+ * orchestrator starts in place, on its conversation with the composer's
+ * startup shimmer, as a local one does; other cloud providers (Coder) start
+ * behind the startup screen, which shows their steps and workspace link.
+ */
+export function OrchestratorStartingChat({ steps, cloud = false, freestyle = false, coderWorkspaceUrl }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean; freestyle?: boolean; coderWorkspaceUrl?: string }) {
+	if (cloud && !freestyle) return <CloudSessionStartupLoader coderWorkspaceUrl={coderWorkspaceUrl} />;
 	return <ChatWorkspace
 		snapshot={pendingSnapshot}
 		sessionRole="orchestrator"
 		startingSteps={steps}
 		newWorkDisabled
+		pendingInPlaceStart={cloud && freestyle}
 		inlineHeader
 		headerActions={
 			<div className="session-topbar-session-chrome flex shrink-0 items-center" data-compact-session-chrome="false">
-				<ShellTopbar embedded startingOrchestrator />
+				<SessionTopbarActions startingOrchestrator />
 			</div>
 		}
 	/>;

@@ -56,6 +56,16 @@ export type BrowserProfileViewState = {
 	temporary: boolean;
 };
 
+/** Live browsers affected by deleting a named profile; no paths or partitions. */
+export type BrowserProfileUsage = {
+	viewId: string;
+	sessionId: string;
+	blocker: "agent-active" | "switching" | null;
+};
+
+export type BrowserProfileUsageResult = { sessions: BrowserProfileUsage[]; error?: string };
+export type BrowserProfileDeleteResult = { error?: string };
+
 export type BrowserMenuBounds = {
 	x: number;
 	y: number;

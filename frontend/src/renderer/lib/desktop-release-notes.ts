@@ -1,7 +1,9 @@
 const RELEASE_ATTRIBUTION_PATTERN =
 	/\s+by\s+@[A-Za-z0-9-]+(?:\[bot\])?\s+in\s+(\[#\d+\]\(https:\/\/github\.com\/(?:OrchestratorInc|Untrivial-ai)\/agent-orchestrator\/pull\/\d+\))\s*$/;
+// The Markdown body writes the footer as a bare URL; notes converted from the
+// HTML feed carry it as a "[v1...v2](url)" link.
 const FULL_CHANGELOG_PATTERN =
-	/^\*\*Full Changelog\*\*:\s+https:\/\/github\.com\/(?:OrchestratorInc|Untrivial-ai)\/agent-orchestrator\/(?:compare|commits)\/\S+\s*$/i;
+	/^\*\*Full Changelog\*\*:\s+(?:\[[^\]]*\]\()?https:\/\/github\.com\/(?:OrchestratorInc|Untrivial-ai)\/agent-orchestrator\/(?:compare|commits)\/\S+\s*$/i;
 
 export function prepareDesktopReleaseNotes(notes: string): string {
 	const lines = notes.split(/\r?\n/).flatMap((line) => {

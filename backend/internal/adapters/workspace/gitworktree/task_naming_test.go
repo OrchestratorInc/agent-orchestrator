@@ -77,22 +77,8 @@ func TestRenameTaskBranch(t *testing.T) {
 }
 
 func TestRenameTaskBranchRollsBackEveryRepository(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
-	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
-	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	git, ws, info := newTwoRepoTask(t)
 	ctx := context.Background()
-	info, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(info.Worktrees) < 2 {
-		t.Fatalf("expected root and child worktrees: %+v", info.Worktrees)
-	}
 	actualRun := ws.run
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -147,15 +133,19 @@ func TestRenameTaskBranchRetriesConcurrentBranchConflict(t *testing.T) {
 
 // A rename after launch must never strand refs the agent already made under the
 // temporary namespace, because AO attributes PRs to the session by that prefix.
-func TestRenameTaskBranchKeepsAttributedWork(t *testing.T) {
-	for name, act := range map[string]func(t *testing.T, git, repo, path string){
-		"sibling": func(t *testing.T, git, repo, path string) { runGit(t, git, repo, "branch", "ao/proj-1/feature") },
-		"switched": func(t *testing.T, git, repo, path string) {
-			runGit(t, git, path, "switch", "-c", "elsewhere")
-		},
-		"pushed": func(t *testing.T, git, repo, path string) {
+// Only a pushed temporary branch blocks the rename: a plain `git push` would
+// then name a different remote branch. Local work under the temporary name
+// stays attributed to the session through that namespace.
+func TestRenameTaskBranchGuard(t *testing.T) {
+	for name, tc := range map[string]struct {
+		act     func(t *testing.T, git, repo, path string)
+		renamed bool
+	}{
+		"sibling":  {func(t *testing.T, git, repo, path string) { runGit(t, git, repo, "branch", "ao/proj-1/feature") }, true},
+		"switched": {func(t *testing.T, git, repo, path string) { runGit(t, git, path, "switch", "-c", "elsewhere") }, true},
+		"pushed": {func(t *testing.T, git, repo, path string) {
 			runGit(t, git, repo, "update-ref", "refs/remotes/origin/ao/proj-1/root", gitOutput(t, git, repo, "rev-parse", "main"))
-		},
+		}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			git := requireGit(t)
@@ -170,15 +160,141 @@ func TestRenameTaskBranchKeepsAttributedWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			act(t, git, repo, root.Path)
+			tc.act(t, git, repo, root.Path)
 			info, err := ws.RenameTaskBranch(ctx, ports.WorkspaceProjectInfo{Root: root}, "ao/fix-login/root")
-			if err == nil || info.Root.Branch != root.Branch {
-				t.Fatalf("rename = %+v, %v", info, err)
-			}
-			if out, err := exec.Command(git, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/ao/fix-login/root").CombinedOutput(); err == nil {
-				t.Fatalf("generated branch was created: %s", out)
+			_, showErr := exec.Command(git, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/ao/fix-login/root").CombinedOutput()
+			if tc.renamed != (err == nil && info.Root.Branch == "ao/fix-login/root" && showErr == nil) {
+				t.Fatalf("rename = %+v, %v, branch exists=%v", info, err, showErr == nil)
 			}
 		})
+	}
+}
+
+func TestRenameTaskBranchToItsOwnName(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A workspace project's temporary branch is the bare namespace.
+	for i, temporary := range []string{"ao/proj-1/root", "ao/proj-2"} {
+		id := fmt.Sprintf("proj-%d", i+1)
+		root, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: domain.SessionID(id), Branch: temporary})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := ws.RenameTaskBranch(context.Background(), ports.WorkspaceProjectInfo{Root: root}, "ao/"+id+"/root")
+		if err != nil || info.Root.Branch != temporary {
+			t.Fatalf("rename %s to own name = %+v, %v", temporary, info, err)
+		}
+	}
+}
+
+// When undoing a partial multi-repository rename also fails, the result still
+// says which branches Git holds.
+func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
+	git, ws, info := newTwoRepoTask(t)
+	root, last := info.Worktrees[0].Path, info.Worktrees[len(info.Worktrees)-1].Path
+	actualRun := ws.run
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if len(args) > 1 && args[1] == last && strings.Contains(joined, "branch -m -- ao/proj-1 ao/fix-login/root") {
+			return nil, errors.New("injected rename failure")
+		}
+		if len(args) > 1 && args[1] == root && strings.Contains(joined, "branch -m -- ao/fix-login/root ao/proj-1") {
+			return nil, errors.New("injected undo failure")
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	got, err := ws.RenameTaskBranch(context.Background(), info, "ao/fix-login/root")
+	if err == nil {
+		t.Fatal("undo failure not reported")
+	}
+	requireBranchesMatchGit(t, git, got)
+}
+
+// When the undo stops partway, the result says which branches Git holds.
+func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
+	git, ws, original := newTwoRepoTask(t)
+	ctx := context.Background()
+	renamed, err := ws.RenameTaskBranch(ctx, original, "ao/fix-login/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := original.Worktrees[len(original.Worktrees)-1].Path
+	actualRun := ws.run
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[1] == last && strings.Contains(strings.Join(args, " "), "branch -m") {
+			return nil, errors.New("injected undo failure")
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	got, err := ws.RevertTaskBranch(ctx, renamed, original)
+	if err == nil {
+		t.Fatal("undo failure not reported")
+	}
+	requireBranchesMatchGit(t, git, got)
+}
+
+// newTwoRepoTask creates a workspace-project task with a root and one child
+// repository on the temporary branch ao/proj-1.
+func newTwoRepoTask(t *testing.T) (string, *Workspace, ports.WorkspaceProjectInfo) {
+	t.Helper()
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
+	if err != nil || len(info.Worktrees) < 2 {
+		t.Fatalf("workspace project = %+v, %v", info, err)
+	}
+	return git, ws, info
+}
+
+func requireBranchesMatchGit(t *testing.T, git string, got ports.WorkspaceProjectInfo) {
+	t.Helper()
+	if actual := gitOutput(t, git, got.Root.Path, "branch", "--show-current"); got.Root.Branch != actual {
+		t.Fatalf("root = %q, Git holds %q", got.Root.Branch, actual)
+	}
+	for _, wt := range got.Worktrees {
+		if actual := gitOutput(t, git, wt.Path, "branch", "--show-current"); wt.Branch != actual {
+			t.Fatalf("%s = %q, Git holds %q", wt.RepoName, wt.Branch, actual)
+		}
+	}
+}
+
+// RevertTaskBranch restores each repository's own original branch exactly,
+// even with refs under the temporary namespace that a rename would skip.
+func TestRevertTaskBranchIsExact(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	root, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "proj-1", Branch: "ao/proj-1/root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := ports.WorkspaceProjectInfo{Root: root}
+	renamed, err := ws.RenameTaskBranch(ctx, original, "ao/fix-login/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, git, repo, "branch", "ao/proj-1/fix")
+	if _, err := ws.RevertTaskBranch(ctx, renamed, original); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, git, root.Path, "branch", "--show-current"); got != root.Branch {
+		t.Fatalf("reverted branch = %q", got)
 	}
 }
 

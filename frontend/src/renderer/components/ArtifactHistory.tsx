@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, LoaderCircle, User } from "lucide-react";
 import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
@@ -9,15 +9,11 @@ import { getGitHubStatus } from "../lib/github-daemon";
 import { cn } from "../lib/utils";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { Button } from "./ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "./ui/dropdown-menu";
 import { PanelMessage } from "./WorkspaceDiffView";
 
 // Version rows shown before "Show more".
 const VERSIONS_SHOWN = 8;
-
-// How long after the menu closes the button ignores a tooltip request.
-const TOOLTIP_AFTER_MENU_MS = 400;
 
 /** "Today at 8:31 PM", "Yesterday at …", else "Oct 11 at …". */
 export function formatVersionTime(isoDate: string, now: Date = new Date()): string {
@@ -84,10 +80,10 @@ function VersionItem({
 }
 
 /**
- * The History menu in the viewer's header: every kept version in one list,
+ * The History submenu in the viewer's title menu: every kept version in one list,
  * newest first, the first marked current. Choosing one previews it in the
  * viewer; the current version returns to the live file. The list and the
- * user's avatar load when the viewer opens, so the menu is ready to read, and
+ * user's avatar load when the title menu opens, so the submenu is ready to read, and
  * opening it records any edit the observer has not picked up yet.
  */
 export function ArtifactHistoryMenu({
@@ -108,10 +104,7 @@ export function ArtifactHistoryMenu({
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
-	const [menuOpen, setMenuOpen] = useState(false);
-	const [tooltipOpen, setTooltipOpen] = useState(false);
 	const [showAll, setShowAll] = useState(false);
-	const closedAtRef = useRef(0);
 	const versions = useArtifactVersions({ enabled: true, hostId, path, sessionId });
 	const syncVersions = useSyncArtifactVersions({ hostId, path, sessionId });
 	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
@@ -127,33 +120,14 @@ export function ArtifactHistoryMenu({
 		return source ? t("artifacts.history.restoredFrom", { time: formatVersionTime(source.createdAt) }) : t("artifacts.history.restoredFromOlder");
 	};
 	return (
-		<DropdownMenu
-			onOpenChange={(open) => {
-				setMenuOpen(open);
-				// Opening shows what is cached at once and refreshes it behind the scenes.
-				if (open) syncVersions.mutate();
-				else closedAtRef.current = Date.now();
-			}}
-			open={menuOpen}
-		>
-			{/* Closing the menu hands focus back to the button, which would otherwise raise its tooltip. */}
-			<Tooltip
-				onOpenChange={(open) => {
-					if (open && Date.now() - closedAtRef.current < TOOLTIP_AFTER_MENU_MS) return;
-					setTooltipOpen(open);
-				}}
-				open={tooltipOpen && !menuOpen}
-			>
-				<TooltipTrigger asChild>
-					<DropdownMenuTrigger asChild>
-						<Button aria-label={t("artifacts.history")} className="text-muted-foreground hover:text-foreground" size="icon-sm" type="button" variant="ghost">
-							<History aria-hidden="true" className="size-icon-sm" />
-						</Button>
-					</DropdownMenuTrigger>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("artifacts.history")}</TooltipContent>
-			</Tooltip>
-			<DropdownMenuContent align="end" className="max-h-[min(28rem,60vh)] w-72 overflow-y-auto" data-browser-native-overlay="true">
+		<DropdownMenuSub onOpenChange={(open) => {
+			if (open) syncVersions.mutate();
+		}}>
+			<DropdownMenuSubTrigger>
+				<History aria-hidden="true" />
+				{t("artifacts.history")}
+			</DropdownMenuSubTrigger>
+			<DropdownMenuSubContent className="max-h-[min(28rem,60vh)] w-72 overflow-y-auto" data-browser-native-overlay="true">
 				{versions.isPending ? (
 					<div className="flex justify-center py-2 text-muted-foreground">
 						<LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
@@ -191,8 +165,8 @@ export function ArtifactHistoryMenu({
 						{t("artifacts.history.showMore")}
 					</DropdownMenuItem>
 				) : null}
-			</DropdownMenuContent>
-		</DropdownMenu>
+			</DropdownMenuSubContent>
+		</DropdownMenuSub>
 	);
 }
 

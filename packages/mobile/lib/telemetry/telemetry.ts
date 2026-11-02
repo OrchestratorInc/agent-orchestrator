@@ -12,7 +12,7 @@ export interface MobileTelemetryClient {
 	capture(event: string, properties?: Record<string, unknown>): void;
 	// register returns a Promise in the SDK; we never await it (best-effort).
 	register(properties: Record<string, unknown>): void | Promise<void>;
-	identify(distinctId: string): void;
+	identify?(distinctId: string): void;
 	reset(): void;
 	unregister(property: string): void | Promise<void>;
 	optOut(): void | Promise<void>;
@@ -20,13 +20,13 @@ export interface MobileTelemetryClient {
 }
 
 /**
- * What a paired desktop reports at GET /api/v1/telemetry/identity. distinctId is
- * the AO Cloud user ID when the desktop is signed in, else its install ID. The
- * phone identifies only the Cloud ID; the install ID remains anonymous. There
- * is no email here by design: the desktop sets it as a person property.
+ * What a paired desktop reports at GET /api/v1/telemetry/identity. The phone
+ * keeps its own PostHog identity. The desktop's Cloud ID and installation ID
+ * are properties only. No email crosses this boundary.
  */
 export type DesktopTelemetryIdentity = {
 	distinctId?: string;
+	installId?: string;
 	cloudUserId?: string;
 	githubLogin?: string;
 	optedOut: boolean;
@@ -37,8 +37,11 @@ export type MobileTelemetry = {
 	capture(event: MobileEventName, properties?: Record<string, unknown>): void;
 	/** Emit the daily-active heartbeat at most once per UTC day. */
 	active(storage?: ActiveStorage, now?: Date): Promise<void>;
-	/** Join the paired desktop's person, or stop everything if it has opted out. */
-	adoptDesktopIdentity(identity: DesktopTelemetryIdentity): void;
+	/** Apply the paired desktop's properties and opt-out. */
+	adoptDesktopIdentity(identity: DesktopTelemetryIdentity | null): void;
+	/** Remove an SDK identity inherited from older desktop adoption code. */
+	resetPhoneIdentity(): void;
+	releasePhoneIdentity(): void;
 	setOptedOut(optedOut: boolean): void;
 	/**
 	 * Applies the saved opt-out read from storage and releases capture. Ignored
@@ -50,6 +53,9 @@ export type MobileTelemetry = {
 
 export type MobileTelemetryOptions = {
 	disabledEvents?: readonly string[];
+	/** The phone's existing persisted installation ID, when primed. */
+	phoneInstallId?: () => string | null;
+	awaitIdentityMigration?: boolean;
 	/**
 	 * Returns false to drop an event that has hit the per-name rate cap. Sync so
 	 * capture() stays non-blocking; runtime.ts backs it with an in-memory,
@@ -78,10 +84,23 @@ export function createMobileTelemetry(
 	const allow = options.allow ?? (() => true);
 	let optedOut = false;
 	let blocked = options.awaitPreference ?? false;
+	let identityPending = options.awaitIdentityMigration ?? false;
 	let liveStateApplied = false;
-	let identified = false;
-	let adoptedId: string | null = null;
 	let adoptedKey: string | null = null;
+	let pairedInstallId: string | null = null;
+	let cloudUserId: string | null = null;
+	let githubActor: string | null = null;
+	void client.unregister("ao_cloud_user_id");
+	void client.unregister("github_actor");
+	const clearPairedAttribution = (): void => {
+		adoptedKey = null;
+		pairedInstallId = null;
+		cloudUserId = null;
+		githubActor = null;
+		void client.unregister("paired_install_id");
+		void client.unregister("github_actor");
+		void client.unregister("ao_cloud_user_id");
+	};
 
 	// With awaitPreference the facade's initial `optedOut` is a guess, not what the
 	// SDK and the saved marker hold (a previous run may have left both opted out).
@@ -101,9 +120,10 @@ export function createMobileTelemetry(
 			// opt-out flag, so optOut() must come after it.
 			client.reset();
 			void client.optOut();
-			identified = false;
-			adoptedId = null;
 			adoptedKey = null;
+			pairedInstallId = null;
+			cloudUserId = null;
+			githubActor = null;
 			return;
 		}
 		void client.optIn();
@@ -113,18 +133,21 @@ export function createMobileTelemetry(
 	const capture = (event: MobileEventName, properties?: Record<string, unknown>): void => {
 		// Fail closed on the event name: an event not in the allowlist is never
 		// sent, so a typo cannot ship a bare untracked event.
-		if (blocked || optedOut) return;
+		if (blocked || identityPending || optedOut) return;
 		if (!(event in MOBILE_ALLOWLIST)) return;
 		// Build-time kill switch, mirroring the desktop denylist.
 		if (denied.has(event)) return;
 		// Per-name rate cap: the runaway backstop. Checked last so a legitimate
 		// event is only dropped when the name is genuinely over its window.
 		if (!allow(event)) return;
+		const phoneInstallId = options.phoneInstallId?.();
 		client.capture(event, {
 			...sanitizeMobileProperties(event, properties),
-			// Anonymous rate until a paired desktop's identity is adopted.
-			// Matches every desktop and daemon event.
-			...(identified ? {} : { $process_person_profile: false }),
+			...(phoneInstallId ? { install_id: phoneInstallId } : {}),
+			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
+			ao_cloud_user_id: cloudUserId,
+			github_actor: githubActor,
+			$process_person_profile: false,
 		});
 	};
 
@@ -136,49 +159,39 @@ export function createMobileTelemetry(
 		setOptedOut(saved);
 	};
 
-	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity): void => {
+	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity | null): void => {
+		if (!identity) {
+			clearPairedAttribution();
+			return;
+		}
 		liveStateApplied = true;
 		setOptedOut(identity.optedOut);
-		if (optedOut || !identity.distinctId) return;
-		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin]);
+		if (optedOut || !identity.distinctId) {
+			clearPairedAttribution();
+			return;
+		}
+		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
+		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
-		const signedIn = Boolean(identity.cloudUserId);
-		if (identified && (!signedIn || adoptedId !== identity.distinctId)) {
-			// An account's identified SDK state cannot become another account's or
-			// a signed-out phone's anonymous identity.
-			client.reset();
-			void client.optIn();
-			void client.register(context);
-			adoptedId = null;
-		}
 		adoptedKey = key;
-		identified = signedIn;
-		// Registered properties merge in the SDK and the identify payload is built
-		// from the ones registered at that moment, so the new identity's properties
-		// go in first: a property it lacks (signed out, or a desktop with no GitHub
-		// login) is removed, and the outgoing $identify never carries the previous
-		// account's attributes.
-		const props: Record<string, string> = {};
-		if (identity.githubLogin) props.github_actor = identity.githubLogin;
-		if (identity.cloudUserId) props.ao_cloud_user_id = identity.cloudUserId;
-		for (const name of ["github_actor", "ao_cloud_user_id"]) {
-			if (!(name in props)) void client.unregister(name);
-		}
-		if (Object.keys(props).length > 0) void client.register(props);
-		if (signedIn && adoptedId !== identity.distinctId) {
-			adoptedId = identity.distinctId;
-			// Only a signed-in Cloud ID is identified. An ins_ ID must remain
-			// anonymous so the desktop can later merge it into the Cloud person.
-			client.identify(identity.distinctId);
-		}
+		cloudUserId = identity.cloudUserId ?? null;
+		githubActor = identity.githubLogin ?? null;
 	};
 
 	return {
 		capture,
 		adoptDesktopIdentity,
+		resetPhoneIdentity: () => {
+			client.reset();
+			void (optedOut ? client.optOut() : client.optIn());
+			void client.register(context);
+			identityPending = false;
+		},
+		releasePhoneIdentity: () => { identityPending = false; },
 		setOptedOut,
 		restoreOptOut,
 		active: async (storage, now) => {
+			if (blocked || identityPending || optedOut) return;
 			if (await reserveDailyActive(storage, now)) {
 				capture(MOBILE_EVENTS.active);
 			}

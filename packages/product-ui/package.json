@@ -17,10 +17,10 @@
 		}
 	},
 	"scripts": {
-		"build": "vite build --config vite.build.config.ts && tsc -p tsconfig.build.json",
+		"build": "vite build --config vite.build.config.ts && tsgo -p tsconfig.build.json",
 		"prepack": "npm run build",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsgo --noEmit"
 	},
 	"dependencies": {
 		"clsx": "^2.1.1",
@@ -37,6 +37,7 @@
 		"@types/node": "^22.0.0",
 		"@types/react": "^19.2.17",
 		"@types/react-dom": "^19.2.3",
+		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"jsdom": "^29.1.1",
 		"motion": "^12.43.0",
 		"react": "^19.2.7",

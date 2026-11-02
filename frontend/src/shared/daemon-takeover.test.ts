@@ -5,7 +5,11 @@ import { DAEMON_SERVICE_NAME, type DaemonProbe } from "./daemon-attach";
 import {
 	RUN_FILE_START_SKEW_MS,
 	browserDaemonOwnershipDecision,
+	browserRuntimeRecoveryDecision,
+	HANDSHAKE_CLOSED_BEFORE_ACCEPT,
+	keepAliveForReplacement,
 	portHolderPidToReplace,
+	shouldReplaceDaemonForStartup,
 } from "./daemon-takeover";
 
 // A minimal valid DaemonProbe (non-null means the AO daemon answered /healthz).
@@ -131,5 +135,76 @@ describe("browserDaemonOwnershipDecision", () => {
 			keepAlive: true,
 		});
 		expect(browserDaemonOwnershipDecision("run-2", {})).toEqual({ action: "replace", keepAlive: true });
+	});
+});
+
+describe("browserRuntimeRecoveryDecision", () => {
+	it("retires an adopted daemon that refuses this app's token", () => {
+		expect(
+			browserRuntimeRecoveryDecision({ rejectedReason: "invalid-token", spawnedHere: false, attempted: false }),
+		).toEqual({ action: "replace", reason: "invalid-token" });
+	});
+
+	it("retires an adopted daemon that hangs up before accepting the hello", () => {
+		expect(
+			browserRuntimeRecoveryDecision({
+				rejectedReason: HANDSHAKE_CLOSED_BEFORE_ACCEPT,
+				spawnedHere: false,
+				attempted: false,
+			}),
+		).toEqual({ action: "replace", reason: HANDSHAKE_CLOSED_BEFORE_ACCEPT });
+	});
+
+	it("waits while the daemon this app spawned is still ours to fix", () => {
+		expect(
+			browserRuntimeRecoveryDecision({ rejectedReason: "invalid-token", spawnedHere: true, attempted: false }),
+		).toEqual({ action: "wait" });
+	});
+
+	it("waits for refusal reasons a restart would not fix", () => {
+		expect(
+			browserRuntimeRecoveryDecision({ rejectedReason: "unsupported-version", spawnedHere: false, attempted: false }),
+		).toEqual({ action: "wait" });
+		expect(browserRuntimeRecoveryDecision({ rejectedReason: null, spawnedHere: false, attempted: false })).toEqual({
+			action: "wait",
+		});
+	});
+
+	it("replaces at most once per launch", () => {
+		expect(
+			browserRuntimeRecoveryDecision({ rejectedReason: "invalid-token", spawnedHere: false, attempted: true }),
+		).toEqual({ action: "wait" });
+	});
+});
+
+describe("startup replacement", () => {
+	it("honors a forced replacement of an adopted daemon", () => {
+		expect(
+			shouldReplaceDaemonForStartup({
+				ownership: { action: "attach" },
+				forceRequested: true,
+			}),
+		).toBe(true);
+	});
+
+	it("replaces only on an ownership mismatch when nothing forced it", () => {
+		expect(
+			shouldReplaceDaemonForStartup({ ownership: { action: "attach" }, forceRequested: false }),
+		).toBe(false);
+		expect(
+			shouldReplaceDaemonForStartup({ ownership: { action: "replace", keepAlive: false }, forceRequested: false }),
+		).toBe(true);
+	});
+
+	it("keeps a forced replacement's own daemon alive", () => {
+		// The retired daemon may not have a lifetime tag at all, so a forced
+		// replacement must not adopt its guidance.
+		expect(keepAliveForReplacement({ ownership: { action: "attach" }, forceRequested: true })).toBe(true);
+		expect(keepAliveForReplacement({ ownership: { action: "replace", keepAlive: false }, forceRequested: false })).toBe(
+			false,
+		);
+		expect(keepAliveForReplacement({ ownership: { action: "replace", keepAlive: true }, forceRequested: false })).toBe(
+			true,
+		);
 	});
 });

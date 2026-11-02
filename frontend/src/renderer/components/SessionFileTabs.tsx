@@ -1,8 +1,7 @@
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionFileTabState } from "../lib/session-file-tabs";
-import { cn } from "../lib/utils";
-import { TerminalTabFrame } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
@@ -55,48 +54,40 @@ export function SessionFileTab({
 }) {
 	const { t } = useTranslation();
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The close button overlays the file icon's slot and replaces it on hover,
-	// matching the shell terminal tabs. A dirty file keeps an always-visible dot
-	// in that slot; the dot swaps to the cross on hover.
+	// The close button takes the file icon's slot on hover, matching the other
+	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
+	// to the cross on hover.
 	const closeAction = (
-		<span className="grid size-icon-base place-items-center">
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button
-						aria-label={t("files.closeTab", { name })}
-						className={cn(
-							"grid size-icon-sm place-items-center rounded-sm text-passive hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50",
-							dirty
-								? "pointer-events-auto opacity-100"
-								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-						)}
-						onClick={(event) => {
-							event.stopPropagation();
-							onClose();
-						}}
-						type="button"
-					>
-						{dirty ? (
-							<>
-								<span
-									aria-hidden="true"
-									className="size-2 rounded-full bg-foreground group-hover:hidden group-focus-within:hidden"
-									data-testid="unsaved-tab-indicator"
-								/>
-								<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-focus-within:block" />
-							</>
-						) : <X className="size-icon-sm" aria-hidden="true" />}
-					</button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("files.closeTab", { name })}</TooltipContent>
-			</Tooltip>
-		</span>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					aria-label={t("files.closeTab", { name })}
+					className={terminalTabActionClassName}
+					onClick={(event) => {
+						event.stopPropagation();
+						onClose();
+					}}
+					type="button"
+				>
+					{dirty ? (
+						<>
+							<span
+								aria-hidden="true"
+								className="size-2 rounded-full bg-foreground group-hover:hidden group-focus-within:hidden"
+								data-testid="unsaved-tab-indicator"
+							/>
+							<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-focus-within:block" />
+						</>
+					) : <X className="size-icon-sm" aria-hidden="true" />}
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("files.closeTab", { name })}</TooltipContent>
+		</Tooltip>
 	);
 	return (
 		<TerminalTabFrame
 			action={closeAction}
-			actionLayout="overlay"
-			actionPosition="leading"
+			actionPinned={dirty}
 			active={active}
 			buttonProps={{
 				"aria-label": name,
@@ -107,18 +98,8 @@ export function SessionFileTab({
 				title: sourceLabel ? `${path} · ${sourceLabel}` : path,
 				type: "button",
 			}}
-			className="max-w-shell-tab-max"
-			contentClassName="font-medium"
-		>
-			<WorkspaceEntryIcon
-				className={cn(
-					"size-icon-base shrink-0",
-					dirty ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0",
-				)}
-				kind="file"
-				name={name}
-			/>
-			<span className="truncate">{name}</span>
-		</TerminalTabFrame>
+			icon={<WorkspaceEntryIcon className="size-icon-sm shrink-0" kind="file" name={name} />}
+			label={name}
+		/>
 	);
 }

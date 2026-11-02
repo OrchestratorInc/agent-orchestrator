@@ -131,6 +131,7 @@ export type TerminalMuxPool = {
 };
 
 const PING_INTERVAL_MS = 20_000;
+const MAX_INPUT_CHUNK_BYTES = 32 * 1024;
 
 function subscribeById<T>(map: Map<string, Set<T>>, id: string, listener: T): () => void {
 	const set = map.get(id) ?? new Set<T>();
@@ -245,8 +246,13 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 			send(openFrame(id, cols, rows));
 		},
 		sendInput: (id, input) => {
+			if (disposed) return;
 			const bytes = encoder.encode(input);
-			send(dataFrame(id, bytes));
+			let offset = 0;
+			do {
+				send(dataFrame(id, bytes.subarray(offset, offset + MAX_INPUT_CHUNK_BYTES)));
+				offset += MAX_INPUT_CHUNK_BYTES;
+			} while (offset < bytes.length);
 		},
 		resize: (id, cols, rows, force) => {
 			send(resizeFrame(id, cols, rows, force));

@@ -72,6 +72,11 @@ export interface CloudCpOffering {
 	 */
 	customCoder?: boolean;
 	/**
+	 * Cloud sessions keep artifact files. When false or absent the artifact
+	 * routes do not exist and requestedOutput "artifact" is refused.
+	 */
+	artifacts?: boolean;
+	/**
 	 * A Coder session run as the dedicated ao-worker user checks out in the
 	 * project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Absent
 	 * from older control planes, which is read as off: a working folder then
@@ -386,6 +391,8 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/** "artifact" asks the agent for a file deliverable; needs offering.artifacts. */
+	requestedOutput?: "artifact";
 	/** Interface the session starts in. Omitted, or a harness without Chat, starts in the terminal. */
 	interfaceMode?: CloudCpInterfaceMode;
 	/**
@@ -626,8 +633,41 @@ export interface CloudCpSession {
 	 * worker has connected yet.
 	 */
 	workerEpoch?: number;
+	/** The deliverable the session was created for. */
+	requestedOutput?: "artifact";
+	/** The guest the session was started for, when someone the project was shared with asked its orchestrator for it. */
+	requestedBy?: CloudCpPersonRef;
+	/** What the session owns. Absent from older control planes. */
+	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
+	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
+	artifactCount?: number;
+	/** When the newest artifact file was committed; changes only when the files do. */
+	artifactsUpdatedAt?: string;
+	/**
+	 * Committed artifact files: on a session read, and filled in by
+	 * useCloudSessionsQuery for a listed session that has any.
+	 */
+	artifactFiles?: CloudCpSessionArtifact[];
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** One committed artifact file of a cloud session. */
+export interface CloudCpSessionArtifact {
+	path: string;
+	name: string;
+	kind: "html" | "markdown" | "file";
+	contentType: string;
+	size: number;
+	sha256: string;
+	updatedAt: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
+export interface CloudCpArtifactAccessResponse {
+	/** Control-plane path ending in "/"; append a file's escaped path. */
+	filesPrefix: string;
+	expiresAt: string;
 }
 
 /**
@@ -1112,6 +1152,8 @@ export interface CloudCpSessionDeletedResponse {
 		id: string;
 		desiredState: string;
 	};
+	/** Whether the session's artifact files were deleted. */
+	artifactsDeleted?: boolean;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/resume accepts user resume intent. */
@@ -1149,6 +1191,12 @@ export interface CloudCpSendMessageRequest {
 	/** Per-turn permission mode, capped by the session and share grant. */
 	mode?: "read-only" | "standard" | "trusted";
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+	/**
+	 * The composer lease grant the sender holds in a shared session. Omitted,
+	 * the message is accepted only while nobody holds the lease and nobody is
+	 * waiting for it; otherwise it fails with 409 COMPOSER_LOCKED.
+	 */
+	composerEpoch?: number;
 }
 
 export interface CloudCpChatModelsResponse {
@@ -1162,7 +1210,26 @@ export interface CloudCpChatModelsResponse {
 		default: boolean;
 		efforts?: string[];
 		defaultEffort?: string;
+		/**
+		 * The approval modes a turn on this model can run, as its provider offers
+		 * them. Absent from an older worker: every mode the session allows is offered.
+		 */
+		approvalModes?: Array<"default" | "accept-edits" | "auto" | "bypass-permissions">;
 	}>;
+	/**
+	 * Where a new task's catalog came from: a Cloud worker running this CLI
+	 * version with the user's current credential, or the models the control
+	 * plane's pinned CLI version supports. Absent from a session's own list,
+	 * which that session's worker reported.
+	 */
+	source?: "worker" | "release";
+	/** The harness CLI version the list is for. */
+	cliVersion?: string;
+	/**
+	 * On a session's own list, whether its worker listed the models for the
+	 * signed-in account rather than from the CLI's built-in list.
+	 */
+	accountListed?: boolean;
 }
 
 export interface CloudCpClientEvent {
@@ -1449,4 +1516,173 @@ export interface CloudCpPlanOffer {
 /** POST /orgs/{orgId}/billing/checkout and /billing/portal */
 export interface CloudCpBillingLinkResponse {
 	url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shared sessions (`share_handlers.go`, `composer_handlers.go`, and the
+// session.live frames of a live=1 event stream)
+// ---------------------------------------------------------------------------
+
+/** A person named by the composer lease. `name` is a display name, never an email. */
+export interface CloudCpComposerParticipant {
+	userId: string;
+	name: string;
+}
+
+/**
+ * The composer lease: a shared session's hard lock on talking to its agent.
+ * Only the holder may send or steer.
+ */
+export interface CloudCpComposerLease {
+	/** null while nobody holds the lease. */
+	holder: CloudCpComposerParticipant | null;
+	/** Increases with every grant; a holder presents it to send, steer, renew, or release. */
+	epoch: number;
+	/** Everyone waiting for the lease, first in line first. */
+	waitlist: CloudCpComposerParticipant[];
+	/** What the holder is typing, read-only for everyone else; null while they have typed nothing. */
+	draft?: CloudCpComposerDraft | null;
+}
+
+/** The lease holder's draft; cursor is the caret's offset into text. */
+export interface CloudCpComposerDraft {
+	text: string;
+	cursor: number;
+}
+
+/** Answer to every composer request; a refusal is this answer with `granted` false. */
+export interface CloudCpComposerAnswer {
+	composer: CloudCpComposerLease & {
+		/** How long the caller's grant has left; 0 unless granted. */
+		expiresInMs: number;
+	};
+	granted: boolean;
+}
+
+/** Someone with the session open right now. */
+export interface CloudCpSessionViewer {
+	userId: string;
+	name: string;
+	/** Profile photo from the sign-in provider, absent when unavailable. */
+	avatarUrl?: string;
+	/** member: an organization member; editor/viewer: a share grant's role. */
+	role: "member" | "editor" | "viewer";
+}
+
+/** A session.live frame: the session's current live state, replacing the last one. */
+export interface CloudCpSessionLive {
+	type: "session.live";
+	viewers: CloudCpSessionViewer[];
+	composer: CloudCpComposerLease;
+	/** Whether the person reading the stream may take the lease from its holder. */
+	canTakeOver: boolean;
+	/** The user the stream is authenticated as: the identity the server acts on. */
+	you: string;
+	/** What the session's turns run with, set by its owner. */
+	chatSettings: CloudCpSessionChatSettings;
+	/** Whether the person reading the stream owns the session and may change chatSettings. */
+	canConfigure: boolean;
+	/** Changes whenever a merge request in the project is asked for or decided. */
+	mergeRequestsVersion?: string;
+}
+
+/** A session's owner-set turn settings; an absent field means the default. */
+/** A person named by the control plane: their id and display name. */
+export interface CloudCpPersonRef {
+	userId: string;
+	name: string;
+}
+
+/** A guest's request that a shared project's owner merge a pull request. */
+export interface CloudCpMergeRequest {
+	id: string;
+	projectId: string;
+	sessionId: string;
+	sessionName: string;
+	pullRequest: { id: string; number: number; url: string; title: string; repository: string };
+	requestedBy: CloudCpPersonRef;
+	status: "pending" | "merged" | "rejected";
+	decidedBy?: CloudCpPersonRef;
+	decidedAt?: string;
+	createdAt: string;
+}
+
+/** One person in a shared session, as a board shows them. */
+export interface CloudCpSessionParticipant {
+	userId: string;
+	name: string;
+	/** Profile photo from the sign-in provider, absent when unavailable. */
+	avatarUrl?: string;
+	/** "owner" is the session's creator. */
+	role: "owner" | "member" | "editor" | "viewer";
+	/** Whether they have the session open now. */
+	present: boolean;
+	/** working while they hold the composer, waiting while in line for it. */
+	state: "working" | "waiting" | "idle";
+}
+
+export interface CloudCpSharedSessionParticipants {
+	sessionId: string;
+	participants: CloudCpSessionParticipant[];
+}
+
+export interface CloudCpSessionChatSettings {
+	model?: string;
+	reasoningEffort?: string;
+	mode?: "read-only" | "standard" | "trusted";
+	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+}
+
+export type CloudCpShareRole = "viewer" | "editor";
+
+/** POST /orgs/{orgId}/projects/{projectId}/shares */
+export interface CloudCpCreateShareLinkRequest {
+	/** Shares one session; omitted, the whole project. */
+	sessionId?: string;
+	role?: CloudCpShareRole;
+	/** anyone: whoever has the link; restricted: only `recipients`. */
+	accessScope?: "anyone" | "restricted";
+	recipients?: string[];
+	interaction?: "view" | "interact";
+	modeCap?: "read-only" | "standard" | "trusted";
+	deniedCommands?: string[];
+	expiresInHours?: number;
+}
+
+export interface CloudCpShareLink {
+	id: string;
+	orgId: string;
+	projectId: string;
+	sessionId?: string;
+	role: CloudCpShareRole;
+	status: "active" | "revoked";
+	accessScope: "anyone" | "restricted";
+	recipients: string[];
+	interaction: "view" | "interact";
+	modeCap?: string;
+	deniedCommands: string[];
+	expiresAt?: string;
+	createdAt: string;
+	updatedAt: string;
+	/** Only in the creation response: the raw token is never stored. */
+	token?: string;
+	url?: string;
+}
+
+/** A project or session someone shared with the caller. */
+export interface CloudCpSharedProject {
+	grant: {
+		id: string;
+		role: CloudCpShareRole;
+		status: string;
+		modeCap?: string;
+		deniedCommands: string[];
+		redeemedAt: string;
+	};
+	project: CloudCpProject;
+	/** The person already belongs to the project's organization: no grant was made. */
+	member?: boolean;
+	sessionId?: string;
+	sessionName?: string;
+	sharedByName?: string;
 }

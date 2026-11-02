@@ -303,7 +303,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 					onChange={(type) => setDraft((current) => ({ ...current, type }))}
 					triggerClassName="w-fit self-start"
 					menuAlign="start"
-					menuClassName="border-0! shadow-md!"
 				/>
 			</div>
 

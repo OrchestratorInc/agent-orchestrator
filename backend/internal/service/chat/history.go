@@ -534,20 +534,29 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		Sequence int64              `json:"sequence"`
 		Role     domain.MessageRole `json:"role"`
 		Text     string             `json:"text"`
+		plain    string
+		captures []ports.ChatContent
 	}
 	type replayEnvelope struct {
 		Kind      string          `json:"kind"`
 		Messages  []replayMessage `json:"messages"`
 		Truncated bool            `json:"truncated"`
+		Warning   string          `json:"warning,omitempty"`
 	}
+	omitted := false
 	encode := func(selected []replayMessage, truncated bool) ([]byte, error) {
+		warning := ""
+		if omitted {
+			warning = "Some captured file context was omitted because it was invalid or exceeded the replay limit. Use only the available context; do not infer the missing code."
+		}
 		return json.Marshal(replayEnvelope{
-			Kind: "approximate_conversation_context", Messages: selected, Truncated: truncated,
+			Warning: warning,
+			Kind:    "approximate_conversation_context", Messages: selected, Truncated: truncated,
 		})
 	}
 	messages := make([]replayMessage, 0, len(rows))
 	for _, message := range rows {
-		if message.Sequence <= floor || message.Sequence > cutoff || message.Streaming || strings.TrimSpace(message.Text) == "" {
+		if message.Sequence <= floor || message.Sequence > cutoff || message.Streaming {
 			continue
 		}
 		switch message.Role {
@@ -555,11 +564,22 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		default:
 			continue
 		}
-		messages = append(messages, replayMessage{message.Sequence, message.Role, strings.TrimSpace(message.Text)})
+		text := strings.TrimSpace(message.Text)
+		var captures []ports.ChatContent
+		if message.Role == domain.MessageRoleUser && message.DeliveryContentJSON != "" {
+			var incomplete bool
+			captures, incomplete = replayFileReferences(message.DeliveryContentJSON)
+			omitted = omitted || incomplete
+		}
+		text = excerptDeliveryMessage(ports.ChatUserMessage{Text: text, Content: captures}).Text
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		messages = append(messages, replayMessage{Sequence: message.Sequence, Role: message.Role, Text: text, plain: strings.TrimSpace(message.Text), captures: captures})
 	}
 	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Sequence < messages[j].Sequence })
 	selected := make([]replayMessage, 0, len(messages))
-	truncated := false
+	truncated := omitted
 	for index := len(messages) - 1; index >= 0; index-- {
 		candidate := make([]replayMessage, len(selected)+1)
 		candidate[0] = messages[index]
@@ -567,6 +587,15 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		encoded, marshalErr := encode(candidate, true)
 		if marshalErr != nil {
 			return "", false, fmt.Errorf("encode replay context: %w", marshalErr)
+		}
+		for len(encoded) > approximateReplayBudget && len(candidate[0].captures) > 0 {
+			omitted, truncated = true, true
+			candidate[0].captures = candidate[0].captures[:len(candidate[0].captures)-1]
+			candidate[0].Text = excerptDeliveryMessage(ports.ChatUserMessage{Text: candidate[0].plain, Content: candidate[0].captures}).Text
+			encoded, marshalErr = encode(candidate, true)
+			if marshalErr != nil {
+				return "", false, marshalErr
+			}
 		}
 		if len(encoded) > approximateReplayBudget {
 			truncated = true
@@ -1021,8 +1050,8 @@ func (s *Service) restoreClosedSourceController(
 	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
-		// A switch target that never answered may have no native session to resume.
-		FreshIfMissing: s.switchBranchUnanswered(recoveryCtx, conversation.ID, branch),
+		// A branch whose agent never answered may have no native session to resume.
+		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
 		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
 		Permissions:           cmp.Or(conversation.Settings.ApprovalMode, cfg.Permissions),
@@ -1100,10 +1129,16 @@ func (s *Service) installStartedBranchController(
 		s.controllers[id] = replacement
 	}
 	if cfg, ok := s.startConfigs[owner]; ok {
+		// Mirror the owner ActivateConversationBranchSession just made durable,
+		// agent-session identity included. A stale field here fails the next
+		// credential rotation's ownership fence, so a second edit or activation
+		// would report an uncertain delivery and stop the session.
 		cfg.ExpectedControllerOwner.Harness = cfg.Harness
 		cfg.ExpectedControllerOwner.Mode = domain.SessionModeChat
 		cfg.ExpectedControllerOwner.IsTerminated = false
 		cfg.ExpectedControllerOwner.RuntimeLaunchID = ""
+		cfg.ExpectedControllerOwner.AgentSessionID = replacement.ProviderConversationID()
+		cfg.ExpectedControllerOwner.AgentSessionIDLaunchID = ""
 		cfg.ExpectedControllerOwner.ProviderConversationID = replacement.ProviderConversationID()
 		cfg.ExpectedControllerOwner.ControllerGeneration = replacement.Generation()
 		s.startConfigs[owner] = cfg

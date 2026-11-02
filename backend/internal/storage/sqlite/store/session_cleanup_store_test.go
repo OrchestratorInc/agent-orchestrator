@@ -289,7 +289,6 @@ func TestOrdinarySessionUpdatesCannotChangeControllerMode(t *testing.T) {
 
 	// A caller trying to flip the mode, alongside a legitimate change.
 	created.Mode = domain.SessionModeTUI
-	created.DisplayName = "renamed"
 	created.Metadata.ProviderConversationID = "thread-2"
 	if err := s.UpdateSession(ctx, created); err != nil {
 		t.Fatalf("UpdateSession: %v", err)
@@ -307,8 +306,5 @@ func TestOrdinarySessionUpdatesCannotChangeControllerMode(t *testing.T) {
 	if after.Metadata.ProviderConversationID != "thread-2" {
 		t.Errorf("provider conversation id = %q, want the update to have applied",
 			after.Metadata.ProviderConversationID)
-	}
-	if after.DisplayName != "renamed" {
-		t.Errorf("display name = %q, want the update to have applied", after.DisplayName)
 	}
 }

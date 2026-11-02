@@ -118,7 +118,7 @@ export function SearchablePicker({
 			</PopoverTrigger>
 			{/* Mounted with the picker, so the list saying it is loading is heard. */}
 			<LiveStatus text={open && filtered.length === 0 && loading ? loadingText ?? t("common.loading") : ""} />
-			<PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] min-w-56 overflow-hidden p-0 shadow-xl">
+			<PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] min-w-56 overflow-hidden p-0">
 				{searchable ? (
 					<div className="flex h-10 items-center gap-2 border-b border-border px-3">
 						<Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />

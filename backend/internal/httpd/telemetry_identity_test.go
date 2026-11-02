@@ -46,7 +46,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 
 	// Install ID until someone signs in.
-	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["optedOut"] != false {
+	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false {
 		t.Fatalf("anonymous identity = %#v", got)
 	}
 
@@ -67,7 +67,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatalf("valid sign-in = %d, want 204", c)
 	}
 	got := get()
-	if got["distinctId"] != "user_01H" || got["cloudUserId"] != "user_01H" {
+	if got["distinctId"] != "user_01H" || got["cloudUserId"] != "user_01H" || got["installId"] != ident.InstallID() {
 		t.Fatalf("signed-in identity = %#v", got)
 	}
 	if _, ok := got["email"]; ok {
@@ -79,7 +79,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = get()
-	if got["optedOut"] != true || got["distinctId"] != "" {
+	if got["optedOut"] != true || got["distinctId"] != "" || got["installId"] != nil {
 		t.Fatalf("opted-out identity = %#v", got)
 	}
 }
@@ -114,11 +114,8 @@ func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) 
 	if c := post(`{"cloudUserId":"user_A"}`); c != http.StatusNoContent {
 		t.Fatalf("sign-in = %d", c)
 	}
-	// A non-empty directory where the install ID file lives makes the rename fail.
-	idPath := filepath.Join(dir, "telemetry_install_id")
-	if err := os.Remove(idPath); err != nil {
-		t.Fatal(err)
-	}
+	// A non-empty directory where the anonymous ID file lives makes the rename fail.
+	idPath := filepath.Join(dir, "telemetry_anonymous_id")
 	if err := os.MkdirAll(filepath.Join(idPath, "x"), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,8 @@ export const MAX_WEBGL_TERMINALS = 8;
 export type WebglLease = {
 	/** The terminal is about to be shown: make sure it renders with WebGL. */
 	activate: () => void;
+	/** Temporarily use the DOM renderer when the active mode needs it. */
+	setEnabled: (enabled: boolean) => void;
 	/** Leave the pool; the terminal's own dispose() frees its context. */
 	release: () => void;
 };
@@ -21,6 +23,7 @@ export type WebglLease = {
 type Entry = {
 	term: Terminal;
 	isVisible: () => boolean;
+	enabled: boolean;
 	addon: WebglAddon | null;
 };
 
@@ -76,15 +79,21 @@ function evictOverCap(): void {
 	}
 }
 
-export function leaseWebglRenderer(term: Terminal, isVisible: () => boolean): WebglLease {
-	const entry: Entry = { term, isVisible, addon: null };
+export function leaseWebglRenderer(term: Terminal, isVisible: () => boolean, enabled = true): WebglLease {
+	const entry: Entry = { term, isVisible, enabled, addon: null };
 	const lease: WebglLease = {
 		activate: () => {
-			if (!entries.has(lease)) return;
+			if (!entries.has(lease) || !entry.enabled) return;
 			entries.delete(lease);
 			entries.set(lease, entry);
 			if (!entry.addon) attach(entry);
 			evictOverCap();
+		},
+		setEnabled: (nextEnabled) => {
+			if (!entries.has(lease) || entry.enabled === nextEnabled) return;
+			entry.enabled = nextEnabled;
+			if (!nextEnabled) detach(entry);
+			else if (entry.isVisible()) lease.activate();
 		},
 		release: () => {
 			entries.delete(lease);

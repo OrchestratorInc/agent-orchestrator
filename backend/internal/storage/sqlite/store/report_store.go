@@ -75,12 +75,38 @@ func (s *Store) ListReportsBySession(ctx context.Context, id domain.SessionID) (
 }
 
 // ListReportedPRURLs returns only a worker's structured created-PR outputs.
+// A URL that is a known alias, such as a renamed repository's old name,
+// resolves to its tracked PR URL.
 func (s *Store) ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error) {
 	urls, err := s.qr.ListReportedPRURLs(ctx, string(id))
 	if err != nil {
 		return nil, fmt.Errorf("list reported PR URLs for %s: %w", id, err)
 	}
+	for i, raw := range urls {
+		if urls[i], err = s.resolveReportedPRURL(ctx, raw); err != nil {
+			return nil, fmt.Errorf("resolve reported PR URL %s: %w", raw, err)
+		}
+	}
 	return urls, nil
+}
+
+// resolveReportedPRURL tries the URL as typed (claim aliases keep that form)
+// and then its normalized form (discovery aliases use that form).
+func (s *Store) resolveReportedPRURL(ctx context.Context, raw string) (string, error) {
+	candidates := []string{raw}
+	if ref, err := domain.ParseChangeRequestURL(raw); err == nil && ref.URL != raw {
+		candidates = append(candidates, ref.URL)
+	}
+	for _, url := range candidates {
+		pr, err := s.qr.GetPRByURLOrAlias(ctx, url)
+		if err == nil {
+			return pr.URL, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+	}
+	return raw, nil
 }
 
 // ListReportsByProject is the read-only persisted report projection. Consumers

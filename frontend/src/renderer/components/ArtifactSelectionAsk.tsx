@@ -12,14 +12,14 @@ function highlightRegistry(): { Highlight?: new (...ranges: Range[]) => unknown;
 	return { Highlight: api.Highlight, registry: api.CSS?.highlights };
 }
 
-/** The selected range and its text when it lies in a rendered markdown body inside container. */
-function markdownSelection(container: HTMLElement): { quote: string; range: Range } | null {
+/** The selected range and its text when it lies in a rendered markdown body, table, or PDF page inside container. */
+function renderedSelection(container: HTMLElement): { quote: string; range: Range } | null {
 	const selection = window.getSelection();
 	if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
 	const range = selection.getRangeAt(0);
 	const node = range.commonAncestorContainer;
 	const element = node instanceof Element ? node : node.parentElement;
-	const body = element?.closest(".markdown-body");
+	const body = element?.closest(".markdown-body, [data-selection-feedback]");
 	if (!body || !container.contains(body)) return null;
 	const quote = selection.toString().trim();
 	return quote ? { quote, range: range.cloneRange() } : null;
@@ -60,7 +60,7 @@ export function ArtifactSelectionAsk({
 			if (timer !== null) window.clearTimeout(timer);
 			timer = window.setTimeout(() => {
 				timer = null;
-				const next = markdownSelection(container);
+				const next = renderedSelection(container);
 				if (!next) return;
 				const nextTarget = { path, side: "file" as const, surface: "focused" as const, quote: next.quote };
 				const key = fileAnnotationKey(nextTarget);

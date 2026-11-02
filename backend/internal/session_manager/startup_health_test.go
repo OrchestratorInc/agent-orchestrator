@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -274,5 +276,48 @@ func TestStartupChatCheckRetryGivesUpAfterSchedule(t *testing.T) {
 	}
 	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "unavailable" {
 		t.Fatalf("readiness = %s, want unavailable so Resume is offered", got)
+	}
+}
+
+// Builds before background branch naming left this state; it is still rolled back.
+func TestStartupHealthCleansOnlyUncommittedSetup(t *testing.T) {
+	for _, scenario := range []string{"clean", "dirty", "committed", "runtime", "provider", "setup-done"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, st, ws, _ := newGitTaskPreparationManager(t)
+			rec, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Mode: domain.SessionModeTUI, Harness: domain.HarnessClaudeCode, ClientRequestID: "create-worker", ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := ws.Create(t.Context(), ports.WorkspaceConfig{ProjectID: "mer", SessionID: rec.ID, Branch: "ao/login/root", BaseBranch: "main"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec.Metadata.WorkspacePath, rec.Metadata.Branch, rec.Metadata.WorkspaceRepoPath = root.Path, root.Branch, root.RepoPath
+			switch scenario {
+			case "dirty":
+				if err := os.WriteFile(filepath.Join(root.Path, "keep"), []byte("keep"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "committed":
+				rec.ClientRequestCommitted = true
+			case "runtime":
+				rec.Metadata.RuntimeHandleID = "live-runtime"
+			case "provider":
+				rec.Metadata.ProviderConversationID = "live-provider"
+			case "setup-done":
+				rec.ProvisionSteps[0].Status = domain.SessionProvisionStepDone
+			}
+			st.sessions[rec.ID] = rec
+			_ = m.checkSessionHealth(t.Context(), rec)
+			_, found := st.sessions[rec.ID]
+			_, pathErr := os.Stat(root.Path)
+			if scenario == "clean" {
+				if found || !errors.Is(pathErr, os.ErrNotExist) {
+					t.Fatalf("unfinished clean request remains: found=%v path=%v", found, pathErr)
+				}
+			} else if !found || pathErr != nil {
+				t.Fatalf("protected request or workspace lost: found=%v path=%v", found, pathErr)
+			}
+		})
 	}
 }

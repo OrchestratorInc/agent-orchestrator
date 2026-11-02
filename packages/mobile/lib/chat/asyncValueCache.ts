@@ -2,7 +2,11 @@ type CachedValue<V> = { value: V; expiresAt: number };
 type PendingValue<V> = { promise: Promise<V> };
 
 export type AsyncValueCache<K, V> = {
-	load(key: K, loader: () => Promise<V>): Promise<V>;
+	/**
+	 * `keep` decides whether a loaded value is cached. Deciding here, rather than
+	 * deleting afterwards, cannot drop a newer entry that another load stored.
+	 */
+	load(key: K, loader: () => Promise<V>, keep?: (value: V) => boolean): Promise<V>;
 	set(key: K, value: V): void;
 	delete(key: K): void;
 };
@@ -37,7 +41,7 @@ export function createAsyncValueCache<K, V>(
 	};
 
 	return {
-		load(key, loader) {
+		load(key, loader, keep) {
 			const current = entries.get(key);
 			if (current && "promise" in current) {
 				touch(key, current);
@@ -59,7 +63,10 @@ export function createAsyncValueCache<K, V>(
 			trim();
 			return promise.then(
 				(value) => {
-					if (entries.get(key) === pending) set(key, value);
+					if (entries.get(key) === pending) {
+						if (keep && !keep(value)) entries.delete(key);
+						else set(key, value);
+					}
 					return value;
 				},
 				(error) => {

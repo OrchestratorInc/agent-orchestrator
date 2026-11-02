@@ -1,16 +1,17 @@
-import { MoreHorizontal } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
 import { apiErrorMessage } from "../lib/api-client";
+import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
 import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
-import { TopbarButton } from "./TopbarButton";
+import { terminalTabActionClassName } from "./TerminalTabFrame";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
@@ -42,8 +43,8 @@ export function SessionTabMenu({
 	const [pending, setPending] = useState<PendingAgentSwitch>();
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	// Agent switching ships behind Developer Mode for its first week.
-	const switching = useUiStore((state) => state.developerMode) && switchTarget === "chat";
+	// The agent picker belongs to a terminal; a chat switches agent from its composer.
+	const switching = switchTarget === "chat";
 	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
 	if (!switchAction && (switchControl || !switching)) return switchControl ? <div className="inline-flex shrink-0 items-center">{switchControl}</div> : null;
 	const switchNow = () => {
@@ -77,16 +78,16 @@ export function SessionTabMenu({
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
-				<TopbarButton
+				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
+				<button
 					aria-label={t("session.actionsMenu")}
-					className="size-7 !bg-transparent text-muted-foreground hover:!bg-transparent active:!bg-transparent focus:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground"
+					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={t("session.actionsMenu")}
 					type="button"
-					variant="icon"
 				>
-					<MoreHorizontal aria-hidden="true" className="size-icon-md" />
-				</TopbarButton>
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
+				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}

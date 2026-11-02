@@ -34,7 +34,8 @@ func agentBrowserRoute(tail string) bool {
 // the browser's port never leaves the host.
 //
 // Keep agentBrowserRoute, the headers dropped and the Location scrub in
-// lockstep with cloud/internal/agentbrowser/agentbrowser.go, AO Cloud's copy:
+// lockstep with internal/agentbrowser/agentbrowser.go in the private AO Cloud
+// control plane (OrchestratorInc/ao-control-plane), its copy:
 // the cloud image builds against a pinned backend, so they cannot share code.
 // ponytail: one agent browser per host, shown in each of its sessions; route per session when sessions get their own browser.
 func (c *SessionsController) agentBrowser(w http.ResponseWriter, r *http.Request) {

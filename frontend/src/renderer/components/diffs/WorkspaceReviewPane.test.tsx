@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import * as codeSelection from "./useCodeSelection";
+import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactNode } from "react";
+import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	defaultWorkspaceReviewTarget,
@@ -35,7 +37,7 @@ vi.mock("../../lib/host-clients", async (importOriginal) => ({
 vi.mock("@pierre/diffs", () => ({
 	hydratePartialDiff: (_mode: string, fileDiff: object) => ({ ...fileDiff, isPartial: false }),
 	parsePatchFiles: (patch: string) => patch ? [{ files: [{
-		name: patch.includes("README.md") ? "README.md" : "src/App.tsx",
+		name: patch.includes("package-lock.json") ? "package-lock.json" : patch.includes("README.md") ? "README.md" : "src/App.tsx",
 		type: "change",
 		isPartial: true,
 		deletionLines: [],
@@ -55,12 +57,13 @@ vi.mock("@pierre/diffs", () => ({
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
-	CodeView: ({ className, items, options, ref, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+	CodeView: ({ className, items, options, ref, renderAnnotation, renderCustomHeader, renderGutterUtility, renderCodeViewFooter }: {
 		ref?: { current: unknown };
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
-		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
+		renderAnnotation?: (annotation: { lineNumber: number; side: string }, fileDiff: unknown, item: { id: string }) => ReactNode;
+		renderCodeViewFooter?: () => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
 	}) => {
@@ -71,9 +74,10 @@ vi.mock("@pierre/diffs/react", () => ({
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
 					{renderCustomHeader(item)}
 					<pre data-testid="review-patch">{item.fileDiff?.additionLines?.join("\n")}</pre>
-					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item)}</div>)}
+					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item.fileDiff, item)}</div>)}
 				</div>
 			))}
+			{renderCodeViewFooter?.()}
 			{items[0] ? renderGutterUtility?.(() => ({ lineNumber: 7, side: "additions" }), items[0]) : null}
 		</div>
 		);
@@ -144,7 +148,29 @@ function commitTarget(data: WorkspaceFilesResponse, sha = data.commits[0].sha): 
 	return reviewTarget(data, { kind: "commits", shas: [sha] });
 }
 
+function ReviewWithCollapseControls(props: ComponentProps<typeof WorkspaceReviewPane>) {
+	const [allCollapsed, setAllCollapsed] = useState(false);
+	const [request, setRequest] = useState<{ expand: boolean; key: number }>();
+	return <>
+		<button onClick={() => setRequest((current) => ({ expand: allCollapsed, key: (current?.key ?? 0) + 1 }))}>{allCollapsed ? "Expand all files" : "Collapse all files"}</button>
+		<WorkspaceReviewPane {...props} collapseRequest={request} onAllCollapsedChange={setAllCollapsed} />
+	</>;
+}
+
 describe("WorkspaceReviewPane", () => {
+	it("keeps Add to chat enabled for one selected workspace commit", () => {
+		const accept=vi.fn(()=>true),remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection"),sha="a".repeat(40);
+		const data=committedWorkspace([{path:"src/App.tsx",status:"modified",additions:1,deletions:1,size:20,binary:false}]);
+		data.commits[0].sha=sha;
+		const target=reviewTarget(data,{kind:"commits",shas:[sha]});
+		const view=renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false}/>);
+		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
+		const host=document.createElement("div"),header=document.createElement("div");header.setAttribute("data-review-item-id",`${target.key}:src/App.tsx`);host.append(header);
+		act(()=>{args[1]({host,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"additions"},rows:[{kind:"add",side:"new",oldNo:null,newNo:1,text:"new code"}]})});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"}}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	beforeEach(() => {
 		window.localStorage.clear();
 		getMock.mockReset();
@@ -171,6 +197,7 @@ describe("WorkspaceReviewPane", () => {
 		);
 		const view = render(pane());
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(scrollToMock).not.toHaveBeenCalled();
 
 		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
@@ -233,6 +260,113 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.queryByText("Binary file preview is not available.")).not.toBeInTheDocument();
 	});
 
+	it.each(["shot.png", "archive.bin"])("keeps large binary %s expanded and reuses its prefetched batch", async (path) => {
+		const data = workspace([
+			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+			{ path, status: "added", additions: 0, deletions: 0, size: 600_000, binary: true },
+		]);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		await prefetchDefaultWorkspaceReviewDiffs(client, "sess-1", data);
+		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["src/App.tsx", path]);
+		render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
+		const collapse = screen.getByRole("button", { name: `Collapse ${path}` });
+		expect(collapse).toHaveAttribute("aria-expanded", "true");
+		if (path.endsWith(".png")) expect(screen.getByRole("img", { name: `After version of ${path}` })).toBeInTheDocument();
+		await userEvent.click(collapse);
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([false, true])("keeps loaded text mounted while deferred files load (expand all: %s)", async (expandAll) => {
+		scrollToMock.mockReset();
+		const data = workspace([
+			{ path: "package-lock.json", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+			{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false },
+		]);
+		let finish!: (value: unknown) => void;
+		postMock.mockResolvedValueOnce({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }] } });
+		postMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(data)} filter="" sessionId="sess-1" split={false} />);
+		const existing = await screen.findByTestId("review-patch");
+		await userEvent.click(screen.getByRole("button", { name: expandAll ? "Collapse all files" : "Expand package-lock.json" }));
+		if (expandAll) await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1]?.[1]?.body.paths).toEqual(["package-lock.json"]);
+		expect(existing).toBeInTheDocument();
+		expect(screen.getByTestId("review-patch")).toBe(existing);
+		expect(scrollToMock).not.toHaveBeenCalled();
+		await act(async () => finish({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: "diff --git a/package-lock.json b/package-lock.json\n", truncated: false, includedPaths: ["package-lock.json"], deferred: [] }] } }));
+		await waitFor(() => expect(screen.getAllByTestId("review-patch")).toHaveLength(2));
+		expect(existing).toBeInTheDocument();
+		if (expandAll) expect(scrollToMock).not.toHaveBeenCalled();
+		else await waitFor(() => expect(scrollToMock).toHaveBeenCalledExactlyOnceWith({ type: "item", id: `${reviewTarget(data).key}:package-lock.json`, align: "start" }));
+		scrollToMock.mockClear();
+		await userEvent.click(screen.getByRole("button", { name: "Collapse package-lock.json" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand package-lock.json" }));
+		expect(postMock).toHaveBeenCalledTimes(2);
+		expect(scrollToMock).not.toHaveBeenCalled();
+	});
+
+	it("opens fallback files with the header icon and status", async () => {
+		const onOpenFile = vi.fn();
+		const data = workspace([{ path: "shot.png", status: "added", additions: 0, deletions: 0, size: 128, binary: true }]);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} onOpenFile={onOpenFile} filter="" sessionId="sess-1" split={false} />);
+		expect(screen.getByRole("button", { name: "Collapse shot.png" })).toContainElement(screen.getByText("A"));
+		const open = screen.getByRole("button", { name: "Open full file" });
+		expect(open.querySelector("svg")).not.toBeNull();
+		expect(open).toHaveClass("border-transparent");
+		await userEvent.click(open);
+		expect(onOpenFile).toHaveBeenCalledWith("shot.png", expect.objectContaining({ mode: "file", scope: "combined" }));
+	});
+
+	it.each([false, true])("marks image and binary files viewed with saved progress (mixed: %s)", async (mixed) => {
+		const files: WorkspaceFilesResponse["files"] = ["sample.png", "archive.bin"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true, fileFingerprint: `v1:${path}` }));
+		if (mixed) files.unshift({ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false, fileFingerprint: "text-v1" });
+		const data = workspace(files);
+		const pane = () => <WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />;
+		const first = renderWithQuery(pane());
+		if (mixed) await screen.findByTestId("review-patch");
+		for (const file of files) {
+			await userEvent.click(await screen.findByRole("checkbox", { name: `Mark ${file.path} as viewed` }));
+			expect(screen.getByRole("button", { name: `Expand ${file.path}` })).toHaveAttribute("aria-expanded", "false");
+		}
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length);
+		expect(screen.queryByRole("img")).not.toBeInTheDocument();
+		first.unmount();
+		renderWithQuery(pane());
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length);
+		for (const file of files) expect(await screen.findByRole("checkbox", { name: `Mark ${file.path} as not viewed` })).toBeChecked();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark sample.png as not viewed" }));
+		expect(screen.getAllByRole("checkbox").filter((box) => box.getAttribute("data-state") === "checked")).toHaveLength(files.length - 1);
+		expect(screen.getByRole("button", { name: "Expand sample.png" })).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(screen.getByRole("button", { name: "Expand sample.png" }));
+		expect(screen.getByRole("img", { name: "After version of sample.png" })).toBeInTheDocument();
+	});
+
+	it.each([false, true])("collapses image bodies individually and together with text files (mixed: %s)", async (mixed) => {
+		const images: WorkspaceFilesResponse["files"] = ["one.png", "two.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
+		const data = workspace(mixed ? [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }, ...images] : images);
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+
+		const firstImage = await screen.findByAltText("After version of one.png");
+		// Image-only reviews must mount CodeView too, so its footer owns scrolling.
+		expect(screen.getByTestId("code-view")).toContainElement(firstImage);
+		await userEvent.click(screen.getByRole("button", { name: "Collapse one.png" }));
+		expect(screen.queryByAltText("After version of one.png")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Expand one.png" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByAltText("After version of two.png")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Expand one.png" }));
+		expect(screen.getByAltText("After version of one.png")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		expect(screen.queryAllByRole("img")).toHaveLength(0);
+		for (const { path } of images) expect(screen.getByRole("button", { name: `Expand ${path}` })).toBeInTheDocument();
+		if (mixed) expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		expect(screen.getAllByRole("img")).toHaveLength(2);
+		if (mixed) expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "false");
+	});
+
 	it("does not reuse parsed metadata when an equal-length patch changes", async () => {
 		const firstPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+one\n";
 		const secondPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+two\n";
@@ -251,6 +385,115 @@ describe("WorkspaceReviewPane", () => {
 		await waitFor(() => expect(screen.getByTestId("review-patch").textContent).toBe(secondPatch));
 		expect(postMock).toHaveBeenCalledTimes(2);
 	});
+
+	it("bounds a 5,123-file review and jumps directly to a distant file without loading intervening pages", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => ({ path: `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
+		const target = reviewTarget(workspace(files));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (filter = "", scrollRequest?: { path: string; key: number }, selected = target) => (
+			<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={selected} filter={filter} scrollRequest={scrollRequest} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane());
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(4), { timeout: 10_000 });
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toEqual(files.slice(0, 96).map((file) => file.path));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(8), { timeout: 10_000 });
+		expect(screen.getByText("Files 97–192 of 5123")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		expect(screen.queryByRole("checkbox", { name: "Mark file-0.ts as viewed" })).not.toBeInTheDocument();
+		view.rerender(pane("", { path: "file-5100.ts", key: 1 }));
+		await waitFor(() => expect(screen.getByText("Files 5089–5123 of 5123")).toBeInTheDocument());
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(10), { timeout: 10_000 });
+		expect(postMock.mock.calls.slice(8).flatMap((call) => call[1].body.paths)).toEqual(files.slice(5088).map((file) => file.path));
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(35);
+		expect(screen.getByRole("button", { name: "Next files" })).toBeDisabled();
+		// Filtering a late page must show its first result immediately.
+		view.rerender(pane("file-4000.ts"));
+		expect(await screen.findByRole("checkbox", { name: "Mark file-4000.ts as viewed" })).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+		view.rerender(pane());
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 97–192 of 5123")).toBeInTheDocument();
+		view.rerender(pane("", undefined, { ...target, selectionKey: "moved-pr-head" }));
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+	}, 60_000);
+
+	it("preserves the review page across manifest refreshes and clamps it when files disappear", async () => {
+		const files = Array.from({ length: 193 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true, fileFingerprint: "before" }));
+		const target = reviewTarget(workspace(files));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (selected = target) => (
+			<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={selected} filter="" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane());
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		const refreshed = { ...target, workspaceVersion: "workspace-2", files: files.map((file) => ({ ...file, fileFingerprint: "after" })) };
+		view.rerender(pane(refreshed));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 193–193 of 193")).toBeInTheDocument();
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-3", files: refreshed.files.slice(0, 100) }));
+		expect(screen.getByText("Files 97–100 of 100")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(4);
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-4", files: refreshed.files.slice(0, 50) }));
+		expect(await screen.findByRole("checkbox", { name: "Mark file-0.dat as viewed" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Next files" })).not.toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(50);
+	}, 60_000);
+
+	it("bounds binary and deferred fallback rows, including Expand all", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 600_000, binary: index % 2 === 0 }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await waitFor(() => expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toContain("file-95.dat"));
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths).every((path: string) => files.slice(0, 96).some((file) => file.path === path))).toBe(true);
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+	}, 60_000);
+
+	it("keeps other pages' viewed and deferred files collapsed when collapsing or expanding a page", async () => {
+		const files = Array.from({ length: 99 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: index === 98 ? 600_000 : 20, binary: index !== 98 }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark file-96.dat as viewed" }));
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("checkbox", { name: "Mark file-96.dat as not viewed" })).toBeChecked();
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+	}, 60_000);
+
+	it("keeps a deferred diff loaded after expanding all on another page", async () => {
+		const files = [
+			...Array.from({ length: 96 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true })),
+			{ path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 600_000, binary: false },
+		];
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand src/App.tsx" }));
+		await screen.findByTestId("review-patch");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(await screen.findByTestId("review-patch")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Collapse src/App.tsx" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
+	}, 60_000);
 
 	it("reuses prefetched batches when opening a review with more than 24 files", async () => {
 		const files = Array.from({ length: 57 }, (_, index) => ({ path: index === 0 ? "src/App.tsx" : `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
@@ -291,12 +534,13 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/diffs", expect.objectContaining({
 			body: expect.objectContaining({ commitSha: "commit-1", paths: ["src/App.tsx"], scope: "committed", workspaceVersion: "workspace-1" }),
 		}));
 		expect(screen.getByTestId("code-view")).toHaveClass("overflow-y-auto");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-overflow", "wrap");
-		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
+		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary))"));
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
@@ -437,7 +681,7 @@ describe("WorkspaceReviewPane", () => {
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 
 		release();
 		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "false"));
@@ -457,7 +701,7 @@ describe("WorkspaceReviewPane", () => {
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 	});
 
 	it("keeps the patch-only diff (and its load-more row) when the file may continue", async () => {
@@ -465,7 +709,8 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await screen.findByTestId("review-patch");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -473,21 +718,25 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
-		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
-		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
+		await screen.findByTestId("review-patch");
+		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true"));
 		first.unmount();
 
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true"));
 	});
 
 	it("collapses and expands file items through controlled CodeView state", async () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
+		await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" });
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		await userEvent.click(screen.getByRole("button", { name: "Expand src/App.tsx" }));
@@ -509,6 +758,7 @@ describe("WorkspaceReviewPane", () => {
 		}
 		renderWithQuery(<Harness />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
 		// The pane carries no title row of its own: the Files header names the review.
 		expect(screen.queryByText(/of 1 viewed/)).not.toBeInTheDocument();
@@ -563,6 +813,7 @@ describe("WorkspaceReviewPane", () => {
 		const pane = () => <QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const { rerender } = render(pane());
+		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("button", { name: "Collapse src/App.tsx" }));
 		await userEvent.click(screen.getAllByRole("button", { name: "Add feedback" })[0]);
 		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "src/App.tsx", side: "file", surface: "review" }));
@@ -585,6 +836,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "README.md", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={model} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		const inlineFeedback = screen.getAllByRole("button", { name: "Add feedback" })[1];
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-gutter-enabled", "true");
@@ -600,6 +852,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Open diff in center" }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"diff",center:true,scope:"committed"}));
@@ -609,9 +862,10 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} canOpenInCenter={false} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Open full file" })).toBeInTheDocument();
 	});
 
 	it("opens a changed diff directly in syntax-aware edit mode", async () => {
@@ -619,6 +873,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={{...commitTarget(data),source:undefined}} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { editing: true, mode: "file", scope: "committed" });
@@ -628,6 +883,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
 	});
@@ -659,6 +915,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "README.md", status: "deleted", additions: 0, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
@@ -709,19 +966,32 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-		await userEvent.click(screen.getByRole("button", { name: "File" }));
+		await userEvent.click(within(screen.getByRole("button", { name: "Collapse beta/workspace-test.txt" }).parentElement!).getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("beta/workspace-test.txt", expect.objectContaining({ mode: "file", scope: "combined" }));
 	});
 
-	it("defers lockfile patches until the user explicitly loads them", async () => {
-		const data = committedWorkspace([{ path: "package-lock.json", status: "modified", additions: 800, deletions: 700, size: 600_000, binary: false, fileFingerprint: "lock-1" }]);
+	it.each([
+		{ path: "package-lock.json", size: 20 },
+		{ path: "src/App.tsx", size: 600_000 },
+	])("loads deferred $path on individual expansion and reuses it on re-expansion", async ({ path, size }) => {
+		const data = committedWorkspace([{ path, status: "modified", additions: 800, deletions: 700, size, binary: false, fileFingerprint: "deferred-1" }]);
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: `diff --git a/${path} b/${path}\n`, truncated: false, includedPaths: [path], deferred: [] }] } });
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
-		expect(screen.getByText(/diff is deferred/i)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: `Expand ${path}` })).toHaveAttribute("aria-expanded", "false");
 		expect(postMock).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Load diff" }));
-		await waitFor(() => expect(postMock).toHaveBeenCalled());
-		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual(["package-lock.json"]);
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(postMock.mock.calls[0]?.[1]?.body.paths).toEqual([path]);
+		await screen.findByTestId("review-patch");
+		expect(screen.getByRole("checkbox", { name: `Mark ${path} as viewed` })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: `Collapse ${path}` }));
+		expect(screen.getByRole("button", { name: `Expand ${path}` })).toHaveAttribute("aria-expanded", "false");
+		await userEvent.click(screen.getByRole("button", { name: `Expand ${path}` }));
+		expect(screen.getByRole("button", { name: `Collapse ${path}` })).toHaveAttribute("aria-expanded", "true");
+		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("requests the target scope and view", async () => {
@@ -800,8 +1070,9 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		await screen.findByTestId("review-patch");
 		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
-		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(screen.getAllByRole("button", { name: "Open full file" })).toHaveLength(2);
 		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: "Add feedback" }).length).toBeGreaterThan(0);
 		// The image preview reads the worktree, so another branch's image falls back to the placeholder.
@@ -823,6 +1094,7 @@ describe("WorkspaceReviewPane", () => {
 			</TooltipProvider></QueryClientProvider>
 		);
 		const { rerender } = render(pane(commitTarget(data, "a".repeat(40))));
+		await screen.findByTestId("review-patch");
 		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(JSON.parse(window.localStorage.getItem(`ao.files.viewed.sess-1.commit:${"a".repeat(40)}`) ?? "{}")).toEqual({ "src/App.tsx": "file-1" });
 

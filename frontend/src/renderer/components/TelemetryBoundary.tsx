@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { captureRendererException } from "../lib/telemetry";
+import { bindRendererErrorHandlers, captureRendererException } from "../lib/telemetry";
 
 type Props = {
 	children: React.ReactNode;
@@ -47,6 +47,7 @@ class TelemetryErrorBoundary extends React.Component<BoundaryProps, State> {
 
 export function TelemetryBoundary({ children }: Props) {
 	const { t } = useTranslation();
+	useEffect(() => { bindRendererErrorHandlers(); }, []);
 	return (
 		<TelemetryErrorBoundary fallbackBody={t("appError.body")} fallbackTitle={t("appError.title")}>
 			{children}

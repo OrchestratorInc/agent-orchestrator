@@ -68,6 +68,33 @@ type ProxyResponse = Writable & {
 // host or an intermediary, or the session failed); HTTP/1.1 takes over.
 class UpstreamHttp2Unavailable extends Error {}
 
+// fetch found no host to ask who it is (no connection, or no answer in time),
+// which does not make it another host. Anything that did answer (a redirect, a
+// TLS certificate) stays an identity failure.
+const UNREACHABLE_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EHOSTDOWN", "EHOSTUNREACH", "ENETDOWN", "ENETUNREACH", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
+const unreachable = (error: unknown): boolean =>
+	(error as Error | undefined)?.name === "TimeoutError" ||
+	(error instanceof TypeError && UNREACHABLE_CODES.has(String((error.cause as { code?: unknown } | undefined)?.code)));
+
+// fetch says only "fetch failed"; its cause says what failed.
+const failureText = (error: Error): string => {
+	const cause = error.cause;
+	return cause instanceof Error ? `${error.message}: ${(cause as { code?: string }).code ?? cause.message}` : error.message;
+};
+
+// A WebSocket as a stream to carry HTTP/2. Once a reset (sleep, a network
+// change) has destroyed the WebSocket's connection, ws never finishes ending
+// the stream: its end waits for a "finish" the TCP socket will not emit. A
+// session would then write into that half-closed stream, which Node fails with
+// an uncaught ERR_INTERNAL_ASSERTION. So the stream goes once it has handed on
+// all it read (it ends only after the WebSocket closed): nothing more can
+// arrive, and nothing can be sent over a closed WebSocket.
+export function webSocketTunnelStream(socket: WebSocket): Duplex {
+	const stream = createWebSocketStream(socket);
+	stream.once("end", () => stream.destroy());
+	return stream;
+}
+
 // Cloudflare quick tunnels answer 429 past 200 requests in flight.
 const MAX_PENDING_UPSTREAM_STREAMS = 100;
 // Preview requests stop this far short of it: a dev server that leaves its
@@ -228,11 +255,27 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (incoming.authorization) out["x-ao-preview-app-authorization"] = incoming.authorization;
 			if (incoming.origin) out["x-ao-preview-app-origin"] = incoming.origin;
 		}
+		if (previewKind === undefined) {
+			delete out["sec-fetch-site"];
+			delete out["sec-fetch-mode"];
+			delete out["sec-fetch-dest"];
+		}
 		out.host = upstream.host;
 		out.authorization = `Bearer ${entry.password}`;
 		if (entry.hostId) out["x-ao-expected-host-id"] = entry.hostId;
 		return out;
 	};
+
+	// A token authenticates the local native client, not arbitrary pages that
+	// happen to learn its URL. Check before stripping Origin/injecting auth.
+	// Only sandboxed render-document GET/HEAD navigations may omit Origin.
+	const validControlOrigin = (req: { headers: IncomingHttpHeaders; method?: string; url?: string }): boolean =>
+		req.headers.origin === undefined
+			? req.headers["sec-fetch-site"] === undefined || (
+				(req.method === "GET" || req.method === "HEAD") &&
+				/^\/api\/v1\/sessions\/[^/]+\/renders\/(?!check(?:$|[?]))[^/?]+(?:\?.*)?$/.test((stripToken(req.url) ?? "").slice(prefix.length))
+			)
+			: req.headers.origin === rendererOrigin;
 
 	const validPreviewOrigin = (scheme: "http" | "https", host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>
 		(kind !== "app" && kind !== "agent") || !origin || origin === `${scheme}://${host}`;
@@ -261,6 +304,9 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	// intermediary without HTTP/2 gets HTTP/1.1 for a minute, then a retry.
 	let upstreamSession: Promise<ClientHttp2Session> | null = null;
 	let http2RetryAt = 0;
+	// Set by close(), which destroys only the session it finds: no request may
+	// open one after it.
+	let closing = false;
 	// Over HTTPS the session rides inside one WebSocket to the host's tunnel
 	// (backend lan_tunnel.go): a Cloudflare quick tunnel answers 429 past 200
 	// plain requests in flight and holds back small streamed writes, but
@@ -279,7 +325,13 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			...(isIP(hostname) ? {} : { servername: hostname }),
 		});
 		// Wrap before "open": the host's first HTTP/2 frame can arrive with it.
-		const stream = createWebSocketStream(socket);
+		const stream = webSocketTunnelStream(socket);
+		// Unless this side ended or destroyed the stream first, the host or the
+		// network closed it under a live session: 1006 is a reset. (A host's
+		// GOAWAY with nothing in flight has this side end it, losing nothing.)
+		socket.once("close", (code: number) => {
+			if (!stream.writableEnded && !stream.destroyed) warn(`upstream ${upstream.host} tunnel WebSocket closed with code ${code}`);
+		});
 		// The stream re-emits socket errors. Before "open" they are the upgrade's,
 		// reported below; after, the session sees the close and is replaced.
 		// Unheard, either would crash the main process.
@@ -397,10 +449,13 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		}
 		return openUpstreamSession();
 	};
-	const sessionForRequest = async (): Promise<ClientHttp2Session | null> => {
+	// A retry (fallBack false) goes the moment its session died, often to a host
+	// still restarting: that refusal says nothing about the host's HTTP/2.
+	const sessionForRequest = async (fallBack: boolean): Promise<ClientHttp2Session | null> => {
 		// A session that closed or received GOAWAY since it was cached is
 		// replaced once; a second failure in a row falls back to HTTP/1.1.
 		for (let attempt = 0; attempt < 2 && Date.now() >= http2RetryAt; attempt++) {
+			if (closing) throw new Error("remote proxy closed");
 			const pending = (upstreamSession ??= openPreferredSession());
 			try {
 				const session = await pending;
@@ -408,7 +463,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			} catch (error) {
 				if (upstreamSession === pending) upstreamSession = null;
 				if (!(error instanceof UpstreamHttp2Unavailable)) throw error;
-				http2RetryAt = Date.now() + HTTP2_RETRY_MS;
+				if (fallBack) http2RetryAt = Date.now() + HTTP2_RETRY_MS;
 				return null;
 			}
 			if (upstreamSession === pending) upstreamSession = null;
@@ -449,7 +504,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	};
 
 	const answerIdentityFailure = (res: ProxyResponse, error: unknown, method: string | undefined, path: string, kind?: PreviewTarget["kind"]): void => {
-		warn(`upstream ${upstream.host} identity check failed on ${method} ${safeLogPath(path, kind)} (${(error as Error).message})`);
+		warn(`upstream ${upstream.host} identity check failed on ${method} ${safeLogPath(path, kind)} (${failureText(error as Error)})`);
 		const incompatible = error instanceof IncompatibleRemoteVersionError;
 		res.writeHead(incompatible ? 426 : 502, { "content-type": "application/json", ...corsHeaders });
 		res.end(incompatible
@@ -458,7 +513,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	};
 
 	const answerUpstreamFailure = (res: ProxyResponse, error: Error, method: string | undefined, path: string, kind?: PreviewTarget["kind"]): void => {
-		warn(`upstream ${upstream.host} failed on ${method} ${safeLogPath(path, kind)} (${error.message}); answering 502`);
+		warn(`upstream ${upstream.host} failed on ${method} ${safeLogPath(path, kind)} (${failureText(error)}); answering 502`);
 		if (res.headersSent) {
 			// With an error, as in relayResponse.
 			res.destroy(error);
@@ -510,6 +565,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		for (const [name, value] of Object.entries(upstreamHeaders)) {
 			if (!name.startsWith(":") && !HOP_BY_HOP_HEADERS.includes(name)) headers[name] = value;
 		}
+		// The host confines legacy API documents with this final CSP policy.
+		// Only our separately routed preview origins can shed that API-origin
+		// sandbox. Keep every upstream app policy, including its own sandbox.
+		if (kind !== undefined && upstreamHeaders["x-ao-preview-api-sandbox"] === "1") {
+			const policy = headers["content-security-policy"];
+			const sandbox = "sandbox allow-scripts allow-forms";
+			if (typeof policy === "string") {
+				if (policy === sandbox) delete headers["content-security-policy"];
+				else if (policy.endsWith(`, ${sandbox}`)) headers["content-security-policy"] = policy.slice(0, -sandbox.length - 2);
+			}
+		}
+		delete headers["x-ao-preview-api-sandbox"];
 		Object.assign(headers, corsHeaders);
 		if (kind !== undefined && kind !== "app") delete headers["set-cookie"];
 		res.writeHead(status, headers);
@@ -583,9 +650,10 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		};
 		const headers = forwardHeaders(req.headers, kind);
 		delete headers.host; // HTTP/2 names the host in :authority
+		const method = req.method ?? "GET";
 		try {
 			stream = session.request(
-				{ ...headers, ":method": req.method ?? "GET", ":path": sessionPath(session, path), ":authority": upstream.host },
+				{ ...headers, ":method": method, ":path": sessionPath(session, path), ":authority": upstream.host },
 				hasBody(req) ? { endStream: false } : undefined,
 			);
 		} catch (error) {
@@ -594,17 +662,25 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			return;
 		}
 		const upstreamStream = stream;
-		// The host never acted on a stream it refused (RFC 9113 §8.7): the
-		// request goes again, if the caller allows, instead of answering 502.
-		const refused = () => retry !== undefined && upstreamStream.rstCode === http2Constants.NGHTTP2_REFUSED_STREAM;
+		// The host never acted on a stream it refused (RFC 9113 §8.7), and a GET
+		// or HEAD is safe to send again when its session was lost (a reset
+		// tunnel) before it was answered: the request goes again, if the caller
+		// allows, instead of answering 502.
+		const safe = method === "GET" || method === "HEAD";
+		const retriable = () => retry !== undefined &&
+			(upstreamStream.rstCode === http2Constants.NGHTTP2_REFUSED_STREAM || (safe && session.destroyed));
 		let responded = false;
+		let failure: Error | undefined;
 		upstreamStream.once("close", () => {
 			settle();
 			// Closed before its response: the host restarted, the tunnel closed or
 			// the stream was reset. Node reports a cancelled stream without "error".
 			if (responded || clientGone || res.writableEnded) return;
-			if (refused()) retry?.();
-			else answerUpstreamFailure(res, new Error(`stream closed with code ${upstreamStream.rstCode}`), req.method, path, kind);
+			const reason = failure?.message ?? `stream closed with code ${upstreamStream.rstCode}`;
+			if (!retriable()) return void answerUpstreamFailure(res, new Error(reason), req.method, path, kind);
+			// The first try's failure, which would otherwise leave no trace.
+			warn(`upstream ${upstream.host} failed on ${method} ${safeLogPath(path, kind)} (${reason}); sending it again`);
+			retry?.();
 		});
 		upstreamStream.once("response", (responseHeaders) => {
 			responded = true;
@@ -617,7 +693,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				() => session.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
 		});
 		upstreamStream.on("error", (error: Error) => {
-			if (!refused()) answerUpstreamFailure(res, error, req.method, path, kind);
+			failure = error;
+			if (!retriable()) answerUpstreamFailure(res, error, req.method, path, kind);
 		});
 		req.pipe(upstreamStream);
 	};
@@ -635,7 +712,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.end('{"error":"unknown path"}');
 			return;
 		}
-		if (!validPreviewOrigin(scheme, host, req.headers.origin, preview?.kind)) {
+		if ((!preview && !validControlOrigin(req)) || !validPreviewOrigin(scheme, host, req.headers.origin, preview?.kind)) {
 			res.writeHead(403, { "content-type": "application/json" });
 			res.end('{"error":"preview origin mismatch"}');
 			return;
@@ -662,10 +739,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (!(await acquireStream(preview !== null, res))) return;
 			let session: ClientHttp2Session | null = null;
 			try {
-				session = await sessionForRequest();
+				session = await sessionForRequest(mayRetry);
 				if (!session) await verifyUpstream();
 			} catch (error) {
-				answerIdentityFailure(res, error, req.method, path, preview?.kind);
+				if (closing || unreachable(error)) answerUpstreamFailure(res, error as Error, req.method, path, preview?.kind);
+				else answerIdentityFailure(res, error, req.method, path, preview?.kind);
 			}
 			// Only a request sent over the session keeps its slot.
 			if (!session || left || res.writableEnded) releaseStream();
@@ -678,12 +756,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 
 	const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer, scheme: "http" | "https"): void => {
 		const preview = previewPath(req.headers.host, req.url, req.method, scheme);
-		const path = preview?.kind === "app" || preview?.kind === "agent" ? preview.path : stripToken(req.url);
+		// Static preview hosts never tunnel sockets. In particular a path
+		// containing the control token must not fall back to the daemon mux.
+		if (preview && preview.kind !== "app" && preview.kind !== "agent") {
+			socket.destroy();
+			return;
+		}
+		const path = preview ? preview.path : stripToken(req.url);
 		if (path === null) {
 			socket.destroy();
 			return;
 		}
-		if (!validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
+		if ((!preview && !validControlOrigin(req)) || !validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
 			socket.destroy();
 			return;
 		}
@@ -699,6 +783,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (socket.destroyed) return;
 			const upstreamSocket = dialUpstream(() => {
 				const headers = forwardHeaders(req.headers, preview?.kind);
+				if (!preview) {
+					delete headers["sec-fetch-site"];
+					delete headers["sec-fetch-mode"];
+					delete headers["sec-fetch-dest"];
+				}
 				const lines = [`${req.method} ${path} HTTP/1.1`];
 				// The WebSocket-specific headers were stripped as hop-by-hop; restore
 				// the two the handshake requires, with the credential injected above.
@@ -729,7 +818,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				socket.on(event, drop);
 			}
 		}).catch((error: Error) => {
-			warn(`upstream ${upstream.host} identity check failed on ${safeLogPath(path, preview?.kind)} (${error.message})`);
+			warn(`upstream ${upstream.host} ${unreachable(error) ? "unreachable" : "identity check failed"} on ${safeLogPath(path, preview?.kind)} (${failureText(error)})`);
 			stopPending();
 		});
 	};
@@ -856,6 +945,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;
 				// a deactivated proxy must actually stop serving.
+				closing = true;
 				for (const drop of tunnels) drop();
 				server.closeAllConnections();
 				for (const socket of secureSockets) socket.destroy();
