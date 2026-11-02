@@ -19,7 +19,6 @@ import (
 
 var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
-var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
 var _ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
 
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
@@ -50,28 +49,30 @@ func crushNativeDB(path string) (*sql.DB, error) {
 	return sql.Open("sqlite", uri.String()+"?mode=ro&_pragma=busy_timeout(2000)")
 }
 
-func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
+// Crush has a project database, not a file per conversation, so it deliberately
+// exposes a row-availability probe rather than AgentTranscriptLocator.
+func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return ports.NativeSessionAvailabilityUnknown, err
 	}
 	id, err := uuid.Parse(ref.NativeSessionID)
-	if err != nil || len(ref.ConfigDir) == 0 {
-		return "", false, nil
+	if err != nil || len(strings.TrimSpace(ref.ConfigDir)) == 0 {
+		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
+		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	if err != nil {
-		return "", false, err
+		return ports.NativeSessionAvailabilityUnknown, err
 	}
 	defer func() { _ = root.Close() }()
 	file, err := root.Open("projects.json")
 	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
+		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	if err != nil {
-		return "", false, err
+		return ports.NativeSessionAvailabilityUnknown, err
 	}
 	defer func() { _ = file.Close() }()
 	var registry struct {
@@ -80,10 +81,13 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		} `json:"projects"`
 	}
 	if err := json.NewDecoder(io.LimitReader(file, 4<<20)).Decode(&registry); err != nil {
-		return "", false, err
+		return ports.NativeSessionAvailabilityUnknown, err
 	}
 	var lastErr error
 	for _, project := range registry.Projects {
+		if err := ctx.Err(); err != nil {
+			return ports.NativeSessionAvailabilityUnknown, err
+		}
 		if !filepath.IsAbs(project.DataDir) {
 			continue
 		}
@@ -101,22 +105,8 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 			continue
 		}
 		if count > 0 {
-			return filepath.Join(path, id.String()), true, nil
+			return ports.NativeSessionAvailabilityAvailable, nil
 		}
 	}
-	return "", false, lastErr
-}
-
-func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if len(strings.TrimSpace(ref.ConfigDir)) == 0 {
-		return ports.NativeSessionAvailabilityUnknown, nil
-	}
-	_, ok, err := p.LocateTranscript(ctx, ref)
-	if err != nil {
-		return ports.NativeSessionAvailabilityUnknown, err
-	}
-	if ok {
-		return ports.NativeSessionAvailabilityAvailable, nil
-	}
-	return ports.NativeSessionAvailabilityUnknown, nil
+	return ports.NativeSessionAvailabilityUnknown, lastErr
 }

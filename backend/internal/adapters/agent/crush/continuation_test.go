@@ -36,10 +36,6 @@ func TestCrushImportedNativeProbe(t *testing.T) {
 		t.Fatalf("config = %q, %v", config, err)
 	}
 	ref := ports.NativeSessionRef{ConfigDir: root, NativeSessionID: id}
-	path, ok, err := p.LocateTranscript(context.Background(), ref)
-	if err != nil || !ok || path != filepath.Join(dbPath, id) {
-		t.Fatalf("locate = %q, %v, %v", path, ok, err)
-	}
 	availability, err := p.ProbeNativeSession(context.Background(), ref)
 	if err != nil || availability != ports.NativeSessionAvailabilityAvailable {
 		t.Fatalf("available = %q, %v", availability, err)
