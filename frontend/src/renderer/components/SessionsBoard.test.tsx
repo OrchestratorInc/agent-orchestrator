@@ -603,7 +603,7 @@ describe("SessionsBoard", () => {
 		expect(status.querySelector(".animate-spin")).toBeNull();
 	});
 
-	it("keeps the loader on a Review pending card", () => {
+	it("keeps the loader on a Retrying review card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -611,8 +611,8 @@ describe("SessionsBoard", () => {
 						id: "s-review-pending",
 						title: "review-pending-card-task",
 						status: "review_pending",
-						displayStatus: "Review pending",
-						kanbanColumn: "needs_review",
+						displayStatus: "Retrying review",
+						kanbanColumn: "validating",
 						activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" },
 					}),
 				]),
@@ -624,11 +624,13 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("review-pending-card-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		const status = within(card).getByTestId("session-status");
-		expect(status).toHaveTextContent("Review pending");
+		expect(status).toHaveTextContent("Retrying review");
 		expect(status.querySelector(".animate-spin")).not.toBeNull();
 	});
 
-	it("keeps the loader on a Mergeable card while its agent is actually working", () => {
+	// The loader follows the phrase: a working agent gets the "Working" phrase
+	// from the daemon, so a card that still reads "Mergeable" describes a settled PR.
+	it("does not spin a Mergeable card even while its agent is active", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -649,7 +651,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("mergeable-active-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		const status = within(card).getByTestId("session-status");
-		expect(status.querySelector(".animate-spin")).not.toBeNull();
+		expect(status.querySelector(".animate-spin")).toBeNull();
 	});
 
 	it("paints Closed without merge red while keeping merged status purple", () => {
@@ -732,13 +734,13 @@ describe("SessionsBoard", () => {
 		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
 	});
 
-	it("shows start failure instead of Awaiting PR on a failed card", () => {
+	it("shows start failure instead of Idle on a failed card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({
 				id: "s-setup-failed",
 				title: "failed-setup-task",
 				status: "idle",
-				displayStatus: "Awaiting PR",
+				displayStatus: "Idle",
 				provisionState: "failed",
 			})])],
 			isError: false,
@@ -748,7 +750,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
-		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
+		expect(within(card).queryByText("Idle")).not.toBeInTheDocument();
 	});
 
 	it("styles legacy statuses from their status-implied Kanban columns", () => {

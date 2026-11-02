@@ -520,13 +520,14 @@ func (s *Store) ListCurrentHeadReviewRunsForSession(ctx context.Context, id doma
 	out := make([]domain.CurrentHeadReviewRun, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, domain.CurrentHeadReviewRun{
-			SessionID: id,
-			Harness:   r.Harness,
-			PRURL:     r.PRURL,
-			Status:    r.Status,
-			Verdict:   r.Verdict,
-			ID:        r.ID,
-			CreatedAt: r.CreatedAt,
+			SessionID:      id,
+			Harness:        r.Harness,
+			PRURL:          r.PRURL,
+			Status:         r.Status,
+			Verdict:        r.Verdict,
+			ID:             r.ID,
+			CreatedAt:      r.CreatedAt,
+			FailedAutoRuns: int(r.FailedAutoRuns),
 		})
 	}
 	return out, nil
@@ -550,13 +551,14 @@ func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []
 	}
 	for _, r := range rows {
 		out[r.SessionID] = append(out[r.SessionID], domain.CurrentHeadReviewRun{
-			SessionID: r.SessionID,
-			Harness:   r.Harness,
-			PRURL:     r.PRURL,
-			Status:    r.Status,
-			Verdict:   r.Verdict,
-			ID:        r.ID,
-			CreatedAt: r.CreatedAt,
+			SessionID:      r.SessionID,
+			Harness:        r.Harness,
+			PRURL:          r.PRURL,
+			Status:         r.Status,
+			Verdict:        r.Verdict,
+			ID:             r.ID,
+			CreatedAt:      r.CreatedAt,
+			FailedAutoRuns: int(r.FailedAutoRuns),
 		})
 	}
 	for _, id := range ids {

@@ -22,7 +22,8 @@ const (
 	// failing check. It is not limited to PRs awaiting a first human review,
 	// and it does not mean the work is idle.
 	KanbanNeedsReview KanbanColumn = "needs_review"
-	// KanbanReady is a PR merged, closed, mergeable, or approved by a person.
+	// KanbanReady is a PR merged, closed, mergeable, or approved by a person
+	// with no merge conflicts or failing CI in the way.
 	KanbanReady KanbanColumn = "ready"
 	// KanbanArchive is a terminated session.
 	KanbanArchive KanbanColumn = "archive"
@@ -67,6 +68,9 @@ type KanbanReviewRunFacts struct {
 	Failed bool
 	// Cancelled reports that a pass for the current head was cancelled.
 	Cancelled bool
+	// RetryExhausted reports that auto review has failed on the current head
+	// as many times as it retries, so it will not try again on this commit.
+	RetryExhausted bool
 }
 
 // KanbanExternalReviewFacts are the provider review verdicts on one PR that AO
@@ -99,19 +103,27 @@ func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanCo
 		return KanbanReady
 	case pr.Draft:
 		return KanbanValidating
-	case externallyApproved(pr):
+	case externallyApproved(pr) && !mergeBlockedByPR(pr):
 		return KanbanReady
 	case aoOwnsNextStep(session, pr):
 		return KanbanValidating
-	// Auto review owns this head until its own pass approves it. A head AO has
-	// not reviewed yet, a pass that failed or was cancelled, and a pass that
-	// asked for changes are all "not approved yet" -- auto review's job is to
-	// keep re-reviewing this PR until it can approve, whether or not anything
-	// is configured to act on what it finds in between. Without AutoReview, a
-	// changes-requested verdict is as far as AO's involvement goes, so it does
-	// release the PR from Validating -- see aoOwnsNextStep above.
+	// Approved, but conflicts or failing CI keep it from merging and no AO
+	// loop is fixing that, so the next turn is a person's.
+	case externallyApproved(pr):
+		return KanbanNeedsReview
+	// Auto review owns this head until its own pass approves it, as long as
+	// it will still review again. It never re-reviews a head whose pass was
+	// cancelled, that asked for changes nobody is sending to the worker, or
+	// that failed as often as it retries; then the next turn is a person's.
 	case session.AutoReview && !approvedByAO(pr):
+		if autoReviewStopped(session, pr) {
+			return KanbanNeedsReview
+		}
 		return KanbanValidating
+	// AO's own pass asked for changes and no AO loop is acting on them, so a
+	// person decides what happens next, even if the PR could merge as it is.
+	case pr.ReviewRun.ChangesRequested:
+		return KanbanNeedsReview
 	case pr.Mergeability == MergeMergeable:
 		return KanbanReady
 	// Fallthrough: the PR is in its review cycle and no AO loop is turning it,
@@ -133,6 +145,24 @@ func approvedByAO(pr KanbanPRFacts) bool {
 // honors dismissed reviews) and a surviving approval AO did not author.
 func externallyApproved(pr KanbanPRFacts) bool {
 	return pr.Review == ReviewApproved && pr.ExternalReview.Approved
+}
+
+// mergeBlockedByPR reports facts on the PR itself that stop it merging and
+// that someone has to fix: merge conflicts or failing CI.
+func mergeBlockedByPR(pr KanbanPRFacts) bool {
+	return pr.Mergeability == MergeConflicting || pr.CI == CIFailing
+}
+
+// autoReviewStopped reports that auto review will not review the current head
+// again on its own, matching the reasons its planner skips a head.
+func autoReviewStopped(session KanbanSessionFacts, pr KanbanPRFacts) bool {
+	run := pr.ReviewRun
+	if run.Running {
+		return false
+	}
+	return run.Cancelled ||
+		(run.ChangesRequested && !session.AutoInjectReview) ||
+		(run.Failed && !run.Outcome && run.RetryExhausted)
 }
 
 // aoOwnsNextStep reports whether AO itself is turning the PR's review-feedback
@@ -191,30 +221,32 @@ func kanbanPriority(column KanbanColumn) int {
 // column stays put. Values are already renderable: clients print them as-is.
 type DisplayStatus string
 
-// DisplayStatus values shown on AO session cards, grouped by the column that
-// can produce them.
+// DisplayStatus values shown on AO session cards. The worker phrases (Working,
+// Blocked, Needs input, Exited, No signal) can appear in any live column.
 const (
-	// Building.
+	// Worker.
 	DisplayWorking     DisplayStatus = "Working"
 	DisplayBlocked     DisplayStatus = "Blocked"
+	DisplayNeedsInput  DisplayStatus = "Needs input"
 	DisplayExited      DisplayStatus = "Exited"
 	DisplayNoSignal    DisplayStatus = "No signal"
 	DisplayInterrupted DisplayStatus = "Interrupted"
-	DisplayAwaitingPR  DisplayStatus = "Awaiting PR"
+	DisplayIdle        DisplayStatus = "Idle"
 	// Validating.
 	DisplayFixingCI           DisplayStatus = "Fixing CI failures"
 	DisplayAddressingComments DisplayStatus = "Addressing comments"
-	DisplayNeedsReview        DisplayStatus = "Needs review"
 	DisplayReviewScheduled    DisplayStatus = "Review scheduled"
 	DisplayReviewing          DisplayStatus = "Reviewing"
-	DisplayReviewFailed       DisplayStatus = "Review failed"
-	DisplayReviewPending      DisplayStatus = "Review pending"
+	DisplayRetryingReview     DisplayStatus = "Retrying review"
 	DisplayDraft              DisplayStatus = "Draft"
 	// In review.
+	DisplayAwaitingReview   DisplayStatus = "Awaiting review"
+	DisplayReviewFailed     DisplayStatus = "Review failed"
+	DisplayReviewCancelled  DisplayStatus = "Review cancelled"
 	DisplayCIFailing        DisplayStatus = "CI failing"
+	DisplayMergeConflicts   DisplayStatus = "Merge conflicts"
 	DisplayCommented        DisplayStatus = "Commented"
 	DisplayChangesRequested DisplayStatus = "Changes requested"
-	DisplayNeedsHumanReview DisplayStatus = "Needs human review"
 	// Ready.
 	DisplayMergeable DisplayStatus = "Mergeable"
 	DisplayApproved  DisplayStatus = "Approved"
@@ -294,29 +326,53 @@ func displayStatusInColumn(
 	case KanbanNeedsReview:
 		return inReviewDisplayStatus(session, pr, now, noSignalGrace)
 	case KanbanReady:
-		return readyDisplayStatus(pr)
+		return readyDisplayStatus(session, pr)
 	default:
 		return buildingDisplayStatus(session, now, noSignalGrace)
+	}
+}
+
+// workerNeedsAttention reports a worker that cannot carry on by itself: it is
+// blocked, asked a question, exited, or never reported. That outranks whatever
+// the column would otherwise say about the PR.
+func workerNeedsAttention(session KanbanSessionFacts, now time.Time, noSignalGrace time.Duration) (DisplayStatus, bool) {
+	switch {
+	case session.Activity == ActivityBlocked:
+		return DisplayBlocked, true
+	case session.Activity == ActivityWaitingInput:
+		return DisplayNeedsInput, true
+	case session.Activity == ActivityExited:
+		return DisplayExited, true
+	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
+		return DisplayNoSignal, true
+	default:
+		return "", false
 	}
 }
 
 // buildingDisplayStatus explains worker progress, because a session with no PR
 // has produced no delivery facts to report yet.
 func buildingDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
-	switch {
-	case session.Activity == ActivityActive:
+	return noPRDisplayStatus(session, now, noSignalGrace, DisplayIdle)
+}
+
+// artifactDisplayStatus is the same reading for a session whose output is
+// files rather than a PR: once the worker settles, the files wait on a person.
+func artifactDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
+	return noPRDisplayStatus(session, now, noSignalGrace, DisplayAwaitingReview)
+}
+
+func noPRDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGrace time.Duration, settled DisplayStatus) DisplayStatus {
+	if session.Activity == ActivityActive {
 		return DisplayWorking
-	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
-		return DisplayBlocked
-	case session.Activity == ActivityExited:
-		return DisplayExited
-	case interruptedWhileIdle(session):
-		return DisplayInterrupted
-	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
-		return DisplayNoSignal
-	default:
-		return DisplayAwaitingPR
 	}
+	if status, ok := workerNeedsAttention(session, now, noSignalGrace); ok {
+		return status
+	}
+	if interruptedWhileIdle(session) {
+		return DisplayInterrupted
+	}
+	return settled
 }
 
 // validatingDisplayStatus reports the AO-driven loop turning the PR. A worker
@@ -326,50 +382,34 @@ func buildingDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGr
 // AutoInjectCI/AutoInjectReview flag on an idle worker falls through to the
 // plain CI/review-facts reading instead of claiming work nobody is doing.
 func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
+	if status, ok := workerNeedsAttention(session, now, noSignalGrace); ok {
+		return status
+	}
+	active := session.Activity == ActivityActive
 	switch {
-	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
-		return DisplayBlocked
-	case session.Activity == ActivityExited:
-		return DisplayExited
-	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
-		return DisplayNoSignal
-	case pr.CI == CIFailing && session.AutoInjectCI && session.Activity == ActivityActive:
+	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case pr.CI == CIFailing:
-		return DisplayCIFailing
-	case changesRequestedOn(pr) && session.AutoInjectReview && session.Activity == ActivityActive:
+	case changesRequestedOn(pr) && session.AutoInjectReview && active:
 		return DisplayAddressingComments
-	case pr.ReviewRun.ChangesRequested:
-		return DisplayNeedsReview
-	case session.AutoReview && !pr.ReviewRun.Present:
-		return DisplayReviewScheduled
 	case pr.ReviewRun.Running:
 		return DisplayReviewing
-	case pr.ReviewRun.Failed:
-		return DisplayReviewFailed
-	case pr.ReviewRun.Cancelled:
-		return DisplayReviewPending
+	case active:
+		return DisplayWorking
+	case pr.CI == CIFailing:
+		return DisplayCIFailing
+	case pr.ReviewRun.ChangesRequested:
+		return DisplayChangesRequested
 	case pr.Draft:
 		return DisplayDraft
+	case pr.ReviewRun.Failed && !pr.ReviewRun.Outcome:
+		if pr.ReviewRun.RetryExhausted {
+			return DisplayReviewFailed
+		}
+		return DisplayRetryingReview
+	case pr.ReviewRun.Cancelled:
+		return DisplayReviewCancelled
 	default:
-		return DisplayNeedsReview
-	}
-}
-
-func artifactDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
-	switch {
-	case session.Activity == ActivityActive:
-		return DisplayWorking
-	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
-		return DisplayBlocked
-	case session.Activity == ActivityExited:
-		return DisplayExited
-	case interruptedWhileIdle(session):
-		return DisplayInterrupted
-	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
-		return DisplayNoSignal
-	default:
-		return DisplayNeedsReview
+		return DisplayReviewScheduled
 	}
 }
 
@@ -381,37 +421,36 @@ func interruptedWhileIdle(session KanbanSessionFacts) bool {
 }
 
 // inReviewDisplayStatus reports the review-feedback loop from the person's
-// side. By the column rule, aoOwnsNextStep already routes a PR with failing CI
-// under AutoInjectCI, or an AO-addressed changes request, to Validating before
-// this ever runs -- so these guards do not change today's output. They stay
-// here, matching validatingDisplayStatus's shape, so this function reports the
-// AO-policy phrase correctly on its own rather than depending on a rule
-// enforced in a different function for its correctness. A dead or idle worker
-// outranks all of it: crediting AO's auto-fix loop requires the worker to
-// actually be active right now, and a stale flag on an idle worker falls
+// side: what is waiting on them. A worker that needs a person, or one that is
+// working right now, outranks it; crediting AO's auto-fix loops requires the
+// worker to actually be active, so a stale flag on an idle worker falls
 // through to the plain CI/review-facts reading below.
 func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
+	if status, ok := workerNeedsAttention(session, now, noSignalGrace); ok {
+		return status
+	}
+	active := session.Activity == ActivityActive
 	switch {
-	case session.Activity == ActivityBlocked || session.Activity == ActivityWaitingInput:
-		return DisplayBlocked
-	case session.Activity == ActivityExited:
-		return DisplayExited
-	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
-		return DisplayNoSignal
-	case pr.CI == CIFailing && session.AutoInjectCI && session.Activity == ActivityActive:
+	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
+	case (changesRequestedOn(pr) || pr.ExternalReview.Comments) && session.AutoInjectReview && active:
+		return DisplayAddressingComments
+	case active:
+		return DisplayWorking
 	case pr.CI == CIFailing:
 		return DisplayCIFailing
-	case pr.ExternalReview.Comments && session.AutoInjectReview && session.Activity == ActivityActive:
-		return DisplayAddressingComments
-	case pr.ExternalReview.ChangesRequested && session.AutoInjectReview && session.Activity == ActivityActive:
-		return DisplayAddressingComments
-	case pr.ExternalReview.ChangesRequested:
+	case pr.Mergeability == MergeConflicting:
+		return DisplayMergeConflicts
+	case changesRequestedOn(pr):
 		return DisplayChangesRequested
 	case pr.ExternalReview.Comments:
 		return DisplayCommented
+	case pr.ReviewRun.Failed && !pr.ReviewRun.Outcome:
+		return DisplayReviewFailed
+	case pr.ReviewRun.Cancelled:
+		return DisplayReviewCancelled
 	default:
-		return DisplayNeedsHumanReview
+		return DisplayAwaitingReview
 	}
 }
 
@@ -423,17 +462,21 @@ func changesRequestedOn(pr KanbanPRFacts) bool {
 
 // readyDisplayStatus reports how the PR landed, or what is left between an
 // approval and the merge button. Merged and closed come first: they are what
-// happened to the PR, and no merge-readiness reading can override them.
-func readyDisplayStatus(pr KanbanPRFacts) DisplayStatus {
+// happened to the PR, and nothing the worker does now can override them.
+func readyDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts) DisplayStatus {
 	switch {
 	case pr.Merged:
 		return DisplayMerged
 	case pr.Closed:
 		return DisplayClosed
+	case session.Activity == ActivityActive:
+		return DisplayWorking
+	case session.Activity == ActivityBlocked:
+		return DisplayBlocked
+	case session.Activity == ActivityWaitingInput:
+		return DisplayNeedsInput
 	case pr.Mergeability == MergeMergeable:
 		return DisplayMergeable
-	case pr.CI == CIFailing:
-		return DisplayCIFailing
 	default:
 		return DisplayApproved
 	}
