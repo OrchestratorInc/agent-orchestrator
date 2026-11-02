@@ -1703,14 +1703,18 @@ func (s *Store) SettleTurnWithFailureCode(
 		errMessage = turn.ErrorMessage
 	}
 
-	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+	settled, err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
 		FailureCode:  string(failureCode),
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turn.ID,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
+	}
+	if settled == 0 {
+		return nil
 	}
 	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
 		gen.SettleStreamingConversationMessagesForTurnParams{
@@ -1740,6 +1744,55 @@ func (s *Store) SettleTurnWithFailureCode(
 		}
 	}
 	return nil
+}
+
+// SettleStaleProviderFailure is the watchdog's compare-and-set boundary. It is
+// normally called from ProjectProviderEvent, so the synthetic archive row, the
+// conditional terminal transition, and its child settlement share one SQLite
+// transaction. A false result is an ordinary lost race to provider progress.
+func (s *Store) SettleStaleProviderFailure(
+	ctx context.Context,
+	conversationID, providerTurnID, watchdogEventID, errMessage string,
+	updatedBefore, now time.Time,
+	terminationPending bool,
+) (bool, error) {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+
+	turnID, err := q.SettleStaleRunningTurnWithProviderFailure(ctx,
+		gen.SettleStaleRunningTurnWithProviderFailureParams{
+			ErrorMessage:                   errMessage,
+			CompletedAt:                    sql.NullTime{Time: now, Valid: true},
+			ProviderHostTerminationPending: boolInt(terminationPending),
+			ConversationID:                 conversationID,
+			ProviderTurnID:                 providerTurnID,
+			UpdatedBefore:                  timeToNullTime(updatedBefore),
+			WatchdogEventID:                watchdogEventID,
+		})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("conditionally settle stale provider turn %s: %w", providerTurnID, err)
+	}
+	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
+		gen.SettleStreamingConversationMessagesForTurnParams{
+			UpdatedAt:      now,
+			ConversationID: conversationID,
+			TurnID:         sql.NullString{String: turnID, Valid: true},
+		}); err != nil {
+		return false, fmt.Errorf("settle streaming messages for turn %s: %w", turnID, err)
+	}
+	if err := q.SettleRunningConversationActivitiesForTurn(ctx,
+		gen.SettleRunningConversationActivitiesForTurnParams{
+			Status:         domain.ActivityStatusFailed,
+			UpdatedAt:      now,
+			ConversationID: conversationID,
+			TurnID:         sql.NullString{String: turnID, Valid: true},
+		}); err != nil {
+		return false, fmt.Errorf("settle running activities for turn %s: %w", turnID, err)
+	}
+	return true, nil
 }
 
 // finalizeCompletedTurnPlan reconciles the two durable plan projections when a
@@ -1859,7 +1912,7 @@ func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID str
 	if turn.ConversationID != conversationID || turn.HandledBySessionID != session || turn.State != domain.TurnStateRunning || turn.ProviderTurnID != "" || turn.RolledBackAt.Valid {
 		return nil
 	}
-	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+	if _, err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State: domain.TurnStateFailed, ErrorMessage: "provider delivery unconfirmed after reconnect",
 		CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: turnID,
 	}); err != nil {
@@ -2010,6 +2063,68 @@ func (s *Store) ListVisibleRunningTurnProviderIDs(
 		return nil, fmt.Errorf("list visible running turns for %s: %w", conversationID, err)
 	}
 	return providerTurnIDs, nil
+}
+
+// ListRunningTurnsForConversationHost returns every live provider turn owned by
+// this session controller in the conversation. Unlike the UI projection, this
+// deliberately includes turns outside the active branch: terminating the shared
+// provider host ends their work too.
+func (s *Store) ListRunningTurnsForConversationHost(
+	ctx context.Context,
+	conversationID string,
+	sessionID domain.SessionID,
+) ([]domain.ConversationTurn, error) {
+	rows, err := s.qr.ListRunningTurnsForConversationHost(ctx,
+		gen.ListRunningTurnsForConversationHostParams{
+			ConversationID:     conversationID,
+			HandledBySessionID: sessionID,
+		})
+	if err != nil {
+		return nil, fmt.Errorf("list running turns for conversation host %s: %w", sessionID, err)
+	}
+	turns := make([]domain.ConversationTurn, 0, len(rows))
+	for _, row := range rows {
+		turns = append(turns, turnToDomain(row))
+	}
+	return turns, nil
+}
+
+// ProviderHostTerminationPending reports the durable obligation left by a
+// watchdog recovery that has not yet conclusively terminated its shared host.
+func (s *Store) ProviderHostTerminationPending(
+	ctx context.Context,
+	conversationID string,
+	sessionID domain.SessionID,
+) (bool, error) {
+	pending, err := s.qr.HasPendingProviderHostTermination(ctx,
+		gen.HasPendingProviderHostTerminationParams{
+			ConversationID:     conversationID,
+			HandledBySessionID: sessionID,
+		})
+	if err != nil {
+		return false, fmt.Errorf("check pending provider host termination for %s: %w", conversationID, err)
+	}
+	return pending, nil
+}
+
+// ClearProviderHostTerminationPending is called only after the provider adapter
+// confirms Terminate succeeded. Until then, retries continue to take the
+// terminate-and-resume path even though the triggering turn is already terminal.
+func (s *Store) ClearProviderHostTerminationPending(
+	ctx context.Context,
+	conversationID string,
+	sessionID domain.SessionID,
+) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if _, err := q.ClearPendingProviderHostTermination(ctx,
+		gen.ClearPendingProviderHostTerminationParams{
+			ConversationID:     conversationID,
+			HandledBySessionID: sessionID,
+		}); err != nil {
+		return fmt.Errorf("clear pending provider host termination for %s: %w", conversationID, err)
+	}
+	return nil
 }
 
 // SetConversationSettings records the provider choices for the next turn.
@@ -2593,7 +2708,9 @@ func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turn
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "fail queued batch", func(q *gen.Queries) error {
 		for _, id := range turnIDs {
-			if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+			// By id: the turns are named explicitly, so the state guard that
+			// keeps SettleTurn idempotent must not skip one.
+			if err := q.SettleConversationTurnByID(ctx, gen.SettleConversationTurnByIDParams{
 				State: domain.TurnStateFailed, ErrorMessage: reason,
 				CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: id,
 			}); err != nil {
@@ -2922,7 +3039,10 @@ func (s *Store) SettleTurnByID(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+	// A direct by-id settle moves a turn to an explicit outcome from any state
+	// (for example an account switch relabelling a failed turn as interrupted),
+	// so it must not inherit SettleConversationTurn's running-only guard.
+	if err := s.qw.SettleConversationTurnByID(ctx, gen.SettleConversationTurnByIDParams{
 		State:        state,
 		ErrorMessage: errMessage,
 		FailureCode:  "",
