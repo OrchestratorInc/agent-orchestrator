@@ -11,8 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestCodewhaleImportAndPrivateNativeIdentity(t *testing.T) {
-	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+func writeCodewhaleImport(t *testing.T, root, cwd string) string {
+	t.Helper()
 	const id = "55555555-5555-4555-8555-555555555555"
 	body, err := json.Marshal(map[string]any{
 		"schema_version": 1,
@@ -26,7 +26,13 @@ func TestCodewhaleImportAndPrivateNativeIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := writeFile(t, filepath.Join(root, "sessions", id+".json"), string(body))
+	return writeFile(t, filepath.Join(root, "sessions", id+".json"), string(body))
+}
+
+func TestCodewhaleImportAndPrivateNativeIdentity(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	const id = "55555555-5555-4555-8555-555555555555"
+	path := writeCodewhaleImport(t, root, cwd)
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-cw", Path: cwd}}}
 	svc := New(st, "", func(domain.AgentHarness) bool { return true })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessCodewhale: root}
@@ -57,5 +63,27 @@ func TestCodewhaleImportAndPrivateNativeIdentity(t *testing.T) {
 	}
 	if _, err := adapter.PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{NativeSessionID: "wrong", ConfigDir: root, TranscriptPath: path, LaunchCWD: launch}); err == nil {
 		t.Fatal("prepared a mismatched source identity")
+	}
+}
+
+func TestCodewhaleScanRefusesNativeHistoryAndApprovalSidecars(t *testing.T) {
+	for _, kind := range []string{"journal", "approval"} {
+		t.Run(kind, func(t *testing.T) {
+			root, cwd := t.TempDir(), t.TempDir()
+			writeCodewhaleImport(t, root, cwd)
+			const id = "55555555-5555-4555-8555-555555555555"
+			path := filepath.Join(root, "sessions", ".journal-archive", id+".jsonl")
+			if kind == "approval" {
+				path = filepath.Join(root, "sessions", id, "approval_receipts.jsonl")
+			}
+			writeFile(t, path, "{\"synthetic\":true}\n")
+			st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-sidecar", Path: cwd}}}
+			svc := New(st, "", nil)
+			svc.roots = map[domain.AgentHarness]string{domain.HarnessCodewhale: root}
+			preview, err := svc.Scan(context.Background())
+			if err != nil || len(preview.Candidates) != 0 {
+				t.Fatalf("dependent snapshot offered: %#v, %v", preview, err)
+			}
+		})
 	}
 }

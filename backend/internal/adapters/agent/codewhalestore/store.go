@@ -224,10 +224,15 @@ func selfContained(provider *os.Root, raw map[string]json.RawMessage, id string)
 	if value := raw["work_state"]; len(value) != 0 && string(value) != "null" {
 		return errors.New("codewhale saved work authority cannot be relocated")
 	}
-	for _, dir := range []string{".goals", "checkpoints"} {
-		_, err := provider.Lstat(filepath.Join("sessions", dir, id+".json"))
+	for _, sidecar := range []string{
+		filepath.Join("sessions", ".goals", id+".json"),
+		filepath.Join("sessions", "checkpoints", id+".json"),
+		filepath.Join("sessions", ".journal-archive", id+".jsonl"),
+		filepath.Join("sessions", id, "approval_receipts.jsonl"),
+	} {
+		_, err := provider.Lstat(sidecar)
 		if err == nil {
-			return errors.New("codewhale conversation has a native goal or checkpoint")
+			return errors.New("codewhale conversation depends on a native sidecar")
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
