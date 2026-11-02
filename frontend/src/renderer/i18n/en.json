@@ -3067,6 +3067,7 @@
 	"artifacts.share.limitReached": "Free plan: up to {{limit}} active links. Upgrade to share more.",
 	"artifacts.share.upgrade": "Upgrade",
 	"artifacts.share.videoSoon": "Sharing videos is coming soon.",
+	"artifacts.share.notOwner": "Only the person who started this session can share its files.",
 	"artifacts.share.copyLink": "Copy link",
 	"artifacts.share.copied": "Copied",
 	"artifacts.share.failed": "Sharing failed: {{message}}",

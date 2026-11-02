@@ -3191,6 +3191,7 @@
 	"artifacts.share.limitReached": "Бесплатный план: до {{limit}} активных ссылок. Перейдите на платный план, чтобы делиться больше.",
 	"artifacts.share.upgrade": "Перейти на платный план",
 	"artifacts.share.videoSoon": "Возможность делиться видео скоро появится.",
+	"artifacts.share.notOwner": "Делиться файлами этой сессии может только тот, кто её начал.",
 	"artifacts.share.copyLink": "Копировать ссылку",
 	"artifacts.share.copied": "Скопировано",
 	"artifacts.share.failed": "Не удалось поделиться: {{message}}",

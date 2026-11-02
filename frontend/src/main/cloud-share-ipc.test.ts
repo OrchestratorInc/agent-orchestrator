@@ -202,6 +202,10 @@ describe("cloudShare IPC", () => {
 		const limit = setup({ shareStatus: 409, shareCode: "artifact_share_limit_reached" });
 		await expect(limit.publish(limit.cloudFile)).resolves.toEqual({ status: "limit", message: "Refused." });
 
+		// Another member's session: only its creator shares its files.
+		const notOwner = setup({ shareStatus: 403, shareCode: "artifact_share_not_owner" });
+		await expect(notOwner.publish(notOwner.cloudFile)).resolves.toEqual({ status: "not_owner" });
+
 		// A file the session changed since it was shown is shown again.
 		const changed = setup({ shareStatus: 409, shareCode: "artifact_share_source_changed" });
 		await expect(changed.publish(changed.cloudFile)).resolves.toMatchObject({ status: "changed", inspection: { name: "q3 plan.md", fingerprint: CLOUD_SHA256 } });

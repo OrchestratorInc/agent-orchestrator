@@ -3141,6 +3141,7 @@
 	"artifacts.share.limitReached": "Offre gratuite : jusqu’à {{limit}} liens actifs. Passez à une offre supérieure pour partager plus.",
 	"artifacts.share.upgrade": "Mettre à niveau",
 	"artifacts.share.videoSoon": "Le partage de vidéos arrive bientôt.",
+	"artifacts.share.notOwner": "Seule la personne qui a démarré cette session peut partager ses fichiers.",
 	"artifacts.share.copyLink": "Copier le lien",
 	"artifacts.share.copied": "Copié",
 	"artifacts.share.failed": "Échec du partage : {{message}}",

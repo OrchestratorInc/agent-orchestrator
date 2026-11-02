@@ -225,6 +225,14 @@ describe("ShareArtifactButton", () => {
 		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
 	});
 
+	it("says only the session's creator can share when someone else tries", async () => {
+		stub(inspection, links, { status: "not_owner" });
+		await openPopover();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("Only the person who started this session can share its files.")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Publish|Try again/ })).toBeNull();
+	});
+
 	it("returns to Publish when the upload is cancelled", async () => {
 		stub(inspection, links, { status: "cancelled" });
 		await openPopover();

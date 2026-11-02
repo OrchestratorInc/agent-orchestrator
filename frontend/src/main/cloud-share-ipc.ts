@@ -108,6 +108,8 @@ function refusal(error: unknown): CloudSharePublishResult {
 				return { status: "limit", message: error.message };
 			case "artifact_share_type_unsupported":
 				return { status: "unsupported", message: error.message };
+			case "artifact_share_not_owner":
+				return { status: "not_owner" };
 		}
 		return { status: "error", message: error.message };
 	}

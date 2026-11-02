@@ -15,6 +15,7 @@ type Phase =
 	| { kind: "loading" }
 	| { kind: "signin" }
 	| { kind: "unsupported" }
+	| { kind: "notOwner" }
 	| { kind: "limit"; limit: number }
 	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
@@ -170,6 +171,8 @@ function SharePanel({
 				return setPhase({ kind: "publish", inspection: result.inspection, links, changed: true });
 			case "unsupported":
 				return setPhase({ kind: "unsupported" });
+			case "not_owner":
+				return setPhase({ kind: "notOwner" });
 			case "signed_out":
 				return setPhase({ kind: "signin" });
 			case "error":
@@ -288,6 +291,8 @@ function SharePanel({
 			);
 		case "unsupported":
 			return <>{title}{status(t("artifacts.share.videoSoon"))}</>;
+		case "notOwner":
+			return <>{title}{status(t("artifacts.share.notOwner"))}</>;
 		case "limit":
 			return (
 				<>
