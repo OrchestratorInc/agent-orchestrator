@@ -708,6 +708,8 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getExperimentCohort: () => ipcRenderer.invoke("appState:getExperimentCohort") as Promise<number | null>,
+		claimFirstRunExperimentExposure: () => ipcRenderer.invoke("appState:claimFirstRunExperimentExposure") as Promise<boolean>,
 		getFirstRunProjectPrompt: () => ipcRenderer.invoke("appState:getFirstRunProjectPrompt") as Promise<"pending" | "seen">,
 		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},

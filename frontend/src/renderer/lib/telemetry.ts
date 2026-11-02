@@ -918,6 +918,12 @@ export async function sanitizeRendererProperties(
 		case "ao.agents.install_clicked":
 			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
 			break;
+		case "ao.onboarding.first_run_experiment_exposed":
+			if (properties?.variant === "prompt" || properties?.variant === "control") safe.variant = properties.variant;
+			break;
+		case "ao.onboarding.first_run_prompt_action":
+			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "dismissed") safe.action = properties.action;
+			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
 		case "ao.renderer.task_create_succeeded":

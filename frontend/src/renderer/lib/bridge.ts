@@ -312,6 +312,8 @@ export const aoBridge: AoBridge =
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
 			getFirstRunProjectPrompt: async () => "seen" as const,
 			markFirstRunProjectPromptSeen: async () => undefined,
 		},

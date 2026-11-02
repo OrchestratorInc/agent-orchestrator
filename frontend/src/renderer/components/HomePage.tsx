@@ -8,6 +8,8 @@ import { useMigrationOffer } from "../hooks/useMigrationOffer";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { firstRunPromptVariant, type FirstRunPromptAction, type FirstRunPromptVariant } from "../lib/experiments";
+import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -169,6 +171,8 @@ function HomePageContent() {
 	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
 	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
 	const firstRunOfferedThisMount = useRef(false);
+	const firstRunVariant = useRef<FirstRunPromptVariant | null>(null);
+	const firstRunActionRecorded = useRef(false);
 	const projects = workspaceQuery.data ?? [];
 	useEffect(() => {
 		let mounted = true;
@@ -201,14 +205,34 @@ function HomePageContent() {
 			void aoBridge.appState.markFirstRunProjectPromptSeen().then(() => setFirstRunStatus("seen")).catch(() => undefined);
 			return;
 		}
-		if (!firstRunOfferedThisMount.current) {
+		if (firstRunOfferedThisMount.current) return;
+		let cancelled = false;
+		void aoBridge.appState.getExperimentCohort().catch(() => null).then((cohort) => {
+			if (cancelled) return;
+			const variant = firstRunPromptVariant(cohort);
 			firstRunOfferedThisMount.current = true;
-			setFirstRunPromptOpen(true);
-			setSourceSignal({ source: "clone", nonce: Date.now() });
-		}
+			firstRunVariant.current = variant;
+			void aoBridge.appState.claimFirstRunExperimentExposure().then((claimed) => {
+				if (claimed) void captureRendererEvent("ao.onboarding.first_run_experiment_exposed", { variant });
+			}).catch(() => undefined);
+			if (variant === "prompt") {
+				setFirstRunPromptOpen(true);
+				setSourceSignal({ source: "clone", nonce: Date.now() });
+			} else {
+				setFirstRunStatus("seen");
+				void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => undefined);
+			}
+		});
+		return () => { cancelled = true; };
 	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
 
-	const finishFirstRunPrompt = () => {
+	const recordFirstRunPromptAction = (action: FirstRunPromptAction) => {
+		if (firstRunVariant.current !== "prompt" || firstRunActionRecorded.current) return;
+		firstRunActionRecorded.current = true;
+		void captureRendererEvent("ao.onboarding.first_run_prompt_action", { action });
+	};
+	const finishFirstRunPrompt = (action: FirstRunPromptAction = "dismissed") => {
+		recordFirstRunPromptAction(action);
 		setFirstRunPromptOpen(false);
 		setFirstRunStatus("seen");
 		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
@@ -318,14 +342,17 @@ function HomePageContent() {
 				<CreateProjectFlow
 					firstRunClone={firstRunPromptOpen}
 					onFirstRunDismiss={finishFirstRunPrompt}
-					onFirstRunProgress={() => setFirstRunPromptOpen(false)}
+					onFirstRunProgress={() => {
+						recordFirstRunPromptAction("clone");
+						setFirstRunPromptOpen(false);
+					}}
 					existingProjectNames={projects.map((project) => project.name)}
 					existingProjectPaths={projects.map((project) => project.path)}
 					mode="choose"
 					onCloneProject={cloneProject}
 					onCreateProject={async (input) => {
 						await createProject(input);
-						if (firstRunStatus === "pending") finishFirstRunPrompt();
+						if (firstRunStatus === "pending") finishFirstRunPrompt("clone");
 					}}
 					onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 					onInitializeProject={initializeProjectRepository}

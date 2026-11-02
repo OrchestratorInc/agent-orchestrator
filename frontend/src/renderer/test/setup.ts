@@ -388,6 +388,8 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getExperimentCohort: async () => null,
+			claimFirstRunExperimentExposure: async () => false,
 			getFirstRunProjectPrompt: async () => "seen",
 			markFirstRunProjectPromptSeen: async () => undefined,
 		},

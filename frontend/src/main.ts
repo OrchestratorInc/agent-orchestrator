@@ -156,7 +156,7 @@ import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { buildTelemetryBootstrap, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -211,7 +211,7 @@ import type {
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
-import { markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
 	dockBounceType,
@@ -3215,6 +3215,13 @@ ipcMain.handle("appState:setMigration", async (_event, migration: MigrationState
 ipcMain.handle("appState:getFirstRunProjectPrompt", async (): Promise<"pending" | "seen"> => {
 	const runFile = runFilePath();
 	return runFile ? readFirstRunProjectPrompt(path.dirname(runFile)) : "seen";
+});
+ipcMain.handle("appState:getExperimentCohort", async (): Promise<number | null> => {
+	return (await loadOrAssignExperimentCohort(desktopDataDir)) ?? null;
+});
+ipcMain.handle("appState:claimFirstRunExperimentExposure", async (): Promise<boolean> => {
+	const runFile = runFilePath();
+	return runFile ? claimFirstRunExperimentExposure(path.dirname(runFile)) : false;
 });
 ipcMain.handle("appState:markFirstRunProjectPromptSeen", async () => {
 	const runFile = runFilePath();

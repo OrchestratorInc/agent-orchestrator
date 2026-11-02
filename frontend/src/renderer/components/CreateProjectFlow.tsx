@@ -1,3 +1,4 @@
+import type { FirstRunPromptAction } from "../lib/experiments";
 import { AppLink } from "./AppLink";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
@@ -190,7 +191,7 @@ export function CreateProjectFlow({
 	onInitializeProject: (path: string) => Promise<void>;
 	onCreateStandaloneAgent?: () => void;
 	firstRunClone?: boolean;
-	onFirstRunDismiss?: () => void;
+	onFirstRunDismiss?: (action: Exclude<FirstRunPromptAction, "clone">) => void;
 	onFirstRunProgress?: () => void;
 	onDismiss?: () => void;
 	onOpenExistingProject?: (path: string) => void | Promise<void>;
@@ -299,7 +300,7 @@ export function CreateProjectFlow({
 		setFolderPickerOpen(false);
 		if (cloneDialogOpen) {
 			setCloneDialogOpen(false);
-			if (firstRunClone) onFirstRunDismiss?.();
+			if (firstRunClone) onFirstRunDismiss?.("local_folder");
 		}
 		transitionToChild(open);
 	};
@@ -355,7 +356,7 @@ export function CreateProjectFlow({
 					await onOpenExistingProject(registeredPath);
 					if (cloneDialogOpen) {
 						setCloneDialogOpen(false);
-						if (firstRunClone) onFirstRunDismiss?.();
+						if (firstRunClone) onFirstRunDismiss?.("local_folder");
 					}
 					return;
 				}
@@ -671,7 +672,7 @@ export function CreateProjectFlow({
 		setCloneDialogOpen(false);
 		setCloneSelection(null);
 		setCloneDetails(initialCloneDetails(hostId));
-		if (firstRunClone) onFirstRunDismiss?.();
+		if (firstRunClone) onFirstRunDismiss?.("dismissed");
 		else if (back) setModePickerOpen(true);
 		else onDismiss?.();
 	};
@@ -861,7 +862,7 @@ export function CreateProjectFlow({
 								void chooseDirectory("single_repo", undefined, true);
 							}}
 							onStartStandaloneAgent={() => {
-								onFirstRunDismiss?.();
+								onFirstRunDismiss?.("standalone");
 								setCloneDialogOpen(false);
 								onCreateStandaloneAgent?.();
 							}}
