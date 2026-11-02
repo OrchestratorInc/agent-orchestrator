@@ -231,6 +231,25 @@ func (c *conversation) configOptionCurrentLocked(id string) string {
 	return ""
 }
 
+// advertisedModelChoices reports the choices the session's model config option
+// advertises. advertised is false when the session lists no model option, or an
+// older adapter advertises one without choices, in which case callers must send
+// the value unchanged rather than enforce against an empty catalog.
+func (c *conversation) advertisedModelChoices() (choices []ports.ChatConfigOptionChoice, advertised bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID != "model" || c.configOptions[i].Type != ports.ChatConfigOptionSelect {
+			continue
+		}
+		if len(c.configOptions[i].Choices) == 0 {
+			return nil, false
+		}
+		return c.configOptions[i].Choices, true
+	}
+	return nil, false
+}
+
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {
 	out := make([]ports.ChatConfigOption, 0, len(options))
 	for _, option := range options {
