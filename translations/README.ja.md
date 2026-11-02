@@ -31,6 +31,8 @@
 
 <br />
 
+Orchestrator.inc（旧称 Agent Orchestrator）は、オープンソース（Apache-2.0）のデスクトップアプリ兼 CLI です。複数のコーディングエージェントをそれぞれ専用の Git worktree とブランチで並列に動かし、CI の失敗、レビューコメント、マージコンフリクトを各プルリクエストを担当するエージェントへ戻します。Claude Code、Codex、Cursor を含む 38 のコーディングエージェントに対応し、macOS、Windows、Linux で動作するほか、iPhone、iPad、Android 向けのアプリもあります。
+
 ## Orchestrator.inc を使う理由
 
 1 つのコーディングエージェントなら、1 つのタスクを処理できます。しかし複数を動かすとなると、作業を分割し、ブランチの衝突を防ぎ、すべての変更を CI、レビュー、マージまで見届ける必要があります。Orchestrator.inc はそのためのローカルのデスクトップワークスペースです。タスクごとに専用のエージェント、ブランチ、worktree が用意され、コードは手元のマシンから出ません。
@@ -164,6 +166,19 @@
 
 Orchestrator.inc を開き、管理させたいリポジトリを指定します。デスクトップアプリがデーモンを実行するため、CLI は不要です。エージェント CLI のセットアップとトラブルシューティングは[インストールガイド](https://docs.orchestrator.inc/installation)を参照してください。
 
+## 比較
+
+コーディングエージェントを並列で動かすほかの方法と Orchestrator.inc の比較:
+
+- [Orchestrator.inc と Conductor の比較](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
+- [Orchestrator.inc と Superset の比較](https://orchestrator.inc/compare/orchestrator-vs-superset/)
+- [Orchestrator.inc と Claude Squad の比較](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
+- [Orchestrator.inc と Vibe Kanban の比較](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
+- [おすすめの AI コーディングエージェント・オーケストレーター](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
+- [AI コーディングエージェントのための Git worktree](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
+
+[すべての比較](https://orchestrator.inc/compare/)もご覧ください。
+
 ## ドキュメント
 
 | ドキュメント | 次の情報が必要な場合 |
@@ -175,6 +190,30 @@ Orchestrator.inc を開き、管理させたいリポジトリを指定します
 | [docs/cli/README.md](../docs/cli/README.md) | CLI の動作とデーモンルートの対応関係。 |
 | [docs/development.md](../docs/development.md) | ローカル開発の前提条件、ビルド手順、テスト実行、トラブルシューティング。 |
 | [docs/STATUS.md](../docs/STATUS.md) | `main` で現在提供されているものと、まだ進行中のもの。 |
+| [orchestrator.inc/llms.txt](https://orchestrator.inc/llms.txt) | AI アシスタントや回答エンジン向けのプレーンテキストの製品概要。 |
+| [docs.orchestrator.inc/llms.txt](https://docs.orchestrator.inc/llms.txt) | AI アシスタント向けの製品ドキュメントのプレーンテキスト索引。 |
+
+## よくある質問
+
+### Orchestrator.inc とは何ですか？
+
+Orchestrator.inc は、1 つのリポジトリで複数の AI コーディングエージェントを動かすためのオープンソースのデスクトップアプリ兼 CLI です。プロジェクトのオーケストレーターエージェントが作業を計画し、ワーカーエージェントをそれぞれ専用の Git worktree とブランチで起動します。その後、各プルリクエストを CI、レビュー、マージまで追跡し、すべてのセッションを 1 つのボードに表示します。
+
+### Orchestrator.inc は Agent Orchestrator と同じものですか？
+
+はい。Orchestrator.inc は Agent Orchestrator（AO）の新しい名前です。プロジェクト、リポジトリ、Apache-2.0 ライセンスは同じで、変わったのは名前だけです。`ao` CLI コマンドや `agent-orchestrator-darwin-arm64.dmg` などのリリースファイル名は旧名のままなので、既存のインストールやスクリプトはそのまま使えます。
+
+### どのコーディングエージェントに対応していますか？
+
+Orchestrator.inc は、Claude Code、Codex、Cursor、opencode、Aider、GitHub Copilot、Gemini CLI、Goose、Cline を含む 38 のコーディングエージェントに対応しています。プロジェクトごとにワーカー、オーケストレーター、レビュアーのエージェントを選べ、タスクごとにエージェントとモデルも選べます。対応状況はエージェントによって異なるため、最新の対応表は[エージェントのセットアップガイド](https://docs.orchestrator.inc/plugins/agents)をご覧ください。
+
+### Orchestrator.inc はコードをどこかに送信しますか？
+
+いいえ。デスクトップでは、コード、worktree、エージェントはすべて手元のマシンにとどまり、Orchestrator.inc がエージェントの API 呼び出しを中継することもありません。テレメトリは限定的な利用状況と信頼性のデータだけで、コード、プロンプト、エージェントとの会話、認証情報は含まれず、設定でオフにできます。コードがホスト型ワークスペースに移るのは、Cloud Agents を選んだ場合だけです。
+
+### 単体のコーディングエージェントとの違いは何ですか？
+
+コーディングエージェントは、1 つのセッションで 1 つのタスクのコードを書きます。Orchestrator.inc 自体はコーディングエージェントではなく、エージェントが動くワークスペースです。大きな作業を並列で動く複数のエージェントに分け、Git worktree でブランチを分離し、CI の失敗、レビューコメント、マージコンフリクトを各 PR を担当するエージェントへ戻します。
 
 ## コントリビューション
 

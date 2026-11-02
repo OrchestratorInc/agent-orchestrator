@@ -31,6 +31,8 @@
 
 <br />
 
+Orchestrator.inc(이전 이름 Agent Orchestrator)는 오픈 소스(Apache-2.0) 데스크톱 앱이자 CLI로, 여러 코딩 에이전트를 각자의 Git worktree와 브랜치에서 병렬로 실행하고 CI 실패, 리뷰 코멘트, 머지 충돌을 각 풀 리퀘스트를 맡은 에이전트에게 돌려보냅니다. Claude Code, Codex, Cursor를 포함한 38개의 코딩 에이전트를 지원하며, macOS, Windows, Linux에서 실행되고 iPhone, iPad, Android 앱도 제공합니다.
+
 ## 왜 Orchestrator.inc인가
 
 코딩 에이전트 하나는 작업 하나를 처리할 수 있습니다. 여러 에이전트를 실행하려면 작업을 나누고, 브랜치 충돌을 막고, 모든 변경 사항을 CI, 리뷰, 머지까지 추적해야 합니다. Orchestrator.inc는 이를 위한 로컬 데스크톱 워크스페이스입니다. 모든 작업은 전용 에이전트, 브랜치, worktree를 가지며, 코드는 내 컴퓨터를 벗어나지 않습니다.
@@ -164,6 +166,19 @@
 
 Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
 
+## 비교
+
+코딩 에이전트를 병렬로 실행하는 다른 방법과 Orchestrator.inc 비교:
+
+- [Orchestrator.inc vs Conductor](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
+- [Orchestrator.inc vs Superset](https://orchestrator.inc/compare/orchestrator-vs-superset/)
+- [Orchestrator.inc vs Claude Squad](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
+- [Orchestrator.inc vs Vibe Kanban](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
+- [최고의 AI 코딩 에이전트 오케스트레이터](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
+- [AI 코딩 에이전트를 위한 Git worktree](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
+
+[모든 비교](https://orchestrator.inc/compare/)도 확인하세요.
+
 ## 문서
 
 | 문서 | 다음 정보가 필요할 때 |
@@ -175,6 +190,30 @@ Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 
 | [docs/cli/README.md](../docs/cli/README.md) | CLI 동작과 데몬 라우트 매핑. |
 | [docs/development.md](../docs/development.md) | 로컬 개발을 위한 사전 요구 사항, 빌드 단계, 테스트 실행, 문제 해결. |
 | [docs/STATUS.md](../docs/STATUS.md) | 현재 `main`에 출시된 내용과 아직 진행 중인 항목. |
+| [orchestrator.inc/llms.txt](https://orchestrator.inc/llms.txt) | AI 어시스턴트와 답변 엔진을 위한 일반 텍스트 제품 요약. |
+| [docs.orchestrator.inc/llms.txt](https://docs.orchestrator.inc/llms.txt) | AI 어시스턴트를 위한 제품 문서의 일반 텍스트 색인. |
+
+## 자주 묻는 질문
+
+### Orchestrator.inc는 무엇인가요?
+
+Orchestrator.inc는 하나의 저장소에서 여러 AI 코딩 에이전트를 운영하기 위한 오픈 소스 데스크톱 앱이자 CLI입니다. 프로젝트 오케스트레이터 에이전트가 작업을 계획하고 워커 에이전트를 시작하며, 각 워커는 자신의 Git worktree와 브랜치에서 작업합니다. 이후 모든 풀 리퀘스트를 CI, 리뷰, 머지까지 추적하고, 모든 세션을 하나의 보드에 보여줍니다.
+
+### Orchestrator.inc는 Agent Orchestrator와 같은 제품인가요?
+
+네. Orchestrator.inc는 Agent Orchestrator(AO)의 새 이름입니다. 프로젝트, 저장소, Apache-2.0 라이선스는 그대로이고 이름만 바뀌었습니다. `ao` CLI 명령과 `agent-orchestrator-darwin-arm64.dmg` 같은 릴리스 파일 이름은 이전 이름을 계속 사용하므로, 기존 설치와 스크립트는 그대로 동작합니다.
+
+### 어떤 코딩 에이전트를 지원하나요?
+
+Orchestrator.inc는 Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose, Cline을 포함한 38개의 코딩 에이전트를 지원합니다. 프로젝트마다 워커, 오케스트레이터, 리뷰어 에이전트를 따로 고를 수 있고, 작업마다 에이전트와 모델을 선택할 수 있습니다. 지원 범위는 에이전트마다 다르며, 최신 현황은 [에이전트 설정 가이드](https://docs.orchestrator.inc/plugins/agents)에서 확인하세요.
+
+### Orchestrator.inc가 제 코드를 어딘가로 보내나요?
+
+아니요. 데스크톱에서는 코드, worktree, 에이전트가 모두 사용자의 컴퓨터에 머물며, Orchestrator.inc는 에이전트의 API 호출을 프록시하지 않습니다. 텔레메트리는 제한된 사용 및 안정성 데이터뿐이며 코드, 프롬프트, 에이전트 대화, 자격 증명은 절대 포함하지 않고, 설정에서 끌 수 있습니다. 코드는 Cloud Agents를 선택한 경우에만 호스팅된 워크스페이스로 옮겨집니다.
+
+### 단일 코딩 에이전트와 무엇이 다른가요?
+
+코딩 에이전트는 하나의 세션에서 하나의 작업에 대한 코드를 작성합니다. Orchestrator.inc는 코딩 에이전트가 아니라 에이전트가 실행되는 워크스페이스입니다. 큰 작업을 병렬로 실행되는 여러 에이전트에 나누고, Git worktree로 브랜치를 분리하며, CI 실패, 리뷰 코멘트, 머지 충돌을 각 PR을 맡은 에이전트에게 돌려보냅니다.
 
 ## 기여하기
 

@@ -31,6 +31,8 @@
 
 <br />
 
+O Orchestrator.inc (antes Agent Orchestrator) é um app desktop e CLI de código aberto (Apache-2.0) que roda vários agentes de programação em paralelo, cada um em seu próprio worktree e branch do Git, e devolve falhas de CI, comentários de revisão e conflitos de merge ao agente responsável por cada pull request. Ele é compatível com 38 agentes de programação, incluindo Claude Code, Codex e Cursor, no macOS, Windows e Linux, com apps para iPhone, iPad e Android.
+
 ## Por que o Orchestrator.inc
 
 Um agente de programação dá conta de uma tarefa. Rodar vários significa dividir o trabalho, evitar conflitos entre branches e acompanhar cada mudança pela CI, pela revisão e pelo merge. O Orchestrator.inc é um workspace desktop local feito para isso: cada tarefa ganha seu próprio agente, branch e worktree, e seu código continua na sua máquina.
@@ -164,6 +166,19 @@ Baixe em [orchestrator.inc/download](https://orchestrator.inc/download/) ou nas 
 
 Abra o Orchestrator.inc e indique o repositório que você quer que ele gerencie. O aplicativo desktop executa o daemon para você, então não é preciso usar a CLI. Consulte o [guia de instalação](https://docs.orchestrator.inc/installation) para configurar as CLIs dos agentes e resolver problemas.
 
+## Comparações
+
+Como o Orchestrator.inc se compara a outras formas de rodar agentes de programação em paralelo:
+
+- [Orchestrator.inc vs. Conductor](https://orchestrator.inc/compare/orchestrator-vs-conductor/)
+- [Orchestrator.inc vs. Superset](https://orchestrator.inc/compare/orchestrator-vs-superset/)
+- [Orchestrator.inc vs. Claude Squad](https://orchestrator.inc/compare/orchestrator-vs-claude-squad/)
+- [Orchestrator.inc vs. Vibe Kanban](https://orchestrator.inc/compare/orchestrator-vs-vibe-kanban/)
+- [Os melhores orquestradores de agentes de programação com IA](https://orchestrator.inc/compare/best-ai-coding-agent-orchestrators/)
+- [Worktrees do Git para agentes de programação com IA](https://orchestrator.inc/compare/git-worktrees-for-ai-coding-agents/)
+
+Veja [todas as comparações](https://orchestrator.inc/compare/).
+
 ## Documentação
 
 | Documento | Comece aqui quando precisar de |
@@ -175,6 +190,30 @@ Abra o Orchestrator.inc e indique o repositório que você quer que ele gerencie
 | [docs/cli/README.md](../docs/cli/README.md) | Comportamento da CLI e mapeamento das rotas do daemon. |
 | [docs/development.md](../docs/development.md) | Pré-requisitos, etapas de build, execução de testes e solução de problemas no desenvolvimento local. |
 | [docs/STATUS.md](../docs/STATUS.md) | O que está disponível atualmente em `main` e o que ainda está em desenvolvimento. |
+| [orchestrator.inc/llms.txt](https://orchestrator.inc/llms.txt) | Um resumo do produto em texto simples para assistentes de IA e mecanismos de resposta. |
+| [docs.orchestrator.inc/llms.txt](https://docs.orchestrator.inc/llms.txt) | Um índice em texto simples da documentação do produto para assistentes de IA. |
+
+## Perguntas frequentes
+
+### O que é o Orchestrator.inc?
+
+O Orchestrator.inc é um app desktop e CLI de código aberto para rodar um conjunto de agentes de programação com IA em um mesmo repositório. Um agente orquestrador do projeto planeja o trabalho e inicia agentes worker, cada um em seu próprio worktree e branch do Git. Depois, ele acompanha cada pull request pela CI, pela revisão e pelo merge, com todas as sessões em um só quadro.
+
+### O Orchestrator.inc é o mesmo que o Agent Orchestrator?
+
+Sim. Orchestrator.inc é o novo nome do Agent Orchestrator (AO): o mesmo projeto, o mesmo repositório e a mesma licença Apache-2.0. Só o nome mudou. O comando `ao` da CLI e os nomes dos arquivos de release, como `agent-orchestrator-darwin-arm64.dmg`, continuam com o nome anterior, então as instalações e os scripts existentes continuam funcionando.
+
+### Quais agentes de programação ele suporta?
+
+O Orchestrator.inc é compatível com 38 agentes de programação, incluindo Claude Code, Codex, Cursor, opencode, Aider, GitHub Copilot, Gemini CLI, Goose e Cline. Cada projeto escolhe seus próprios agentes worker, orquestrador e revisor, e você escolhe o agente e o modelo para cada tarefa. O suporte varia de acordo com o agente; os [guias de configuração dos agentes](https://docs.orchestrator.inc/plugins/agents) trazem a matriz atualizada.
+
+### O Orchestrator.inc envia meu código para algum lugar?
+
+Não. No desktop, seu código, seus worktrees e seus agentes ficam na sua máquina, e o Orchestrator.inc não faz proxy das chamadas de API dos seus agentes. A telemetria se limita a dados de uso e confiabilidade, nunca seu código, prompts, conversas com agentes ou credenciais, e você pode desativá-la nas Configurações. O código só vai para workspaces hospedados se você escolher Cloud Agents.
+
+### Qual a diferença em relação a um único agente de programação?
+
+Um agente de programação escreve código para uma tarefa em uma sessão. O Orchestrator.inc não é um agente de programação; é o workspace onde os agentes rodam. Ele divide trabalhos maiores entre vários agentes rodando em paralelo, mantém as branches separadas com worktrees do Git e devolve falhas de CI, comentários de revisão e conflitos de merge ao agente responsável por cada PR.
 
 ## Como contribuir
 
