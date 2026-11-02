@@ -187,3 +187,97 @@ func TestStepsOnlyLandForAcceptedSignals(t *testing.T) {
 		}
 	})
 }
+
+// blockedOnDialog drives a session into blocked through the real signal path so
+// later tool events are suppressed for the state while still really having run.
+func blockedOnDialog(t *testing.T, m *Manager, st *fakeStore, id domain.SessionID, toolName, toolUseID string) {
+	t.Helper()
+	ctx := context.Background()
+	apply := func(s ports.ActivitySignal) {
+		t.Helper()
+		if err := m.ApplyActivitySignal(ctx, id, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply(ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: toolName, ToolUseID: toolUseID})
+	apply(ports.ActivitySignal{Valid: true, State: domain.ActivityBlocked, Event: "permission-request", ToolName: toolName})
+	if got := st.sessions[id].Activity.State; got != domain.ActivityBlocked {
+		t.Fatalf("setup: state = %q, want blocked", got)
+	}
+}
+
+func TestStepsRecordSuppressedToolEventsWhileBlocked(t *testing.T) {
+	// A sibling tool runs while a dialog is on screen: the session must stay
+	// blocked, but the tool really ran, so its step must open and close — state
+	// suppression must not swallow step tracking.
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	blockedOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
+
+	ctx := context.Background()
+	sibling := func(event string) {
+		t.Helper()
+		if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: event, ToolName: "Read", ToolUseID: "toolu_2"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := st.sessions["mer-1"].Activity.State; got != domain.ActivityBlocked {
+			t.Fatalf("state after %s = %q, want blocked", event, got)
+		}
+	}
+	sibling("pre-tool-use")
+	sibling("post-tool-use")
+
+	var step *domain.SessionStep
+	for _, s := range m.Steps("mer-1") {
+		if s.ToolUseID == "toolu_2" {
+			step = &s
+			break
+		}
+	}
+	if step == nil {
+		t.Fatalf("sibling step missing from %+v", m.Steps("mer-1"))
+	}
+	if step.EndedAt.IsZero() {
+		t.Fatalf("sibling step = %+v, want closed", *step)
+	}
+	if step.Failed {
+		t.Fatalf("sibling step = %+v, want a success", *step)
+	}
+}
+
+func TestStepsSweptFailureClosesStepWhileBlocked(t *testing.T) {
+	// The plugin sweep closes a turn's leftover tool as failed. While the session
+	// is blocked on an unrelated dialog that post is suppressed for the state,
+	// but the step must still be marked failed and closed — otherwise the exact
+	// "running forever" step this PR fixes reappears behind a dialog.
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	blockedOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
+
+	ctx := context.Background()
+	for _, s := range []ports.ActivitySignal{
+		{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: "Read", ToolUseID: "toolu_left"},
+		{Valid: true, State: domain.ActivityActive, Event: "post-tool-use-failure", ToolName: "Read", ToolUseID: "toolu_left"},
+	} {
+		if err := m.ApplyActivitySignal(ctx, "mer-1", s); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var step *domain.SessionStep
+	for _, s := range m.Steps("mer-1") {
+		if s.ToolUseID == "toolu_left" {
+			step = &s
+			break
+		}
+	}
+	if step == nil {
+		t.Fatalf("swept step missing from %+v", m.Steps("mer-1"))
+	}
+	if step.EndedAt.IsZero() || !step.Failed {
+		t.Fatalf("swept step = %+v, want closed and failed", *step)
+	}
+	if got := st.sessions["mer-1"].Activity.State; got != domain.ActivityBlocked {
+		t.Fatalf("state after the swept failure = %q, want blocked", got)
+	}
+}

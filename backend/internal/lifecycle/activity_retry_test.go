@@ -47,7 +47,7 @@ func TestActivityProjectionFailurePreservesBlockedToolCorrelation(t *testing.T) 
 	s.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", Mode: domain.SessionModeTUI,
 		Activity: domain.Activity{State: domain.ActivityBlocked}}
 	m := New(s, nil)
-	m.flights["mer-1"] = &toolFlight{inflight: map[string]string{"tool-1": "Bash"}, blockedCandidate: "tool-1"}
+	m.flights["mer-1"] = &toolFlight{inflight: map[string]string{"tool-1": "Bash"}, blockedCandidates: map[string]struct{}{"tool-1": {}}}
 	before := cloneToolFlight(m.flights["mer-1"])
 	err := m.ApplyActivitySignal(context.Background(), "mer-1", ports.ActivitySignal{
 		Valid: true, State: domain.ActivityActive, Event: "post-tool-use", ToolName: "Bash", ToolUseID: "tool-1",

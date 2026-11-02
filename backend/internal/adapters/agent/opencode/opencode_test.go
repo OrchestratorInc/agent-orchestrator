@@ -718,6 +718,39 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
 		}
 	}
+	// Tool executions must be reported as tool-use events with the upstream
+	// identity: the lifecycle only tracks flights and steps for these event
+	// names. Tool arguments must never reach AO.
+	for _, marker := range []string{`callHookSync("pre-tool-use"`, `callHookSync("post-tool-use"`, "tool_name:", "tool_use_id:", "input.callID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin missing tool-event wiring %q:\n%s", marker, body)
+		}
+	}
+	// A permission ask names the blocked call in properties.tool.callID. Without
+	// it the lifecycle cannot correlate the dialog with the tool it is holding
+	// up, and the block lifts only at the turn boundary.
+	if !strings.Contains(body, "tool_use_id: props?.tool?.callID") {
+		t.Fatalf("installed plugin does not forward the blocked tool id on permission-blocked:\n%s", body)
+	}
+	// OpenCode 1 has no failure hook, so a tool that threw never reports a post.
+	// The leftover call ids must be closed as failed at the turn boundary and on
+	// an identity switch, or the step shows "running" for the rest of the session.
+	for _, marker := range []string{"toolsInFlight", "failOpenTools", `callHookSync("post-tool-use-failure"`} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not close failed tool steps (%q missing):\n%s", marker, body)
+		}
+	}
+	// A thrown subtask still fires tool.execute.after, with no output. It must
+	// stay in flight so the boundary sweep closes it as a failure instead of
+	// being reported as a success.
+	if !strings.Contains(body, "if (output === undefined) return") {
+		t.Fatalf("installed plugin does not keep thrown subtasks in flight:\n%s", body)
+	}
+	for _, leak := range []string{"input.args", "output.args", "output.output"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("installed plugin forwards tool payload field %q:\n%s", leak, body)
+		}
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)

@@ -188,7 +188,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
+	wantEvents := []string{"session-start", "active", "pre-tool-use", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -271,8 +271,8 @@ process.stdin.on("end", () => {
 	calls := readV2HookCalls(t, capture)
 	// Child execution/tool activity folds onto the parent as plain active; child
 	// permission dialogs surface on the parent; child turn boundaries are
-	// dropped. The parent turn still emits its own start/activity/stop.
-	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "active", "active", "stop"}
+	// dropped. The parent turn still emits its own start/activity/tool pair/stop.
+	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "active", "pre-tool-use", "post-tool-use", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -295,9 +295,267 @@ process.stdin.on("end", () => {
 	if got, ok := payloads[2]["tool_name"]; ok && got != "" {
 		t.Fatalf("child tool active carried tool_name %#v, want none", got)
 	}
-	// Parent tools keep the identity the step timeline needs.
+	// Parent tools keep the identity the step timeline needs, on a matched pair.
 	if payloads[6]["tool_name"] != "read" || payloads[6]["tool_use_id"] != "tool_parent" {
-		t.Fatalf("parent tool payload = %#v, want read/tool_parent", payloads[6])
+		t.Fatalf("parent tool pre payload = %#v, want read/tool_parent", payloads[6])
+	}
+	if payloads[7]["tool_name"] != "read" || payloads[7]["tool_use_id"] != "tool_parent" {
+		t.Fatalf("parent tool post payload = %#v, want read/tool_parent", payloads[7])
+	}
+}
+
+func TestManagedV2PluginWiresToolEvents(t *testing.T) {
+	// Tool calls must be reported as tool-use events with the upstream call id:
+	// the lifecycle only tracks flights and steps for these event names. A failed
+	// or interrupted tool is closed by name, so the payload carries both.
+	for _, marker := range []string{
+		`report("pre-tool-use"`,
+		`report(failed ? "post-tool-use-failure" : "post-tool-use"`,
+		`input.status === "error"`,
+		`input.error != null`,
+		"input.id",
+		"failOpenTools",
+		// Nested Code Mode executions reuse the outer call id, so one id is one
+		// lifecycle: nesting depth, and a completion that does not empty it
+		// reports nothing.
+		".depth > 1",
+		"entry.depth--",
+	} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin missing tool-event wiring %q", marker)
+		}
+	}
+	if strings.Contains(v2PluginSource, "input.input") {
+		t.Fatal("managed v2 plugin forwards tool arguments")
+	}
+}
+
+func TestManagedV2PluginReportsToolEvents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "tools")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	wantEvents := []string{"session-start", "pre-tool-use", "post-tool-use", "pre-tool-use", "post-tool-use-failure", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		if payload["session_id"] != "ses_tools" {
+			t.Fatalf("call %d session_id = %#v", i, payload["session_id"])
+		}
+		for _, leaked := range []string{"args", "input", "result", "error"} {
+			if _, ok := payload[leaked]; ok {
+				t.Fatalf("call %d forwarded tool payload field %q: %#v", i, leaked, payload)
+			}
+		}
+	}
+	// The call id is stable across the pair, so the step opens and closes.
+	for i, want := range []struct {
+		name string
+		id   string
+	}{
+		{"bash", "call_1"},
+		{"bash", "call_1"},
+		{"read", "call_2"},
+		{"read", "call_2"},
+	} {
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i+1].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", i+1, err)
+		}
+		if payload["tool_name"] != want.name || payload["tool_use_id"] != want.id {
+			t.Fatalf("call %d = %#v, want %s/%s", i+1, payload, want.name, want.id)
+		}
+	}
+}
+
+func TestManagedV2PluginKeepsNestedExecutionsOnOneLifecycle(t *testing.T) {
+	// Code Mode nested executions reuse the outer call's id. They must not
+	// overwrite the entry, close another running tool's step early, or leave the
+	// outer call untracked for the interruption sweep.
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "nested")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	// Exactly one pre for the outer call (nested starts do not re-report), one
+	// post when its nesting empties, and the interrupted second call swept as a
+	// failure even though one of its nested executions had already completed.
+	wantEvents := []string{"session-start", "pre-tool-use", "post-tool-use", "pre-tool-use", "post-tool-use-failure", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+	}
+	// Both reported events carry the shared outer call id.
+	for _, want := range []struct {
+		index int
+		id    string
+	}{
+		{1, "call_outer"},
+		{2, "call_outer"},
+		{3, "call_left"},
+		{4, "call_left"},
+	} {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[want.index].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", want.index, err)
+		}
+		if payload["tool_use_id"] != want.id {
+			t.Fatalf("call %d tool_use_id = %#v, want %s", want.index, payload["tool_use_id"], want.id)
+		}
+	}
+}
+
+func TestManagedV2PluginClosesToolStepsLeftOpenByAnInterruptedTurn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "interrupted")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	// The interrupted execution never delivers the tool's after hook, so the
+	// turn boundary must close its step, or AO shows it running forever.
+	wantEvents := []string{"session-start", "pre-tool-use", "post-tool-use-failure", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+	}
+	// The failure carries the same identity the step was opened with.
+	var closed map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(calls[2].Input)), &closed); err != nil {
+		t.Fatalf("close payload: %v", err)
+	}
+	if closed["tool_name"] != "bash" || closed["tool_use_id"] != "call_open" {
+		t.Fatalf("close payload = %#v, want bash/call_open", closed)
 	}
 }
 
@@ -424,8 +682,40 @@ if (mode === "single") {
   await flush();
   emit({ type: "session.execution.started", data: { sessionID: "ses_parent" } });
   await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_parent", tool: "read", id: "tool_parent" });
   await callbacks["tool:execute.after"]({ sessionID: "ses_parent", tool: "read", id: "tool_parent" });
   emit({ type: "session.execution.succeeded", data: { sessionID: "ses_parent" } });
+  await flush();
+} else if (mode === "tools") {
+  emit({ type: "session.created", data: { sessionID: "ses_tools" } });
+  await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_tools", tool: "bash", id: "call_1", input: { command: "rm -rf /" } });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_tools", tool: "bash", id: "call_1", status: "completed", result: { output: "ok" } });
+  await callbacks["tool:execute.before"]({ sessionID: "ses_tools", tool: "read", id: "call_2" });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_tools", tool: "read", id: "call_2", status: "error", error: { message: "nope" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_tools" } });
+  await flush();
+} else if (mode === "nested") {
+  emit({ type: "session.created", data: { sessionID: "ses_nested" } });
+  await flush();
+  // One outer call with two nested executions reusing its id: a single
+  // lifecycle, opened by the first start and closed by the last completion.
+  await callbacks["tool:execute.before"]({ sessionID: "ses_nested", tool: "code", id: "call_outer" });
+  await callbacks["tool:execute.before"]({ sessionID: "ses_nested", tool: "code", id: "call_outer" });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_nested", tool: "code", id: "call_outer", status: "completed" });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_nested", tool: "code", id: "call_outer", status: "completed" });
+  // A second outer call interrupted while a nested execution is still open: the
+  // boundary must still find the entry and close it.
+  await callbacks["tool:execute.before"]({ sessionID: "ses_nested", tool: "code", id: "call_left" });
+  await callbacks["tool:execute.before"]({ sessionID: "ses_nested", tool: "code", id: "call_left" });
+  await callbacks["tool:execute.after"]({ sessionID: "ses_nested", tool: "code", id: "call_left", status: "completed" });
+  emit({ type: "session.execution.interrupted", data: { sessionID: "ses_nested", reason: "user" } });
+  await flush();
+} else if (mode === "interrupted") {
+  emit({ type: "session.created", data: { sessionID: "ses_interrupted" } });
+  await flush();
+  await callbacks["tool:execute.before"]({ sessionID: "ses_interrupted", tool: "bash", id: "call_open" });
+  emit({ type: "session.execution.interrupted", data: { sessionID: "ses_interrupted", reason: "user" } });
   await flush();
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
