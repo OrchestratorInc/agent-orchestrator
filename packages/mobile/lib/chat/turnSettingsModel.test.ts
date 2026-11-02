@@ -244,7 +244,44 @@ describe("default labels", () => {
 			["default", "Use agent model (Opus 5.5)"],
 			["opus", "Opus 5.5"],
 		]);
+		const picked = snapshot({ harness: "claude-code", settings: { model: "opus" } });
+		const model = turnSettingsRows(picked, [], options).find((row) => row.id === "option:model");
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.value)).toEqual(["opus"]);
 		expect(turnSettingsSummary(claudeChat, [], options)).toBe("Opus 5.5 · Xhigh · Auto");
+	});
+
+	// Claude Code reports "opus" for a session nobody pointed at Opus when its
+	// own settings name it. Nothing was picked in AO, so the chat follows the
+	// agent's model, and the menu says so (review on #7419).
+	it("ticks the agent's model when nothing was picked, whatever the provider reports", () => {
+		const options = resolveDefaultChoices(claude());
+		const model = turnSettingsRows(claudeChat, [], options).find((row) => row.id === "option:model");
+		expect(model?.choices.filter((choice) => choice.selected).map((choice) => choice.label)).toEqual(["Use agent model (Opus 5.5)"]);
+		expect(model?.value).toBe("Opus 5.5");
+		expect(turnSettingsModelLabel(claudeChat, [], options)).toBe("Opus 5.5");
+	});
+
+	// AO hands Claude Code its catalog's full ids on top of the aliases Claude
+	// lists by itself, so the newest Opus arrives twice as "Opus 5.5" (review
+	// on #7419). One row stays: the running one, else the alias.
+	describe("with a model listed by alias and by id", () => {
+		const twice = (current: string): ChatConfigOption[] => claude({ model: current }).map((option) => option.id === "model"
+			? { ...option, choices: [...option.choices, { value: "claude-opus-5-5", name: "Opus 5.5", description: "Best for everyday, complex tasks" }] }
+			: option);
+		const opusRows = (current: string) => choices(resolveDefaultChoices(twice(current)), "model")?.filter(([, name]) => name.includes("Opus 5.5"));
+
+		it("lists it once beside the agent's own choice", () => {
+			expect(opusRows("opus")).toEqual([["default", "Use agent model (Opus 5.5)"], ["opus", "Opus 5.5"]]);
+		});
+
+		it("keeps the id when the id is what runs", () => {
+			expect(opusRows("claude-opus-5-5")).toEqual([["default", "Use agent model (Opus 5.5)"], ["claude-opus-5-5", "Opus 5.5"]]);
+		});
+
+		it("folds both into the agent's own choice on a fresh chat or another model", () => {
+			expect(opusRows("default")).toEqual([["default", "Opus 5.5"]]);
+			expect(opusRows("sonnet")).toEqual([["default", "Opus 5.5"]]);
+		});
 	});
 
 	// Same as desktop: with another model picked, the one Opus row is the

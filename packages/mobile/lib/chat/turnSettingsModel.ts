@@ -124,12 +124,20 @@ function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 		const choices = option.choices.map(namePermissionChoice);
 		return choices.every((choice, index) => choice === option.choices[index]) ? option : { ...option, choices };
 	}
+	const resolved = resolveImplicitChoice(option);
+	return isModelOption(resolved) ? withoutDuplicateNames(resolved) : resolved;
+}
+
+function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const implicit = option.choices.find((choice) => choice.value === "default");
 	if (!implicit) return option;
 	const named = implicit.description?.trim().toLowerCase();
-	const concrete = named
-		? option.choices.find((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
-		: undefined;
+	// The running model when it is one of the models so named: Claude lists a
+	// model twice, by alias and by id, and the other copy goes as a duplicate.
+	const namedChoices = named
+		? option.choices.filter((choice) => choice !== implicit && choice.name.trim().toLowerCase() === named)
+		: [];
+	const concrete = namedChoices.find((choice) => choice.value === option.currentValue) ?? namedChoices[0];
 	if (concrete && option.currentValue !== concrete.value) {
 		// The row that stays reads exactly like the one it replaces.
 		const name = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
@@ -141,14 +149,35 @@ function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 		};
 	}
 	if (!isDefaultPlaceholderLabel(implicit.name)) return option;
-	// An `agent` option is classed with models here, but it picks an agent.
-	const isModel = option.category === "model" || option.id.toLowerCase() === "model";
-	const follow = isModel ? FOLLOW_AGENT.model : kind === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
+	const follow = isModelOption(option) ? FOLLOW_AGENT.model : providerTurnControlKind(option) === "effort" ? FOLLOW_AGENT.effort : FOLLOW_AGENT.other;
 	return {
 		...option,
 		choices: option.choices.map((choice) =>
 			choice === implicit ? { ...choice, name: concrete ? `${follow} (${concrete.name})` : follow, description: undefined } : choice),
 	};
+}
+
+/** A model picker. An `agent` option is classed with models elsewhere, but it picks an agent. */
+function isModelOption(option: ChatConfigOption): boolean {
+	return option.category === "model" || option.id.toLowerCase() === "model";
+}
+
+/**
+ * One row per model name. AO hands Claude Code its catalog's full ids on top
+ * of the aliases it lists by itself, so "opus" and "claude-opus-5-5" both
+ * arrive as "Opus 5.5". The running one stays, else the first, which is the
+ * alias: it follows the family's newest model.
+ */
+function withoutDuplicateNames(option: ChatConfigOption): ChatConfigOption {
+	const kept = new Map<string, ChatConfigChoice>();
+	for (const choice of option.choices) {
+		const name = choice.name.trim().toLowerCase();
+		const first = kept.get(name);
+		if (!first || (choice.value === option.currentValue && first.value !== option.currentValue)) kept.set(name, choice);
+	}
+	if (kept.size === option.choices.length) return option;
+	const keep = new Set(kept.values());
+	return { ...option, choices: option.choices.filter((choice) => keep.has(choice)) };
 }
 
 /** "Default", "Default (recommended)": a label that names no model, level or mode. */
@@ -286,7 +315,10 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 		});
 	}
 
-	rows.push(...options.map(providerRow));
+	// Nothing picked: the provider's model is the agent's own, whatever it
+	// reports running, so the choice that follows the agent is the one ticked.
+	const followsAgentModel = !sentValue(snapshot.settings.model);
+	rows.push(...options.map((option) => providerRow(option, followsAgentModel)));
 	return rows.sort((a, b) => controlPriority(a) - controlPriority(b));
 }
 
@@ -336,7 +368,14 @@ function isPermissionRow(row: TurnSettingRow): boolean {
 	return row.providerKind === "permissions";
 }
 
-function providerRow(option: ChatConfigOption): TurnSettingRow {
+/**
+ * `followsAgentModel`: no model was picked in AO (the daemon saves every pick),
+ * so a model row ticks its "Use agent model" choice even while the provider
+ * reports the model that resolves to. Claude Code reports "opus" for a session
+ * nobody pointed at Opus when its own settings name it.
+ */
+function providerRow(option: ChatConfigOption, followsAgentModel: boolean): TurnSettingRow {
+	const follows = followsAgentModel && isModelOption(option) && option.choices.some((choice) => choice.value === "default");
 	return {
 		id: `option:${option.id}`,
 		label: option.name,
@@ -348,7 +387,7 @@ function providerRow(option: ChatConfigOption): TurnSettingRow {
 			value: choice.value,
 			label: choice.name,
 			description: choice.description,
-			selected: choice.value === option.currentValue,
+			selected: follows ? choice.value === "default" : choice.value === option.currentValue,
 			permissionMode: choice.permissionMode,
 		})),
 		target: { kind: "option", optionId: option.id },
