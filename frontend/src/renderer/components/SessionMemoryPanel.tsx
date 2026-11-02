@@ -342,7 +342,7 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 				</tr>
 			</thead>
 			<tbody className="[&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
-				{live.length > 0 ? <GroupRow label={t("shell.memoryGroupSessions")} /> : null}
+				{/* No "Sessions" label: the section heading above the card already says it. */}
 				{live.map((row) => (
 					<SessionRow
 						chip={chipTone(state ?? "fine", facts.find((f) => f.id === row.id) ?? toSessionFacts(row.session, row.reading, Date.now()), largest)}
