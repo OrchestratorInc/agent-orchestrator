@@ -24,6 +24,7 @@ import { CenterPane } from "./CenterPane";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CHAT_EVENTS_SAFETY_POLL_MS, CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
+import { useCloudOpening } from "../lib/cloud-opening";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { CloudReviewerChatSurface } from "./chat/CloudReviewerChatSurface";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
@@ -262,8 +263,8 @@ function startupEventProgress(events: readonly CloudCpClientEvent[], cutoff: num
 	return latest;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl, eventsFromChat = false }: {
-	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string;
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl, eventsFromChat = false, queuedMessage }: {
+	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string; queuedMessage?: string;
 	/**
 	 * The session's events are the chat's to read: its Chat surface is mounted
 	 * under this screen (it reads them as it opens, then polls only as a safety
@@ -394,7 +395,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	}, [client, orgId, pollEvents, queryClient, sessionId]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} queuedMessage={terminalOnly ? undefined : queuedMessage} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -715,6 +716,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => stopTerminalLiveResize, [stopTerminalLiveResize]);
 
 	const cloudStage = cloudLifecycleStage(session);
+	// The first message this device sent to a new Chat session. The startup
+	// screen shows it while it covers the chat the message went to; the session
+	// may not have resolved yet, so the interface comes from the send.
+	const cloudOpening = useCloudOpening(session?.cloud?.orgId ?? cloudOrgId, sessionId);
+	const startupQueuedMessage = cloudOpening && (session ? session.mode === "chat" : cloudOpening.interfaceMode === "chat")
+		? cloudOpening.text
+		: undefined;
 	// A startup failure AO gave up on (or a runtime that ended without one)
 	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
@@ -2359,6 +2367,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
 						coderWorkspaceUrl={session?.cloud?.coderWorkspaceUrl}
 						eventsFromChat={!session || Boolean(showChatSurface && session.cloud)}
+						queuedMessage={startupQueuedMessage}
 					/>
 					: null}
 			{interfaceUi.dialogs}

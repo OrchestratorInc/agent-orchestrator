@@ -706,6 +706,7 @@
 	"terminal.sessionLoader.terminal": "Connecting your terminal",
 	"terminal.sessionLoader.label": "Session setup activity",
 	"terminal.sessionLoader.openCoderWorkspace": "Open the workspace in Coder",
+	"terminal.sessionLoader.queuedMessage": "Your message, sent when the workspace is ready",
 	"createProject.githubAuthFailed": "GitHub authentication failed",
 	"createProject.githubAuthorizationExpired": "GitHub authorization expired.",
 	"createProject.githubReposFailed": "Failed to load repositories.",

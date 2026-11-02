@@ -716,6 +716,7 @@
 	"terminal.sessionLoader.terminal": "Подключение терминала",
 	"terminal.sessionLoader.label": "Ход подготовки сессии",
 	"terminal.sessionLoader.openCoderWorkspace": "Открыть рабочее пространство в Coder",
+	"terminal.sessionLoader.queuedMessage": "Ваше сообщение отправится, когда рабочее пространство будет готово",
 	"createProject.githubAuthFailed": "Ошибка аутентификации GitHub",
 	"createProject.githubAuthorizationExpired": "Срок авторизации GitHub истёк.",
 	"createProject.githubReposFailed": "Не удалось загрузить репозитории.",

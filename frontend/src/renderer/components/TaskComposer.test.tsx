@@ -3318,7 +3318,7 @@ describe("useTaskLaunch Cloud start on send", () => {
 
 	it("creates exactly one session per send, with the brief and the picked settings, and seeds its opening", async () => {
 		const queryClient = freestyleFixture();
-		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-1", harness: "codex" } });
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-1", harness: "codex", interfaceMode: "chat" } });
 		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
 		await screen.findByText("ready");
 		let sessionId!: string;
@@ -3330,7 +3330,8 @@ describe("useTaskLaunch Cloud start on send", () => {
 		// The brief goes with the create; nothing renames or messages a session afterwards.
 		expect(h.cloudRenameSession).not.toHaveBeenCalled();
 		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
-		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-1"])).toMatchObject({ clientMessageId: "req-1", text: "Fix the bug" });
+		// With the interface it started in, which the session view needs before its list has the session.
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-1"])).toMatchObject({ clientMessageId: "req-1", text: "Fix the bug", interfaceMode: "chat" });
 	});
 
 	it("retries a send whose answer was lost with the same request id, so it cannot start a second session", async () => {

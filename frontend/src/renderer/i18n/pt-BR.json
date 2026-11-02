@@ -714,6 +714,7 @@
 	"terminal.sessionLoader.terminal": "Conectando seu terminal",
 	"terminal.sessionLoader.label": "Atividade de configuração da sessão",
 	"terminal.sessionLoader.openCoderWorkspace": "Abrir o espaço de trabalho no Coder",
+	"terminal.sessionLoader.queuedMessage": "Sua mensagem, enviada quando o espaço de trabalho estiver pronto",
 	"createProject.githubAuthFailed": "Falha na autenticação do GitHub",
 	"createProject.githubAuthorizationExpired": "A autorização do GitHub expirou.",
 	"createProject.githubReposFailed": "Não foi possível carregar os repositórios.",

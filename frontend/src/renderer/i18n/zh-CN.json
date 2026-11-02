@@ -709,6 +709,7 @@
 	"terminal.sessionLoader.terminal": "正在连接您的终端",
 	"terminal.sessionLoader.label": "会话设置活动",
 	"terminal.sessionLoader.openCoderWorkspace": "在 Coder 中打开工作区",
+	"terminal.sessionLoader.queuedMessage": "您的消息将在工作区就绪后发送",
 	"createProject.githubAuthFailed": "GitHub 身份验证失败",
 	"createProject.githubAuthorizationExpired": "GitHub 授权已过期。",
 	"createProject.githubReposFailed": "无法加载存储库。",

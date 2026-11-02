@@ -18,6 +18,7 @@ import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
+import { seedCloudOpening } from "../lib/cloud-opening";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -2071,6 +2072,63 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	describe("the first message of a session starting behind the startup screen", () => {
+		const queued = "Your message, sent when the workspace is ready";
+		const opening = (interfaceMode?: "chat" | "tui") => ({ clientMessageId: "req-1", text: "Fix the flaky login test", createdAt: new Date().toISOString(), ...(interfaceMode ? { interfaceMode } : {}) });
+
+		it("shows on a new Coder Chat session's startup screen", async () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening("chat")));
+			const loader = screen.getByTestId("cloud-session-loader-screen");
+			expect(await within(loader).findByRole("figure", { name: queued })).toHaveTextContent("Fix the flaky login test");
+			// The checklist stays.
+			expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
+		});
+
+		it("shows from the first frame, before a just-created Chat session resolves", async () => {
+			workspaceQueryState.data = [];
+			cloudSessionQueryState.isLoading = true;
+			try {
+				const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("chat")));
+				expect(await within(screen.getByTestId("cloud-session-loader-screen")).findByRole("figure", { name: queued })).toBeInTheDocument();
+				// One started in the terminal does not show it: the agent gets it as its prompt.
+				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("tui")));
+				await waitFor(() => expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument());
+			} finally {
+				cloudSessionQueryState.isLoading = false;
+			}
+		});
+
+		it("does not show on a terminal session's startup screen", async () => {
+			const session = workerSession("sess-2");
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening()));
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
+		});
+
+		it("leaves a Freestyle Chat session starting in place on its conversation", async () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening("chat")));
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
 	});
 
 	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {

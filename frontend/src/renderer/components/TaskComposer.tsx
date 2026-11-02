@@ -260,6 +260,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					clientMessageId: input.clientRequestId ?? session.id,
 					text: input.brief,
 					createdAt: sentAt,
+					...(session.interfaceMode ? { interfaceMode: session.interfaceMode } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.

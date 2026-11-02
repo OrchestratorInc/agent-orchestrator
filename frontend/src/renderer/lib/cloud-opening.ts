@@ -1,4 +1,5 @@
 import { useQuery, type QueryClient } from "@tanstack/react-query";
+import type { CloudCpInterfaceMode } from "./cloud-cp";
 
 // The brief a new Cloud task was started with, kept from the moment its session
 // was created until the session's own chat holds it. The session view shows it
@@ -10,6 +11,8 @@ export interface CloudOpening {
 	text: string;
 	/** When the brief was sent: the session's start is timed from here. */
 	createdAt: string;
+	/** The interface the session was created in, known before the session list has it. */
+	interfaceMode?: CloudCpInterfaceMode;
 }
 
 const openingKey = (orgId: string, sessionId: string) => ["cloud-opening", orgId, sessionId] as const;

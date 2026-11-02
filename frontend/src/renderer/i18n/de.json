@@ -709,6 +709,7 @@
 	"terminal.sessionLoader.terminal": "Verbindung zum Terminal wird hergestellt",
 	"terminal.sessionLoader.label": "Aktivität zur Sitzungseinrichtung",
 	"terminal.sessionLoader.openCoderWorkspace": "Workspace in Coder öffnen",
+	"terminal.sessionLoader.queuedMessage": "Deine Nachricht, gesendet, sobald der Arbeitsbereich bereit ist",
 	"createProject.githubAuthFailed": "GitHub-Authentifizierung fehlgeschlagen",
 	"createProject.githubAuthorizationExpired": "Die GitHub-Autorisierung ist abgelaufen.",
 	"createProject.githubReposFailed": "Repositorys konnten nicht geladen werden.",
