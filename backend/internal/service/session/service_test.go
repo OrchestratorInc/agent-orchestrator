@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -3849,6 +3850,10 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
 		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
+		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
+		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
+		{"delete shared history", fmt.Errorf("delete mer-1: %w", domain.ErrSessionHistoryShared), apierr.KindConflict, "SESSION_HISTORY_SHARED"},
+		{"delete cleanup refused", fmt.Errorf("delete mer-1: %w", &sessionmanager.CleanupRefusedError{Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}), apierr.KindConflict, "WORKSPACE_CLEANUP_REFUSED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
@@ -5807,7 +5812,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5865,7 +5870,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6044,7 +6049,7 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
 	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{
-		"mer-1": {SessionID: "mer-1", SessionGeneration: 2, WorkspaceDisposition: domain.DispositionFailed},
+		"mer-1": {SessionID: "mer-1", SessionGeneration: 2, WorkspaceDisposition: domain.DispositionFailed, ReportOnly: true},
 	}
 	svc := &Service{store: st}
 	for _, tc := range []struct {
@@ -6054,15 +6059,16 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 	}{
 		{true, 2, domain.DispositionFailed}, {false, 2, ""}, {true, 3, ""},
 	} {
+		wantReportOnly := tc.want != ""
 		rec := st.sessions["mer-1"]
 		rec.IsTerminated, rec.CleanupGeneration = tc.terminated, tc.generation
 		st.sessions[rec.ID] = rec
 		got, err := svc.Get(context.Background(), rec.ID)
-		if err != nil || got.WorkspaceCleanup != tc.want {
-			t.Fatalf("cleanup=%q want=%q err=%v", got.WorkspaceCleanup, tc.want, err)
+		if err != nil || got.WorkspaceCleanup != tc.want || got.WorkspaceCleanupReportOnly != wantReportOnly {
+			t.Fatalf("cleanup=%q reportOnly=%v want=%q err=%v", got.WorkspaceCleanup, got.WorkspaceCleanupReportOnly, tc.want, err)
 		}
 		list, err := svc.List(context.Background(), ListFilter{})
-		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
+		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want || list[0].WorkspaceCleanupReportOnly != wantReportOnly {
 			t.Fatalf("list=%+v err=%v", list, err)
 		}
 	}
@@ -6430,5 +6436,56 @@ func TestSpawnFirstForInstallFailedEligibleSpawnReleasesTheClaim(t *testing.T) {
 	}
 	if got, _ := spawnedFirstForInstall(t, sink); got != true {
 		t.Fatalf("retry first_for_install = %#v, want true", got)
+	}
+}
+
+type expiringStore struct {
+	*fakeStore
+	archived []domain.ArchivedSession
+}
+
+func (s *expiringStore) ListReleasedArchivedSessions(context.Context) ([]domain.ArchivedSession, error) {
+	return s.archived, nil
+}
+
+type deletingCommander struct {
+	*fakeCommander
+	deleted []domain.SessionID
+	refuse  map[domain.SessionID]error
+}
+
+func (c *deletingCommander) DeleteSession(_ context.Context, id domain.SessionID, _ bool) error {
+	if err := c.refuse[id]; err != nil {
+		return err
+	}
+	c.deleted = append(c.deleted, id)
+	return nil
+}
+
+// Retention deletes only sessions archived longer than the setting, passes over
+// one a delete refuses, and reports a delete that failed for another reason.
+func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	store := &expiringStore{fakeStore: newFakeStore(), archived: []domain.ArchivedSession{
+		{ID: "mer-old", ArchivedAt: now.AddDate(0, 0, -31)},
+		{ID: "mer-shared", ArchivedAt: now.AddDate(0, 0, -40)},
+		{ID: "mer-recent", ArchivedAt: now.AddDate(0, 0, -29)},
+	}}
+	mgr := &deletingCommander{fakeCommander: &fakeCommander{}, refuse: map[domain.SessionID]error{
+		"mer-shared": fmt.Errorf("delete mer-shared: %w", domain.ErrSessionHistoryShared),
+	}}
+	svc := NewWithDeps(Deps{Manager: mgr, Store: store})
+	svc.clock = func() time.Time { return now }
+
+	if err := svc.DeleteExpired(ctx, 0); err != nil || len(mgr.deleted) != 0 {
+		t.Fatalf("retention off: deleted=%v err=%v", mgr.deleted, err)
+	}
+	if err := svc.DeleteExpired(ctx, 30); err != nil || !slices.Equal(mgr.deleted, []domain.SessionID{"mer-old"}) {
+		t.Fatalf("30 days: deleted=%v err=%v, want only mer-old", mgr.deleted, err)
+	}
+	mgr.refuse["mer-old"] = errors.New("disk I/O error")
+	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
+		t.Fatalf("failed delete err = %v, want it reported", err)
 	}
 }
