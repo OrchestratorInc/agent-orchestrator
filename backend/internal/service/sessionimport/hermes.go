@@ -146,9 +146,6 @@ func readHermesTranscript(ctx context.Context, root string, paths ...string) (tr
 	if strings.TrimSpace(title.String) != "" {
 		t.title = title.String
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
-	}
+	t.title = importTitle(t.title)
 	return t, nil
 }
