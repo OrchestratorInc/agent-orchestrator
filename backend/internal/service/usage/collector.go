@@ -67,6 +67,7 @@ type SourceRoots struct {
 	PiSessions     string
 	QwenUsage      string
 	GeminiTmp      string
+	ClineSessions  string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -110,7 +111,24 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		PiSessions:     filepath.Join(dataDir, "pi", "sessions"),
 		QwenUsage:      filepath.Join(qwenRuntime, "usage"),
 		GeminiTmp:      filepath.Join(geminiHome, ".gemini", "tmp"),
+		ClineSessions:  clineSessionsDir(home),
 	}, nil
+}
+
+// clineSessionsDir mirrors Cline CLI's own resolution: CLINE_SESSION_DATA_DIR,
+// then CLINE_DATA_DIR/sessions, then <CLINE_DIR or ~/.cline>/data/sessions.
+func clineSessionsDir(home string) string {
+	if dir := strings.TrimSpace(os.Getenv("CLINE_SESSION_DATA_DIR")); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "sessions")
+	}
+	clineHome := strings.TrimSpace(os.Getenv("CLINE_DIR"))
+	if clineHome == "" {
+		clineHome = filepath.Join(home, ".cline")
+	}
+	return filepath.Join(clineHome, "data", "sessions")
 }
 
 func qwenRuntimeBaseDir(ctx context.Context, home, workspace string) (string, error) {
@@ -469,6 +487,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessPi ||
 			session.Harness == domain.HarnessQwen || session.Harness == domain.HarnessGemini ||
+			session.Harness == domain.HarnessCline ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
 		if err != nil {
@@ -539,7 +558,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	needsReconcile := false
 	lastErrorCode := ""
 	if (session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessPi ||
-		session.Harness == domain.HarnessGemini) &&
+		session.Harness == domain.HarnessGemini || session.Harness == domain.HarnessCline) &&
 		strings.TrimSpace(signal.TranscriptPath) == "" {
 		lastErrorCode = domain.UsageErrorSourceDiscoveryPending
 	}
@@ -2461,6 +2480,14 @@ func validateSourceAttribution(
 			subagentID != "" || !qwenUsageFilename(filepath.Base(resolved)) {
 			return rejected()
 		}
+	case domain.UsageSourceClineSession:
+		sessionDir := filepath.Dir(resolved)
+		manifest, ok := readClineSessionManifest(ctx, filepath.Join(sessionDir, binding.NativeRootID+".json"))
+		if binding.Harness != domain.HarnessCline || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != nativeSessionID+".messages.json" ||
+			filepath.Base(sessionDir) != nativeSessionID || !ok || manifest.SessionID != nativeSessionID {
+			return rejected()
+		}
 	case domain.UsageSourceGeminiSession:
 		meta, ok := readGeminiSessionMeta(ctx, resolved)
 		if binding.Harness != domain.HarnessGemini || nativeSessionID != binding.NativeRootID ||
@@ -2493,6 +2520,9 @@ func (c *Collector) validateSourceAttribution(
 	); err != nil {
 		return err
 	}
+	if kind == domain.UsageSourceClineSession {
+		return c.validateClineWorkspace(ctx, binding, resolved)
+	}
 	if kind != domain.UsageSourceKimiWire {
 		return nil
 	}
@@ -2522,6 +2552,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.QwenUsage}
 	case domain.HarnessGemini:
 		return []string{c.roots.GeminiTmp}
+	case domain.HarnessCline:
+		return []string{c.roots.ClineSessions}
 	default:
 		return nil
 	}
@@ -2541,6 +2573,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceQwenMonthly, true
 	case domain.HarnessGemini:
 		return domain.UsageSourceGeminiSession, true
+	case domain.HarnessCline:
+		return domain.UsageSourceClineSession, true
 	default:
 		return "", false
 	}
@@ -2596,6 +2630,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverQwenPath(ctx, sessionID)
 	case domain.HarnessGemini:
 		return c.discoverGeminiPath(ctx, nativeID)
+	case domain.HarnessCline:
+		return c.discoverClinePath(ctx, nativeID)
 	}
 	type candidate struct {
 		path string
@@ -2763,6 +2799,87 @@ func (c *Collector) discoverPiPath(ctx context.Context, nativeID string) (string
 		}
 	}
 	return "", nil
+}
+
+// clineSessionManifest is the small <id>.json Cline CLI keeps beside a
+// session's messages document.
+type clineSessionManifest struct {
+	SessionID     string `json:"session_id"`
+	CWD           string `json:"cwd"`
+	WorkspaceRoot string `json:"workspace_root"`
+}
+
+const maxClineManifestBytes = 1 << 20
+
+func readClineSessionManifest(ctx context.Context, path string) (clineSessionManifest, bool) {
+	if ctx.Err() != nil {
+		return clineSessionManifest{}, false
+	}
+	file, err := os.Open(path) //nolint:gosec // derived from a validated provider-owned path.
+	if err != nil {
+		return clineSessionManifest{}, false
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, maxClineManifestBytes+1))
+	if err != nil || len(data) > maxClineManifestBytes || ctx.Err() != nil {
+		return clineSessionManifest{}, false
+	}
+	var manifest clineSessionManifest
+	if json.Unmarshal(data, &manifest) != nil || !nativeUsageIDPattern.MatchString(manifest.SessionID) {
+		return clineSessionManifest{}, false
+	}
+	return manifest, true
+}
+
+// validateClineWorkspace requires the Cline session to have run in the AO
+// session's own worktree. Cline's hooks can report another session's native
+// ID under this session's AO identity when interactive sessions share a hub
+// (#7478); the ID alone would then bill that session's usage here.
+func (c *Collector) validateClineWorkspace(ctx context.Context, binding domain.UsageBindingRecord, resolved string) error {
+	rejected := errors.New(domain.UsageErrorArtifactPathRejected)
+	session, ok, err := c.store.GetSession(ctx, binding.SessionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return rejected
+	}
+	workspace := strings.TrimSpace(session.Metadata.WorkspacePath)
+	manifest, manifestOK := readClineSessionManifest(
+		ctx, filepath.Join(filepath.Dir(resolved), binding.NativeRootID+".json"),
+	)
+	if workspace == "" || !manifestOK {
+		return rejected
+	}
+	want := canonicalWorkspacePath(workspace)
+	for _, candidate := range []string{manifest.CWD, manifest.WorkspaceRoot} {
+		if candidate = strings.TrimSpace(candidate); candidate != "" && filepath.IsAbs(candidate) &&
+			canonicalWorkspacePath(candidate) == want {
+			return nil
+		}
+	}
+	return rejected
+}
+
+func canonicalWorkspacePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
+func (c *Collector) discoverClinePath(ctx context.Context, nativeID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(c.roots.ClineSessions) == "" {
+		return "", nil
+	}
+	path := filepath.Join(c.roots.ClineSessions, nativeID, nativeID+".messages.json")
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return "", nil
+	}
+	return path, nil
 }
 
 // geminiSessionMeta is the first line of a Gemini CLI chat log.

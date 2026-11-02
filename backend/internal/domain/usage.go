@@ -19,6 +19,7 @@ const (
 	UsageSourcePiSession      UsageSourceKind = "pi_session"
 	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
 	UsageSourceGeminiSession  UsageSourceKind = "gemini_session"
+	UsageSourceClineSession   UsageSourceKind = "cline_session"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.

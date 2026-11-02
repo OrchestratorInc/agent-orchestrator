@@ -149,6 +149,9 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 		}
 		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, nil)
 	}
+	if snapshotSourceKind(source.Source.Kind) {
+		return i.ingestSnapshot(ctx, source, parserState, file, info, identity, now, result)
+	}
 	if source.Source.FileIdentity != identity || info.Size() < source.Source.ByteOffset {
 		return i.resetSourceGeneration(ctx, source, identity, now)
 	}
@@ -303,6 +306,28 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 			errors.New("transcript changed during ingestion"),
 		)
 	}
+	stored, stop, err := i.storeParsed(ctx, source, parsed, now, result)
+	if stop {
+		return stored, err
+	}
+	result.Reconcile = parsed.newCodexChild
+	if parsed.Cursor.State == domain.UsageSourceComplete {
+		return result, i.completeBinding(ctx, source.Source.BindingID, now)
+	}
+	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
+	return result, nil
+}
+
+// storeParsed prices one parsed chunk and applies it with its cursor. stop
+// reports that the caller must return result and err as they are: the apply
+// failed, or an event conflict settled the source.
+func (i *Ingestor) storeParsed(
+	ctx context.Context,
+	source domain.UsageSourceContext,
+	parsed parseResult,
+	now time.Time,
+	result IngestResult,
+) (IngestResult, bool, error) {
 	apply := func() error {
 		return i.store.ApplyUsageChunk(
 			ctx,
@@ -359,22 +384,17 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 				nil,
 				now,
 			); markErr != nil {
-				return result, errors.Join(err, markErr)
+				return result, true, errors.Join(err, markErr)
 			}
 			if source.BindingState == domain.UsageBindingFinalizing {
-				return result, i.completeBinding(ctx, source.Source.BindingID, now)
+				return result, true, i.completeBinding(ctx, source.Source.BindingID, now)
 			}
-			return result, nil
+			return result, true, nil
 		}
-		return result, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
+		return result, true, fmt.Errorf("apply usage source %d: %w", source.Source.ID, err)
 	}
 	i.notifyLateRouteEvidence(ctx, source.Source.ID)
-	result.Reconcile = parsed.newCodexChild
-	if parsed.Cursor.State == domain.UsageSourceComplete {
-		return result, i.completeBinding(ctx, source.Source.BindingID, now)
-	}
-	result.More = progressed && !chunk.atEOF && !chunk.readToEOF
-	return result, nil
+	return result, false, nil
 }
 
 // notifyLateRouteEvidence asks for a repair pass when a chunk landed
