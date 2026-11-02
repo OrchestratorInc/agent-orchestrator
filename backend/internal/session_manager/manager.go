@@ -3407,12 +3407,17 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	if mode == domain.SessionModeChat && m.chat != nil && m.chat.HasLiveChatController(id) {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
 	}
-	if rec.Activity.State != domain.ActivityExited {
+	// Imports stay idle until their first open, before AO has a runtime to
+	// replace. A pending import already bound to a runtime keeps the ordinary
+	// exited precondition, so retrying cannot replace an idle live agent.
+	unopenedTerminalImport := mode == domain.SessionModeTUI && rec.NeedsImportResume() &&
+		rec.Metadata.RuntimeHandleID == "" && rec.Metadata.RuntimeLaunchID == ""
+	if rec.Activity.State != domain.ActivityExited && !unopenedTerminalImport {
 		// Builds before the controller-stop lifecycle fix can leave a Chat row
 		// idle, active, or blocked even though no controller survived. The live
 		// registry is authoritative for whether a duplicate Chat controller could
-		// be created, so recover only when it confirms there is none. TUI keeps its
-		// existing durable-exited precondition.
+		// be created, so recover only when it confirms there is none. Other TUI
+		// sessions keep their existing durable-exited precondition.
 		if mode != domain.SessionModeChat || m.chat == nil {
 			return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
 		}
