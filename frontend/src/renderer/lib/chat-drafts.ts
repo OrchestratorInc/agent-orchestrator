@@ -1,5 +1,6 @@
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
+import { isCloudAttachmentReference } from "./cloud-attachment-reference";
 
 /**
  * Renderer-owned, session-scoped Chat drafts.
@@ -724,7 +725,8 @@ function isAttachment(value: unknown): value is ChatDraftAttachment {
 		typeof attachment.id === "string" &&
 		attachment.id.length > 0 &&
 		typeof attachment.path === "string" &&
-		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/")) &&
+		(attachment.path === "" || attachment.path.startsWith(".ao/attachments/") ||
+			isCloudAttachmentReference(attachment.path)) &&
 		typeof attachment.name === "string" &&
 		typeof attachment.mimeType === "string" &&
 		typeof attachment.bytes === "number" &&

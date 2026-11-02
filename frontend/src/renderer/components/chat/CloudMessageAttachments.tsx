@@ -66,11 +66,13 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 	const [open, setOpen] = useState(false);
 	const [failed, setFailed] = useState(false);
 	const bytes = useAttachmentBytes(source, attachment);
+	// The PDF viewer takes ownership of the bytes it is given, so each viewer
+	// gets a copy and the cached bytes stay readable for the next one.
 	const load = async () => {
-		if (bytes.data) return bytes.data;
+		if (bytes.data) return bytes.data.slice();
 		const result = await bytes.refetch();
 		if (!result.data) throw result.error ?? new Error("The PDF could not be read.");
-		return result.data;
+		return result.data.slice();
 	};
 	if (failed) return <CloudFileAttachment source={source} attachment={attachment} />;
 	return (

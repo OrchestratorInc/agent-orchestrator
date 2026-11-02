@@ -108,6 +108,7 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -640,7 +641,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+		// A cloud file's reference is no daemon path: it previews from its bytes
+		// while they are in memory, else as a file.
+		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
 	});

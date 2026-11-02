@@ -5,6 +5,7 @@
 // the AO Cloud token like every other control-plane call.
 
 import { aoBridge } from "./bridge";
+import { CLOUD_ATTACHMENT_REFERENCE_PREFIX } from "./cloud-attachment-reference";
 
 /** An attachment as the control plane describes it. */
 export interface CloudAttachment {
@@ -94,10 +95,7 @@ export async function placeCloudAttachment(baseUrl: string, orgId: string, sessi
 	return parsed.path;
 }
 
-// The composer treats a staged file as a path it lists under "Attached
-// files". A cloud file is staged by uploading it, and its "path" is this
-// reference, which the cloud send turns back into the message's attachment ids.
-const REFERENCE_PREFIX = "ao-cloud-attachment:";
+const REFERENCE_PREFIX = CLOUD_ATTACHMENT_REFERENCE_PREFIX;
 const ATTACHED_FILES_HEADING = "Attached files (read these files in the workspace):";
 
 /** The staged "path" of an uploaded cloud attachment. */

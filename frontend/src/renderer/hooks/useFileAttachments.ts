@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatDraftScopeSessionId } from "../lib/chat-drafts";
+import { isCloudAttachmentReference } from "../lib/cloud-attachment-reference";
 
 // Client-side mirror of the backend spawn caps in
 // backend/internal/httpd/controllers/sessions.go (maxAttachments /
@@ -89,7 +90,8 @@ function sharedAttachmentSnapshot(attachments: FileAttachment[]): FileAttachment
 		bytes,
 		name,
 		// Unstaged files have no durable copy. Keep their bytes in memory for retry.
-		...(stagedPath ? { stagedPath } : { data, dataUrl }),
+		// A cloud file's only local preview is its bytes, so it keeps its dataUrl.
+		...(stagedPath ? { stagedPath, ...(isCloudAttachmentReference(stagedPath) ? { dataUrl } : {}) } : { data, dataUrl }),
 	}));
 }
 
