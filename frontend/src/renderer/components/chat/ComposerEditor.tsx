@@ -866,11 +866,11 @@ export const ComposerEditor = forwardRef<
 			)}>
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
 					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
-					<span className="grid *:col-start-1 *:row-start-1 *:transition-[opacity,translate,filter] *:duration-300 *:ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:*:transition-none">
-						<span aria-hidden={dictating} className={dictating ? "-translate-y-1 opacity-0 blur-[2px]" : "translate-y-0 opacity-100 blur-0"}>
+					<span className="grid *:col-start-1 *:row-start-1 *:transition-[opacity,filter] *:duration-300 *:ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:*:transition-none">
+						<span aria-hidden={dictating} className={dictating ? "opacity-0 blur-[2px]" : "opacity-100 blur-0"}>
 							<FadingPlaceholder text={placeholder} />
 						</span>
-						<span aria-hidden={!dictating} className={dictating ? "translate-y-0 opacity-100 blur-0" : "translate-y-1 opacity-0 blur-[2px]"}>
+						<span aria-hidden={!dictating} className={dictating ? "opacity-100 blur-0" : "opacity-0 blur-[2px]"}>
 							{t("chat.dictation.placeholder")}
 						</span>
 					</span>
