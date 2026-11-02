@@ -36,6 +36,39 @@ afterEach(() => {
 });
 
 describe("clone repository input", () => {
+	it("uses the real clone form and alternate callbacks for the first run prompt", async () => {
+		const onOpenLocalFolder = vi.fn();
+		const onStartStandaloneAgent = vi.fn();
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/chosen");
+		const { props, view } = renderCloneDialog({
+			firstRun: true,
+			value: { remoteUrl: "https://github.com/acme/web-app.git", destinationParent: "" },
+			onOpenLocalFolder,
+			onStartStandaloneAgent,
+		});
+		expect(screen.getByRole("dialog", { name: "Start a project" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Clone and continue" })).toBeDisabled();
+		expect(props.onContinue).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Choose where to clone the repository" }));
+		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith({ title: "Choose where to clone the repository" });
+		await waitFor(() => expect(props.onChange).toHaveBeenCalledWith({ ...props.value, destinationParent: "/chosen" }));
+		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, value: { ...props.value, destinationParent: "/chosen" } }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Clone and continue" })).toBeEnabled());
+		fireEvent.click(screen.getByRole("button", { name: "Clone and continue" }));
+		expect(props.onContinue).toHaveBeenCalledWith(expect.objectContaining({ destinationParent: "/chosen", targetPath: "/chosen/web-app" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open a local folder" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
+		expect(onOpenLocalFolder).toHaveBeenCalledOnce();
+		expect(onStartStandaloneAgent).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
+	});
+
+	it("lets Escape dismiss the first run prompt", () => {
+		const { props } = renderCloneDialog({ firstRun: true });
+		fireEvent.keyDown(document, { key: "Escape" });
+		expect(props.onClose).toHaveBeenCalledOnce();
+	});
+
 	it("edits the destination without opening the picker and submits the updated path", async () => {
 		window.ao!.app.checkGitRepository = vi.fn().mockResolvedValue(true);
 		window.ao!.app.chooseDirectory = vi.fn();
@@ -59,7 +92,7 @@ describe("clone repository input", () => {
 		const { props, view } = renderCloneDialog();
 		fireEvent.click(screen.getByRole("button", { name: "Choose where to clone the repository" }));
 		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith({
-			title: "Choose where to clone the repository", defaultPath: "~/ao/projects",
+			title: "Choose where to clone the repository", defaultPath: "/code",
 		});
 		await waitFor(() => expect(props.onChange).toHaveBeenCalledWith({ ...props.value, destinationParent: "/Projects/new folder" }));
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, value: { ...props.value, destinationParent: "/Projects/new folder" } }));

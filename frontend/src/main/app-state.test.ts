@@ -7,6 +7,8 @@ import {
 	APP_STATE_FILE_NAME,
 	writeAppStateMarker,
 	readMigrationState,
+	readFirstRunProjectPrompt,
+	markFirstRunProjectPromptSeen,
 	updateMigration,
 	type AppStateMarker,
 } from "./app-state";
@@ -47,6 +49,23 @@ describe("writeAppStateMarker", () => {
 		expect(m.installedAt).toBe("2026-06-26T10:00:00.000Z");
 		expect(m.lastReconciledAt).toBe("2026-06-26T10:00:00.000Z");
 		expect(m.installSource).toBe("npm-bootstrap");
+		expect(m.firstRunProjectPrompt).toBe("pending");
+	});
+
+	it("keeps the first run prompt seen across later launch writes", async () => {
+		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
+		await writeAppStateMarker(options);
+		expect(await readFirstRunProjectPrompt(dir)).toBe("pending");
+		await markFirstRunProjectPromptSeen(dir);
+		await markFirstRunProjectPromptSeen(dir);
+		await writeAppStateMarker(options);
+		expect(await readFirstRunProjectPrompt(dir)).toBe("seen");
+	});
+
+	it("treats a marker from an older build as an existing user", async () => {
+		await writeFile(path.join(dir, APP_STATE_FILE_NAME), JSON.stringify({ schemaVersion: 2, installedAt: "2025-01-01T00:00:00Z" }));
+		await writeAppStateMarker({ stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() });
+		expect(await readFirstRunProjectPrompt(dir)).toBe("seen");
 	});
 
 	it("records the current build's restart protocol without preserving a newer build's capability", async () => {
@@ -97,7 +116,7 @@ describe("writeAppStateMarker", () => {
 
 		const raw = await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8");
 		const keys = Object.keys(JSON.parse(raw) as Record<string, unknown>);
-		expect(keys.sort()).toEqual([...GO_READER_KEYS].sort());
+		expect(keys.sort()).toEqual([...GO_READER_KEYS, "firstRunProjectPrompt"].sort());
 		// Trailing newline, mirroring runfile.Write.
 		expect(raw.endsWith("}\n")).toBe(true);
 	});

@@ -705,6 +705,8 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getFirstRunProjectPrompt: () => ipcRenderer.invoke("appState:getFirstRunProjectPrompt") as Promise<"pending" | "seen">,
+		markFirstRunProjectPromptSeen: () => ipcRenderer.invoke("appState:markFirstRunProjectPromptSeen") as Promise<void>,
 	},
 	cliLink: {
 		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
