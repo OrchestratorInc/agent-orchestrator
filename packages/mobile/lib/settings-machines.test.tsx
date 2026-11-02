@@ -24,12 +24,16 @@ const fixtures = vi.hoisted(() => ({
 	emulating: false,
 	setEmulated: vi.fn(),
 }));
+vi.mock("./native-header-button", async () => {
+	const React = await import("react");
+	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const router = { navigate: fixtures.navigate, push: fixtures.push };
 	return {
-		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useRouter: () => router,
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
 	};
@@ -362,8 +366,8 @@ describe("Settings", () => {
 		fixtures.platform.OS = platform;
 		const root = await renderSettings();
 		expect(root.findAll((node) => node.props.title === "Settings")).toHaveLength(0);
-		const buttons = root.findAllByType("StackToolbarButton" as never);
-		expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(platform === "ios" ? ["Back"] : []);
+		const buttons = root.findAllByType("NativeHeaderButton" as never);
+		expect(buttons.map((button) => button.props.label)).toEqual(platform === "ios" ? ["Back"] : []);
 		if (platform === "ios") {
 			expect(root.findByType("StackToolbar" as never).props.placement).toBe("left");
 			act(() => buttons[0].props.onPress());

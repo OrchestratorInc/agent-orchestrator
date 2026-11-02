@@ -26,6 +26,10 @@ vi.mock("react-native", async () => {
 			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item }))))),
 	};
 });
+vi.mock("./native-header-button", async () => {
+	const React = await import("react");
+	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -33,7 +37,7 @@ vi.mock("expo-router", async () => {
 		useRouter: () => fixture.router,
 		useLocalSearchParams: () => fixture.params,
 		useFocusEffect: (callback: () => void) => { fixture.focus = callback; },
-		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView"), Badge: host("StackToolbarBadge") }) },
 	};
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
@@ -223,8 +227,9 @@ it("confirms a copied pull-request link without redrawing the cards", () => {
 it("leaves by the back button instead of carrying the board's items", () => {
 	fixture.router.back.mockClear();
 	act(() => { renderer = create(<PRsScreen />); });
-	const buttons = renderer!.root.findAllByType("StackToolbarButton" as never);
-	expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(["Back"]);
+	expect(renderer!.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
+	const buttons = renderer!.root.findAllByType("NativeHeaderButton" as never);
+	expect(buttons.map((button) => button.props.label)).toEqual(["Back"]);
 	act(() => buttons[0].props.onPress());
 	expect(fixture.router.back).toHaveBeenCalledTimes(1);
 });

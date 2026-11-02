@@ -28,8 +28,10 @@ export type WorkerFilterMenuOptions = {
 
 /**
  * The Workers filter as one native header menu: an Environment submenu and a
- * Project submenu, each with the system's own check on the current choice. A
- * UIMenu on iOS, Compose's DropdownMenu on Android.
+ * Project submenu, each with the system's own check on the current choice.
+ * The fallback for other platforms and the shared tests: iOS draws its own in a
+ * 44pt glass circle (./worker-filter-menu.ios), Android a Compose dropdown
+ * (./worker-filter-menu.android).
  *
  * A function rather than a component: Stack.Toolbar reads its children by
  * element type, so what it is handed has to be the Stack.Toolbar.Menu itself.

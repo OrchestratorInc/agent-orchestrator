@@ -10,7 +10,8 @@ describe("pair screen", () => {
 	it("closes from the native bar on iOS and from Material's close button on Android", () => {
 		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: Platform.OS === "ios", title: "Pair a machine" }} />');
 		expect(page).toContain('const NATIVE_BAR = Platform.OS === "ios";');
-		expect(page).toContain('<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close" onPress={() => backOr(router)} />');
+		expect(page).toContain('<NativeHeaderButton icon="close" label="Close" onPress={() => backOr(router)} />');
+		expect(page).not.toContain("Stack.Toolbar.Button");
 		expect(page).toContain('{NATIVE_BAR ? null : <View style={styles.topBar}><NativeHeaderButton icon="close" label="Close" onPress={back} /></View>}');
 		expect(page).not.toMatch(/icon="back"|chevron/);
 	});

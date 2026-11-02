@@ -5,10 +5,14 @@ const fixtures = vi.hoisted(() => ({ platform: { OS: "ios" }, router: { back: vi
 
 vi.mock("react-native", () => ({ Platform: fixtures.platform }));
 vi.mock("./backNavigation", () => ({ backOr: fixtures.backOr }));
+vi.mock("./native-header-button", async () => {
+	const React = await import("react");
+	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) }, useRouter: () => fixtures.router };
+	return { Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) }, useRouter: () => fixtures.router };
 });
 
 import { StackRootBack } from "./StackRootBack";
@@ -39,8 +43,10 @@ describe("StackRootBack", () => {
 		fixtures.platform.OS = "ios";
 		act(() => { renderer = create(<StackRootBack />); });
 		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("left");
-		const back = renderer!.root.findByType("StackToolbarButton" as never);
-		expect(back.props).toMatchObject({ icon: "chevron.backward", accessibilityLabel: "Back" });
+		// Our 44pt glass circle in the bar: a bar button's frame is under the target.
+		expect(renderer!.root.findByType("StackToolbarView" as never).props.hidesSharedBackground).toBe(true);
+		const back = renderer!.root.findByType("NativeHeaderButton" as never);
+		expect(back.props).toMatchObject({ icon: "back", label: "Back" });
 		back.props.onPress();
 		expect(fixtures.backOr).toHaveBeenCalledWith(fixtures.router);
 	});

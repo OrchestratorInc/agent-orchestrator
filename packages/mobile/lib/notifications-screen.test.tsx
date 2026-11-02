@@ -70,11 +70,15 @@ vi.mock("react-native", async () => {
 		View: host("View"),
 	};
 });
+vi.mock("./native-header-button", async () => {
+	const React = await import("react");
+	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
+});
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useRouter: () => fixtures.router,
 		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {

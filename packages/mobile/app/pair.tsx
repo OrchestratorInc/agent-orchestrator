@@ -36,7 +36,6 @@ import { Button, EmptyState, NumberedStep } from "../lib/ui";
 import { Spinner } from "../lib/Spinner";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { NativeHeaderButton } from "../lib/native-header-button";
-import { toolbarIcon } from "../lib/toolbarIcon";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
 import { iconSize, onCamera, radius, space, type } from "../lib/tokens";
@@ -335,11 +334,14 @@ export default function PairScreen() {
 
 	const back = () => backOr(router);
 	// iOS presents this as a modal under a native bar, which closes it from an
-	// xmark item. Android's modal is a full-screen page with no bar, so it keeps
-	// the Material close button in its own top row below.
+	// xmark item: our glass circle rather than a bar button, whose frame UIKit
+	// sizes under the 44pt target. Android's modal is a full-screen page with
+	// no bar, so it keeps the Material close button in its own top row below.
 	const headerItems = useMemo(() => NATIVE_BAR ? (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close" onPress={() => backOr(router)} />
+			<Stack.Toolbar.View hidesSharedBackground>
+				<NativeHeaderButton icon="close" label="Close" onPress={() => backOr(router)} />
+			</Stack.Toolbar.View>
 		</Stack.Toolbar>
 	) : null, [router]);
 	if (repairHost === undefined) {
