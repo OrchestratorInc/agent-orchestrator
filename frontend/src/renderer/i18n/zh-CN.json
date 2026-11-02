@@ -2891,6 +2891,7 @@
 	"chat.startup.label": "会话设置",
 	"chat.startup.steps": "设置步骤",
 	"chat.startup.running": "正在设置会话",
+	"chat.startup.sandbox": "正在启动沙箱",
 	"chat.startup.failed": "会话设置失败",
 	"chat.action.session.spawned": "已启动一个代理",
 	"chat.action.session.terminated": "已终止一个代理",

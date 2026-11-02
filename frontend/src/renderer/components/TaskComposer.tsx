@@ -16,7 +16,8 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
-import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession, type CloudCpSessionResponse } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession } from "../lib/cloud-cp";
+import { seedCloudOpening } from "../lib/cloud-opening";
 import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
@@ -56,7 +57,6 @@ import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { discardedPreparedCloudSession, forgetPreparedCloudSession, preparedCloudSessions, rememberPreparedCloudSession } from "../lib/cloud-session-prestart";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
 import { useModelTuning } from "./settings/ModelTuningControls";
@@ -159,11 +159,9 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
-export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
+export function useTaskLaunch({ projectId, hostId }: {
 	projectId?: string;
 	hostId?: string;
-	/** Start a non-Coder Cloud project's session as the page opens, ahead of its brief (the new chat page). */
-	prestartCloud?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -198,12 +196,6 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	// The prepared worktree's session id. It becomes the task's session id on send,
 	// so files uploaded into it before then are already where the agent reads them.
 	const [preparedSessionId, setPreparedSessionId] = useState("");
-	// A Cloud session started ahead of the brief (prestartCloud), and the sends
-	// that claimed one, by request id, so a retry reaches the same session.
-	const [preparedCloud, setPreparedCloud] = useState<PreparedCloudTask>();
-	const preparedCloudRef = useRef<PreparedCloudTask | undefined>(undefined);
-	preparedCloudRef.current = preparedCloud;
-	const claimedCloudRef = useRef(new Map<string, string>());
 	const requestRef = useRef<{ payload: string; id: string } | undefined>(undefined);
 	const {
 		attachments,
@@ -238,37 +230,7 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 			try {
 				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
-				// The session started as the page opened takes the brief as its first
-				// message, so its sandbox is already up; a retry reaches the same one.
-				const prepared = preparedCloudRef.current;
-				const claimed = input.clientRequestId ? claimedCloudRef.current.get(input.clientRequestId) : undefined;
-				const preparedId = claimed ?? (prepared && prepared.orgId === cloudOrg.id && prepared.projectId === input.projectId &&
-					prepared.harness === (input.agent ?? "claude-code") && prepared.mode === input.mode ? prepared.sessionId : undefined);
-				if (preparedId) {
-					if (input.clientRequestId) claimedCloudRef.current.set(input.clientRequestId, preparedId);
-					if (prepared?.sessionId === preparedId) setPreparedCloud(undefined);
-					const started = await startPreparedCloudSession(cloudClient, cloudOrg.id, preparedId, input).catch((err: unknown) => {
-						// A session that is gone (deleted, or failed to start), or a control
-						// plane that cannot name it after the brief, gives way to a fresh one;
-						// any other failure keeps the claim for a retry.
-						if (err instanceof CloudCpError && (err.status === 404 || err.code === "SESSION_TERMINATED")) return undefined;
-						if (err instanceof PreparedSessionUnnamed) {
-							discardPreparedCloudSession(cloudClient, cloudOrg.id, preparedId);
-							return undefined;
-						}
-						throw err;
-					});
-					if (started) {
-						forgetPreparedCloudSession(preparedId);
-						rememberCloudChatSettings(cloudOrg.id, started.id, started.harness, input);
-						seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, started);
-						void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-						void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
-						return started.id;
-					}
-					forgetPreparedCloudSession(preparedId);
-					if (input.clientRequestId) claimedCloudRef.current.delete(input.clientRequestId);
-				}
+				const sentAt = new Date().toISOString();
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
 				// The task starts in the interface the composer resolved (its choice,
@@ -290,6 +252,13 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 				// The session's Chat composer shows, and its turns keep, what the task
 				// was started with, as a local task's chat does.
 				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
+				// The session view shows the brief from its first frame, with its start
+				// under it, while the sandbox comes up.
+				seedCloudOpening(queryClient, cloudOrg.id, session.id, {
+					clientMessageId: input.clientRequestId ?? session.id,
+					text: input.brief,
+					createdAt: sentAt,
+				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
@@ -1068,65 +1037,6 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
 	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
-	// A non-Coder Cloud project's session starts as the new chat page opens, with
-	// no brief, so its sandbox is coming up while the user types; the send makes
-	// it the task (createCloudTask). A different agent, interface or project, or
-	// leaving the page, deletes one no send claimed.
-	const prestartMode = submitMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined);
-	const prestartOrgId = cloudOrg?.id;
-	// Only once the offering is known: a project on the org's default provider may be Coder.
-	// Once settings have loaded, so the interface it starts in does not change after it started.
-	const prestartEnabled = prestartCloud && isCloudProject && cloudOffering.loaded && !isCoderCloudProject &&
-		canSubmit && settings !== undefined && Boolean(prestartOrgId) && Boolean(selectedAgent);
-	const prestartClientRef = useRef(cloudClient);
-	prestartClientRef.current = cloudClient;
-	useEffect(() => {
-		if (!prestartEnabled || !prestartOrgId || !projectId) return;
-		const cloudClient = prestartClientRef.current;
-		// Sessions an earlier page or run started and never used.
-		for (const leftover of preparedCloudSessions(prestartOrgId)) discardPreparedCloudSession(cloudClient, prestartOrgId, leftover);
-		let disposed = false;
-		let started: PreparedCloudTask | undefined;
-		// A moment's wait, so flicking through agents does not start a sandbox for each.
-		const timer = window.setTimeout(() => {
-			void createCloudSession(cloudClient, prestartOrgId, {
-				projectId,
-				kind: "worker",
-				harness: selectedAgent as CreateTaskInput["agent"] & string,
-				displayName: t("command.newTask"),
-				// No brief yet: the agent waits idle, and the send is its first turn.
-				prompt: "",
-				...(prestartMode ? { interfaceMode: prestartMode } : {}),
-			}).then(({ session }) => {
-				started = { orgId: prestartOrgId, projectId, sessionId: session.id, harness: selectedAgent, mode: prestartMode };
-				rememberPreparedCloudSession({ orgId: prestartOrgId, sessionId: session.id });
-				if (disposed) {
-					discardPreparedCloudSession(cloudClient, prestartOrgId, session.id);
-					return;
-				}
-				setPreparedCloud(started);
-			}, () => undefined);
-		}, PRESTART_DELAY_MS);
-		return () => {
-			disposed = true;
-			window.clearTimeout(timer);
-			setPreparedCloud(undefined);
-			// A session a send claimed is the task now.
-			if (started && ![...claimedCloudRef.current.values()].includes(started.sessionId)) {
-				discardPreparedCloudSession(cloudClient, prestartOrgId, started.sessionId);
-			}
-		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [prestartEnabled, prestartMode, prestartOrgId, projectId, selectedAgent]);
-	// The pre-started sandbox is coming up until its worker connects: the page shows it starting.
-	const preparedCloudState = useQuery<CloudCpSessionResponse>({
-		queryKey: ["cloud-prepared-session", prestartOrgId ?? "", preparedCloud?.sessionId ?? ""],
-		enabled: Boolean(preparedCloud && prestartOrgId),
-		refetchInterval: (query) => query.state.data?.session.runtimeConnected ? false : 2_000,
-		retry: false,
-		queryFn: ({ signal }) => cloudClient.getSession(prestartOrgId!, preparedCloud!.sessionId, { signal }),
-	});
-	const cloudSessionStarting = Boolean(preparedCloud) && preparedCloudState.data?.session.runtimeConnected !== true;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
 			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
@@ -1246,8 +1156,6 @@ export function useTaskLaunch({ projectId, hostId, prestartCloud = false }: {
 		submitMode,
 		isCloudProject,
 		isCoderCloudProject,
-		// A Cloud session started ahead of the brief is still coming up.
-		cloudSessionStarting,
 		canSubmit,
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
@@ -1483,56 +1391,8 @@ export function lastCloudSessionModel(sessions: CloudCpSession[] | undefined, ag
 }
 
 // How long the page waits after its agent settles before starting a Cloud session.
-const PRESTART_DELAY_MS = 600;
 
 /** A Cloud session the new chat page started ahead of its brief. */
-interface PreparedCloudTask {
-	orgId: string;
-	projectId: string;
-	sessionId: string;
-	harness: string;
-	mode?: "chat" | "tui";
-}
-
-/** Deletes a pre-started Cloud session no send claimed. It ran no task, so nothing is lost. */
-function discardPreparedCloudSession(client: ReturnType<typeof useCloudCp>["client"], orgId: string, sessionId: string): void {
-	void client.deleteSession(orgId, sessionId).then(
-		() => discardedPreparedCloudSession(sessionId),
-		(error: unknown) => {
-			if (error instanceof CloudCpError && (error.status === 404 || error.code === "SESSION_TERMINATED")) discardedPreparedCloudSession(sessionId);
-		},
-	);
-}
-
-/** A control plane that cannot rename a session: its pre-started one cannot take the brief's name. */
-class PreparedSessionUnnamed extends Error {}
-
-/**
- * Makes a pre-started Cloud session the task: named after the brief, with the
- * brief as its first message and the task's settings on that turn. A control
- * plane that predates renaming refuses (PreparedSessionUnnamed) before the
- * brief is sent, so the task starts as a fresh session named after it.
- */
-async function startPreparedCloudSession(
-	client: ReturnType<typeof useCloudCp>["client"],
-	orgId: string,
-	sessionId: string,
-	input: CreateTaskInput,
-): Promise<CloudCpSession> {
-	const displayName = input.brief.trim().slice(0, 100) || (input.agent ?? "claude-code");
-	const renamed = await client.renameSession(orgId, sessionId, displayName).then((answer) => answer.session, (error: unknown) => {
-		if (error instanceof CloudCpError && (error.status === 404 || error.status === 405)) throw new PreparedSessionUnnamed();
-		return undefined;
-	});
-	await client.sendSessionMessage(orgId, sessionId, {
-		text: input.brief,
-		...(input.model ? { model: input.model } : {}),
-		...(input.effort ? { reasoningEffort: input.effort } : {}),
-		...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-	}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
-	return renamed ?? (await client.getSession(orgId, sessionId)).session;
-}
-
 /**
  * Seeds a new Cloud session's Chat settings (CloudSessionChatSurface reads this
  * key) with what its task was started with, so its composer shows them. Only a

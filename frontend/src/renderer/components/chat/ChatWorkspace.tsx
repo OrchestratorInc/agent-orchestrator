@@ -1941,6 +1941,9 @@ function ChatWorkspaceContent({
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
+									// A Freestyle Chat session started from this device: the row under its
+									// brief says the sandbox is still coming up until its worker connects.
+									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
 							</ChatHostId.Provider>
@@ -2671,6 +2674,7 @@ export function Timeline({
 	arriving = false,
 	workerUpdates = false,
 	openingStartedAt,
+	openingStartupLabel,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2707,13 +2711,15 @@ export function Timeline({
 	rollbackDisabled?: boolean;
 	localEchos?: ConversationLocalEcho[];
 	/** A session that is starting, or failed to start, and its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string };
+	startup?: ComponentProps<typeof SessionStartup> & { openingTurnId?: string; label?: string };
 	/** An interface switch is bringing this conversation in; only then does the transcript fade in. */
 	arriving?: boolean;
 	/** Orchestrator chat: draw worker messages and reports as rows, and the orchestrator's handling under them. */
 	workerUpdates?: boolean;
 	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
 	openingStartedAt?: string;
+	/** Names the opening start in place of its timer while the sandbox comes up. */
+	openingStartupLabel?: string;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -3619,7 +3625,7 @@ export function Timeline({
 		const groups = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
-				? { ...group, live: true, liveStartedAt: openingStartedAt }
+				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
 				: group);
 		if (!workerUpdates) return groups;
 		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
@@ -3627,7 +3633,7 @@ export function Timeline({
 		return groups
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
@@ -3637,7 +3643,7 @@ export function Timeline({
 	// its session reports any steps, so the row keeps its label through the handoff
 	// and the steps fill in under it.
 	const openingSetup = !startup && openingPending && turn?.state !== "running"
-		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness) }
+		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness), label: openingStartupLabel }
 		: undefined;
 	const rowStartup = startup ?? openingSetup;
 	const startupGroupKey = rowStartup && (openingSetup || showStartup)
@@ -4481,14 +4487,14 @@ export function Timeline({
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
 					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
-						<LiveResponseStatus startupLabel={t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
+						<LiveResponseStatus startupLabel={rowStartup.label ?? t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
 							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
 					) : openingPending && !groups.some((group) => group.live) ? (
 						// Before the brief has a turn of its own (still being created).
-						<LiveResponseStatus startedAt={openingStartedAt} />
+						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
 						<div className="flex justify-end" data-chat-scroll-anchor="">
@@ -4722,7 +4728,7 @@ const TurnGroup = memo(function TurnGroup({
 	queued: boolean;
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
-	startup?: ComponentProps<typeof SessionStartup>;
+	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
@@ -4896,7 +4902,7 @@ const TurnGroup = memo(function TurnGroup({
 		startup || group.live ? (
 			<LiveResponseStatus
 				startedAt={group.liveStartedAt}
-				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
+				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
 				task={currentTask ? liveTaskLabel(currentTask) : undefined}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
@@ -5356,6 +5362,7 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		a.anchor === b.anchor &&
 		a.turnId === b.turnId &&
 		a.live === b.live &&
+		a.liveStartupLabel === b.liveStartupLabel &&
 		a.rollbackable === b.rollbackable &&
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
@@ -5416,6 +5423,8 @@ type TimelineGroup = {
 	/** The turn is still running, so its diff and plan can still change. */
 	live?: boolean;
 	liveStartedAt?: string;
+	/** Names the start in place of the timer, such as a Cloud sandbox still coming up. */
+	liveStartupLabel?: string;
 	blocked?: boolean;
 	/** A live provider failure replaces the generic Working label until the turn settles. */
 	liveProviderFailure?: ConversationActivity;

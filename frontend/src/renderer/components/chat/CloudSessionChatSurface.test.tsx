@@ -1737,3 +1737,50 @@ describe("cloudStartupChecklist", () => {
 		expect(cloudStartupChecklist(starting, [], undefined, false)).toBeUndefined();
 	});
 });
+
+describe("CloudSessionChatSurface opening brief", () => {
+	const cloudSession = { ...session, runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } } as WorkspaceSession;
+	const seeded = () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(["cloud-opening", "org-1", "session-1"], { clientMessageId: "req-1", text: "Fix the bug", createdAt: "2026-11-02T00:00:00Z" });
+		return queryClient;
+	};
+	const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+	beforeEach(() => {
+		localStorage.clear();
+		cloudMocks.chatProps.mockClear();
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+	});
+
+	it("shows the brief this device started the session with from the first frame, before the chat read lands", () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		render(<QueryClientProvider client={seeded()}><CloudSessionChatSurface session={cloudSession} /></QueryClientProvider>);
+		expect(props().localEchos).toEqual([{ clientMessageId: "req-1", text: "Fix the bug", createdAt: "2026-11-02T00:00:00Z", opening: true }]);
+		expect(props().openingStartedAt).toBe("2026-11-02T00:00:00Z");
+	});
+
+	it("drops the brief once the control plane's chat holds the first message, so it shows once", async () => {
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [
+			{ sequence: 1, type: "chat.user_message", sessionId: "session-1", createdAt: "2026-11-02T00:00:01Z", payload: { text: "Fix the bug" } },
+		], hasMore: false, nextAfter: 1 });
+		render(<QueryClientProvider client={seeded()}><CloudSessionChatSurface session={cloudSession} /></QueryClientProvider>);
+		await waitFor(() => expect(props().snapshot.items.filter((item: { kind: string; role?: string }) => item.kind === "message" && item.role === "user")).toHaveLength(1));
+		expect(props().localEchos).toBeUndefined();
+		// The start is still timed from the send until the first turn settles.
+		expect(props().openingStartedAt).toBe("2026-11-02T00:00:00Z");
+	});
+
+	it("forgets the brief once the first turn settled", async () => {
+		const queryClient = seeded();
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [
+			{ sequence: 1, type: "chat.user_message", sessionId: "session-1", createdAt: "2026-11-02T00:00:01Z", payload: { text: "Fix the bug" } },
+			{ sequence: 2, type: "chat.turn_started", sessionId: "session-1", createdAt: "2026-11-02T00:00:05Z", payload: { turnId: "turn-1" } },
+			{ sequence: 3, type: "chat.turn_completed", sessionId: "session-1", createdAt: "2026-11-02T00:00:09Z", payload: { turnId: "turn-1" } },
+		], hasMore: false, nextAfter: 3 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...cloudSession, runtimeConnected: true }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryData(["cloud-opening", "org-1", "session-1"])).toBeUndefined());
+	});
+});
+

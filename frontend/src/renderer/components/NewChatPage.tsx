@@ -39,7 +39,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const router = useRouter();
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
-	const task = useTaskLaunch({ projectId, hostId, prestartCloud: true });
+	const task = useTaskLaunch({ projectId, hostId });
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
@@ -394,7 +394,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				onSend={send}
 				busy={pending}
 				// The Cloud session started for this task is still coming up.
-				composerStarting={task.cloudSessionStarting && !pending}
 				// The session's own composer controls from the start: the same bar, held
 				// still once sent, with the agent at the top of the model menu.
 				draftSettings={frozen ? (frozenSettings ? <LaunchSettingsBar {...frozenSettings} /> : null) : (

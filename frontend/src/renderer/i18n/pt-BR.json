@@ -2958,6 +2958,7 @@
 	"chat.startup.label": "Configuração da sessão",
 	"chat.startup.steps": "Etapas de configuração",
 	"chat.startup.running": "Configurando a sessão",
+	"chat.startup.sandbox": "Iniciando o sandbox",
 	"chat.startup.failed": "Falha na configuração da sessão",
 	"chat.action.session.spawned": "Gerou um agente",
 	"chat.action.session.terminated": "Encerrou um agente",

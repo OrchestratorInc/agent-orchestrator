@@ -2421,6 +2421,26 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 	});
 
+	it("says the sandbox is starting under the brief a Freestyle session was started with, until its worker connects", () => {
+		const startedAt = new Date().toISOString();
+		const cloudSession = (observedState: string, runtimeConnected = false, sandboxProvider = "freestyle") => ({
+			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
+			cloud: { orgId: "org-1", sandboxProvider, desiredState: "running", observedState },
+		});
+		const echo = [{ clientMessageId: "req-1", text: "Fix the login bug", createdAt: startedAt, opening: true }];
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		expect(screen.getByText("Starting sandbox")).toBeInTheDocument();
+		// Connected: the row under the brief goes back to timing the reply.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("running", true)} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+		view.unmount();
+		// A Coder session starts behind its own startup screen: the chat names no sandbox start.
+		render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning", false, "coder")} localEchos={echo} openingStartedAt={startedAt} />);
+		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+	});
+
 	it.each([
 		["fetch", "Getting the latest code"],
 		["worktree", "Preparing your workspace"],

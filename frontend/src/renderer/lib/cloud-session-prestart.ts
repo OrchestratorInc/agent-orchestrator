@@ -1,68 +1,72 @@
-// Cloud sessions the new chat page started before its brief was sent, so the
-// sandbox is already coming up when the user is done typing. Until a send
-// claims one it is not a task yet: the session lists leave it out, and one the
-// page did not claim (it closed, or the app quit first) is deleted. A deleted
-// one is still listed by the control plane (as deleted), so it stays left out.
+// Earlier builds of the new chat page started a Cloud session as the page
+// opened, before its brief was sent, and recorded it here until a send claimed
+// it. Sessions are now created only when the person sends. This removes what
+// those builds left behind: a recorded session that never received a message
+// is deleted, and the record goes with it.
+
+import type { CloudCpClient } from "./cloud-cp/client";
+import { CloudCpError } from "./cloud-cp/errors";
 
 const STORAGE_KEY = "ao.cloudPreparedSessions.v1";
 
-/** A pre-started session no send claimed, by org; `discarded` once it was deleted. */
-export interface PreparedCloudSession {
+interface LegacyPreparedSession {
 	orgId: string;
 	sessionId: string;
+	/** Already deleted by the build that recorded it. */
 	discarded?: boolean;
 }
 
-// Deleted ones are kept only so the lists keep leaving them out; the oldest go first.
-const MAX_REMEMBERED = 200;
-
-let prepared: PreparedCloudSession[] | undefined;
-
-function read(): PreparedCloudSession[] {
-	if (prepared) return prepared;
+function readLegacy(): LegacyPreparedSession[] {
 	try {
 		const saved: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
-		prepared = Array.isArray(saved)
-			? saved.filter((entry): entry is PreparedCloudSession =>
+		return Array.isArray(saved)
+			? saved.filter((entry): entry is LegacyPreparedSession =>
 				Boolean(entry) && typeof entry.orgId === "string" && typeof entry.sessionId === "string")
 			: [];
 	} catch {
-		prepared = [];
+		return [];
 	}
-	return prepared;
 }
 
-function write(next: PreparedCloudSession[]) {
-	prepared = next;
+function forget(sessionId: string): void {
 	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+		const next = readLegacy().filter((entry) => entry.sessionId !== sessionId);
+		if (next.length === 0) localStorage.removeItem(STORAGE_KEY);
+		else localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
 	} catch {
-		// Kept for this run; an unclaimed session left by a crash then shows in the list.
+		// Nothing to forget without storage.
 	}
 }
 
-/** Records a session the page started ahead of its brief. */
-export function rememberPreparedCloudSession(entry: PreparedCloudSession): void {
-	write([...read().filter((candidate) => candidate.sessionId !== entry.sessionId), entry].slice(-MAX_REMEMBERED));
-}
+const cleaning = new Set<string>();
 
-/** Records that an unclaimed pre-started session was deleted: no list shows it, and nothing deletes it again. */
-export function discardedPreparedCloudSession(sessionId: string): void {
-	write(read().map((candidate) => candidate.sessionId === sessionId ? { ...candidate, discarded: true } : candidate));
-}
-
-/** Forgets a pre-started session a send claimed: it is a task now. */
-export function forgetPreparedCloudSession(sessionId: string): void {
-	if (!read().some((candidate) => candidate.sessionId === sessionId)) return;
-	write(read().filter((candidate) => candidate.sessionId !== sessionId));
-}
-
-/** Whether a listed session is a pre-started one no send has claimed, which no list shows. */
-export function isUnclaimedPreparedCloudSession(sessionId: string): boolean {
-	return read().some((candidate) => candidate.sessionId === sessionId);
-}
-
-/** The unclaimed pre-started sessions of an org, such as ones an earlier run left behind. */
-export function preparedCloudSessions(orgId: string): string[] {
-	return read().filter((candidate) => candidate.orgId === orgId && !candidate.discarded).map((candidate) => candidate.sessionId);
+/**
+ * Deletes the org's sessions an earlier build started ahead of a brief and no
+ * send claimed. A recorded session with a message of its own became a task (a
+ * send claimed it just before the app quit), so it is kept; only its record
+ * goes. A failure other than "already gone" keeps the record for the next run.
+ */
+export async function cleanUpLegacyPreparedCloudSessions(
+	client: Pick<CloudCpClient, "listChatEvents" | "deleteSession">,
+	orgId: string,
+): Promise<void> {
+	const recorded = readLegacy().filter((entry) => entry.orgId === orgId);
+	if (recorded.length === 0 || cleaning.has(orgId)) return;
+	cleaning.add(orgId);
+	try {
+		for (const entry of recorded) {
+			if (!entry.discarded) {
+				try {
+					const page = await client.listChatEvents(orgId, entry.sessionId, { after: 0, limit: 1, types: ["chat.user_message"] });
+					if (page.events.length === 0) await client.deleteSession(orgId, entry.sessionId);
+				} catch (error) {
+					const gone = error instanceof CloudCpError && (error.status === 404 || error.code === "SESSION_TERMINATED");
+					if (!gone) continue;
+				}
+			}
+			forget(entry.sessionId);
+		}
+	} finally {
+		cleaning.delete(orgId);
+	}
 }

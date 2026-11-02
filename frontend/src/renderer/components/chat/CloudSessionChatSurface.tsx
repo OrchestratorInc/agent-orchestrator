@@ -14,6 +14,7 @@ import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { subscribeSessionEventsBridged } from "../../lib/cloud-cp/stream-bridge";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -1378,6 +1379,24 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	// The brief this device started the session with: shown from the first frame,
+	// until the control plane's chat holds the session's first human message, and
+	// timed from when it was sent, so the start reads as one conversation.
+	const opening = useCloudOpening(cloud?.orgId, session.id);
+	const chatHasHumanMessage = useMemo(
+		() => (eventsQuery.data ?? []).some((event) => event.type === "chat.user_message"),
+		[eventsQuery.data],
+	);
+	const openingEchos = useMemo(
+		() => opening && !chatHasHumanMessage
+			? [{ clientMessageId: opening.clientMessageId, text: opening.text, createdAt: opening.createdAt, opening: true as const }]
+			: undefined,
+		[chatHasHumanMessage, opening],
+	);
+	const openingSettled = snapshot.turns.some((turn) => turn.state !== "running" && turn.state !== "queued");
+	useEffect(() => {
+		if (opening && chatHasHumanMessage && openingSettled && cloud?.orgId) forgetCloudOpening(queryClient, cloud.orgId, session.id);
+	}, [chatHasHumanMessage, cloud?.orgId, opening, openingSettled, queryClient, session.id]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -1539,6 +1558,8 @@ export function CloudSessionChatSurface({
 		<AdaptiveStreamPacingContext.Provider value>
 		<ChatWorkspace
 			snapshot={snapshot}
+			localEchos={openingEchos}
+			openingStartedAt={opening?.createdAt}
 			onSessionLinkOpen={openSessionLink}
 			agentSwitch={agentSwitch}
 			models={models}

@@ -3284,7 +3284,7 @@ describe("useTaskLaunch agent choices", () => {
 	});
 });
 
-describe("useTaskLaunch Cloud pre-start", () => {
+describe("useTaskLaunch Cloud start on send", () => {
 	beforeEach(() => {
 		h.cloudProjects.length = 0;
 		h.cloudCreateSession.mockReset();
@@ -3293,85 +3293,83 @@ describe("useTaskLaunch Cloud pre-start", () => {
 		h.cloudSendSessionMessage.mockReset();
 		h.cloudGetSession.mockReset();
 		h.cloudListUserAgentModels.mockReset();
-		window.localStorage.removeItem("ao.cloudPreparedSessions.v1");
 	});
 	let task!: ReturnType<typeof useTaskLaunch>;
-	function Launcher({ prestart = true }: { prestart?: boolean }) {
-		task = useTaskLaunch({ projectId: "cloud-1", prestartCloud: prestart });
-		return <p>{task.cloudSessionStarting ? "starting" : "idle"}{task.canSubmit ? " ready" : ""}</p>;
+	function Launcher() {
+		task = useTaskLaunch({ projectId: "cloud-1" });
+		return <p>{task.canSubmit ? "ready" : "loading"}</p>;
+	}
+	function freestyleFixture() {
+		const queryClient = cloudFixture("codex");
+		h.cloudOfferingLoaded = true;
+		h.cloudDefaultProvider = "freestyle";
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+		return queryClient;
 	}
 
-	it("starts a Freestyle project's session as the page opens, and the send makes it the task", async () => {
-		const queryClient = cloudFixture("codex");
-		h.cloudOfferingLoaded = true;
-		h.cloudDefaultProvider = "freestyle";
-		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
-		h.cloudCreateSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex" } });
-		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex", runtimeConnected: false } });
-		h.cloudRenameSession.mockResolvedValue({ session: { id: "pre-1", harness: "codex", displayName: "Fix the bug" } });
-		h.cloudSendSessionMessage.mockResolvedValue({ event: {} });
+	it("creates no Cloud session while the page is open and nothing was sent", async () => {
+		const queryClient = freestyleFixture();
 		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
-		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-1", harness: "codex", prompt: "", displayName: "New task" });
-		await screen.findByText(/starting/);
-		// Until a send claims it, the session lists leave it out.
-		const { isUnclaimedPreparedCloudSession } = await import("../lib/cloud-session-prestart");
-		expect(isUnclaimedPreparedCloudSession("pre-1")).toBe(true);
+		await screen.findByText("ready");
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(window.localStorage.getItem("ao.cloudPreparedSessions.v1")).toBeNull();
+	});
 
+	it("creates exactly one session per send, with the brief and the picked settings, and seeds its opening", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "s-1", harness: "codex" } });
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
 		let sessionId!: string;
-		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-1" }); });
-		expect(sessionId).toBe("pre-1");
+		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-1", approvalMode: "auto" }); });
+		expect(sessionId).toBe("s-1");
 		expect(h.cloudCreateSession).toHaveBeenCalledOnce();
-		expect(h.cloudRenameSession).toHaveBeenCalledWith("org-1", "pre-1", "Fix the bug");
-		expect(h.cloudSendSessionMessage).toHaveBeenCalledWith("org-1", "pre-1", expect.objectContaining({ text: "Fix the bug" }), { idempotencyKey: "req-1" });
-		expect(isUnclaimedPreparedCloudSession("pre-1")).toBe(false);
-		expect(h.cloudDeleteSession).not.toHaveBeenCalled();
-	});
-
-	it("deletes a pre-started session no send claimed when the page goes away", async () => {
-		const queryClient = cloudFixture("codex");
-		h.cloudOfferingLoaded = true;
-		h.cloudDefaultProvider = "freestyle";
-		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
-		h.cloudCreateSession.mockResolvedValue({ session: { id: "pre-2", harness: "codex" } });
-		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-2", harness: "codex", runtimeConnected: true } });
-		const view = render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
-		await screen.findByText(/idle ready/);
-		view.unmount();
-		await waitFor(() => expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "pre-2"));
-	});
-
-	it("starts a fresh session named after the brief when the control plane cannot rename the pre-started one", async () => {
-		const queryClient = cloudFixture("codex");
-		h.cloudOfferingLoaded = true;
-		h.cloudDefaultProvider = "freestyle";
-		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
-		h.cloudCreateSession.mockResolvedValueOnce({ session: { id: "pre-3", harness: "codex" } }).mockResolvedValue({ session: { id: "fresh-1", harness: "codex" } });
-		h.cloudGetSession.mockResolvedValue({ session: { id: "pre-3", harness: "codex", runtimeConnected: false } });
-		h.cloudRenameSession.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
-		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
-		await screen.findByText(/starting/);
-		let sessionId!: string;
-		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-3" }); });
-		expect(sessionId).toBe("fresh-1");
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-1", harness: "codex", prompt: "Fix the bug", displayName: "Fix the bug", approvalMode: "auto" });
+		expect(h.cloudCreateSession.mock.calls[0][2]).toEqual({ idempotencyKey: "req-1" });
+		// The brief goes with the create; nothing renames or messages a session afterwards.
+		expect(h.cloudRenameSession).not.toHaveBeenCalled();
 		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
-		expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ prompt: "Fix the bug", displayName: "Fix the bug" }), { idempotencyKey: "req-3" });
-		await waitFor(() => expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "pre-3"));
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-1"])).toMatchObject({ clientMessageId: "req-1", text: "Fix the bug" });
 	});
 
-	it("never pre-starts a Coder project's session", async () => {
-		const queryClient = cloudFixture("codex");
-		h.cloudProjects[0].config = { ...h.cloudProjects[0].config, sandboxProvider: "coder" };
-		h.cloudOfferingLoaded = true;
-		h.cloudDefaultProvider = "freestyle";
-		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "Sol", default: true }]));
+	it("retries a send whose answer was lost with the same request id, so it cannot start a second session", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudCreateSession
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValue({ session: { id: "s-2", harness: "codex" } });
 		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
-		await screen.findByText(/ready/);
+		await screen.findByText("ready");
+		await act(async () => { await task.launch("Fix the bug", { clientRequestId: "req-2" }).catch(() => undefined); });
+		let sessionId!: string;
+		await act(async () => { sessionId = await task.launch("Fix the bug", { clientRequestId: "req-2" }); });
+		expect(sessionId).toBe("s-2");
+		expect(h.cloudCreateSession).toHaveBeenCalledTimes(2);
+		expect(h.cloudCreateSession.mock.calls.map((call) => call[2])).toEqual([{ idempotencyKey: "req-2" }, { idempotencyKey: "req-2" }]);
+	});
+
+	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudCreateSession.mockRejectedValue(new CloudCpError("All your plan's running sessions are in use. Pause or archive one, or upgrade your plan.", { status: 409, code: "WORKER_SLOTS_FULL" }));
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		await act(async () => { await task.launch("Fix the bug", { clientRequestId: "req-3" }).catch(() => undefined); });
+		expect(h.cloudCreateSession).toHaveBeenCalledOnce();
+		expect(task.error).toContain("running sessions are in use");
+		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-3"])).toBeUndefined();
+	});
+
+	it("creates a Coder project's session only on send too, through the same create", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudProjects[0].config = { ...h.cloudProjects[0].config, sandboxProvider: "coder" };
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "c-1", harness: "codex" } });
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		expect(task.isCoderCloudProject).toBe(true);
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		await act(async () => { await task.launch("Fix the bug", { clientRequestId: "req-4" }); });
+		expect(h.cloudCreateSession).toHaveBeenCalledOnce();
 	});
 });
 

@@ -3026,6 +3026,7 @@
 	"chat.startup.label": "Подготовка сессии",
 	"chat.startup.steps": "Шаги подготовки",
 	"chat.startup.running": "Подготовка сессии",
+	"chat.startup.sandbox": "Запуск песочницы",
 	"chat.startup.failed": "Ошибка подготовки сессии",
 	"chat.action.session.spawned": "Агент запущен",
 	"chat.action.session.terminated": "Работа агента завершена",

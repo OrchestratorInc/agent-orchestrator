@@ -1,5 +1,5 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
-import { isUnclaimedPreparedCloudSession } from "../lib/cloud-session-prestart";
+import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
@@ -664,9 +664,9 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
-			// A session the new chat page started ahead of its brief is not a task
-			// until a send claims it.
-			return response.items.filter((session) => !isUnclaimedPreparedCloudSession(session.id));
+			// Sessions an earlier build started ahead of a brief and never used.
+			void cleanUpLegacyPreparedCloudSessions(client, orgId);
+			return response.items;
 		},
 	});
 	// The list carries only an artifact count. Each live session's files are
