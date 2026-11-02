@@ -11,3 +11,10 @@ func SupportedHarness(h domain.AgentHarness) bool {
 		return false
 	}
 }
+
+// ChatReportedHarness reports whether the harness's usage is recorded from
+// the per-turn accounting its chat connection reports, because it has no
+// native transcript pipeline. It never overlaps SupportedHarness.
+func ChatReportedHarness(h domain.AgentHarness) bool {
+	return !SupportedHarness(h) && domain.ChatReportedUsageHarness(h)
+}

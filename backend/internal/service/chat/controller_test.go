@@ -3147,6 +3147,10 @@ type harness struct {
 	reconciled   []domain.SessionID
 	reconcileErr error
 
+	// turnUsage lists the per-turn usage reports handed to the usage pipeline.
+	turnUsageMu sync.Mutex
+	turnUsage   []ports.ChatTurnUsageReport
+
 	clockMu sync.Mutex
 	clock   time.Time
 }
@@ -3250,6 +3254,11 @@ func newHarnessWithConversationAndStoreForHarness(
 		},
 		RecheckAccount: func(domain.SessionID, domain.AgentHarness) {
 			h.accountRechecks.Add(1)
+		},
+		OnTurnUsage: func(_ context.Context, report ports.ChatTurnUsageReport) {
+			h.turnUsageMu.Lock()
+			defer h.turnUsageMu.Unlock()
+			h.turnUsage = append(h.turnUsage, report)
 		},
 		NewID: func() string {
 			counterMu.Lock()
@@ -6567,6 +6576,45 @@ func TestUsageProjectionMergesIndependentProviderUpdates(t *testing.T) {
 	}
 	if usage.CachedTokens != 74216 {
 		t.Fatalf("cumulative totals were not merged: %+v", usage)
+	}
+}
+
+// A provider's per-turn usage reaches the usage pipeline once its event has
+// committed, attributed to the session, conversation and turn; a usage update
+// that names no turn is conversation state only.
+func TestUsageProjectionReportsTurnUsage(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventUsage, Usage: &ports.ChatUsage{
+			ContextUsed: 900, ContextWindow: 1000, ContextKnown: true,
+		}},
+		ports.ChatEvent{Kind: ports.ChatEventUsage, ProviderTurnID: "pt-1", Usage: &ports.ChatUsage{
+			InputTokens: 10, OutputTokens: 5, TotalTokens: 15, TotalsKnown: true,
+			Turn: &ports.ChatTurnUsage{ModelID: "model-a", UncachedInputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		}},
+	)
+
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Usage != nil && s.Conversation.Usage.TotalTokens == 15
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.turnUsageMu.Lock()
+		reports := append([]ports.ChatTurnUsageReport(nil), h.turnUsage...)
+		h.turnUsageMu.Unlock()
+		if len(reports) == 1 {
+			report := reports[0]
+			if report.SessionID != testSession || report.ConversationID != h.ctrl.ConversationID() ||
+				report.ProviderTurnID != "pt-1" || report.ModelID != "model-a" || report.Usage.UncachedInputTokens != 10 {
+				t.Fatalf("turn usage report = %+v", report)
+			}
+			return
+		}
+		if len(reports) > 1 || time.Now().After(deadline) {
+			t.Fatalf("turn usage reports = %+v, want exactly one", reports)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

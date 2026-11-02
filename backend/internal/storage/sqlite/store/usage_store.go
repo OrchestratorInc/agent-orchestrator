@@ -222,6 +222,10 @@ func (s *Store) ListWatchableUsageSources(ctx context.Context) ([]domain.UsageSo
 	}
 	out := make([]domain.UsageSourceRecord, 0, len(rows))
 	for _, row := range rows {
+		// A chat-turn source names a conversation, not a file to watch.
+		if row.Kind == domain.UsageSourceChatTurn {
+			continue
+		}
 		out = append(out, usageSourceFromGen(row))
 	}
 	return out, nil
@@ -642,6 +646,10 @@ func (s *Store) ListLegacyUsageSources(ctx context.Context) ([]domain.UsageSourc
 		if err != nil {
 			return nil, fmt.Errorf("get legacy usage source %d: %w", id, err)
 		}
+		// Repair rereads a transcript; a chat-turn source has none.
+		if row.Kind == domain.UsageSourceChatTurn {
+			continue
+		}
 		out = append(out, usageSourceContextFromGen(row))
 	}
 	return out, nil
@@ -662,6 +670,10 @@ func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain
 		}
 		if err != nil {
 			return nil, fmt.Errorf("get untimed usage source %d: %w", id, err)
+		}
+		// Repair rereads a transcript; a chat-turn source has none.
+		if row.Kind == domain.UsageSourceChatTurn {
+			continue
 		}
 		out = append(out, usageSourceContextFromGen(row))
 	}
@@ -1056,7 +1068,7 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 		expectedProvider = domain.UsageProviderOpenAI
 	}
 	validProvider := event.ProviderID == expectedProvider
-	if harness == domain.HarnessPi {
+	if harness == domain.HarnessPi || domain.ChatReportedUsageHarness(harness) {
 		validProvider = event.ProviderID == domain.UsageProviderOpenAI ||
 			event.ProviderID == domain.UsageProviderAnthropic
 	}

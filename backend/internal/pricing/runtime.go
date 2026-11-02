@@ -555,6 +555,7 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 			CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 			PiCacheWrite             *int64 `json:"cacheWrite"`
 			PiCacheWrite1H           *int64 `json:"cacheWrite1h"`
+			ChatCacheWrite           *int64 `json:"cachedWriteTokens"`
 			CacheCreation            *struct {
 				Ephemeral5mInputTokens *int64 `json:"ephemeral_5m_input_tokens"`
 				Ephemeral1hInputTokens *int64 `json:"ephemeral_1h_input_tokens"`
@@ -566,6 +567,9 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 		total := usage.CacheCreationInputTokens
 		if total == nil {
 			total = usage.PiCacheWrite
+		}
+		if total == nil {
+			total = usage.ChatCacheWrite
 		}
 		split := cacheWriteSplit{total: total}
 		if usage.CacheCreation != nil {
@@ -589,8 +593,9 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 			Last *struct {
 				CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
 			} `json:"last_token_usage"`
-			Derived      *int64 `json:"ao_derived_cache_write_input_tokens"`
-			PiCacheWrite *int64 `json:"cacheWrite"`
+			Derived        *int64 `json:"ao_derived_cache_write_input_tokens"`
+			PiCacheWrite   *int64 `json:"cacheWrite"`
+			ChatCacheWrite *int64 `json:"cachedWriteTokens"`
 		}
 		if err := json.Unmarshal([]byte(event.ProviderUsageJSON), &usage); err != nil {
 			return cacheWriteSplit{}
@@ -600,6 +605,10 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 		}
 		if usage.Derived != nil {
 			return cacheWriteSplit{total: usage.Derived}
+		}
+		if usage.PiCacheWrite == nil {
+			// A chat-reported turn: the cache writes its connection reported.
+			return cacheWriteSplit{total: usage.ChatCacheWrite}
 		}
 		return cacheWriteSplit{total: usage.PiCacheWrite}
 	default:

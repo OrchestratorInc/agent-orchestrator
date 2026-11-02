@@ -452,6 +452,7 @@ func (runtime *providerRuntime) observeModelResponse(turnID string, stored sessi
 		runtime.failTurn(turnID, fmt.Errorf("persist Unreal Agent usage: %w", err))
 		return
 	}
+	usage.Turn = unrealTurnUsage(response.ID, runtime.model, response.Usage)
 	_ = runtime.emit(wireEvent{Kind: ports.ChatEventUsage, ProviderTurnID: turnID, Usage: &usage})
 	if response.Failure != nil {
 		runtime.failTurn(turnID, errors.New(strings.TrimSpace(response.Failure.Code+": "+response.Failure.Message)))
@@ -595,6 +596,27 @@ func (runtime *providerRuntime) recordUsage(delta llm.Usage) (ports.ChatUsage, e
 		return ports.ChatUsage{}, err
 	}
 	return runtime.usage, nil
+}
+
+// unrealTurnUsage is one model response's own usage. The harness counts cache
+// reads and writes inside input and reasoning inside output; a turn makes one
+// response per tool round, so each is told apart by its response id.
+func unrealTurnUsage(responseID, model string, usage llm.Usage) *ports.ChatTurnUsage {
+	input := max(usage.InputTokens, 0)
+	cached := min(max(usage.CachedInputTokens, 0), input)
+	write := min(max(usage.CacheWriteInputTokens, 0), input-cached)
+	output := max(usage.OutputTokens, 0)
+	reasoning := min(max(usage.ReasoningTokens, 0), output)
+	return &ports.ChatTurnUsage{
+		ResponseID:          responseID,
+		ModelID:             model,
+		CachedInputTokens:   cached,
+		UncachedInputTokens: input - cached,
+		CacheWriteTokens:    &write,
+		OutputTokens:        output,
+		ReasoningTokens:     &reasoning,
+		TotalTokens:         input + output,
+	}
 }
 
 func shell() string {

@@ -638,6 +638,49 @@ type ChatUsage struct {
 	// provider did not report money (common for subscription-backed sessions).
 	Cost     *float64
 	Currency string
+	// Turn is what one billed exchange cost, when the provider reported it
+	// apart from the conversation figures above. Nil elsewhere. The usage
+	// pipeline records it for harnesses that have no native transcript.
+	Turn *ChatTurnUsage
+}
+
+// ChatTurnUsage is the token accounting for one billed exchange in a turn,
+// already normalized to AO's usage vocabulary: cached and uncached input are
+// disjoint, cache writes are part of uncached input, and reasoning is part of
+// output. The subsets are kept apart because pricing charges them differently.
+type ChatTurnUsage struct {
+	// ResponseID tells apart several billed responses in one turn. Empty means
+	// the provider reports a turn once.
+	ResponseID string
+	// ModelID is the model the turn ran on, when the adapter knows it.
+	ModelID             string
+	CachedInputTokens   int64
+	UncachedInputTokens int64
+	// CacheWriteTokens is the part of UncachedInputTokens written to the cache.
+	CacheWriteTokens *int64
+	OutputTokens     int64
+	// ReasoningTokens is the part of OutputTokens spent thinking.
+	ReasoningTokens *int64
+	// TotalTokens is the provider's own total, kept as reported.
+	TotalTokens int64
+	// Cost is what the provider says this exchange cost, in Currency. Nil when
+	// it reported no money for it.
+	Cost     *float64
+	Currency string
+}
+
+// ChatTurnUsageReport is one billed exchange a chat conversation reported,
+// with the AO session, conversation and turn it belongs to.
+type ChatTurnUsageReport struct {
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+	ConversationID string
+	ProviderTurnID string
+	// ModelID is the turn's model, or the conversation's selection when the
+	// adapter could not name it. Empty when neither is known.
+	ModelID string
+	Usage   ChatTurnUsage
+	At      time.Time
 }
 
 // ChatRateLimits is the account's quota position.

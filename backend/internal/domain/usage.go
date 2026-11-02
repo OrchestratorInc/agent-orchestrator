@@ -18,7 +18,30 @@ const (
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
 	UsageSourcePiSession      UsageSourceKind = "pi_session"
 	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
+	// UsageSourceChatTurn is not a file: it holds the per-turn usage a chat
+	// harness reported over AO's own chat connection. Its events are what the
+	// provider told AO, not a native transcript AO can reread, so no watcher,
+	// ingestor or transcript repair ever opens it.
+	UsageSourceChatTurn UsageSourceKind = "chat_turn"
 )
+
+// ChatTurnArtifactPrefix prefixes a chat-turn source's artifact path. The path
+// names the conversation, never a file.
+const ChatTurnArtifactPrefix = "ao-chat:"
+
+// ChatReportedUsageHarness reports whether a harness's usage is recorded from
+// the per-turn accounting its chat connection reports. These are exactly the
+// chat harnesses with no native transcript parser; a harness that has one is
+// never listed here, so a turn is never counted from both.
+func ChatReportedUsageHarness(h AgentHarness) bool {
+	switch h {
+	case HarnessOpenCode, HarnessOpenCodeV2, HarnessDroid, HarnessKimchi, HarnessCursor,
+		HarnessOMP, HarnessDeepSeek, HarnessCommandCode, HarnessCopilot, HarnessAgy, HarnessUnreal:
+		return true
+	default:
+		return false
+	}
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string
