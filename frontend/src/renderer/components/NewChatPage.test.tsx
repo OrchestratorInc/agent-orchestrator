@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
 	fallbackAction: undefined as string | undefined,
+	isCloudProject: false,
 	error: undefined as string | undefined,
 	status: undefined as string | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
@@ -38,7 +39,7 @@ vi.mock("./TaskComposer", () => ({
 		status: h.status,
 		errorAction: h.errorAction,
 		submitMode: undefined,
-		isCloudProject: false,
+		isCloudProject: h.isCloudProject,
 		canSubmit: true,
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
@@ -76,6 +77,7 @@ beforeEach(() => {
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
+	h.isCloudProject = false;
 	h.error = undefined;
 	h.status = undefined;
 	h.errorAction = undefined;
@@ -129,6 +131,24 @@ describe("NewChatPage", () => {
 			params: { projectId: "proj-1", sessionId: "sess-1" },
 			replace: true,
 		}));
+	});
+
+	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {
+		h.isCloudProject = true;
+		h.launch.mockResolvedValue("cloud-sess-1");
+		const queryClient = renderPage();
+		const queryClientEchos = () => queryClient.getQueryData(["conversation-local-echos"]);
+		// No hand-over to the old dialog: the page stays and offers the same composer.
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.skills).toEqual([]);
+		// The settings bar (inside the draft's fragment) offers the approval mode.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({ props: expect.objectContaining({ showApprovalMode: true }) }) } }));
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Fix the build", expect.objectContaining({ clientRequestId: "cid-1" }));
+		// A cloud session opens on its own surface, so no local echo is seeded for it.
+		expect(queryClientEchos()).toBeUndefined();
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
 	});
 
 	it("takes attachments before a workspace exists and uploads them with the task", async () => {
@@ -228,6 +248,50 @@ describe("NewChatPage", () => {
 		expect(outcome).toBeInstanceOf(TypeError);
 		expect(outcome).not.toHaveProperty("code");
 		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	// A Cloud create's error carries the control plane's HTTP status.
+	const createError = (message: string, status: number, code?: string) =>
+		Object.assign(new Error(message), { name: "TaskCreateError", status, ...(code ? { code } : {}) });
+
+	it.each([
+		{ status: 500, code: "internal_error" },
+		{ status: 502, code: undefined },
+		{ status: 503, code: "unavailable" },
+		{ status: 504, code: undefined },
+		{ status: 429, code: "rate_limited" },
+		{ status: 429, code: undefined },
+	])("leaves a $status ($code) answer to a create uncertain, so the composer retries it with the same request id", async ({ status, code }) => {
+		h.isCloudProject = true;
+		// The composer holds the send while it is in flight, as it does in the app.
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] });
+		h.launch.mockRejectedValue(createError("The control plane could not finish the request.", status, code));
+		renderPage();
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		// The error itself, not a final refusal: the composer keeps the send and offers "Retry message safely".
+		expect(outcome).toMatchObject({ status });
+		expect(outcome).not.toMatchObject({ code: "TASK_CREATE_FAILED" });
+		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1" });
+		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ status: 409, code: "WORKER_SLOTS_FULL", message: "All your plan's running sessions are in use." },
+		{ status: 402, code: "PLAN_REQUIRED", message: "Cloud sessions need a plan." },
+		{ status: 429, code: "WEEKLY_LIMIT_REACHED", message: "You have used this week's Cloud hours." },
+		{ status: 422, code: "validation_error", message: "The brief is too long." },
+	])("keeps a $status $code refusal final, with its own message", async ({ status, code, message }) => {
+		h.isCloudProject = true;
+		h.launch.mockRejectedValue(createError(message, status, code));
+		renderPage();
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ message, code: "TASK_CREATE_FAILED" });
 	});
 
 	it("becomes a fresh new chat when it moved to another project during the hand-off", async () => {
