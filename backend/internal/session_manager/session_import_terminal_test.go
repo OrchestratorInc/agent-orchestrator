@@ -20,7 +20,7 @@ type terminalImportAgent struct {
 
 func (a *terminalImportAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	a.restores = append(a.restores, cfg)
-	return []string{"goose", "session", "--resume", "--session-id", cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]}, a.native, nil
+	return []string{"gemini", "--resume", cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]}, a.native, nil
 }
 
 func (a *terminalImportAgent) RelocateImportedSession(_ context.Context, r ports.ImportedSessionRelocation) error {
@@ -40,7 +40,7 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 				t.Fatal(err)
 			}
 			rec := st.sessions["mer-1"]
-			rec.Mode, rec.Harness, rec.Activity.State = domain.SessionModeTUI, domain.HarnessGoose, domain.ActivityIdle
+			rec.Mode, rec.Harness, rec.Activity.State = domain.SessionModeTUI, domain.HarnessGemini, domain.ActivityIdle
 			rec.Metadata = domain.SessionMetadata{
 				WorkspacePath: workspace, Branch: "ao/import", AgentSessionID: "native-terminal", ProviderConversationID: "native-terminal",
 				ImportSource: &domain.SessionImportSource{NativeID: "native-terminal", ConfigDir: t.TempDir(), Transferred: true, Prepared: true, WorkingSubdir: "child"},

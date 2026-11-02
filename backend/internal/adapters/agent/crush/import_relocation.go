@@ -20,8 +20,12 @@ import (
 // RelocateImportedSession copies the selected native conversation to the
 // worktree's nearest .crush store. Crush's --session lookup is database-local;
 // creating this directory makes its existing cwd/data-directory lookup find
-// the copy. All later opens use the same ResumeCwd and must retain AO's turns.
+// the copy. An existing destination is always refused; later opens use the
+// normal restore path and the pinned ResumeCwd without calling this again.
 func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	id, err := uuid.Parse(r.NativeSessionID)
 	if err != nil || !filepath.IsAbs(r.LaunchCWD) || filepath.Base(r.TranscriptPath) != id.String() {
 		return errors.New("invalid crush import relocation")
@@ -43,14 +47,8 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 			return errors.New("crush import destination is the source database")
 		}
 	}
-	if info, err := os.Lstat(target); err == nil {
-		if !info.Mode().IsRegular() {
-			return errors.New("crush destination is not a regular database")
-		}
-		if err := crushCopyHasSession(ctx, target, id.String()); err != nil {
-			return err
-		}
-		return pinCrushImportStore(r.LaunchCWD, dir)
+	if _, err := os.Lstat(target); err == nil {
+		return errors.New("crush import destination database already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -71,11 +69,8 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
-	if _, err := os.Stat(target); err == nil {
-		if err := crushCopyHasSession(ctx, target, id.String()); err != nil {
-			return err
-		}
-		return pinCrushImportStore(r.LaunchCWD, dir)
+	if _, err := os.Lstat(target); err == nil {
+		return errors.New("crush import destination database appeared during import")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -118,22 +113,6 @@ func pinCrushImportStore(workspace, dir string) error {
 		return err
 	}
 	return hookutil.AtomicWriteFile(filepath.Join(workspace, ".crush.json"), data, 0o600)
-}
-
-func crushCopyHasSession(ctx context.Context, path, id string) error {
-	db, err := crushNativeDB(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = db.Close() }()
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = ?`, id).Scan(&count); err != nil {
-		return err
-	}
-	if count != 1 {
-		return errors.New("existing crush workspace database does not contain the imported conversation")
-	}
-	return nil
 }
 
 func copyCrushConversation(ctx context.Context, source, target, id string) error {

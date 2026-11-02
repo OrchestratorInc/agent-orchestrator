@@ -23,7 +23,6 @@ type harnessImporter struct {
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCrush:  {root: crushRoot, discover: discoverCrush, read: readCrushTranscript},
 	domain.HarnessGemini: {root: geminiRoot, discover: discoverGemini, read: readGeminiTranscript},
-	domain.HarnessGoose:  {root: gooseRoot, discover: discoverGoose, read: readGooseTranscript},
 }
 
 // importTitle keeps list titles compact without cutting UTF-8 characters.

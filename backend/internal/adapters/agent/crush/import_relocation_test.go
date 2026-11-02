@@ -10,7 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestCrushImportRelocationKeepsSourceAndLaterTurns(t *testing.T) {
+func TestCrushImportRelocationKeepsSourceAndRefusesExistingCopy(t *testing.T) {
 	source := filepath.Join(t.TempDir(), "crush.db")
 	db, err := sql.Open("sqlite", source)
 	if err != nil {
@@ -53,8 +53,8 @@ func TestCrushImportRelocationKeepsSourceAndLaterTurns(t *testing.T) {
 	if _, err := copyDB.Exec(`INSERT INTO messages VALUES ('ao-turn', '12345678-1234-1234-1234-123456789012', 'assistant', '[]', 101)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
-		t.Fatal(err)
+	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
+		t.Fatal("existing destination must be refused")
 	}
 	if err := copyDB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("later turns = %d, %v", count, err)
