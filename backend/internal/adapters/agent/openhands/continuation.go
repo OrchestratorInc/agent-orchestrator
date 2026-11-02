@@ -29,10 +29,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return os.Getenv(key)
 	}
-	if dir := lookup("OPENHANDS_CONVERSATIONS_DIR"); len(dir) > 0 {
+	if dir := lookup("OPENHANDS_CONVERSATIONS_DIR"); dir != "" {
 		return dir, nil
 	}
-	if dir := lookup("OPENHANDS_PERSISTENCE_DIR"); len(dir) > 0 {
+	if dir := lookup("OPENHANDS_PERSISTENCE_DIR"); dir != "" {
 		return filepath.Join(dir, "conversations"), nil
 	}
 	home, err := os.UserHomeDir()
@@ -44,7 +44,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 
 // ProbeNativeSession verifies the persisted state belongs to the requested ID.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
-	if len(ref.ConfigDir) == 0 {
+	if ref.ConfigDir == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	_, ok, err := p.LocateTranscript(ctx, ref)
@@ -63,7 +63,7 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		return "", false, err
 	}
 	id, err := uuid.Parse(ref.NativeSessionID)
-	if err != nil || len(ref.ConfigDir) == 0 {
+	if err != nil || ref.ConfigDir == "" {
 		return "", false, nil
 	}
 	root, err := os.OpenRoot(ref.ConfigDir)
@@ -96,4 +96,3 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	}
 	return filepath.Join(ref.ConfigDir, path), true, nil
 }
-

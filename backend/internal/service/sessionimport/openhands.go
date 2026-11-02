@@ -20,10 +20,10 @@ import (
 
 // OpenHands stores local conversations by UUID hex, independently of cwd.
 func openHandsRoot(home string) string {
-	if root := os.Getenv("OPENHANDS_CONVERSATIONS_DIR"); len(root) > 0 {
+	if root := os.Getenv("OPENHANDS_CONVERSATIONS_DIR"); root != "" {
 		return root
 	}
-	if root := os.Getenv("OPENHANDS_PERSISTENCE_DIR"); len(root) > 0 {
+	if root := os.Getenv("OPENHANDS_PERSISTENCE_DIR"); root != "" {
 		return filepath.Join(root, "conversations")
 	}
 	return filepath.Join(home, ".openhands", "conversations")
@@ -183,10 +183,10 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 					Content contentText `json:"content"`
 				} `json:"llm_message"`
 			}
-			if json.Unmarshal(line, &event) != nil || len(event.ID) == 0 {
-				return nil
+			if json.Unmarshal(line, &event) != nil || event.ID == "" {
+				return nil //nolint:nilerr // Skip torn or identity-less events without discarding readable history.
 			}
-			if len(event.Parent) == 0 {
+			if event.Parent == "" {
 				event.Parent = previous // legacy linear logs have no parent_id
 			}
 			at, _ := time.Parse(time.RFC3339Nano, event.At)
@@ -203,10 +203,10 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			if strings.Contains(text, omittedText) {
 				t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
 			}
-			if len(strings.TrimSpace(text)) == 0 {
+			if strings.TrimSpace(text) == "" {
 				text = ""
 			}
-			if len(first) == 0 && len(text) > 0 {
+			if first == "" && text != "" {
 				first = event.ID
 			}
 			if old, ok := nodes[event.ID]; ok {
@@ -235,18 +235,18 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 		}
 	}
 	leaf := state.Leaf
-	if len(leaf) == 0 {
+	if leaf == "" {
 		leaf = previous
 	}
 	var items []tagged
 	seen := map[string]bool{}
-	for len(leaf) > 0 && !seen[leaf] {
+	for leaf != "" && !seen[leaf] {
 		n, ok := nodes[leaf]
 		if !ok {
 			break
 		}
 		seen[leaf] = true
-		if len(n.item.Text) > 0 {
+		if n.item.Text != "" {
 			items = append(items, n.item)
 		}
 		leaf = n.parent
@@ -260,7 +260,7 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 		t.messages = append(t.messages, item.Message)
 		if item.Role == domain.MessageRoleUser {
 			hasUser = true
-			if len(t.title) == 0 {
+			if t.title == "" {
 				t.title = item.Text
 			}
 		}
