@@ -293,6 +293,14 @@ type TerminalInputFencer interface {
 	HoldInput(terminalID string) (lastInputAt time.Time, release func())
 }
 
+// TerminalInputForgetter is an optional TerminalInputGate capability: it drops
+// one terminal's input bookkeeping. Session Manager calls it only after a
+// runtime Destroy succeeded, since the timestamp must outlive viewers while the
+// runtime (and any draft in it) may still be live (#5691).
+type TerminalInputForgetter interface {
+	ForgetTerminalInput(terminalID string)
+}
+
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
 // its live lifecycle. It is late-bound like ShellTerminalCloser because review
 // services are assembled after the session manager in daemon wiring.
@@ -702,6 +710,23 @@ func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (lastInputAt time
 		return time.Time{}, nil
 	}
 	return fencer.HoldInput(terminalID)
+}
+
+// destroySessionRuntime destroys a session's runtime and, only once Destroy
+// succeeded, tells the terminal mux to drop that terminal's input timestamp
+// (keyed by the runtime handle id). A failed Destroy may leave the runtime and
+// its draft live, so the timestamp stays.
+func (m *Manager) destroySessionRuntime(ctx context.Context, handle ports.RuntimeHandle) error {
+	if err := m.runtime.Destroy(ctx, handle); err != nil {
+		return err
+	}
+	m.terminalInputGateMu.Lock()
+	forgetter, ok := m.terminalInputGate.(TerminalInputForgetter)
+	m.terminalInputGateMu.Unlock()
+	if ok {
+		forgetter.ForgetTerminalInput(handle.ID)
+	}
+	return nil
 }
 
 // beginShellTerminalTeardown starts the shell-terminal gate for id ahead of
@@ -2705,7 +2730,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		// IsAlive dials the host's listener, which Destroy's graceful shutdown
 		// closes before the PID exits, so a hung host reads as gone. Terminating
 		// then would leave a possibly-live agent with no row pointing at it.
-		if err := m.runtime.Destroy(ctx, handle); err != nil {
+		if err := m.destroySessionRuntime(ctx, handle); err != nil {
 			return KillResult{}, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
 	}
@@ -2845,7 +2870,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 			return fmt.Errorf("retire replacement %s: native session: %w", id, err)
 		}
 		if handle.ID != "" {
-			if err := m.runtime.Destroy(ctx, handle); err != nil {
+			if err := m.destroySessionRuntime(ctx, handle); err != nil {
 				return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
 			}
 		}
@@ -2891,7 +2916,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID != "" {
-		if err := m.runtime.Destroy(ctx, handle); err != nil {
+		if err := m.destroySessionRuntime(ctx, handle); err != nil {
 			return fmt.Errorf("retire replacement %s: runtime: %w", id, err)
 		}
 	}
@@ -2969,7 +2994,7 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID != "" {
-		if err := m.runtime.Destroy(ctx, handle); err != nil {
+		if err := m.destroySessionRuntime(ctx, handle); err != nil {
 			return fmt.Errorf("retire replacement %s: runtime: %w", rec.ID, err)
 		}
 	}
@@ -3970,7 +3995,7 @@ func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionReco
 	// 5. Runtime teardown (best-effort; same pattern as Kill).
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID != "" {
-		if err := m.runtime.Destroy(ctx, handle); err != nil {
+		if err := m.destroySessionRuntime(ctx, handle); err != nil {
 			m.logger.Warn("save-teardown-all: runtime destroy failed", "sessionID", rec.ID, "error", err)
 		}
 	}
@@ -4176,7 +4201,7 @@ func (m *Manager) reconcileReap(ctx context.Context, rec domain.SessionRecord) e
 	if !alive {
 		return nil
 	}
-	if err := m.runtime.Destroy(ctx, handle); err != nil {
+	if err := m.destroySessionRuntime(ctx, handle); err != nil {
 		return fmt.Errorf("reconcile reap %s: destroy: %w", rec.ID, err)
 	}
 	return nil
@@ -4790,7 +4815,7 @@ func (m *Manager) saveAndTeardownWorkspaceProject(ctx context.Context, rec domai
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID != "" {
-		if err := m.runtime.Destroy(ctx, handle); err != nil {
+		if err := m.destroySessionRuntime(ctx, handle); err != nil {
 			m.logger.Warn("save-teardown-all: runtime destroy failed", "sessionID", rec.ID, "error", err)
 		}
 	}
@@ -5508,7 +5533,7 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		// runtime adapter that spawns a successor during teardown) can itself call
 		// Spawn or Restore without deadlocking on the gate.
 		if h := runtimeHandle(rec.Metadata); h.ID != "" {
-			_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
+			_ = m.destroySessionRuntime(ctx, h) // best effort; usually already gone
 		}
 		reclaim, reason := m.cleanupWorkspaceUnderGate(ctx, rec, ws)
 		if reason != "" {
