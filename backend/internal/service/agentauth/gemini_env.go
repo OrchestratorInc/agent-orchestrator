@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
@@ -112,7 +113,9 @@ func geminiAPIKeySettings(path string) ([]byte, error) {
 		if readErr != nil || len(data) > 64*1024 {
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Gemini's settings file could not be read.")
 		}
-		if len(data) > 0 && (json.Unmarshal(data, &root) != nil || root == nil) {
+		// Gemini CLI accepts comments in settings.json, as its probe does. The
+		// rewritten file keeps every setting; the comments are not kept.
+		if len(data) > 0 && (json.Unmarshal(gemini.StripJSONComments(data), &root) != nil || root == nil) {
 			return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Gemini's settings file is invalid; repair it before saving a key here.", nil)
 		}
 	} else if !os.IsNotExist(err) {

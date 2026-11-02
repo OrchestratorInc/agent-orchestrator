@@ -237,6 +237,10 @@ func geminiLocalAuthStatus(ctx context.Context, home string) (ports.AgentAuthSta
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// StripJSONComments applies the comment handling Gemini CLI uses for
+// settings.json, for code outside this package that reads or edits it.
+func StripJSONComments(data []byte) []byte { return stripGeminiJSONComments(data) }
+
 // Gemini CLI accepts comments in settings.json. Replace them with whitespace
 // so quoted strings and the remaining JSON retain their original boundaries.
 func stripGeminiJSONComments(data []byte) []byte {

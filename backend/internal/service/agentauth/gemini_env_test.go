@@ -153,6 +153,41 @@ func TestGeminiKeySavePreservesSettingsAndSwitchesAuthMode(t *testing.T) {
 	}
 }
 
+func TestGeminiKeySaveAcceptsCommentedSettings(t *testing.T) {
+	home := stubGeminiHome(t)
+	dir := filepath.Join(home, ".gemini")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "settings.json")
+	commented := `{
+  // Gemini CLI accepts comments here.
+  "ui": {"theme": "custom"}, /* block comment */
+  "docs": "https://example.com/not//a-comment",
+  "security": {"auth": {"selectedType": "oauth-personal"}}
+}`
+	if err := os.WriteFile(path, []byte(commented), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(foundExecutable("gemini"), nil)
+	t.Cleanup(svc.Close)
+	if _, err := svc.StartLogin(t.Context(), "gemini", "gemini_api_key", "sk-new"); err != nil {
+		t.Fatalf("commented settings were rejected: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	auth := settings["security"].(map[string]any)["auth"].(map[string]any)
+	if auth["selectedType"] != "gemini-api-key" || settings["ui"].(map[string]any)["theme"] != "custom" || settings["docs"] != "https://example.com/not//a-comment" {
+		t.Fatalf("settings not kept: %s", data)
+	}
+}
+
 func TestGeminiKeySaveRejectsMalformedSettingsBeforeWritingKey(t *testing.T) {
 	home := stubGeminiHome(t)
 	dir := filepath.Join(home, ".gemini")
