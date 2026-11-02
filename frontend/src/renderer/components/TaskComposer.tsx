@@ -24,7 +24,7 @@ import {
 	useAgentReadinessQuery,
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
-import { useChatPermissionModes } from "../hooks/useChatPermissionModes";
+import { useChatPermissionModesQuery } from "../hooks/useChatPermissionModes";
 import { useSettings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -767,7 +767,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		settings?.defaultSessionMode === "chat" &&
 		!(chatHarnesses ?? []).includes(selectedAgent);
 	const usesChatPermissions = !isCloudProject && !requiresTuiFallback && settings?.defaultSessionMode === "chat";
-	const chatPermissionModes = useChatPermissionModes(hostId, usesChatPermissions ? selectedAgent : undefined)?.get(selectedAgent);
+	const permissionDiscovery = useChatPermissionModesQuery(hostId, usesChatPermissions ? selectedAgent : undefined);
+	const chatPermissionModes = permissionDiscovery.data?.get(selectedAgent);
 	const projectPermissions = projectConfig?.worker?.agentConfig?.permissions ?? projectConfig?.agentConfig?.permissions;
 	const wantedApproval = approvalMode ?? (isCloudProject ? "bypass-permissions" : APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto");
 	// An inherited or stale choice cannot invent an ACP mode. Use the agent's
@@ -838,11 +839,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 					: cloudCatalogGap === "failed"
 						? t("newTask.cloudModelsFailed", { agent: selectedAgentLabel })
 						: undefined;
+	// An omitted agent or failed permission probe must still reach daemon admission
+	// and its default-Chat-to-TUI fallback once initial discovery settles.
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
-		(!usesChatPermissions || Boolean(chatPermissionModes?.length)) &&
+		(!usesChatPermissions || !permissionDiscovery.isPending) &&
 		(!isStandalone || selectedAgent !== "") &&
 		selectedAgent !== "" &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&

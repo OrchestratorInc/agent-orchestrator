@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
+	realPermissionDiscovery: false,
 	delete: vi.fn(),
 	get: vi.fn(),
 	post: vi.fn(),
@@ -33,9 +34,15 @@ const h = vi.hoisted(() => ({
 	cloudUserId: "user-1",
 }));
 
-vi.mock("../hooks/useChatPermissionModes", () => ({
-	useChatPermissionModes: (_host: string | undefined, harness: string | undefined) => harness ? new Map([[harness, harness === "kimi" ? ["default"] : ["default", "accept-edits", "auto", "bypass-permissions"]]]) : undefined,
-}));
+vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useChatPermissionModes")>();
+	return {
+		...actual,
+		useChatPermissionModesQuery: (host: string | undefined, harness: string | undefined) => h.realPermissionDiscovery
+			? actual.useChatPermissionModesQuery(host, harness)
+			: { data: harness ? new Map([[harness, harness === "kimi" ? ["default"] : ["default", "accept-edits", "auto", "bypass-permissions"]]]) : undefined, isPending: false },
+	};
+});
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>();
@@ -88,6 +95,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("../lib/host-clients", () => ({
+	clientForSessionHost: (host?: string) => ({ GET: host ? h.remoteGet : h.get }),
 	clientForHost: () => ({ GET: h.remoteGet, POST: h.remotePost, DELETE: h.remoteDelete }),
 	connectedHosts: () => h.connectedHostIds,
 	subscribeConnectedHosts: () => () => undefined,
@@ -181,6 +189,7 @@ async function waitForTaskReady() {
 }
 
 beforeEach(() => {
+	h.realPermissionDiscovery = false;
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.agentCatalog = { agents: AGENT_OPTIONS.map((id) => agentReadiness(id, agentLabel(id))) };
 	// An older control plane, unless a test says otherwise.
@@ -3627,5 +3636,40 @@ describe("Chat launch permission capability boundary", () => {
 		act(() => task.chooseTurnSettings({ ...task.turnSettings, approvalMode: "auto" }));
 		await act(async () => { await task.launch("back on auto"); });
 		expect(h.post).toHaveBeenCalledWith(path, expect.objectContaining({ body: expect.objectContaining({ approvalMode: "auto" }) }));
+	});
+});
+
+describe("Chat launch permission discovery recovery", () => {
+	it.each(["omitted agent", "failed request"])("keeps the terminal retry reachable after %s", async (discovery) => {
+		h.realPermissionDiscovery = true;
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		let answerPermissions!: (value: unknown) => void;
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } };
+			if (path === "/api/v1/agents/chat/permission-modes") return new Promise((resolve) => { answerPermissions = resolve; });
+			if (path.includes("/models")) return { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } };
+			return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+		});
+		const delegate = vi.fn(async (options: { body: { mode?: string } }) => options.body.mode === "tui"
+			? { data: { workerId: "terminal-recovery" } }
+			: { error: { code: "CHAT_DRIVER_INCOMPATIBLE", message: "Codex Chat needs a newer agent version." } });
+		h.post.mockImplementation(async (path: string, options) => path === "/api/v1/orchestrators/delegate" ? delegate(options) : { data: {} });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+		await waitFor(() => expect(answerPermissions).toEqual(expect.any(Function)));
+		fireEvent.change(task(), { target: { value: "Recover this launch" } });
+		expect(startTask()).toBeDisabled();
+		expect(delegate).not.toHaveBeenCalled();
+		await act(async () => { answerPermissions(discovery === "omitted agent"
+			? { data: { agents: [] } }
+			: { error: { message: "Permission discovery temporarily unavailable" } }); });
+		await waitFor(() => expect(startTask()).toBeEnabled());
+		fireEvent.click(startTask());
+		await screen.findByText("Codex Chat needs a newer agent version.");
+		fireEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("terminal-recovery"));
+		expect(delegate).toHaveBeenCalledTimes(2);
+		expect(delegate.mock.calls[0][0].body.mode).toBeUndefined();
+		expect(delegate.mock.calls[1][0].body.mode).toBe("tui");
 	});
 });
