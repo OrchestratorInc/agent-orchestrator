@@ -3189,7 +3189,6 @@
 	"automations.model": "Modelo",
 	"automations.projectDefault": "Project default",
 	"automations.empty.title": "No automations yet",
-	"automations.empty.description": "Create a daily, weekly, or custom recurring session.",
 	"automations.delete.title": "Delete automation?",
 	"automations.delete.description": "This permanently deletes {{name}} and its run history. Linked sessions remain available.",
 	"automations.delete.confirm": "Delete automation",
@@ -3838,5 +3837,17 @@
 	"newTask.openHarnessSettings": "Abrir configuración de agentes",
 	"newTask.chooseNewBranch": "Elegir rama nueva",
 	"newTask.newBranchPrompt": "Nombre de la rama nueva",
-	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea."
+	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea.",
+	"automations.template.daily_pr_review_v1": "Bandeja de revisión de PR",
+	"automations.template.daily_issue_triage_v1": "Clasificación diaria de incidencias",
+	"automations.template.weekly_release_notes_v1": "Notas de versión semanales",
+	"automations.validation.promptBytes": "El prompt no debe superar los 4.096 bytes UTF-8.",
+	"automations.customFrequency.weekdays": "Días laborables (lun–vie)",
+	"automations.templates.title": "Empieza con una plantilla",
+	"automations.templates.description": "Elige un punto de partida, personalízalo y deja que tu agente se encargue.",
+	"automations.search": "Buscar automatizaciones…",
+	"automations.template.daily_pr_review_v1.description": "Encuentra las solicitudes de cambios que necesitan tu atención, con prioridades y próximos pasos.",
+	"automations.template.daily_issue_triage_v1.description": "Convierte las incidencias nuevas y actualizadas en una lista priorizada con acciones claras.",
+	"automations.template.weekly_release_notes_v1.description": "Redacta notas de versión a partir de solicitudes fusionadas, agrupadas en funciones, correcciones y otros cambios.",
+	"automations.templates.setup": "Requiere acceso de lectura a GitHub para el proyecto seleccionado."
 }

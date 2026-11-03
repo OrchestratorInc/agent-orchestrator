@@ -192,6 +192,8 @@ type Automation struct {
 	Model       string
 	Mode        string
 	Effort      string
+	TemplateID  string
+	UseCase     string
 }
 
 type AutomationRun struct {

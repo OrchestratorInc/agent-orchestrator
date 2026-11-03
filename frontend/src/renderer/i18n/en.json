@@ -3115,7 +3115,6 @@
 	"automations.model": "Model",
 	"automations.projectDefault": "Project default",
 	"automations.empty.title": "No automations yet",
-	"automations.empty.description": "Create a daily, weekly, or custom recurring session.",
 	"automations.delete.title": "Delete automation?",
 	"automations.delete.description": "This permanently deletes {{name}} and its run history. Linked sessions remain available.",
 	"automations.delete.confirm": "Delete automation",
@@ -3750,5 +3749,17 @@
 	"newTask.openHarnessSettings": "Open Agent Harnesses",
 	"newTask.chooseNewBranch": "Choose new branch",
 	"newTask.newBranchPrompt": "New branch name",
-	"newTask.newBranchReady": "Branch {{branch}} selected for your next task."
+	"newTask.newBranchReady": "Branch {{branch}} selected for your next task.",
+	"automations.template.daily_pr_review_v1": "PR review inbox",
+	"automations.template.daily_issue_triage_v1": "Daily issue triage",
+	"automations.template.weekly_release_notes_v1": "Weekly release notes",
+	"automations.validation.promptBytes": "Keep the prompt within 4,096 UTF-8 bytes.",
+	"automations.customFrequency.weekdays": "Weekdays (Mon–Fri)",
+	"automations.templates.title": "Start with a template",
+	"automations.templates.description": "Pick a starting point, make it yours, and let your agent take it from there.",
+	"automations.search": "Search automations…",
+	"automations.template.daily_pr_review_v1.description": "Find the pull requests that need your attention, with review priorities and suggested next steps.",
+	"automations.template.daily_issue_triage_v1.description": "Turn new and recently updated issues into a focused triage list with clear next actions.",
+	"automations.template.weekly_release_notes_v1.description": "Draft release notes from merged pull requests, grouped into features, fixes, and other changes.",
+	"automations.templates.setup": "Requires GitHub read access for the selected project."
 }

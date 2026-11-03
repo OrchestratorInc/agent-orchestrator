@@ -2212,6 +2212,8 @@ type CreateAutomationRequest struct {
 	ProjectID   string `json:"projectId"`
 	DisplayName string `json:"displayName"`
 	Prompt      string `json:"prompt"`
+	UseCase     string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string `json:"templateId,omitempty" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string `json:"kind" enum:"worker,orchestrator"`
 	Harness     string `json:"harness,omitempty"`
 	RRule       string `json:"rrule,omitempty"`
@@ -2227,6 +2229,7 @@ type CreateAutomationRequest struct {
 type UpdateAutomationRequest struct {
 	DisplayName *string `json:"displayName,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
+	UseCase     *string `json:"useCase,omitempty" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
 	Kind        *string `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness     *string `json:"harness,omitempty"`
 	RRule       *string `json:"rrule,omitempty"`
@@ -2255,6 +2258,8 @@ type AutomationResponse struct {
 	ProjectID   string                        `json:"projectId"`
 	DisplayName string                        `json:"displayName"`
 	Prompt      string                        `json:"prompt"`
+	UseCase     string                        `json:"useCase" enum:"pr_review,issue_triage,repo_digest,ci_triage,release_notes,security_audit,dependency_maintenance,docs_maintenance,other,unknown"`
+	TemplateID  string                        `json:"templateId" enum:"custom,daily_pr_review_v1,daily_issue_triage_v1,weekly_release_notes_v1"`
 	Kind        string                        `json:"kind" enum:"worker,orchestrator"`
 	Harness     string                        `json:"harness,omitempty"`
 	RRule       string                        `json:"rrule"`

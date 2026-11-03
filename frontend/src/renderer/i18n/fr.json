@@ -3189,7 +3189,6 @@
 	"automations.model": "Modèle",
 	"automations.projectDefault": "Project default",
 	"automations.empty.title": "No automations yet",
-	"automations.empty.description": "Create a daily, weekly, or custom recurring session.",
 	"automations.delete.title": "Delete automation?",
 	"automations.delete.description": "This permanently deletes {{name}} and its run history. Linked sessions remain available.",
 	"automations.delete.confirm": "Delete automation",
@@ -3838,5 +3837,17 @@
 	"newTask.openHarnessSettings": "Ouvrir les paramètres des agents",
 	"newTask.chooseNewBranch": "Choisir une nouvelle branche",
 	"newTask.newBranchPrompt": "Nom de la nouvelle branche",
-	"newTask.newBranchReady": "Branche {{branch}} sélectionnée pour votre prochaine tâche."
+	"newTask.newBranchReady": "Branche {{branch}} sélectionnée pour votre prochaine tâche.",
+	"automations.template.daily_pr_review_v1": "File de revue des PR",
+	"automations.template.daily_issue_triage_v1": "Triage quotidien des tickets",
+	"automations.template.weekly_release_notes_v1": "Notes de version hebdomadaires",
+	"automations.validation.promptBytes": "Le prompt doit rester dans la limite de 4 096 octets UTF-8.",
+	"automations.customFrequency.weekdays": "Jours ouvrés (lun–ven)",
+	"automations.templates.title": "Commencer avec un modèle",
+	"automations.templates.description": "Choisissez un point de départ, adaptez-le et laissez votre agent prendre le relais.",
+	"automations.search": "Rechercher des automatisations…",
+	"automations.template.daily_pr_review_v1.description": "Repérez les pull requests qui nécessitent votre attention, avec des priorités et des étapes suggérées.",
+	"automations.template.daily_issue_triage_v1.description": "Transformez les tickets nouveaux et actualisés en une liste de triage ciblée avec des actions claires.",
+	"automations.template.weekly_release_notes_v1.description": "Rédigez des notes de version à partir des pull requests fusionnées, regroupées par fonctionnalités et correctifs.",
+	"automations.templates.setup": "Nécessite un accès GitHub en lecture au projet sélectionné."
 }
