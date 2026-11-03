@@ -11,13 +11,15 @@ import (
 
 type preparedImportAgent struct {
 	terminalImportAgent
-	ref   ports.NativeSessionRef
-	err   error
-	calls int
+	ref     ports.NativeSessionRef
+	err     error
+	calls   int
+	request ports.ImportedSessionRelocation
 }
 
-func (a *preparedImportAgent) PrepareImportedSession(context.Context, ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+func (a *preparedImportAgent) PrepareImportedSession(_ context.Context, request ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	a.calls++
+	a.request = request
 	return a.ref, a.err
 }
 
@@ -25,7 +27,7 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 	a := &preparedImportAgent{ref: ports.NativeSessionRef{NativeSessionID: "copied-native", ConfigDir: t.TempDir(), TranscriptPath: "/private/copy.json"}}
 	m, st, _ := newExitedResumeManager(t, &fakeRuntime{}, a)
 	rec := st.sessions["mer-1"]
-	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "original", ConfigDir: t.TempDir(), Prepared: true}
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "original", ConfigDir: t.TempDir(), Prepared: true, Fingerprint: "synthetic-native-snapshot"}
 	rec.Metadata.NativeTranscriptPath = "/original/history.json"
 	st.sessions[rec.ID] = rec
 	prepared, err := m.relocateImportedSession(context.Background(), rec, rec.Metadata.WorkspacePath)
@@ -33,6 +35,9 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 		t.Fatal(err)
 	}
 	source := prepared.Metadata.ImportSource
+	if a.request.SourceFingerprint != "synthetic-native-snapshot" {
+		t.Fatal("native preparer did not receive the selected source fingerprint")
+	}
 	if prepared.Metadata.AgentSessionID != "copied-native" || prepared.Metadata.ProviderConversationID != "copied-native" || source.NativeID != "original" || source.ResumeNativeID != "copied-native" || source.SourceTranscriptPath != "/original/history.json" || prepared.Metadata.NativeTranscriptPath != "/private/copy.json" {
 		t.Fatalf("prepared identity = %#v", prepared.Metadata)
 	}
