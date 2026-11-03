@@ -23,7 +23,7 @@ const appearance = { symbol: "server" as const };
 const code = (endpoints = [lan, tunnel], hostId = "h_verified") => encodePairingCode({ v: 2, hostId, name: "Desktop", platform: "linux", endpoints, token: "new-test-token" });
 const dependencies = (winner = lan) => ({
 	race: vi.fn((endpoints: Endpoint[], id: string) => raceEndpoints(endpoints, id, async (endpoint) => {
-		if (endpoint.host !== winner.host) throw new Error("offline");
+		if (endpoint.host !== winner.host || endpoint.port !== winner.port || endpoint.secure !== winner.secure) throw new Error("offline");
 		return { hostId: "h_verified" };
 	}, { graceMs: 0 })),
 	verify: vi.fn(async () => {}),
@@ -43,7 +43,6 @@ describe("#7346 legacy reconnect with real pairing and host storage", () => {
 		const d = dependencies();
 		const result = await pairFromCode(code(), d, { repairHost: (await findHost(""))! });
 		const hosts = await loadHosts();
-		console.log("LEGACY REPAIR STATE", JSON.stringify({ kind: result.ok ? result.kind : result.reason, ids: hosts.map(h => h.id), names: hosts.map(h => h.name), oldKeyPresent: secure.has("ao.hostToken."), active: (await activeHost())?.id }));
 		expect(hosts).toHaveLength(1);
 		expect(result).toMatchObject({ ok: true, kind: "reconnected", host: { id: "h_verified", name: "My workstation", appearance, token: "new-test-token" } });
 		expect(result).not.toHaveProperty("instead");
@@ -63,7 +62,7 @@ describe("#7346 legacy reconnect with real pairing and host storage", () => {
 		expect(result).toMatchObject({ ok: true, kind: "added", instead: { id: "" } });
 		expect(await loadHosts()).toHaveLength(2);
 	});
-	it.each([{ ...lan, port: 3012 }, { ...lan, secure: true }])("requires the same port and TLS mode: %j", async (endpoint) => {
+	it.each([{ ...lan, port: 3012 }, { ...lan, secure: true }])("does not infer legacy identity from a different port or TLS mode: %j", async (endpoint) => {
 		const result = await pairFromCode(code([endpoint]), dependencies(endpoint), { repairHost: (await findHost(""))! });
 		expect(result).toMatchObject({ ok: true, kind: "added" });
 		expect(await loadHosts()).toHaveLength(2);
@@ -91,6 +90,56 @@ describe("#7346 legacy reconnect with real pairing and host storage", () => {
 		await saveHost({ ...(await findHost(""))!, id: "h_verified", name: "Duplicate", token: "older-test-token" });
 		expect(await pairFromCode(code(), dependencies(), { repairHost: (await findHost(""))! })).toMatchObject({ ok: true, kind: "reconnected" });
 		expect((await loadHosts()).map(h => [h.id, h.name])).toEqual([["h_verified", "My workstation"]]);
+	});
+});
+
+describe("legacy identity proof independent of the winning endpoint", () => {
+	const tailscale: Endpoint = { kind: "tailscale", host: "workstation.example.ts.net", port: 443, secure: true };
+	async function secureLegacy() {
+		plain.clear(); secure.clear();
+		plain.set("ao.serverConfig", JSON.stringify({ host: tailscale.host, httpPort: String(tailscale.port), secure: true, password: "old-test-token" }));
+		await migrateLegacyConfig();
+		await saveHost({ ...(await findHost(""))!, name: "My workstation", appearance });
+		await setActiveHost("");
+		return (await findHost(""))!;
+	}
+	it("repairs a reachable secure legacy pairing when LAN wins the main race", async () => {
+		const repair = await secureLegacy();
+		const d = dependencies();
+		d.race = vi.fn((endpoints: Endpoint[], id: string) => raceEndpoints(endpoints, id, async () => ({ hostId: "h_verified" }), { graceMs: 0 }));
+		const result = await pairFromCode(code([lan, tailscale]), d, { repairHost: repair });
+		expect(result).toMatchObject({ ok: true, kind: "reconnected", config: { host: lan.host }, host: { id: "h_verified", name: "My workstation", appearance } });
+		expect(await loadHosts()).toHaveLength(1);
+		expect(d.race).toHaveBeenNthCalledWith(2, [tailscale], "h_verified");
+		expect(d.verify).toHaveBeenCalledOnce();
+		expect(d.verify).toHaveBeenCalledWith(expect.objectContaining({ host: lan.host, password: "new-test-token" }));
+		expect(d.chooseName).not.toHaveBeenCalled();
+		expect(secure.has("ao.hostToken.")).toBe(false);
+		expect((await activeHost())?.id).toBe("h_verified");
+	});
+	it.each(["unreachable", "different-id"])("does not replace the legacy pairing when its saved endpoint is %s", async (failure) => {
+		const repair = await secureLegacy();
+		const d = dependencies();
+		d.race = vi.fn((endpoints: Endpoint[], id: string) => raceEndpoints(endpoints, id, async (endpoint) => {
+			if (endpoint.host === tailscale.host) {
+				if (failure === "unreachable") throw new Error("offline");
+				return { hostId: "h_other" };
+			}
+			return { hostId: "h_verified" };
+		}, { graceMs: 0 }));
+		const result = await pairFromCode(code([lan, tailscale]), d, { repairHost: repair });
+		expect(result).toMatchObject({ ok: true, kind: "added", instead: { id: "" } });
+		expect(await loadHosts()).toHaveLength(2);
+		expect((await findHost(""))?.token).toBe("old-test-token");
+		expect(secure.has("ao.hostToken.")).toBe(true);
+	});
+	it("does not probe the legacy endpoint after scanned credential verification fails", async () => {
+		const repair = await secureLegacy();
+		const d = dependencies();
+		d.verify.mockRejectedValueOnce(new Error("401"));
+		expect(await pairFromCode(code([lan, tailscale]), d, { repairHost: repair })).toMatchObject({ ok: false, reason: "verify-failed" });
+		expect(d.race).toHaveBeenCalledOnce();
+		expect((await loadHosts()).map(h => h.id)).toEqual([""]);
 	});
 });
 
