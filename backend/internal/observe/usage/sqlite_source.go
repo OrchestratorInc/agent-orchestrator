@@ -49,7 +49,7 @@ var sqliteUsageReaders = map[domain.UsageSourceKind]sqliteUsageReader{
 // Its parser baseline must survive a source replacement: replaying counters
 // from zero would bill every earlier call again.
 func sqliteCumulativeSource(kind domain.UsageSourceKind) bool {
-	return kind == domain.UsageSourceHermesState
+	return kind == domain.UsageSourceHermesState || snapshotUsageSource(kind)
 }
 
 // readRowIDChunk adapts an append-only reader whose records carry their row
@@ -65,9 +65,11 @@ func readRowIDChunk(records []jsonlRecord, after int64, limit int) (sqliteUsageC
 	return chunk, nil
 }
 
+// sqliteUsageSource reports whether the kind is read by the polled cursor
+// path: a SQLite database, or a whole-file snapshot the agent rewrites.
 func sqliteUsageSource(kind domain.UsageSourceKind) bool {
 	_, ok := sqliteUsageReaders[kind]
-	return ok
+	return ok || snapshotUsageSource(kind)
 }
 
 // openSQLiteUsageDB opens an agent-owned database strictly read-only. The
@@ -103,7 +105,6 @@ func (i *Ingestor) ingestSQLite(
 		SyncWatch: source.Source.State == domain.UsageSourceError &&
 			source.Source.LastErrorCode == domain.UsageErrorArtifactMissing,
 	}
-	read := sqliteUsageReaders[source.Source.Kind]
 	path := source.Source.ArtifactPath
 	identity, err := usagesvc.SourceIdentity(ctx, path)
 	if err != nil {
@@ -118,20 +119,12 @@ func (i *Ingestor) ingestSQLite(
 		}
 		return i.replaceSource(ctx, source, identity, now)
 	}
-	db, err := openSQLiteUsageDB(ctx, path)
+	chunk, err := i.readPolledSource(ctx, source.Source, path)
 	if err != nil {
 		if ctx.Err() != nil {
 			return result, ctx.Err()
 		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("open usage database: %w", err))
-	}
-	defer func() { _ = db.Close() }()
-	chunk, err := read(ctx, db, source.Source, i.sqliteChunkRows)
-	if err != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage database: %w", err))
+		return i.retrySource(ctx, source.Source, domain.UsageErrorSourceReadFailed, now, fmt.Errorf("read usage source: %w", err))
 	}
 	if after, err := usagesvc.SourceIdentity(ctx, path); err != nil || after != identity {
 		if ctx.Err() != nil {
@@ -190,6 +183,20 @@ func (i *Ingestor) ingestSQLite(
 		result.RetryAt = &next
 	}
 	return result, nil
+}
+
+// readPolledSource reads one bounded chunk from a SQLite database or a
+// whole-file snapshot.
+func (i *Ingestor) readPolledSource(ctx context.Context, source domain.UsageSourceRecord, path string) (sqliteUsageChunk, error) {
+	if read, ok := snapshotUsageReaders[source.Kind]; ok {
+		return read(ctx, path, source)
+	}
+	db, err := openSQLiteUsageDB(ctx, path)
+	if err != nil {
+		return sqliteUsageChunk{}, fmt.Errorf("open usage database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	return sqliteUsageReaders[source.Kind](ctx, db, source, i.sqliteChunkRows)
 }
 
 // replaceCumulativeSource starts a new generation for a replaced database but
