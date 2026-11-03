@@ -850,7 +850,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 					<Button variant="primary" onClick={onNext}>{t("firstRun.continue")}</Button>
 				) : cloud.status === "loading" ? null : (
 					<>
-						<Button variant="ghost" className="text-muted-foreground" onClick={onNext}>
+						<Button variant="ghost" onClick={onNext}>
 							{t("firstRun.doLater")}
 						</Button>
 						<Button variant="primary" onClick={signIn} disabled={browserWaiting}>
