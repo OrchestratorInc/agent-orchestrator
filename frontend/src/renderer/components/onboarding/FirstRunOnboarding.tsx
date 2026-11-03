@@ -102,7 +102,12 @@ const INSTALL_POLL_MS = 1_000;
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
 const COPY_WIDTH = 400;
-const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.55, bounce: 0.06 } as const;
+const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.34, bounce: 0.04 } as const;
+/** Pages that lead with the app icon. */
+const STEPS_WITH_ICON: ReadonlySet<Step> = new Set<Step>(["welcome", "signin"]);
+/** The icon (48px) and the gap under it (20px). */
+const ICON_SLOT_HEIGHT = 68;
+const IconSlotContext = createContext(false);
 
 const STARTER_PROMPTS = [
 	{ label: "firstRun.startPromptImproveLabel", prompt: "firstRun.startPromptImprove" },
@@ -232,13 +237,16 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	}, []);
 	const wide = rowWidth >= 900;
 	const stageCollapsed = step === "project";
-	// Spring only when the stage opens or closes; a window resize follows at once.
-	const previousCollapsed = useRef(stageCollapsed);
-	const collapseChanged = previousCollapsed.current !== stageCollapsed;
+	// The stage always springs open or closed (an interrupted spring picks up
+	// from where it is), so it can't be left half-way or snap back.
+	const collapseTransition = reduceMotion ? { duration: 0 } : COLLAPSE_SPRING;
+	// Whether the page being left showed the app icon, so the next page's
+	// icon slot starts from it and collapses (or grows) instead of cutting.
+	const lastStep = useRef(step);
+	const previousHadIcon = STEPS_WITH_ICON.has(lastStep.current);
 	useEffect(() => {
-		previousCollapsed.current = stageCollapsed;
-	}, [stageCollapsed]);
-	const collapseTransition = reduceMotion || !collapseChanged ? { duration: 0 } : COLLAPSE_SPRING;
+		lastStep.current = step;
+	}, [step]);
 	// Pages with nothing to do are passed over in both directions, decided when
 	// the person moves (these checks start on the welcome page, so they have
 	// usually settled by then); a page still checking is shown, never flashed.
@@ -341,6 +349,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 					transition={collapseTransition}
 					style={{ width: !wide ? "100%" : undefined }}
 				>
+					<IconSlotContext.Provider value={previousHadIcon}>
 					<AnimatePresence initial={false}>
 						<motion.div
 							key={step}
@@ -358,6 +367,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
 						</motion.div>
 					</AnimatePresence>
+					</IconSlotContext.Provider>
 				</motion.div>
 				{wide ? (
 					<div className="flex min-h-0 min-w-0 flex-1">
@@ -445,7 +455,8 @@ function StepSplit({
 	children,
 	centered = false,
 }: {
-	icon?: ReactNode;
+	/** Lead with the app icon. */
+	icon?: boolean;
 	/** The stage is closed on this step: centre the copy across the window. */
 	centered?: boolean;
 	title: string;
@@ -463,12 +474,34 @@ function StepSplit({
 			)}
 		>
 			<div className="flex w-full max-w-md flex-col">
-				{icon ? <div className="pb-5">{icon}</div> : null}
+				<IconSlot shown={Boolean(icon)} />
 				<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
 				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
 				{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
 			</div>
 		</div>
+	);
+}
+
+/** The app icon over the title. Its height animates from the previous page's
+ * (shown or not), so the title glides up or down instead of jumping. */
+function IconSlot({ shown }: { shown: boolean }) {
+	const previous = useContext(IconSlotContext);
+	const reduceMotion = useReducedMotion();
+	const [mountedWith] = useState(previous);
+	if (!shown && !mountedWith) return null;
+	const open = { height: ICON_SLOT_HEIGHT, opacity: 1, scale: 1 };
+	const closed = { height: 0, opacity: 0, scale: 0.9 };
+	return (
+		<motion.div
+			aria-hidden={!shown}
+			className="origin-top-left overflow-hidden"
+			initial={reduceMotion ? false : mountedWith ? open : closed}
+			animate={shown ? open : closed}
+			transition={reduceMotion ? { duration: 0 } : COLLAPSE_SPRING}
+		>
+			<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />
+		</motion.div>
 	);
 }
 
@@ -645,7 +678,7 @@ function WelcomeStep({ point, cycle, onNext }: { point: number; cycle: number; o
 	const current = ORCH_POINTS[point]!;
 	return (
 		<StepSplit
-			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
+			icon
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
 		>
@@ -727,7 +760,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 	};
 	return (
 		<StepSplit
-			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
+			icon
 			title={t("firstRun.signInTitle")}
 		>
 			{cloud.status === "loading" ? (
