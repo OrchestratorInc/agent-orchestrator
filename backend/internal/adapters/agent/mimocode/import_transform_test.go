@@ -107,7 +107,7 @@ func TestMiMoExportRemapCompactionReference(t *testing.T) {
 				ID string `json:"id"`
 			} `json:"info"`
 			Parts []struct {
-				Tail string `json:"tail_start_id"`
+				Tail       string `json:"tail_start_id"`
 				Projection struct {
 					Summary string `json:"summary_message_id"`
 					Start   string `json:"tail_start_id"`
