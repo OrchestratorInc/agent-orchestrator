@@ -31,6 +31,10 @@ type Archive struct {
 	Model    string
 	Updated  time.Time
 	Messages []Message
+	// Runtime authority is distinct from the native conversation identity.
+	RuntimeBound bool
+	RuntimeDir   string
+	RuntimeScope string
 }
 
 type nativeMessage struct {
@@ -53,12 +57,16 @@ type entry struct {
 type document struct {
 	Version  int `json:"schema_version"`
 	Metadata struct {
-		ID         string    `json:"id"`
-		Workspace  string    `json:"workspace"`
-		Title      string    `json:"title"`
-		Model      string    `json:"model"`
-		Updated    time.Time `json:"updated_at"`
-		SpawnDepth int       `json:"spawn_depth"`
+		ID           string    `json:"id"`
+		Workspace    string    `json:"workspace"`
+		Title        string    `json:"title"`
+		Model        string    `json:"model"`
+		Updated      time.Time `json:"updated_at"`
+		SpawnDepth   int       `json:"spawn_depth"`
+		RuntimeStore *struct {
+			DataDir string `json:"data_dir"`
+			Scope   string `json:"execution_scope"`
+		} `json:"runtime_store"`
 	} `json:"metadata"`
 	Messages []nativeMessage `json:"messages"`
 	Leaf     string          `json:"leaf_id"`
@@ -124,6 +132,9 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 		}
 	}
 	out := Archive{ID: doc.Metadata.ID, CWD: doc.Metadata.Workspace, Title: doc.Metadata.Title, Model: doc.Metadata.Model, Updated: doc.Metadata.Updated}
+	if binding := doc.Metadata.RuntimeStore; binding != nil {
+		out.RuntimeBound, out.RuntimeDir, out.RuntimeScope = true, binding.DataDir, binding.Scope
+	}
 	add := func(message nativeMessage, at time.Time) {
 		if message.Role != "user" && message.Role != "assistant" {
 			return
