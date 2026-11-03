@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactCount, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
 	return { kind, name, path: name, size: 10, updatedAt, ...(kind === "html" ? { previewUrl: `http://preview/${name}` } : {}) };
@@ -124,5 +124,21 @@ describe("filterArtifactGroups", () => {
 
 	it("returns nothing when no row matches", () => {
 		expect(filterArtifactGroups(groups, "pricing", "px0")).toEqual([]);
+	});
+});
+
+describe("canChangeSessionArtifacts", () => {
+	it("gives a cloud session's files to the person who started it, and only them", () => {
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, "u-1")).toBe(true);
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, "u-2")).toBe(false);
+		expect(canChangeSessionArtifacts({ orgId: "org-1", createdByUserId: "u-1" }, undefined)).toBe(false);
+	});
+
+	it("always gives a local session's files to this person", () => {
+		expect(canChangeSessionArtifacts(undefined, undefined)).toBe(true);
+	});
+
+	it("leaves the decision to a control plane too old to name the creator", () => {
+		expect(canChangeSessionArtifacts({ orgId: "org-1" }, "u-2")).toBe(true);
 	});
 });

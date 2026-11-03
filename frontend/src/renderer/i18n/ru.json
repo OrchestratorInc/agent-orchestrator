@@ -2230,6 +2230,7 @@
 	"artifacts.deleteTitle": "Удалить артефакт?",
 	"artifacts.deleteDescription": "Файл {{name}} будет навсегда удалён из папки артефактов этой сессии.",
 	"artifacts.deleteCloudDescription": "Файл {{name}} будет навсегда удалён из облачного хранилища сессии и её песочницы.",
+	"artifacts.viewOnly": "Только просмотр. Изменять, скачивать и копировать файлы этой сессии может только тот, кто её запустил.",
 	"artifacts.fullscreen": "На весь экран",
 	"artifacts.exitFullscreen": "Выйти из полноэкранного режима",
 	"artifacts.history": "История версий",

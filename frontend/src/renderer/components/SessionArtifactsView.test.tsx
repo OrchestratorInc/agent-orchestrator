@@ -58,8 +58,8 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
-		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">
+	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: unknown; sendMessage?: (message: string) => Promise<void> }) => (
+		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
 			{`viewer:${path}`}
 			<button type="button" onClick={() => onEditingChange?.(true)}>start editing</button>
 			<button type="button" onClick={() => onEditingChange?.(false)}>stop editing</button>
@@ -712,6 +712,42 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
 
 		expect(await within(dialog).findByText("artifact file not found")).toBeInTheDocument();
+	});
+
+	it("offers only viewing on another member's cloud session", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1", createdByUserId: "someone-else" } } as WorkspaceSession} />);
+
+		// The list's cards: no edit, delete or copy to this machine.
+		expect(screen.getAllByRole("button", { name: /^More actions:/ }).length).toBeGreaterThan(0);
+		expect(screen.queryByRole("button", { name: /^Edit file:/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Delete artifact:/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Open in / })).toBeNull();
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const viewer = await screen.findByTestId("artifact-view");
+		expect(viewer).toHaveAttribute("data-read-only", "true");
+		expect(viewer).toHaveAttribute("data-saves", "false");
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history"]);
+		expect(screen.getByText("View only. Only the person who started this session can change, download or copy its files.")).toBeInTheDocument();
+	});
+
+	it("offers every action on the person's own cloud session", async () => {
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1", createdByUserId: "me-1" } } as WorkspaceSession} />);
+
+		expect(screen.getAllByRole("button", { name: /^Edit file:/ }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /^Delete artifact:/ }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: /^Open in / })).toHaveLength(1);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const viewer = await screen.findByTestId("artifact-view");
+		expect(viewer).toHaveAttribute("data-read-only", "false");
+		expect(viewer).toHaveAttribute("data-saves", "true");
+		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.queryByText(/^View only\./)).toBeNull();
 	});
 
 	it("offers copy, download and delete for a cloud session", async () => {

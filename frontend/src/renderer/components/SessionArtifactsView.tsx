@@ -15,7 +15,7 @@ import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type Artifac
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import type { ArtifactRow } from "../lib/artifacts";
+import { canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -286,7 +286,7 @@ function ArtifactViewerBody({
 						cloud={cloudVersions}
 						hostId={hostId}
 						onBack={() => onPreviewVersion(null)}
-						onRestore={() => {
+						onRestore={readOnly ? undefined : () => {
 							if (previewVersion !== null) restore.mutate({ version: previewVersion }, { onSuccess: () => onPreviewVersion(null) });
 						}}
 						path={artifact.path}
@@ -414,6 +414,9 @@ export function SessionArtifactsView({
 	const cloudUserId = useCloudMeUserId(cloud);
 	const cloudOwner = Boolean(cloudUserId) && session.cloud?.createdByUserId === cloudUserId;
 	const cloudOrgId = session.cloud?.orgId;
+	// Another member's cloud session files open view only: no edit, restore,
+	// delete or copy of them (the control plane refuses the changes too).
+	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
 	// which hands a save to the session's worker.
@@ -602,8 +605,8 @@ export function SessionArtifactsView({
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={false}
-							save={cloud ? saveCloudArtifact : undefined}
+							readOnly={!owner}
+							save={cloud && owner ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
@@ -621,7 +624,7 @@ export function SessionArtifactsView({
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
-				{session.cloud && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
+				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>

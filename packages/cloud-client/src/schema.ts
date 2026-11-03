@@ -795,7 +795,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Only the person who started the session (Session.createdByUserId) saves an edit: any other member of its organization, who may still read the file, gets 403 artifact_not_owner, as does everyone for a session with no creator on record. Present only when the deployment reports offering.artifacts; otherwise 404. */
         put: operations["saveSessionArtifact"];
         post?: never;
         delete?: never;
@@ -857,7 +857,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. */
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. Only the person who started the session restores a version; anyone else gets 403 artifact_not_owner, as for saveSessionArtifact. */
         post: operations["restoreSessionArtifactVersion"];
         delete?: never;
         options?: never;
@@ -3865,7 +3865,7 @@ export interface components {
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
-             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact). Omitted when none is on record.
+             * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleting one); every other member of the organization sees them read-only. Omitted when none is on record.
              */
             createdByUserId?: string;
             /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */

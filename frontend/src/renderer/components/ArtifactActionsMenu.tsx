@@ -7,10 +7,11 @@ import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpClient } from "../lib/cloud-cp";
-import { artifactKey } from "../lib/artifacts";
+import { artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
@@ -18,7 +19,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ERROR_CLEAR_MS = 5_000;
@@ -58,7 +59,9 @@ export async function openCloudArtifactsFolder(
 
 /**
  * The open artifact's name, as a menu: show it in the file manager or a
- * terminal (local sessions only), copy its contents, or delete it.
+ * terminal (local sessions only), copy its contents, or delete it. Another
+ * member's cloud session files are view only: the menu then offers none of
+ * the actions that change or copy them, and says why.
  */
 export function ArtifactActionsMenu({
 	artifact,
@@ -104,6 +107,7 @@ export function ArtifactActionsMenu({
 	const local = !hostId && !session.cloud;
 	const sidebar = variant === "sidebar";
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
+	const owner = canChangeSessionArtifacts(session.cloud, useCloudMeUserId(Boolean(session.cloud)));
 	const access = useCloudArtifactAccess(session, Boolean(session.cloud) && !downloadUrl);
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
@@ -162,7 +166,7 @@ export function ArtifactActionsMenu({
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
-	const copyable = !fileMediaKind(artifact.path);
+	const copyable = owner && !fileMediaKind(artifact.path);
 
 	const error = open.error?.message || copyError;
 	const resetOpen = open.reset;
@@ -197,14 +201,16 @@ export function ArtifactActionsMenu({
 		<>
 			{sidebar ? (
 				<>
-					{onEdit && !fileMediaKind(artifact.path) ? (
+					{owner && onEdit && !fileMediaKind(artifact.path) ? (
 						<Button aria-label={`${t("files.editFile")}: ${artifact.name}`} className={actionClassName} onClick={onEdit} size="icon-sm" type="button" variant="quiet">
 							<Pencil aria-hidden="true" className="size-icon-sm" />
 						</Button>
-			) : null}
-					<Button aria-label={`${t("artifacts.delete")}: ${artifact.name}`} className={actionClassName} onClick={confirmDelete} size="icon-sm" type="button" variant="destructive-ghost">
-						<Trash2 aria-hidden="true" className="size-icon-sm" />
-					</Button>
+					) : null}
+					{owner ? (
+						<Button aria-label={`${t("artifacts.delete")}: ${artifact.name}`} className={actionClassName} onClick={confirmDelete} size="icon-sm" type="button" variant="destructive-ghost">
+							<Trash2 aria-hidden="true" className="size-icon-sm" />
+						</Button>
+					) : null}
 				</>
 			) : null}
 			{onTogglePin && !pinInMenu ? (
@@ -284,7 +290,7 @@ export function ArtifactActionsMenu({
 							) : null}
 						</>
 					) : null}
-					{session.cloud ? (
+					{session.cloud && owner ? (
 						<>
 							<DropdownMenuItem onSelect={() => void revealCloud()}>
 								<FolderOpen aria-hidden="true" />
@@ -299,7 +305,7 @@ export function ArtifactActionsMenu({
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
 						</DropdownMenuItem>
 					) : null}
-					{!sidebar ? (
+					{!sidebar && owner ? (
 						<>
 							{session.cloud ? (
 								<DropdownMenuItem onSelect={() => void download()}>
@@ -317,6 +323,9 @@ export function ArtifactActionsMenu({
 							</DropdownMenuItem>
 						</>
 					) : null}
+					{owner ? null : (
+						<DropdownMenuLabel className="max-w-64 whitespace-normal font-normal text-muted-foreground">{t("artifacts.viewOnly")}</DropdownMenuLabel>
+					)}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
 			<ConfirmDialog

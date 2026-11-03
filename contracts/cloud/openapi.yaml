@@ -1224,8 +1224,12 @@ paths:
         the app, when the committed file still has expectedSha256 (409
         artifact_changed otherwise). The save is kept as the file's newest
         version and reaches the session's worker, which writes it to its disk
-        unless the file changed there since. Present only when the deployment
-        reports offering.artifacts; otherwise 404.
+        unless the file changed there since. Only the person who started the
+        session (Session.createdByUserId) saves an edit: any other member of
+        its organization, who may still read the file, gets 403
+        artifact_not_owner, as does everyone for a session with no creator on
+        record. Present only when the deployment reports offering.artifacts;
+        otherwise 404.
       requestBody:
         required: true
         content:
@@ -1312,6 +1316,8 @@ paths:
         Makes a kept version the committed file again, kept as its newest
         version (restoredFrom names the one it restored), and hands it to the
         session's worker. Restoring the committed version changes nothing.
+        Only the person who started the session restores a version; anyone
+        else gets 403 artifact_not_owner, as for saveSessionArtifact.
       requestBody:
         required: true
         content:
@@ -6939,7 +6945,10 @@ components:
           description: >-
             The person who started the session (for a spawned worker, its
             orchestrator's). Only they share its files as public links
-            (shareSessionArtifact). Omitted when none is on record.
+            (shareSessionArtifact) and change them (saveSessionArtifact,
+            restoreSessionArtifactVersion, deleting one); every other member
+            of the organization sees them read-only. Omitted when none is on
+            record.
         requestedBy:
           type: object
           additionalProperties: false

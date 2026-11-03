@@ -24,6 +24,22 @@ export type ArtifactRow = {
 	projectId?: string;
 };
 
+/**
+ * Whether this person may change or take a copy of a session's artifact files:
+ * edit, restore a version, delete, download, copy their contents or copy them
+ * to this machine. A local session's files are always theirs. A cloud
+ * session's belong to the person who started it, and every other member of
+ * the organization only views them; the control plane refuses their edits,
+ * restores and deletes. A control plane too old to name the creator leaves
+ * the decision to the server. `cloudUserId` is the control-plane ID
+ * (useCloudMeUserId), not the desktop's account ID, and undefined until known,
+ * when the files stay view only.
+ */
+export function canChangeSessionArtifacts(cloud: WorkspaceSession["cloud"], cloudUserId: string | undefined): boolean {
+	if (!cloud?.createdByUserId) return true;
+	return cloud.createdByUserId === cloudUserId;
+}
+
 export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path">): string {
 	return JSON.stringify([artifact.sessionId, artifact.path]);
 }

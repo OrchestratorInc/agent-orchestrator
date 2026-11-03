@@ -1837,6 +1837,7 @@
 	"artifacts.deleteTitle": "アーティファクトを削除しますか？",
 	"artifacts.deleteDescription": "{{name}} をこのセッションのアーティファクトフォルダから完全に削除します。",
 	"artifacts.deleteCloudDescription": "{{name}} をセッションのクラウドストレージとサンドボックスから完全に削除します。",
+	"artifacts.viewOnly": "閲覧のみ。このセッションのファイルを変更、ダウンロード、コピーできるのは、セッションを開始した人だけです。",
 	"artifacts.fullscreen": "全画面表示",
 	"artifacts.exitFullscreen": "全画面表示を終了",
 	"artifacts.history": "バージョン履歴",
