@@ -171,12 +171,15 @@ export function PreviewStage({
 	children,
 	phone,
 	phoneShown = false,
+	phoneDelay = 0,
 	opaque = false,
 	frameWidth,
 }: {
 	children: ReactNode;
 	phone?: ReactNode;
 	phoneShown?: boolean;
+	/** Seconds to hold the phone (and the window's shift) before it slides. */
+	phoneDelay?: number;
 	/** Paint the window without transparency (as with the setting off). */
 	opaque?: boolean;
 	/** Lay the stage out at this width whatever its column's current width, so a
@@ -245,7 +248,7 @@ export function PreviewStage({
 	const phoneOffset = -(STAGE_INSET + phoneWidth * 1.4 + PHONE_GAP);
 	// A soft spring: settles with a hint of overshoot, the same both ways, and
 	// picks up mid-flight if the step changes again before it lands.
-	const transition = reduceMotion ? { duration: 0 } : SLIDE_SPRING;
+	const transition = reduceMotion ? { duration: 0 } : { ...SLIDE_SPRING, delay: phoneDelay };
 	// The camera: the fitted window, or the focus rect filling the stage with an
 	// even margin (never smaller than the fit, at most MAX_ZOOM of it), centred.
 	let camera = { x: left, y: top, scale };
