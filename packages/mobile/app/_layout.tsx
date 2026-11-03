@@ -60,17 +60,16 @@ const PICKER_SHEETS = [
 // The manual-connect form — the only sheet with text inputs, and the only one
 // that has to move for the keyboard.
 //
-// Android needs **two** detents to do that, which is not a styling preference:
-// react-native-screens only expands a sheet for the IME when it has more than
-// one detent. See `SheetDelegate.configureBottomSheetBehaviour`, `KeyboardVisible`
-// branch — with 2 or 3 detents it calls `useTwoDetents(STATE_EXPANDED)`, but with
-// a single detent (which is what `fitToContents` compiles to) it only attaches a
-// callback and leaves the height alone. That is why this sheet sat behind the
-// keyboard: a one-detent sheet structurally cannot get out of its way.
-//
-// So Android opens at the smaller detent and is expanded to the larger one by the
-// OS as soon as a field is focused, then restored when the keyboard hides. iOS
-// lifts a presented sheet by itself. Its body is a SwiftUI Form, which scrolls
+// Android opens it at full height, and the form pads itself above the keyboard
+// (see ManualConnectSheet.android). The OS does not expand a sheet for the IME
+// here: the keyboard controller keeps the window from resizing, so a sheet
+// opened at a smaller detent stayed put and the keyboard covered all but its
+// first field. It runs under the status bar at full height, its body padded for
+// the bar, so nothing about its frame depends on the keyboard: at 0.95 the sheet
+// was lifted into the room above it as the keyboard rose, and at full height
+// inside the bar it opened under the bar until the first inset change moved it
+// down. Both landed in one jump once the keyboard had settled. iOS lifts a
+// presented sheet by itself. Its body is a SwiftUI Form, which scrolls
 // and fills the sheet rather than measuring to fit, so the sheet opens at a
 // fixed height: full for the connection form.
 //
@@ -80,7 +79,8 @@ const PICKER_SHEETS = [
 // Android keeps the title in the sheet's body.
 const CONNECT_SHEET_OPTIONS = {
 	presentation: "formSheet",
-	sheetAllowedDetents: Platform.OS === "ios" ? [1] : [0.6, 0.95],
+	sheetAllowedDetents: [1] as number[],
+	sheetShouldOverflowTopInset: true,
 	sheetGrabberVisible: true,
 	sheetCornerRadius,
 	headerShown: Platform.OS === "ios",

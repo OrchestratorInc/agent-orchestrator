@@ -14,7 +14,7 @@ export type FormTextFieldProps = {
 	autoCorrect?: boolean;
 	maxLength?: number;
 	autoFocus?: boolean;
-	returnKeyType?: "next" | "done";
+	returnKeyType?: "next" | "done" | "go";
 	onSubmitEditing?: () => void;
 	editable?: boolean;
 	/**

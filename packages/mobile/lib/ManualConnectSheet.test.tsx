@@ -28,6 +28,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: "KeyboardAvoidingView" }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 24, left: 0 }) }));
 vi.mock("@expo/ui", () => ({ Host: "Host" }));
 vi.mock("@expo/ui/swift-ui", async () => (await import("./nativeFormTestDoubles")).swiftUIDouble());
@@ -232,15 +233,29 @@ describe("ManualConnectSheet on Android", () => {
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 	});
 
-	// At the sheet's first detent, Connect at the form's end sat half under the
-	// gesture bar; it is pinned below the scrolling form, clear of the bar.
-	it("pins Connect and what it waits for below the form, clear of the gesture bar", async () => {
+	// The sheet pads itself above the keyboard, and Connect is pinned below the
+	// scrolling fields, so it stays in sight with the keyboard up or down.
+	it("pins Connect and what it waits for below the fields, clear of the gesture bar", async () => {
 		await renderAndroid();
 		const connect = renderer!.root.findByType("RNButton" as never);
 		const scroll = renderer!.root.findByType("ScrollView" as never);
 		expect(scroll.findAll((node) => node === connect)).toHaveLength(0);
-		const footer = renderer!.root.findAll((node) => node.type === ("View" as never) && node.findAll((child) => child === connect).length > 0 && node.findAll((child) => child === scroll).length === 0)[0];
+		const sheet = renderer!.root.findByType("KeyboardAvoidingView" as never);
+		expect(sheet.props.behavior).toBe("padding");
+		const footer = sheet.findAll((node) => node.type === ("View" as never) && node.findAll((child) => child === connect).length > 0 && node.findAll((child) => child === scroll).length === 0)[0];
 		expect(Object.assign({}, ...[footer.props.style].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
 		expect(footer.findByProps({ children: "Add a name and a host to connect." })).toBeTruthy();
+	});
+
+	it("connects from the password's Go key once the form is complete", async () => {
+		await renderAndroid();
+		const go = () => field("manual-connect-password").props.keyboardActions.onGo();
+		expect(field("manual-connect-password").props.keyboardOptions.imeAction).toBe("go");
+		await act(async () => go());
+		expect(fixtures.ping).not.toHaveBeenCalled();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await act(async () => go());
+		expect(fixtures.ping).toHaveBeenCalledOnce();
 	});
 });
