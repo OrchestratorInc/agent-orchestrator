@@ -72,12 +72,21 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		return "", false, nil
 	}
 	suffix := "_" + id + ".jsonl"
+	sessionsDir := filepath.Join(configDir, "sessions")
 	var found string
-	walkErr := filepath.WalkDir(filepath.Join(configDir, "sessions"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	walkErr := filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
-		if err := ctx.Err(); err != nil {
+		if err != nil {
+			// As in discovery, an unreadable sibling is ineligible; errors
+			// on the sessions root still prevent an authoritative lookup.
+			if path != sessionsDir && errors.Is(err, fs.ErrPermission) {
+				if entry != nil && entry.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			return err
 		}
 		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), suffix) {

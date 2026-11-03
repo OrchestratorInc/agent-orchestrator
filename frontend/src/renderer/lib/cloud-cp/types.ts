@@ -63,8 +63,10 @@ export interface CloudCpOffering {
 	defaultProvider: string;
 	billingMode: CloudCpBillingMode;
 	kind: CloudCpOfferingKind;
-	/** Plan feature flags; empty when none. */
+	/** The org's product features and the deployment's own (attachments); empty when none. */
 	features: string[];
+	/** The largest file one attachment may be, sent with the attachments feature. */
+	maxAttachmentBytes?: number;
 	/**
 	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
 	 * it may connect its own Coder deployment, and its Coder sessions are not
@@ -1285,8 +1287,10 @@ export interface CloudCpRestoreSessionResponse {
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/messages (requires an Idempotency-Key header). */
 export interface CloudCpSendMessageRequest {
-	/** 1-65536 bytes. */
+	/** 1-65536 bytes; may be empty when the message carries attachments. */
 	text: string;
+	/** Files uploaded to the session (POST .../attachments) that the message carries. */
+	attachmentIds?: string[];
 	model?: string;
 	reasoningEffort?: string;
 	/** Per-turn permission mode, capped by the session and share grant. */

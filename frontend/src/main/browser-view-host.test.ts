@@ -734,6 +734,11 @@ describe("browser shortcut matching", () => {
 		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
 	});
 
+	it("leaves ⌘D to the page instead of starting dictation", () => {
+		const chord = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("dictate", chord, true)).toBe(false);
+	});
+
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
 		const input = { key: " ", control: false, meta: false, shift: false, alt: false, type: "keyDown" };
 		expect(browserShortcutAction(input, false)).toBeNull();
