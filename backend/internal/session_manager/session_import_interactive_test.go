@@ -170,7 +170,8 @@ func TestInteractiveForkBindsObservedTranscriptAndRefusesMissingBinding(t *testi
 }
 
 func (l *failingNativePublicationLCM) ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
-	if l.fail {
+	// Fail publication only; rollback must still be able to record process exit.
+	if l.fail && signal.Event == "session-start" {
 		return errors.New("synthetic identity publication failure")
 	}
 	return l.nativeBindingLCM.ApplyActivitySignal(ctx, id, signal)
