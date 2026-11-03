@@ -20,7 +20,8 @@ func TestClineFirstOpenUsesExactImportedRootAndAOExecutionDirectory(t *testing.T
 			home, root, source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("CLINE_DIR", "")
-			t.Setenv("CLINE_DATA_DIR", root)
+			// The import root differs from the launch default, so AO must pass it explicitly.
+			t.Setenv("CLINE_DATA_DIR", "")
 			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			// Resolution uses a synthetic executable. fakeRuntime records argv;
 			// neither the real provider nor a login is needed by this CI test.
