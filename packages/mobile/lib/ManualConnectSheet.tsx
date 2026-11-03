@@ -4,13 +4,13 @@ import { Stack } from "expo-router";
 import { useMemo, useRef } from "react";
 import { Linking } from "react-native";
 import { LOCAL_NETWORK_HINT } from "./connectionError";
-import { FormFooter, formModifiers, FormPasswordField, FormTextField, FormToggle, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormPasswordField, FormTextField, FormTextFieldRow, FormToggle, sectionModifiers } from "./formFields";
 import { Spinner } from "./Spinner";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { useManualConnect, type ManualConnectProps } from "./useManualConnect";
 
-// iOS: a SwiftUI Form under the sheet's native bar. app/sheets/connect.tsx
-// titles the bar and holds Cancel; Connect (or Save) is the bar's trailing item.
+// iOS: a SwiftUI Form on a pushed page. app/connect.tsx titles the bar, which
+// holds the stack's back; Connect (or Save) is the bar's trailing item.
 export function ManualConnectSheet(props: ManualConnectProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
@@ -45,7 +45,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 			{headerItems}
 			<Host style={{ flex: 1 }} colorScheme={scheme}>
 				<Form modifiers={formModifiers(t)}>
-					<Section footer={<FormFooter>{form.subtitle}</FormFooter>} modifiers={sectionModifiers(t)}>
+					<Section modifiers={sectionModifiers(t)}>
 						<FormTextField
 							label="Name"
 							value={form.machineName}
@@ -60,26 +60,34 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 					</Section>
 					<Section
 						title="Connection"
-						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : form.connectHint ? <FormFooter>{form.connectHint}</FormFooter> : undefined}
+						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : undefined}
 						modifiers={sectionModifiers(t)}
 					>
-						<FormTextField
+						{/* The port is a few digits: it shares the host's row, at its end. */}
+						<FormTextFieldRow
 							label="Host"
-							value={cfg.host}
-							onChangeText={form.setField("host")}
-							placeholder="192.168.x.x or my-pc.tailXXXX.ts.net"
-							autoCapitalize="none"
-							autoCorrect={false}
-							keyboardType="url"
-							textContentType="URL"
-							testID="manual-connect-host"
-						/>
-						<FormTextField
-							label="API port"
-							value={cfg.httpPort}
-							onChangeText={form.setField("httpPort")}
-							keyboardType="number-pad"
-							testID="manual-connect-port"
+							fields={[
+								{
+									label: "Host",
+									value: cfg.host,
+									onChangeText: form.setField("host"),
+									placeholder: "192.168.x.x",
+									autoCapitalize: "none",
+									autoCorrect: false,
+									keyboardType: "url",
+									width: "grow",
+									testID: "manual-connect-host",
+								},
+								{
+									label: "Port",
+									value: cfg.httpPort,
+									onChangeText: form.setField("httpPort"),
+									placeholder: "Port",
+									keyboardType: "number-pad",
+									width: 56,
+									testID: "manual-connect-port",
+								},
+							]}
 						/>
 						<FormPasswordField
 							label="Password"

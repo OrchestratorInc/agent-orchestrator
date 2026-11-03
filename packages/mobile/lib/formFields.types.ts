@@ -24,6 +24,23 @@ export type FormTextFieldProps = {
 	 */
 	error?: string;
 	testID?: string;
+	/**
+	 * How wide the field is when it shares a row with another: "grow" takes
+	 * the room the others leave, a number is a fixed width. Full width when
+	 * left out, as a field alone on its row is.
+	 */
+	width?: number | "grow";
+};
+
+/**
+ * Two or more short fields on one row, such as a host and its port. iOS draws
+ * one labelled row with the fields at its trailing edge, split by a divider;
+ * Android lays the outlined fields side by side, each with its own label.
+ */
+export type FormTextFieldRowProps = {
+	/** The row's label on iOS; Android labels each field instead. */
+	label: string;
+	fields: FormTextFieldProps[];
 };
 
 export type FormPasswordFieldProps = Omit<FormTextFieldProps, "keyboardType" | "autoCapitalize" | "autoCorrect" | "maxLength">;

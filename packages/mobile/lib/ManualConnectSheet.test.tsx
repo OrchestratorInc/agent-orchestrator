@@ -120,7 +120,7 @@ function confirm() {
 describe("ManualConnectSheet on iOS", () => {
 	it("labels every field for VoiceOver and hides the password", () => {
 		render();
-		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "API port"], ["manual-connect-password", "Password"], ["manual-connect-tls", "Use TLS"]]) {
+		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "Port"], ["manual-connect-password", "Password"], ["manual-connect-tls", "Use TLS"]]) {
 			expect(hasModifier(field(testID), "accessibilityLabel", label)).toBe(true);
 		}
 		expect(field("manual-connect-password").type).toBe("SecureField");
@@ -172,17 +172,14 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
 	});
 
-	// A disabled Connect alone does not say what it is waiting for.
-	it("says what Connect is waiting for until the form is complete", async () => {
+	it("enables Connect once the form has a name and a host", async () => {
 		render();
-		const hint = () => renderer!.root.findAllByType("Section" as never)[1].props.footer?.props;
-		expect(hint()).toMatchObject({ children: "Add a name and a host to connect." });
-		expect(hint().error).toBeFalsy();
+		expect(confirm().props.disabled).toBe(true);
 		await type("manual-connect-host", "192.168.1.30");
-		expect(hint()).toMatchObject({ children: "Add a name to connect." });
+		expect(confirm().props.disabled).toBe(true);
 		await type("manual-connect-name", "Office PC");
-		expect(hint()).toBeUndefined();
 		expect(confirm().props.disabled).toBe(false);
+		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
 	});
 
 	it("reveals the password in place and hides it again", () => {
@@ -233,18 +230,18 @@ describe("ManualConnectSheet on Android", () => {
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 	});
 
-	// The sheet pads itself above the keyboard, and Connect is pinned below the
-	// scrolling fields, so it stays in sight with the keyboard up or down.
-	it("pins Connect and what it waits for below the fields, clear of the gesture bar", async () => {
+	// Connect follows the last field.
+	it("puts Connect right after the fields", async () => {
 		await renderAndroid();
 		const connect = renderer!.root.findByType("RNButton" as never);
+		expect(connect.props.title).toBe("Connect");
+		expect(connect.props.disabled).toBe(true);
+		const page = renderer!.root.findByType("KeyboardAvoidingView" as never);
+		expect(page.props.behavior).toBe("padding");
 		const scroll = renderer!.root.findByType("ScrollView" as never);
-		expect(scroll.findAll((node) => node === connect)).toHaveLength(0);
-		const sheet = renderer!.root.findByType("KeyboardAvoidingView" as never);
-		expect(sheet.props.behavior).toBe("padding");
-		const footer = sheet.findAll((node) => node.type === ("View" as never) && node.findAll((child) => child === connect).length > 0 && node.findAll((child) => child === scroll).length === 0)[0];
-		expect(Object.assign({}, ...[footer.props.style].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
-		expect(footer.findByProps({ children: "Add a name and a host to connect." })).toBeTruthy();
+		expect(scroll.findAll((node) => node === connect)).toHaveLength(1);
+		// The last field clears the gesture bar when scrolled to the end.
+		expect(Object.assign({}, ...[scroll.props.contentContainerStyle].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
 	});
 
 	it("connects from the password's Go key once the form is complete", async () => {

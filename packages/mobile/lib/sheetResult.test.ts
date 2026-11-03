@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	agentSheetRoute,
-	connectSheetRoute,
+	connectRoute,
 	machineNameSheetRoute,
 	parkSheetResult,
 	modelSheetRoute,
@@ -62,8 +62,8 @@ describe("route builders", () => {
 
 	it("passes the saved machine id to a reconnect form", () => {
 		const fn = vi.fn();
-		const route = connectSheetRoute(fn, "h_dev");
-		expect(route.pathname).toBe("/sheets/connect");
+		const route = connectRoute(fn, "h_dev");
+		expect(route.pathname).toBe("/connect");
 		expect(route.params.hostId).toBe("h_dev");
 		takeSheetResult<void>(route.params.resultKey)?.();
 		expect(fn).toHaveBeenCalled();

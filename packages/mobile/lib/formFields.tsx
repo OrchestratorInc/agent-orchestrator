@@ -1,4 +1,4 @@
-import { Button, HStack, LabeledContent, SecureField, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, LabeledContent, SecureField, Text, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
 import {
 	accessibilityLabel,
 	autocorrectionDisabled,
@@ -6,6 +6,7 @@ import {
 	buttonStyle,
 	disabled as disabledModifier,
 	foregroundStyle,
+	frame,
 	keyboardType as keyboardTypeModifier,
 	labelStyle,
 	listRowBackground,
@@ -20,13 +21,13 @@ import {
 	type ModifierConfig,
 } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
-import type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
+import type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 import type { Theme } from "./theme";
 import { useTheme } from "./ThemeProvider";
 import { space } from "./tokens";
 import { useNativeTextInput } from "./useNativeTextInput";
 
-export type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
+export type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 
 // iOS: rows of a SwiftUI Form. Each field is a labelled row, its value aligned
 // to the trailing edge as Settings lays out an editable value.
@@ -70,21 +71,46 @@ function inputModifiers(t: Theme, props: FormTextFieldProps, contentType?: Param
 	return modifiers;
 }
 
-export function FormTextField(props: FormTextFieldProps & { textContentType?: Parameters<typeof textContentType>[0] }) {
+type TextContentType = Parameters<typeof textContentType>[0];
+
+/** The bare input, without its row: a fixed `width` frames it to that size. */
+function InlineTextField(props: FormTextFieldProps & { textContentType?: TextContentType }) {
 	const t = useTheme();
 	const text = useNativeState(props.value);
 	const change = useNativeTextInput(props.value, text, props.onChangeText);
+	const modifiers = inputModifiers(t, props, props.textContentType);
+	if (typeof props.width === "number") modifiers.push(frame({ width: props.width }));
+	return (
+		<TextField
+			text={text}
+			placeholder={props.placeholder}
+			autoFocus={props.autoFocus}
+			maxLength={props.maxLength}
+			testID={props.testID}
+			onTextChange={(next) => change(next)}
+			modifiers={modifiers}
+		/>
+	);
+}
+
+export function FormTextField(props: FormTextFieldProps & { textContentType?: TextContentType }) {
 	return (
 		<LabeledContent label={props.label}>
-			<TextField
-				text={text}
-				placeholder={props.placeholder}
-				autoFocus={props.autoFocus}
-				maxLength={props.maxLength}
-				testID={props.testID}
-				onTextChange={(next) => change(next)}
-				modifiers={inputModifiers(t, props, props.textContentType)}
-			/>
+			<InlineTextField {...props} />
+		</LabeledContent>
+	);
+}
+
+/** One labelled row holding several inputs, split by dividers; each keeps its own label for VoiceOver. */
+export function FormTextFieldRow({ label, fields }: FormTextFieldRowProps) {
+	return (
+		<LabeledContent label={label}>
+			<HStack spacing={space.sm}>
+				{fields.flatMap((field, index) => [
+					...(index ? [<Divider key={`divider-${index}`} />] : []),
+					<InlineTextField key={field.testID ?? field.label} {...field} />,
+				])}
+			</HStack>
 		</LabeledContent>
 	);
 }

@@ -117,10 +117,6 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 	const validPort = isValidPort(cfg.httpPort);
 	const canConnect = !!machineName.trim() && !!cfg.host.trim() && validPort;
 	const editing = !!editingHost;
-	// What Connect is waiting for, said beside it: a disabled button alone does
-	// not say a name is required. A bad port has its own error.
-	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host"].filter(Boolean);
-	const connectHint = missing.length ? `Add ${missing.join(" and ")} to ${editing ? "save" : "connect"}.` : undefined;
 	return {
 		cfg,
 		setField,
@@ -131,13 +127,9 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		failure,
 		portError: portError(cfg.httpPort),
 		canConnect,
-		connectHint,
 		connect,
 		editing,
 		title: editing ? "Edit connection" : "Connect manually",
-		subtitle: editing
-			? "Update this machine's name, address, port, password, or TLS setting."
-			: "Name this machine, then enter the address and password from Connect Mobile or ao remote-host enable.",
 	};
 }
 

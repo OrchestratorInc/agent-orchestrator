@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
@@ -30,21 +30,15 @@ import { raceEndpoints } from "../lib/race";
 import { createScanGate } from "../lib/scanGate";
 import { mayAwaitLocalNetwork, raceAwaitingLocalNetwork } from "../lib/localNetworkWait";
 import { loadLocalNetworkConfirmed, setLocalNetworkConfirmed } from "../lib/localNetworkStore";
-import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
+import { connectRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, EmptyState, NumberedStep } from "../lib/ui";
 import { Spinner } from "../lib/Spinner";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { NativeHeaderButton } from "../lib/native-header-button";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
 import { iconSize, onCamera, radius, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
-
-// Whether the root stack draws this modal's bar (see app/_layout.tsx): a
-// static choice, because a modal whose header appears after it mounts is
-// rebuilt and would lose the scan in progress.
-const NATIVE_BAR = Platform.OS === "ios";
 
 export default function PairScreen() {
 	const t = useTheme();
@@ -83,7 +77,7 @@ export default function PairScreen() {
 				// leaving the error up until the user finds Try again. Only while
 				// this screen is in front — the manual-connect and name sheets sit
 				// on top of it, and a pair behind them could push a second sheet or
-				// close the screen mid-typing. Checked before promptAnswered() so
+				// go back mid-typing. Checked before promptAnswered() so
 				// the one retry is not spent while hidden.
 				if (!focused.current) return;
 				const code = gate.promptAnswered();
@@ -111,13 +105,11 @@ export default function PairScreen() {
 		});
 		return () => { current = false; };
 	}, [repairHostId]);
-	// The iOS bar names the task, so a reconnect must not read as a new pairing.
-	// Only the title changes, which updates the bar without rebuilding the modal.
+	// The bar names the task, so a reconnect must not read as a new pairing.
 	const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";
 	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
-	// The camera keeps running under the manual-connect sheet, so a QR code in
-	// frame would otherwise pair behind it. This replaces the old `manualOpen`
-	// flag now that the sheet is a route pushed on top rather than local state.
+	// The camera keeps running under the manual-connect page, so a QR code in
+	// frame would otherwise pair behind it.
 	const focused = useRef(true);
 	useFocusEffect(
 		useCallback(() => {
@@ -333,24 +325,12 @@ export default function PairScreen() {
 	}
 
 	const back = () => backOr(router);
-	// iOS presents this as a modal under a native bar, which closes it from an
-	// xmark item: our glass circle rather than a bar button, whose frame UIKit
-	// sizes under the 44pt target. Android's modal is a full-screen page with
-	// no bar, so it keeps the Material close button in its own top row below.
-	const headerItems = useMemo(() => NATIVE_BAR ? (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.View hidesSharedBackground>
-				<NativeHeaderButton icon="close" label="Close" onPress={() => backOr(router)} />
-			</Stack.Toolbar.View>
-		</Stack.Toolbar>
-	) : null, [router]);
 	if (repairHost === undefined) {
-		return <View style={styles.center}>{headerItems}<Spinner /></View>;
+		return <View style={styles.center}><Spinner /></View>;
 	}
 	if (repairHostId && !repairHost) {
 		return (
 			<View style={styles.screen}>
-				{headerItems}
 				<EmptyState
 					icon="monitor-off"
 					title="Machine no longer saved"
@@ -363,26 +343,15 @@ export default function PairScreen() {
 
 	const live = permission?.granted === true;
 	return (
-		<View style={[styles.screen, { paddingTop: NATIVE_BAR ? space.md : insets.top }]}>
-			{headerItems}
-			{/* Presented as a modal, so it closes rather than goes back. Android has
-			    no bar, so the page draws Material's: Close, then the page's title. */}
-			{NATIVE_BAR ? null : (
-				<View style={styles.topBar}>
-					<NativeHeaderButton icon="close" label="Close" onPress={back} />
-					<Text accessibilityRole="header" numberOfLines={1} style={styles.barTitle}>{title}</Text>
+		<View style={styles.screen}>
+			{/* Two short steps; the bar already names the task. Onboarding has
+			    just shown its own, so they are not repeated from there. */}
+			{fromOnboarding ? <View style={styles.introGap} /> : (
+				<View style={styles.steps}>
+					<NumberedStep n={1} total={2} title={repairHost ? `Open Connect Mobile on ${repairHost.name}` : "Open Connect Mobile on your computer"} compact />
+					<NumberedStep n={2} total={2} title="Scan the code" compact />
 				</View>
 			)}
-
-			{repairHost ? (
-				<View style={styles.repairIntro}>
-					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
-				</View>
-			) : fromOnboarding ? null : <View style={styles.steps}>
-					<NumberedStep n={1} total={3} title="Enable Orchestrator on a machine" compact />
-					<NumberedStep n={2} total={3} title="Open Connect Mobile or run ao remote-host enable" compact />
-					<NumberedStep n={3} total={3} title="Scan the code or enter details manually" compact />
-			</View>}
 
 			<View style={[styles.viewfinder, live && styles.viewfinderLive]}>
 				{live ? (
@@ -456,12 +425,12 @@ export default function PairScreen() {
 
 			{/* Always reachable — including when the camera is permanently denied,
 			    which would otherwise leave the user with no way forward at all. */}
-			<View style={[styles.manual, { paddingBottom: insets.bottom + space.sm }]}>
+			<View style={[styles.manual, { paddingBottom: insets.bottom + space.md }]}>
 				<Button
-					variant="ghost"
+					variant="secondary"
 					icon={{ ios: "keyboard", android: "keyboard" }}
 					title="Enter details manually"
-					onPress={() => router.push(connectSheetRoute(() => void finish(), repairHost?.id))}
+					onPress={() => router.push(connectRoute(() => void finish(), repairHost?.id))}
 				/>
 			</View>
 		</View>
@@ -489,11 +458,9 @@ function CameraGate({
 	return (
 		<View style={styles.gate}>
 			<AppSymbol name={{ ios: "camera", android: "photo_camera" }} size={iconSize.xl} color={t.textTertiary} />
-			<Text accessibilityRole="header" style={styles.gateTitle}>Camera access needed</Text>
+			<Text accessibilityRole="header" style={styles.gateTitle}>{canAskAgain ? "Scan with your camera" : "Camera is off"}</Text>
 			<Text style={styles.gateHint}>
-				{canAskAgain
-					? "Orchestrator uses the camera only to read a pairing QR code."
-					: "Camera access is turned off for Orchestrator. Enable it in system settings, or enter your details manually below."}
+				{canAskAgain ? "Used only to read the pairing code." : "Turn it on in Settings, or enter details manually."}
 			</Text>
 			{canAskAgain ? (
 				// App Review 5.1.1(iv): the button ahead of the system permission
@@ -520,17 +487,17 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	topBar: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
-	barTitle: { fontFamily: "DMSans_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
-
-	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
-	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg, gap: space.xs },
-	repairText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	steps: { paddingHorizontal: space.xl, paddingTop: space.xs, paddingBottom: space.lg },
+	introGap: { height: space.md },
 
 	// A card in the theme until the camera runs: the permission prompt inside it
 	// is themed text, which the dark preview backdrop would swallow in light mode.
+	// A 3:4 portrait frame as wide as the page, not one stretched to fill it:
+	// tall enough to aim with, short enough to keep everything under it close.
+	// Shrinks before the manual button is pushed off a short screen.
 	viewfinder: {
-		flex: 1,
+		aspectRatio: 3 / 4,
+		flexShrink: 1,
 		marginHorizontal: space.lg,
 		borderRadius: radius.lg, borderCurve: "continuous",
 		overflow: "hidden",
@@ -562,7 +529,7 @@ const makeStyles = (t: Theme) =>
 	},
 
 	// Connecting and failure share one quiet slot under the viewfinder: no fill
-	// or border, aligned with the numbered steps above.
+	// or border, aligned with the steps above.
 	notice: {
 		flexDirection: "row",
 		gap: space.sm,
@@ -578,7 +545,8 @@ const makeStyles = (t: Theme) =>
 	// padding so the first label lines up with the message above it.
 	noticeActions: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs, marginLeft: -space.md },
 
-	manual: { alignItems: "center", paddingTop: space.sm },
+	// Pinned to the bottom, full width, however much room the page has.
+	manual: { marginTop: "auto", paddingHorizontal: space.lg, paddingTop: space.lg },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

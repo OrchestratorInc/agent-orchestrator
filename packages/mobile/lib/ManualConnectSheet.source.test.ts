@@ -15,12 +15,12 @@ it("does not send machine A's saved bearer when manually pairing machine B", () 
 });
 
 // A started connect can't be called back. Leaving mid-request used to let
-// onConnected close the sheet a second time, popping the pair flow under it.
-it("holds the sheet while connecting and closes it only while it is still on top", () => {
+// onConnected close the form a second time, popping the pair flow under it.
+it("holds the page while connecting and closes it only while it is still on top", () => {
 	const form = read("./useManualConnect.ts");
-	const route = read("../app/sheets/connect.tsx");
+	const route = read("../app/connect.tsx");
 	expect(form).toContain("useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);");
 	expect(route).toContain("onBusyChange={setBusy}");
-	expect(route).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
+	expect(route).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false, headerBackVisible: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true, headerBackVisible: true });\n\t}, [busy, navigation]);");
 	expect(route).toContain("if (!navigation.isFocused()) return;\n\t\t\t\t\tbackOr(router);\n\t\t\t\t\tdone?.();");
 });

@@ -65,9 +65,9 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 	};
 }
 
-export function connectSheetRoute(onConnected: () => void, hostId?: string) {
+export function connectRoute(onConnected: () => void, hostId?: string) {
 	return {
-		pathname: "/sheets/connect" as const,
+		pathname: "/connect" as const,
 		params: {
 			resultKey: parkSheetResult(onConnected),
 			...(hostId ? { hostId } : {}),

@@ -46,6 +46,7 @@ export function swiftUIDouble() {
 		TextField: "TextField",
 		Toggle: "Toggle",
 		VStack: "VStack",
+		Divider: "Divider",
 		DisclosureGroup: Object.assign(host("DisclosureGroup"), { Label: host("DisclosureGroupLabel") }),
 		useNativeState: useTestNativeState,
 	};
@@ -71,6 +72,7 @@ export function composeDouble() {
 		LazyColumn: "LazyColumn",
 		PullToRefreshBox: "PullToRefreshBox",
 		Row: "Row",
+		Shape: { Pill: () => ({ $shape: "pill" }) },
 		Switch: "Switch",
 		Text: "Text",
 		TextButton: "TextButton",
@@ -84,7 +86,7 @@ export function composeDouble() {
 
 export const composeModifierNames = [
 	"animateContentSize", "background", "clickable", "clip", "combinedClickable", "fillMaxSize", "fillMaxWidth", "padding",
-	"paddingAll", "semantics", "testID", "toggleable", "weight",
+	"paddingAll", "semantics", "testID", "toggleable", "weight", "width",
 ] as const;
 
 export function composeModifierDouble() {

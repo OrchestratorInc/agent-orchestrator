@@ -1,15 +1,16 @@
-import { Icon, IconButton, ListItem, OutlinedTextField, Switch, Text, useNativeState, type TextFieldKeyboardOptions } from "@expo/ui/jetpack-compose";
-import { fillMaxWidth, semantics, testID as testTag, toggleable, type ModifierConfig } from "@expo/ui/jetpack-compose/modifiers";
+import { Icon, IconButton, ListItem, OutlinedTextField, Row, Shape, Switch, Text, useNativeState, type TextFieldKeyboardOptions } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, semantics, testID as testTag, toggleable, weight, width as fixedWidth, type ModifierConfig } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
-import type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
+import type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 import { useTheme } from "./ThemeProvider";
+import { space } from "./tokens";
 import { materialDrawable } from "./toolbarIcon.android";
 import { useNativeTextInput } from "./useNativeTextInput";
 
-export type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
+export type { FormPasswordFieldProps, FormTextFieldProps, FormTextFieldRowProps, FormToggleProps } from "./formFields.types";
 
-// Android: Material 3 controls for a Compose column. Fields are outlined, with
-// a floating label, and show their own error as supporting text.
+// Android: Material 3 controls for a Compose column. Fields are outlined pills,
+// with a floating label, and show their own error as supporting text.
 
 function keyboardOptions(props: FormTextFieldProps): TextFieldKeyboardOptions {
 	return {
@@ -24,8 +25,9 @@ function keyboardActions(onSubmit: (() => void) | undefined) {
 	return onSubmit ? { onDone: onSubmit, onNext: onSubmit, onGo: onSubmit } : undefined;
 }
 
-function fieldModifiers(testID: string | undefined, extra: ModifierConfig[] = []): ModifierConfig[] {
-	return [fillMaxWidth(), ...extra, ...(testID ? [testTag(testID)] : [])];
+function fieldModifiers(props: Pick<FormTextFieldProps, "testID" | "width">, extra: ModifierConfig[] = []): ModifierConfig[] {
+	const size = props.width === undefined ? fillMaxWidth() : props.width === "grow" ? weight(1) : fixedWidth(props.width);
+	return [size, ...extra, ...(props.testID ? [testTag(props.testID)] : [])];
 }
 
 export function FormTextField(props: FormTextFieldProps) {
@@ -42,13 +44,23 @@ export function FormTextField(props: FormTextFieldProps) {
 			isError={Boolean(props.error)}
 			keyboardOptions={keyboardOptions(props)}
 			keyboardActions={keyboardActions(props.onSubmitEditing)}
-			modifiers={fieldModifiers(props.testID)}
+			shape={Shape.Pill({})}
+			modifiers={fieldModifiers(props)}
 		>
 			{/* The label is the field's accessible name for TalkBack as well as its visible title. */}
 			<OutlinedTextField.Label><Text>{props.label}</Text></OutlinedTextField.Label>
 			{props.placeholder ? <OutlinedTextField.Placeholder><Text>{props.placeholder}</Text></OutlinedTextField.Placeholder> : null}
 			{props.error ? <OutlinedTextField.SupportingText><Text>{props.error}</Text></OutlinedTextField.SupportingText> : null}
 		</OutlinedTextField>
+	);
+}
+
+/** Fields side by side, top-aligned so one showing an error does not shift the other. */
+export function FormTextFieldRow({ fields }: FormTextFieldRowProps) {
+	return (
+		<Row horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="top" modifiers={[fillMaxWidth()]}>
+			{fields.map((field) => <FormTextField key={field.testID ?? field.label} {...field} />)}
+		</Row>
 	);
 }
 
@@ -69,7 +81,8 @@ export function FormPasswordField(props: FormPasswordFieldProps) {
 			keyboardOptions={{ keyboardType: "password", capitalization: "none", autoCorrectEnabled: false, imeAction: props.returnKeyType ?? "default" }}
 			keyboardActions={keyboardActions(props.onSubmitEditing)}
 			// Autofill reads the content type, which is how a saved password is offered here.
-			modifiers={fieldModifiers(props.testID, [semantics({ contentType: "password" })])}
+			shape={Shape.Pill({})}
+			modifiers={fieldModifiers(props, [semantics({ contentType: "password" })])}
 		>
 			<OutlinedTextField.Label><Text>{props.label}</Text></OutlinedTextField.Label>
 			{props.placeholder ? <OutlinedTextField.Placeholder><Text>{props.placeholder}</Text></OutlinedTextField.Placeholder> : null}

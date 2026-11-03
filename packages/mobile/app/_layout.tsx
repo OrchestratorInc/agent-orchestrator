@@ -57,27 +57,13 @@ const PICKER_SHEETS = [
 	{ name: "sheets/model", title: "Model" },
 ] as const;
 
-// The manual-connect form — the only sheet with text inputs, and the only one
-// that has to move for the keyboard.
-//
-// Android opens it at full height, and the form pads itself above the keyboard
-// (see ManualConnectSheet.android). The OS does not expand a sheet for the IME
-// here: the keyboard controller keeps the window from resizing, so a sheet
-// opened at a smaller detent stayed put and the keyboard covered all but its
-// first field. It runs under the status bar at full height, its body padded for
-// the bar, so nothing about its frame depends on the keyboard: at 0.95 the sheet
-// was lifted into the room above it as the keyboard rose, and at full height
-// inside the bar it opened under the bar until the first inset change moved it
-// down. Both landed in one jump once the keyboard had settled. iOS lifts a
-// presented sheet by itself. Its body is a SwiftUI Form, which scrolls
-// and fills the sheet rather than measuring to fit, so the sheet opens at a
-// fixed height: full for the connection form.
-//
-// iOS heads these forms with a native bar: an inline title, Cancel and the
-// confirm action, as a form sheet's are. Shown from the start rather than by
-// the page, because a modal whose header appears after it mounts is rebuilt.
-// Android keeps the title in the sheet's body.
-const CONNECT_SHEET_OPTIONS = {
+// iOS's machine-name sheet, the one sheet with a text input: a native bar
+// with an inline title, Cancel and the confirm action, as a form sheet's are.
+// Shown from the start rather than by the page, because a modal whose header
+// appears after it mounts is rebuilt. Its body is a SwiftUI Form, which scrolls
+// and fills the sheet rather than measuring to fit, so the route sets a fixed
+// height. (Manual connect, which once shared these, is a pushed page.)
+const NAME_SHEET_OPTIONS = {
 	presentation: "formSheet",
 	sheetAllowedDetents: [1] as number[],
 	sheetShouldOverflowTopInset: true,
@@ -258,10 +244,10 @@ function Shell() {
 				    Android), a page pushed over the board like Settings. */}
 				<Stack.Screen name="prs" options={{ headerShown: false, title: "Pull Requests", contentStyle: { backgroundColor: t.bgBase } }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
-				{/* iOS bars the modal natively, with its close item; Android keeps a
-				    full-screen page with Material's close button in the body. Fixed
-				    here, as the page cannot toggle a modal's header without a rebuild. */}
-				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: Platform.OS === "ios", title: "Pair a machine" }} />
+				{/* Pairing is two pages pushed over whatever opened it, each with the
+				    stack's back: the scanner, then the manual form over it. */}
+				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />
+				<Stack.Screen name="connect" options={{ title: "Connect manually" }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than
@@ -321,17 +307,6 @@ function Shell() {
 					}}
 				/>
 				<Stack.Screen
-					name="sheets/connect"
-					options={{
-						...CONNECT_SHEET_OPTIONS,
-						title: "Connect manually",
-						// The bar in the colour of the form below it (the grouped page
-						// on iOS, the sheet surface on Android), so the two read as one.
-						headerStyle: { backgroundColor: t.bgBase },
-						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgBase : t.bgSurface },
-					}}
-				/>
-				<Stack.Screen
 					name="sheets/machine-name"
 					options={Platform.OS === "android" ? {
 						presentation: "transparentModal",
@@ -339,7 +314,7 @@ function Shell() {
 						headerShown: false,
 						contentStyle: { backgroundColor: "transparent" },
 					} : {
-						...CONNECT_SHEET_OPTIONS,
+						...NAME_SHEET_OPTIONS,
 						title: "Name this machine",
 						// Two short rows: half height clears the keyboard on every phone.
 						sheetAllowedDetents: [0.5],

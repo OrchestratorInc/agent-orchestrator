@@ -6,15 +6,15 @@ import { isPresentedRoute, presentedRouteDepth } from "./pageNavigation";
 
 describe("opening pages outside sheets", () => {
 	it("recognises every sheet and modal the root stack presents", () => {
-		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "pair"]) expect(isPresentedRoute(name)).toBe(true);
+		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "render"]) expect(isPresentedRoute(name)).toBe(true);
 		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "settings/machine/[id]/index"]) expect(isPresentedRoute(name)).toBe(false);
 	});
 
-	// Settings, Notifications, Pull Requests and New task are pages pushed over
-	// the board on both platforms, so a page opened from one is pushed on top
-	// instead of dismissing it first.
-	it("treats Settings, Notifications, Pull Requests and New task as pages", () => {
-		for (const name of ["settings", "notifications", "prs", "spawn"]) expect(isPresentedRoute(name)).toBe(false);
+	// Settings, Notifications, Pull Requests, New task and pairing (the scanner
+	// and the manual form) are pages pushed over the board on both platforms, so
+	// a page opened from one is pushed on top instead of dismissing it first.
+	it("treats Settings, Notifications, Pull Requests, New task and pairing as pages", () => {
+		for (const name of ["settings", "notifications", "prs", "spawn", "pair", "connect"]) expect(isPresentedRoute(name)).toBe(false);
 		expect(presentedRouteDepth(["(tabs)", "settings", "notifications", "review/[sessionId]"])).toBe(0);
 	});
 
