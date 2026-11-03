@@ -538,7 +538,7 @@ describe("ArtifactsView", () => {
 		const dialog = screen.getByRole("dialog", { name: "page.html" });
 		const opened = dialog.querySelector("iframe");
 		expect(opened).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
-		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith("ao-html", true);
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "ao-html", cloud: undefined }, true);
 
 		const rewritten = structuredClone(page);
 		rewritten.artifactFiles![0].updatedAt = "2026-10-11T10:05:00Z";
@@ -550,7 +550,7 @@ describe("ArtifactsView", () => {
 		expect(reloaded).not.toBe(opened);
 	});
 
-	it("leaves a cloud preview to its versioned URL instead of the local artifact stream", async () => {
+	it("follows a cloud preview's changes through its cloud session", async () => {
 		const user = userEvent.setup();
 		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
 		cloud.cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
@@ -559,7 +559,7 @@ describe("ArtifactsView", () => {
 
 		await user.click(within(screen.getByRole("region", { name: "Cloud" })).getByRole("button", { name: /^notes\.md/ }));
 		expect(screen.getByRole("dialog", { name: "notes.md" })).toBeInTheDocument();
-		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith("cloud-1", false);
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "cloud-1", cloud: { orgId: "org-1" } }, true);
 	});
 
 	it("opens a Scratchpad artifact on the standalone session route", async () => {

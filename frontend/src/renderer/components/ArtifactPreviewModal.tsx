@@ -118,8 +118,8 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const { client: cloudClient } = useCloudCp(cloud);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const contentUrl = artifactContentUrl(artifact.sessionId, artifact.path, artifact.rawUrl);
-	// A local file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(artifact.sessionId, !cloud);
+	// A file the agent rewrites while it is open shows the new content.
+	useArtifactFileChanges({ id: artifact.sessionId, cloud: artifact.cloud }, true);
 	if (artifact.cloud) {
 		const orgId = artifact.cloud.orgId;
 		if (access.isError) return <PanelMessage action={<RetryButton onClick={() => { void access.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
