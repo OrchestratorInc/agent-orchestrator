@@ -29,6 +29,20 @@ func TestTranscriptWatcherExistingRootWrite(t *testing.T) {
 	assertNoTranscriptEvent(t, watcher.Events(), ignored)
 }
 
+// TestTranscriptWatcherEmitsClineMessagesRewrite catches dropping writes to
+// Cline's whole-document source, which is JSON rather than JSONL.
+func TestTranscriptWatcherEmitsClineMessagesRewrite(t *testing.T) {
+	root := t.TempDir()
+	document := filepath.Join(root, "1793093930983_gfzbo", "1793093930983_gfzbo.messages.json")
+	mustNoError(t, os.MkdirAll(filepath.Dir(document), 0o700))
+	mustNoError(t, os.WriteFile(document, []byte(`{"messages":[]}`), 0o600))
+	watcher, cancel := startTranscriptWatcher(t, root, document)
+	defer stopTranscriptWatcher(t, watcher, cancel)
+
+	mustNoError(t, os.WriteFile(document, []byte(`{"messages":[{"id":"m"}]}`), 0o600))
+	waitForTranscriptEvent(t, watcher.Events(), document)
+}
+
 func TestTranscriptWatcherErrorsRedactRootPath(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "private-transcript-root")
 	mustNoError(t, os.WriteFile(root, []byte("not a directory"), 0o600))

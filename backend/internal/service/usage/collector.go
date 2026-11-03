@@ -2368,7 +2368,7 @@ func (c *Collector) validateSourcePath(ctx context.Context, harness domain.Agent
 	if len(path) > maxUsagePathBytes {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
-	if !filepath.IsAbs(path) || strings.ToLower(filepath.Ext(path)) != ".jsonl" {
+	if !filepath.IsAbs(path) || !usageArtifactName(harness, path) {
 		return "", "", 0, errors.New(domain.UsageErrorArtifactPathRejected)
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
@@ -2876,11 +2876,24 @@ func (c *Collector) discoverClinePath(ctx context.Context, nativeID string) (str
 		return "", nil
 	}
 	path := filepath.Join(c.roots.ClineSessions, nativeID, nativeID+".messages.json")
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return "", nil
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().IsRegular() {
+		return path, nil
 	}
-	return path, nil
+	return "", nil
 }
+
+// usageArtifactName accepts the file names a harness's usage sources use:
+// JSONL logs, and Cline's whole-document <id>.messages.json.
+func usageArtifactName(harness domain.AgentHarness, path string) bool {
+	if strings.ToLower(filepath.Ext(path)) == ".jsonl" {
+		return true
+	}
+	return harness == domain.HarnessCline && strings.HasSuffix(path, ClineMessagesSuffix)
+}
+
+// ClineMessagesSuffix ends the name of the document Cline CLI rewrites with a
+// session's messages.
+const ClineMessagesSuffix = ".messages.json"
 
 // geminiSessionMeta is the first line of a Gemini CLI chat log.
 type geminiSessionMeta struct {

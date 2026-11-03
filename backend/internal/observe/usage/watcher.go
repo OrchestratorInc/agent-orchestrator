@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+
+	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
 const (
@@ -211,7 +213,7 @@ func (w *TranscriptWatcher) handleEvent(ctx context.Context, event fsnotify.Even
 	withinRoot := w.withinDesiredRoot(ctx, path)
 	w.mu.Unlock()
 	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 &&
-		filepath.Ext(path) == ".jsonl" &&
+		(filepath.Ext(path) == ".jsonl" || strings.HasSuffix(path, usagesvc.ClineMessagesSuffix)) &&
 		withinRoot {
 		emit = path
 		discovery = event.Op&(fsnotify.Create|fsnotify.Rename) != 0
