@@ -742,6 +742,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if fresh.nativeID != source.NativeID {
 		return errors.New("the source no longer holds this conversation")
 	}
+	if source.Fingerprint != "" && fresh.cwd != source.CWD {
+		return errSourceFingerprintChanged
+	}
 	if len(fresh.messages) == 0 {
 		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
 			return nil // A native server-side conversation need not expose a transcript.
