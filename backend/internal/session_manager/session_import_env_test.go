@@ -153,7 +153,7 @@ func TestChatImportPreparationReusesEnvironmentThroughControllerGate(t *testing.
 	record.Metadata.AgentSessionID, record.Metadata.ProviderConversationID = "thread-1", "thread-1"
 	record.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "thread-1", ConfigDir: root, Transferred: true, Prepared: true}
 	store.sessions[record.ID] = record
-	project := store.projects[record.ProjectID]
+	project := store.projects[string(record.ProjectID)]
 	project.Config.Env = map[string]string{"SYNTHETIC_WORKSPACE_ID": "project-value", "SYNTHETIC_CLEAR": ""}
 	store.projects[project.ID] = project
 	issuer := &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{{token: "synthetic-chat-token", verifier: "synthetic-chat-verifier"}}}
@@ -207,7 +207,7 @@ func TestNonImportChatLaunchEnvironmentRemainsIdentical(t *testing.T) {
 	manager.dataDir = t.TempDir()
 	seedChatResumeSession(store, domain.ActivityExited)
 	record := store.sessions["mer-1"]
-	project := store.projects[record.ProjectID]
+	project := store.projects[string(record.ProjectID)]
 	project.Config.Env = map[string]string{"SYNTHETIC_WORKSPACE_ID": "project-value", "SYNTHETIC_CLEAR": ""}
 	store.projects[project.ID] = project
 	expected := manager.runtimeEnv(record.ID, record.ProjectID, record.IssueID, project.Config.Env)
