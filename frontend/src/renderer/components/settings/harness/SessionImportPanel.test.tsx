@@ -15,7 +15,6 @@ vi.mock("../../../lib/api-client", () => ({
 it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("kimchi")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
@@ -27,6 +26,10 @@ it("does not offer OpenCode imports while resumed tools use the saved directory"
 
 it("does not offer Kimi imports while resumed tools use the saved directory", () => {
 	expect(IMPORTABLE_AGENTS.has("kimi")).toBe(false);
+});
+
+it("does not offer Droid imports while resumed tool cwd is unverified", () => {
+	expect(IMPORTABLE_AGENTS.has("droid")).toBe(false);
 });
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {

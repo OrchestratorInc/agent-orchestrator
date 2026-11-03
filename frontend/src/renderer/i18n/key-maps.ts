@@ -28,6 +28,7 @@ export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"open-in-editor": "shortcut.open-in-editor",
 	"copy-session-path": "shortcut.copy-session-path",
 	"model-picker": "shortcut.model-picker",
+	dictate: "shortcut.dictate",
 	"open-orchestrator": "shortcut.open-orchestrator",
 	"toggle-browser-devtools": "titlebar.devtools",
 };
