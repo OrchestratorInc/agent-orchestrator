@@ -1136,12 +1136,29 @@ function FirstProjectStep({ onFinish }: { onFinish: () => void }) {
 	return project ? <FirstTask project={project} onFinish={onFinish} /> : <ProjectChooser />;
 }
 
+/** The ready agent we integrate best with: Claude Code, then Codex, then the
+ * default priority order (Cursor, OpenCode, OpenCode 2, Aider), then any other
+ * ready agent. Undefined until one is ready, which leaves the usual agent
+ * questions in place. */
+function useBestReadyAgent(): string | undefined {
+	const readiness = useAgentReadinessQuery();
+	return useMemo(() => {
+		const ready = (readiness.data?.agents ?? []).filter((agent) => agent.effectiveReadiness === "ready").map((agent) => agent.id as string);
+		const rank = (id: string) => DEFAULT_AGENT_PRIORITY_RANK.get(id) ?? Number.MAX_SAFE_INTEGER;
+		return ready.sort((a, b) => rank(a) - rank(b))[0];
+	}, [readiness.data]);
+}
+
 function ProjectChooser() {
 	const { t } = useTranslation();
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const projects = useWorkspaceQuery().data ?? [];
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource; nonce: number } | null>(null);
 	const request = (source: ProjectSource) => setSourceSignal({ source, nonce: Date.now() });
+	const creating = useUiStore((state) => state.projectCreationPending);
+	// No agent questions on the first project: the best ready agent runs both
+	// the workers and the orchestrator.
+	const agent = useBestReadyAgent();
 
 	return (
 		<StepSplit
@@ -1176,7 +1193,9 @@ function ProjectChooser() {
 				onCreateProject={createProject}
 				onInitializeProject={initializeProjectRepository}
 				sourceSignal={sourceSignal}
+				autoAgent={agent}
 			/>
+			{creating ? <Waiting>{t("firstRun.projectCreating")}</Waiting> : null}
 		</StepSplit>
 	);
 }

@@ -3963,5 +3963,6 @@
 	"firstRun.exampleComposerDraft": "Спланируй следующий шаг для этой функции",
 	"firstRun.exampleTask4": "Ускорить поиск",
 	"firstRun.phoneInReview": "На проверке",
-	"firstRun.phonePrOpen": "открыт"
+	"firstRun.phonePrOpen": "открыт",
+	"firstRun.projectCreating": "Настраиваем проект…"
 }
