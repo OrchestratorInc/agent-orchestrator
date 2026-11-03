@@ -482,7 +482,6 @@ export function PreviewSidebar({
 	projects = [],
 	dimBody = false,
 	account,
-	focusAccount = false,
 	dimFooter = false,
 }: {
 	projects?: PreviewSidebarProject[];
@@ -490,8 +489,6 @@ export function PreviewSidebar({
 	dimBody?: boolean;
 	/** The signed-in cloud account; the footer shows Sign in to cloud without one. */
 	account?: { name: string; avatarUrl?: string } | null;
-	/** Lead with the account row: highlight it and dim the other footer rows. */
-	focusAccount?: boolean;
 	dimFooter?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -546,9 +543,9 @@ export function PreviewSidebar({
 			<div className="flex flex-col p-2 relative mt-auto gap-0 overflow-hidden border-t border-border-strong px-2 !py-2">
 				<div className="relative flex w-full min-w-46.5 flex-col gap-0.5">
 					<div className={cn(dimFooter && "opacity-35")}>
-						<SidebarAccountRow account={account ?? null} highlight={focusAccount} />
+						<SidebarAccountRow account={account ?? null} />
 					</div>
-					<div className={cn("flex flex-col gap-0.5", (dimFooter || focusAccount) && "opacity-35")}>
+					<div className={cn("flex flex-col gap-0.5", dimFooter && "opacity-35")}>
 						<button type="button" tabIndex={-1} className={FOOTER_ROW_CLASS}>
 							<span className={FOOTER_ROW_INNER_CLASS}>
 								<Smartphone aria-hidden="true" />
@@ -1200,7 +1197,7 @@ export function PreviewNewChat({
 										<div className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 pt-3 pb-3">
 											<div className="relative">
 												<div className="min-h-[4.5rem] py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-													<span>Plan the next step for this feature</span>
+													<span>{t("firstRun.exampleComposerDraft")}</span>
 												</div>
 											</div>
 											<ComposerToolbar
@@ -1227,11 +1224,6 @@ export function PreviewNewChat({
 			</section>
 		</div>
 	);
-}
-
-/** Wraps preview content the step is not about, so the taught part leads. */
-export function PreviewDim({ children }: { children: ReactNode }) {
-	return <div className="flex h-full min-h-0 flex-1 flex-col opacity-35">{children}</div>;
 }
 
 // ── Session page with the inspector (a worker's pull request) ──────────────

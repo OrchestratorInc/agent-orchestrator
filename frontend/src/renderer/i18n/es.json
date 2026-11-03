@@ -3897,5 +3897,6 @@
 	"newTask.openHarnessSettings": "Abrir configuración de agentes",
 	"newTask.chooseNewBranch": "Elegir rama nueva",
 	"newTask.newBranchPrompt": "Nombre de la rama nueva",
-	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea."
+	"newTask.newBranchReady": "Rama {{branch}} seleccionada para tu próxima tarea.",
+	"firstRun.exampleComposerDraft": "Planifica el siguiente paso de esta función"
 }

@@ -3959,5 +3959,6 @@
 	"newTask.openHarnessSettings": "Открыть настройки агентов",
 	"newTask.chooseNewBranch": "Выбрать новую ветку",
 	"newTask.newBranchPrompt": "Имя новой ветки",
-	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи."
+	"newTask.newBranchReady": "Ветка {{branch}} выбрана для следующей задачи.",
+	"firstRun.exampleComposerDraft": "Спланируй следующий шаг для этой функции"
 }

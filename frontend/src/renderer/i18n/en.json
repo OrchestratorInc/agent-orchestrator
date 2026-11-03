@@ -3809,5 +3809,6 @@
 	"newTask.openHarnessSettings": "Open Agent Harnesses",
 	"newTask.chooseNewBranch": "Choose new branch",
 	"newTask.newBranchPrompt": "New branch name",
-	"newTask.newBranchReady": "Branch {{branch}} selected for your next task."
+	"newTask.newBranchReady": "Branch {{branch}} selected for your next task.",
+	"firstRun.exampleComposerDraft": "Plan the next step for this feature"
 }

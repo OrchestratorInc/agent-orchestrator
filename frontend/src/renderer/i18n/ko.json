@@ -3828,5 +3828,6 @@
 	"newTask.openHarnessSettings": "에이전트 설정 열기",
 	"newTask.chooseNewBranch": "새 브랜치 선택",
 	"newTask.newBranchPrompt": "새 브랜치 이름",
-	"newTask.newBranchReady": "다음 작업에 사용할 {{branch}} 브랜치를 선택했습니다."
+	"newTask.newBranchReady": "다음 작업에 사용할 {{branch}} 브랜치를 선택했습니다.",
+	"firstRun.exampleComposerDraft": "이 기능의 다음 단계를 계획해 줘"
 }

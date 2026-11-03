@@ -3828,5 +3828,6 @@
 	"newTask.openHarnessSettings": "Agenteneinstellungen öffnen",
 	"newTask.chooseNewBranch": "Neuen Branch wählen",
 	"newTask.newBranchPrompt": "Name des neuen Branches",
-	"newTask.newBranchReady": "Branch {{branch}} für die nächste Aufgabe ausgewählt."
+	"newTask.newBranchReady": "Branch {{branch}} für die nächste Aufgabe ausgewählt.",
+	"firstRun.exampleComposerDraft": "Plane den nächsten Schritt für dieses Feature"
 }

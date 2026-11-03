@@ -3810,5 +3810,6 @@
 	"newTask.openHarnessSettings": "打开代理设置",
 	"newTask.chooseNewBranch": "选择新分支",
 	"newTask.newBranchPrompt": "新分支名称",
-	"newTask.newBranchReady": "已为下一个任务选择分支 {{branch}}。"
+	"newTask.newBranchReady": "已为下一个任务选择分支 {{branch}}。",
+	"firstRun.exampleComposerDraft": "规划这个功能的下一步"
 }
