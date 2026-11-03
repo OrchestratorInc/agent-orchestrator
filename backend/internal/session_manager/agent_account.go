@@ -49,8 +49,8 @@ func (m *Manager) StartAccountTransition(
 	if rec.IsTerminated {
 		return domain.SessionInterfaceTransition{}, ErrTerminated
 	}
-	if interfaceWorkspaceUnavailable(rec) {
-		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
+	if err := interfaceWorkspaceNotReady(rec, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
 	}
 	current, err := m.agentAccounts.SessionAccountID(ctx, id, rec.Harness)
 	if err != nil {

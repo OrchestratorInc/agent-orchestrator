@@ -95,6 +95,9 @@ var (
 	// ErrInterfaceWorkspaceUnavailable means the session's start failed before
 	// its workspace existed, so no controller can run there until it restarts.
 	ErrInterfaceWorkspaceUnavailable = errors.New("session: workspace was never set up")
+	// ErrInterfaceWorkspaceProvisioning means the session is still being set
+	// up, so its workspace is not recorded yet and the start owns the launch.
+	ErrInterfaceWorkspaceProvisioning = errors.New("session: workspace is still being set up")
 	// ErrInterfaceAlreadySelected makes a stale/double switch request an explicit
 	// conflict instead of leaking a generic 500 after the first switch commits.
 	ErrInterfaceAlreadySelected = errors.New("session: requested interface is already selected")
