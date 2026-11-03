@@ -4232,9 +4232,19 @@ components:
             allowed.
         features:
           type: array
-          description: Plan feature flags; empty when none apply.
+          description: >-
+            The organization's product features (share lets it share
+            sessions) and the deployment's own: attachments when the session
+            attachment routes are on. Empty when none apply.
           items:
             type: string
+        maxAttachmentBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The largest file one session attachment may be, in bytes. Sent
+            with attachments in features and omitted without it.
         customCoder:
           type: boolean
           description: >-
@@ -6118,8 +6128,15 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 65536
+          description: The message. It may be empty only when attachmentIds names at least one file.
+        attachmentIds:
+          type: array
+          maxItems: 10
+          description: Files uploaded to the session that the message carries. The worker places them in the session's workspace before the agent reads the message.
+          items:
+            type: string
+            format: uuid
         model:
           type: string
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
@@ -6152,6 +6169,25 @@ components:
               type:
                 type: string
                 minLength: 1
+    MessageAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, size, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
     ChatApprovalDecisionInput:
       type: object
       additionalProperties: false
@@ -8167,6 +8203,11 @@ components:
             authorName:
               type: string
               description: The sender's display name when the message was sent. Never an email address, so a share guest can see it.
+            attachments:
+              type: array
+              description: The files the message carries.
+              items:
+                $ref: "#/components/schemas/MessageAttachment"
         createdAt:
           type: string
           format: date-time
