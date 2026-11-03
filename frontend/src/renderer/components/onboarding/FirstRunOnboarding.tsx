@@ -411,8 +411,10 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			<div className="flex h-14 shrink-0 items-center justify-between gap-3 border-t border-border pl-12 pr-4">
 				<Progress index={index} />
 				<div className="flex items-center gap-2">
-					{/* Kept in place on the first page so nothing shifts later. */}
-					<Button type="button" variant="ghost" className={cn("text-muted-foreground", first && "invisible")} onClick={() => setConfirmingSkip(true)}>
+					{/* Only from the project page on: the earlier pages are quick, and
+					    skipping there would leave the app without tools. Kept in place
+					    (invisible) before then so nothing shifts when it appears. */}
+					<Button type="button" variant="ghost" className={cn("text-muted-foreground", step !== "project" && "invisible")} onClick={() => setConfirmingSkip(true)}>
 						{t("firstRun.skipSetup")}
 					</Button>
 					<Button type="button" variant="ghost" className={cn(first && "invisible")} onClick={goBack}>
