@@ -47,7 +47,7 @@ func discoverCommandCode(ctx context.Context, root string) ([]sourceFiles, error
 			return err
 		}
 		if walkErr != nil {
-			return nil // Unreadable entries do not hide other conversations.
+			return nil //nolint:nilerr // Skip unreadable entries so other conversations remain discoverable.
 		}
 		if entry.IsDir() {
 			if strings.HasPrefix(entry.Name(), ".") {

@@ -140,9 +140,9 @@ func TestCommandCodeRefusesUnreadableNativeBundle(t *testing.T) {
 }
 
 func TestCommandCodeRelocationUsesPhysicalWorkspace(t *testing.T) {
-	root, real := t.TempDir(), t.TempDir()
+	root, physicalWorkspace := t.TempDir(), t.TempDir()
 	alias := filepath.Join(t.TempDir(), "workspace-alias")
-	if err := os.Symlink(real, alias); err != nil {
+	if err := os.Symlink(physicalWorkspace, alias); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	id := "11111111-2222-4333-8444-555555555555"
@@ -152,7 +152,7 @@ func TestCommandCodeRelocationUsesPhysicalWorkspace(t *testing.T) {
 	if err := New().RelocateImportedSession(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := commandNativeProjectBucket(real)
+	bucket, err := commandNativeProjectBucket(physicalWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}

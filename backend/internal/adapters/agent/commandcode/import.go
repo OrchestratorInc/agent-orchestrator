@@ -89,9 +89,10 @@ func commandProjectBucket(cwd string) (string, error) {
 		return "", errors.New("command-code workspace must be absolute")
 	}
 	for _, ch := range cwd {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || strings.ContainsRune(" /\\._-:", ch)) {
-			return "", errors.New("command-code workspace needs unsupported slug transliteration")
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || strings.ContainsRune(" /\\._-:", ch) {
+			continue
 		}
+		return "", errors.New("command-code workspace needs unsupported slug transliteration")
 	}
 	for _, pattern := range []string{`([A-Z]{2,})([0-9]+)`, `([a-z0-9]+)([A-Z]{2,})`, `([a-z0-9])([A-Z])`, `([A-Z]+)([A-Z][a-rt-z0-9]+)`} {
 		cwd = regexp.MustCompile(pattern).ReplaceAllString(cwd, "$1 $2")
@@ -110,11 +111,11 @@ func commandProjectBucket(cwd string) (string, error) {
 func commandNativeProjectBucket(cwd string) (string, error) {
 	// The native catalog uses Node's process.cwd(), which is the physical
 	// working directory rather than an alias supplied to the runtime launcher.
-	real, err := filepath.EvalSymlinks(cwd)
+	physicalCWD, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return "", err
 	}
-	return commandProjectBucket(real)
+	return commandProjectBucket(physicalCWD)
 }
 
 // RelocateImportedSession copies only this native conversation and its sidecars
