@@ -277,8 +277,10 @@ func waitForHealth(t *testing.T, base string) {
 	t.Helper()
 	// Per-request timeout so a stalled connect or hung handshake doesn't park
 	// the test for the full Go test timeout; the outer deadline only bounds
-	// the polling loop, not any single GET.
-	client := &http.Client{Timeout: 500 * time.Millisecond}
+	// the polling loop, not any single GET. Keep-alives are off for the reason
+	// given in TestServerShutdownEndpoint: a pooled spare conn that never carries a
+	// request holds graceful shutdown for the whole ShutdownTimeout.
+	client := &http.Client{Timeout: 500 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true}}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(base + "/healthz")
@@ -343,7 +345,7 @@ func requireIPv6Loopback(t *testing.T) {
 // probeIPv6Loopback reads a health probe and its ipv6Loopback flag.
 func probeIPv6Loopback(t *testing.T, base string) (pid int, ipv6Loopback bool) {
 	t.Helper()
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	resp, err := client.Get(base + "/healthz")
 	if err != nil {
 		t.Fatalf("GET %s/healthz: %v", base, err)
