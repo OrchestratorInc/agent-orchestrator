@@ -3,6 +3,7 @@ package qwen
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,58 @@ import (
 )
 
 const qwenTestID = "807b463e-6160-40ef-aa01-eb87dcc061e1"
+
+func requireUnreadableQwenDirectory(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("directory permissions are not enforced for this user")
+	} else if !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+}
+
+func TestLocateTranscriptSkipsUnreadableSibling(t *testing.T) {
+	root := t.TempDir()
+	target := writeQwenSource(t, root, "/zzz")
+	blocked := filepath.Join(root, "projects", "-aaa")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requireUnreadableQwenDirectory(t, blocked)
+	ref := ports.NativeSessionRef{NativeSessionID: qwenTestID, ConfigDir: root}
+	p := New()
+	if got, ok, err := p.LocateTranscript(context.Background(), ref); err != nil || !ok || got != target {
+		t.Fatalf("readable sibling transcript = %q, %v, %v", got, ok, err)
+	}
+	if got, err := p.ProbeNativeSession(context.Background(), ref); err != nil || got != ports.NativeSessionAvailabilityAvailable {
+		t.Fatalf("readable sibling availability = %v, %v", got, err)
+	}
+}
+
+func TestLocateTranscriptReportsUnreadableProjectsRoot(t *testing.T) {
+	root := t.TempDir()
+	projects := filepath.Join(root, "projects")
+	if err := os.Mkdir(projects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	requireUnreadableQwenDirectory(t, projects)
+	ref := ports.NativeSessionRef{NativeSessionID: qwenTestID, ConfigDir: root}
+	if _, ok, err := New().LocateTranscript(context.Background(), ref); ok || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("unreadable root: found=%v, err=%v", ok, err)
+	}
+}
+
+func TestLocateTranscriptPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok, err := New().LocateTranscript(ctx, ports.NativeSessionRef{NativeSessionID: qwenTestID, ConfigDir: t.TempDir()}); ok || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lookup: found=%v, err=%v", ok, err)
+	}
+}
 
 func TestNativeSessionConfigDir(t *testing.T) {
 	for _, tc := range []struct {
