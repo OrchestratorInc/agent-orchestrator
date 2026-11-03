@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake 已关闭。点击开启。",
+	"awake.activeTooltip": "Stay Awake 已开启。点击关闭。",
+	"awake.pausedBattery": "电量低于 {{percent}}%，已暂停。\n充电后自动恢复。",
+	"awake.pausedHeat": "Mac 冷却期间已暂停。关闭后重新开启以重试。",
+	"awake.pausedUnknownBattery": "无法获取电池状态。关闭后重新开启以重试。",
+	"awake.toggleFailed": "无法更改 Stay Awake。请重试。",
+	"awake.pausedTooltip": "Stay Awake 已暂停。点击关闭。",
 	"sideChat.closingTab": "正在关闭",
 	"sideChat.closing": "正在关闭侧边聊天。确认停止后将消失。",
 	"sideChat.retryClose": "重试关闭",

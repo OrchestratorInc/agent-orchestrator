@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake ist aus. Zum Einschalten klicken.",
+	"awake.activeTooltip": "Stay Awake ist an. Zum Ausschalten klicken.",
+	"awake.pausedBattery": "Pausiert: Akku unter {{percent}} %.\nWird nach dem Laden fortgesetzt.",
+	"awake.pausedHeat": "Pausiert, bis dein Mac abgekühlt ist. Zum erneuten Versuch aus- und einschalten.",
+	"awake.pausedUnknownBattery": "Akkustatus nicht verfügbar. Zum erneuten Versuch aus- und einschalten.",
+	"awake.toggleFailed": "Stay Awake konnte nicht geändert werden. Erneut versuchen.",
+	"awake.pausedTooltip": "Stay Awake ist pausiert. Zum Ausschalten klicken.",
 	"sideChat.closingTab": "Wird geschlossen",
 	"sideChat.closing": "Seitenchat wird geschlossen. Er verschwindet nach bestätigtem Herunterfahren.",
 	"sideChat.retryClose": "Schließen erneut versuchen",

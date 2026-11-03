@@ -1010,7 +1010,7 @@ function KeepAwakeRow({
 							<button
 								type="button"
 								aria-label={t("mobile.keepAwake.details")}
-								className="ml-1 inline-flex align-middle text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							>
 								<Info className="size-3.5" aria-hidden="true" />
 							</button>

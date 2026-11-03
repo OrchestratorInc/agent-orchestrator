@@ -1,4 +1,11 @@
 {
+	"awake.offTooltip": "Stay Awake is off. Click to turn on.",
+	"awake.activeTooltip": "Stay Awake is on. Click to turn off.",
+	"awake.pausedBattery": "Paused: battery below {{percent}}%.\nResumes after charging.",
+	"awake.pausedHeat": "Paused while your Mac cools. Toggle to retry.",
+	"awake.pausedUnknownBattery": "Battery status unavailable. Toggle to retry.",
+	"awake.toggleFailed": "Couldn’t update Stay Awake. Try again.",
+	"awake.pausedTooltip": "Stay Awake is paused. Click to turn off.",
 	"sideChat.closingTab": "Closing",
 	"sideChat.closing": "Closing side chat. It will disappear once shutdown is confirmed.",
 	"sideChat.retryClose": "Retry close",
