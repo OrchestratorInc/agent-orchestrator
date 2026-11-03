@@ -98,9 +98,16 @@ func jitCapableNode(ctx context.Context, node string) (string, error) {
 
 func resolveJITCapableNode(ctx context.Context, node string) (string, error) {
 	crashed, err := nodeCrashesOnJIT(ctx, node)
-	if err != nil || !crashed {
-		// Not the entitlement crash: launch the bundled Node as before and let
-		// any other failure surface through the normal ACP error path.
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		// A smoke test that cannot run says nothing about the entitlement:
+		// launch the bundled Node as before and let any real failure surface
+		// through the normal ACP error path.
+		return node, nil //nolint:nilerr // Deliberately falls back to the unrepaired launch path.
+	}
+	if !crashed {
 		return node, nil
 	}
 	repaired, err := repairNodeJIT(ctx, node)
