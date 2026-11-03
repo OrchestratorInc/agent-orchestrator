@@ -78,9 +78,12 @@ export function menuModels(models: readonly AgentModelInfo[], selected: string, 
 	};
 }
 
-/** An agent's default-model row, by the model's name when the catalog marks one. */
+/**
+ * An agent's default-model row, worded as chat's: following the agent is not
+ * the same choice as pinning the model it names, which keeps its own row.
+ */
 export function defaultModelChoice(defaultLabel?: string): string {
-	return defaultLabel ? `Default · ${defaultLabel}` : "Default model";
+	return defaultLabel ? `Use agent model (${defaultLabel})` : "Use agent model";
 }
 
 /**
