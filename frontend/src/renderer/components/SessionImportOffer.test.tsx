@@ -67,3 +67,12 @@ it("stays hidden once dismissed", () => {
 	renderOffer(agent("codex", true, "authorized"));
 	expect(screen.queryByRole("button", { name: "Import Codex chats" })).not.toBeInTheDocument();
 });
+
+it("opens Copilot's import tab only when Copilot is installed and signed in", () => {
+	const view = renderOffer(agent("copilot", true, "unauthorized"));
+	expect(screen.queryByRole("button", { name: "Import GitHub Copilot chats" })).not.toBeInTheDocument();
+	view.unmount();
+	renderOffer(agent("copilot", true, "authorized"));
+	fireEvent.click(screen.getByRole("button", { name: "Import GitHub Copilot chats" }));
+	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "copilot", harnessTab: "import" });
+});

@@ -122,7 +122,7 @@ func New(store Store, dataDir string) *Service {
 	if qwen == "" {
 		qwen = filepath.Join(home, ".qwen")
 	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessCopilot: copilotRoot(home), domain.HarnessOMP: ompRoot(home), domain.HarnessKimchi: kimchi, domain.HarnessQwen: qwen}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
@@ -401,6 +401,8 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	// Per-harness layouts that do not fit the projects/sessions directory model
 	// discover their own conversations.
 	switch harness {
+	case domain.HarnessCopilot:
+		return discoverCopilot(ctx, root)
 	case domain.HarnessKimi:
 		return discoverKimi(ctx, root)
 	case domain.HarnessKimchi:
@@ -591,7 +593,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi, domain.HarnessCopilot, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessQwen}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
