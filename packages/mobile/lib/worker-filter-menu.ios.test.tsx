@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ select: vi.fn() }));
 
-vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", textSecondary: "#secondary" }), useThemeState: () => ({ scheme: "dark" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#primary", textSecondary: "#secondary" }), useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios", Version: "26.0" }, StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("expo-router", async () => {
@@ -66,18 +66,19 @@ const modifier = (node: ReactTestInstance, name: string) =>
 	(node.props.modifiers as { modifier: string; args: unknown[] }[]).find((entry) => entry.modifier === name);
 
 // A bar button's frame is under 44pt and UIKit offers no way to grow it, so the
-// filter is our own flat glyph with a frame the size of the touch target.
-it("is a flat 44pt glyph in the bar, named for VoiceOver", async () => {
+// filter is our own view with a 44pt target: the circled glyph, nothing behind it.
+it("is the circled filter glyph in the bar's own ink, no glass or fill, named for VoiceOver", async () => {
 	await act(async () => { renderer = create(workerFilterMenu(options())); });
 	expect(renderer!.root.findByType("StackToolbarView" as never).props.hidesSharedBackground).toBe(true);
 	expect(renderer!.root.findByType("Host" as never).props.style).toEqual({ width: 44, height: 44 });
 	const menu = renderer!.root.findAllByType("Menu" as never)[0];
 	expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Filter workers"]);
 	const face = menu.props.label;
-	expect(face.props.modifiers).toEqual(expect.arrayContaining([{ modifier: "frame", args: [{ width: 44, height: 44 }] }]));
-	expect(face.props.modifiers).not.toEqual(expect.arrayContaining([expect.objectContaining({ modifier: "glassCircle" })]));
-	// The bar's other buttons are bare glyphs in the primary ink.
-	expect(face.props).toMatchObject({ systemName: "line.3.horizontal.decrease", size: 24, color: "#textPrimary" });
+	expect(face.props).toMatchObject({ systemName: "line.3.horizontal.decrease.circle", size: 24, color: "#primary" });
+	expect(face.props.modifiers).toContainEqual({ modifier: "frame", args: [{ width: 44, height: 44 }] });
+	const names = (face.props.modifiers as { modifier: string }[]).map((entry) => entry.modifier);
+	expect(names).not.toContain("backgroundOverlay");
+	expect(names).not.toContain("clipShape");
 });
 
 it("fills the glyph and names the filters once the board is filtered", async () => {

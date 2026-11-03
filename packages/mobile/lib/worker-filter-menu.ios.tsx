@@ -21,9 +21,9 @@ import type { WorkerFilterMenuOptions } from "./worker-filter-menu";
 export type { WorkerFilterMenuOptions } from "./worker-filter-menu";
 
 /**
- * The Workers filter on iOS: a SwiftUI menu on a flat glyph with a 44pt target,
- * held in the bar as a custom view. Flat, not a glass circle: DESIGN.md keeps
- * glass out of the working UI. Not `Stack.Toolbar.Menu`: UIKit sizes a bar
+ * The Workers filter on iOS: a SwiftUI menu on the circled filter glyph with a
+ * 44pt target, held in the bar as a custom view. No glass and no fill behind
+ * it: DESIGN.md keeps glass out of the working UI. Not `Stack.Toolbar.Menu`: UIKit sizes a bar
  * button's frame under the touch target and offers no way to grow it. The
  * menus inside are the same as before, a Machine and a Project submenu each
  * with the system's check on the current choice.
@@ -51,12 +51,12 @@ function WorkerFilterButton({ environments, selectedEnvironmentId, onSelectEnvir
 	return (
 		<Host style={{ width: touchTarget, height: touchTarget }} colorScheme={scheme}>
 			<Menu
-				// Drawn as the bar's own buttons are (the bell, the gear): a bare glyph
-				// in the primary ink at their size. A filtered board fills it into a
-				// circle, so the state shows in its shape, not in colour alone.
+				// In the ink and size of the bar's own buttons (the bell, the gear),
+				// nothing behind it. A filtered board fills the circle, so the state
+				// shows in its shape, not in colour alone.
 				label={
 					<Image
-						systemName={filtered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"}
+						systemName={filtered ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"}
 						size={iconSize.xl}
 						color={t.textPrimary}
 						modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
