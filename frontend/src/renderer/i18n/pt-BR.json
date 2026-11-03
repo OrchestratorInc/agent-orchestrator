@@ -3897,5 +3897,6 @@
 	"newTask.openHarnessSettings": "Abrir configurações de agentes",
 	"newTask.chooseNewBranch": "Escolher nova ramificação",
 	"newTask.newBranchPrompt": "Nome da nova ramificação",
-	"newTask.newBranchReady": "Ramificação {{branch}} selecionada para sua próxima tarefa."
+	"newTask.newBranchReady": "Ramificação {{branch}} selecionada para sua próxima tarefa.",
+	"firstRun.exampleComposerDraft": "Planeje o próximo passo deste recurso"
 }
