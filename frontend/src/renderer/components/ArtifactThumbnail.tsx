@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { File, FileText, Globe, Image, Table2, Workflow } from "lucide-react";
+import { File, FileText, FileVideo, Globe, Image, Table2, Workflow } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { artifactContentUrl } from "../lib/artifact-content-url";
+import { fileMediaKind, mediaCrossOrigin } from "../lib/file-media";
 import type { ArtifactRow } from "../lib/artifacts";
 import { isMermaidPath, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { isDelimitedTextPath } from "../lib/delimited-text";
@@ -46,6 +47,9 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
+	// A local video shows the frame Chromium paints after a metadata preload,
+	// which reads only the ranges it needs rather than the whole file.
+	const video = !cloud && fileMediaKind(row.path) === "video" ? contentUrl : undefined;
 	// A cloud PDF card keeps the link it loaded with, so an access renewal does
 	// not download and parse the whole file again.
 	const pinnedPdf = usePinnedArtifactUrl(cloud && pdfPath ? access.data : undefined, cloud && pdfPath ? row.path : undefined, row.updatedAt);
@@ -136,12 +140,12 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const content = file.data && !file.data.binary ? file.data.content : "";
 	const preview = isMarkdown ? stripMarkdownFrontmatter(content) : content;
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
-	const Icon = imagePath ? Image : row.kind === "html" ? Globe : table ? Table2 : mermaid ? Workflow : isMarkdown || plainText || pdf ? FileText : File;
+	const Icon = imagePath ? Image : video ? FileVideo : row.kind === "html" ? Globe : table ? Table2 : mermaid ? Workflow : isMarkdown || plainText || pdf ? FileText : File;
 	const accessPending = cloud && cloudPreviewable && !access.data && access.fetchStatus === "fetching";
 	const imagePending = checkImage && imageStatus.isPending;
 	const unavailable = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400)))
 		|| (cloud && !cloudPreviewable) || pageAvailable === false || (page && !contentUrl) || (textPreview && !contentUrl)
-		|| (!page && !image && !pdf && !textPreview)
+		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	const placeholder = (
 		<span className="absolute inset-0 grid place-items-center text-passive" title={t("artifactLink.noPreview")}>
@@ -152,6 +156,8 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		<span inert ref={container} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
 			{accessPending || imagePending || unavailable ? placeholder : !visible ? null : image ? (
 				<img src={image} alt="" loading="eager" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
+			) : video ? (
+				<video crossOrigin={mediaCrossOrigin(video)} muted onError={() => setFailed(true)} playsInline preload="metadata" src={video} tabIndex={-1} className="h-full w-full object-cover object-top" />
 			) : page ? (
 				cloud ? (
 					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} thumbnail={{ width, fallback: placeholder }} title={row.name} url={page} />
