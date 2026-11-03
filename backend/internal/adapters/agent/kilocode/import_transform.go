@@ -131,55 +131,54 @@ func remapKiloExport(data []byte, sourceID, cwd string, next func(string) (strin
 		}
 		ids[identity.old], generated[id] = id, true
 	}
-	var reference func(any) (any, error)
-	reference = func(value any) (any, error) {
-		switch value := value.(type) {
-		case string:
-			if replacement, ok := ids[value]; ok {
-				return replacement, nil
+	// Only schema-defined graph fields are references. Tool input/output,
+	// structured responses and provider metadata must remain unchanged
+	// JSON values, even when their keys or strings resemble native IDs.
+	rewriteFields := func(object map[string]any, keys ...string) error {
+		for _, key := range keys {
+			value, present := object[key]
+			if !present || value == nil {
+				continue
 			}
-			if strings.HasPrefix(value, "ses_") || strings.HasPrefix(value, "msg_") || strings.HasPrefix(value, "prt_") {
-				return nil, errors.New("kilo export references history outside the imported session")
+			old, ok := value.(string)
+			if !ok {
+				return errors.New("invalid kilo native graph reference")
 			}
-		case []any:
-			for i, child := range value {
-				replaced, err := reference(child)
-				if err != nil {
-					return nil, err
-				}
-				value[i] = replaced
+			if old == "" {
+				continue
 			}
-		}
-		return value, nil
-	}
-	var rewrite func(any) error
-	rewrite = func(value any) error {
-		switch value := value.(type) {
-		case map[string]any:
-			for key, child := range value {
-				switch key {
-				case "id", "sessionID", "parentID", "messageID", "partID", "contextFrom", "tail_start_id", "sessionId", "parentId", "messageId", "partId", "session_id", "parent_id", "message_id", "part_id", "sessionIDs", "messageIDs", "partIDs", "session_ids", "message_ids", "part_ids":
-					replaced, err := reference(child)
-					if err != nil {
-						return err
-					}
-					value[key] = replaced
-				}
-				if err := rewrite(child); err != nil {
-					return err
-				}
+			replacement, ok := ids[old]
+			if !ok {
+				return errors.New("kilo export references history outside the imported session")
 			}
-		case []any:
-			for _, child := range value {
-				if err := rewrite(child); err != nil {
-					return err
-				}
-			}
+			object[key] = replacement
 		}
 		return nil
 	}
-	if err := rewrite(export); err != nil {
+	if err := rewriteFields(info, "id", "parentID"); err != nil {
 		return nil, "", err
+	}
+	if revert, ok := info["revert"].(map[string]any); ok {
+		if err := rewriteFields(revert, "messageID", "partID"); err != nil {
+			return nil, "", err
+		}
+	}
+	for _, value := range messages {
+		message := value.(map[string]any)
+		if err := rewriteFields(message["info"].(map[string]any), "id", "sessionID", "parentID"); err != nil {
+			return nil, "", err
+		}
+		for _, value := range message["parts"].([]any) {
+			part := value.(map[string]any)
+			if err := rewriteFields(part, "id", "sessionID", "messageID"); err != nil {
+				return nil, "", err
+			}
+			if part["type"] == "compaction" {
+				if err := rewriteFields(part, "tail_start_id"); err != nil {
+					return nil, "", err
+				}
+			}
+		}
 	}
 	info["directory"] = filepath.Clean(cwd)
 	delete(info, "workspaceID") // implicit-local execution uses no workspace identity

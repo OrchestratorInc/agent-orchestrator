@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -114,5 +115,42 @@ func TestKiloExportRemapCompactionReference(t *testing.T) {
 	}
 	if result.Messages[0].Parts[0].Tail != result.Messages[1].Info.ID || result.Messages[0].Parts[0].Tail == user {
 		t.Fatal("compaction retained an original message reference")
+	}
+}
+
+func TestKiloExportRemapPreservesArbitraryPayloadIdentities(t *testing.T) {
+	data, source := kiloSyntheticExport()
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	message := value["messages"].([]any)[0].(map[string]any)
+	part := message["parts"].([]any)[0].(map[string]any)
+	oldPart := part["id"]
+	payload := map[string]any{"id": "msg_external", "sessionID": source, "nested": map[string]any{"messageID": message["info"].(map[string]any)["parentID"], "partID": oldPart}}
+	part["type"], part["tool"], part["callID"] = "tool", "shell", "call_synthetic"
+	state := map[string]any{"status": "completed", "input": payload, "output": "Synthetic output", "title": "Synthetic tool", "metadata": payload, "providerMetadata": payload, "providerOutput": payload, "time": map[string]any{"start": float64(0), "end": float64(1)}}
+	part["state"], part["metadata"] = state, payload
+	message["info"].(map[string]any)["structured"] = payload
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := kiloImportID{random: bytes.NewReader(make([]byte, 70))}
+	out, nativeID, err := remapKiloExport(data, source, t.TempDir(), gen.next, func(string) (bool, error) { return false, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	message = got["messages"].([]any)[0].(map[string]any)
+	part = message["parts"].([]any)[0].(map[string]any)
+	if !reflect.DeepEqual(part["state"], state) || !reflect.DeepEqual(part["metadata"], payload) || !reflect.DeepEqual(message["info"].(map[string]any)["structured"], payload) {
+		t.Fatal("arbitrary payload was treated as a native graph")
+	}
+	if part["id"] == oldPart || part["sessionID"] != nativeID || part["messageID"] != message["info"].(map[string]any)["id"] {
+		t.Fatal("declared part identity was not rewritten")
 	}
 }

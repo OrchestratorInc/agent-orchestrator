@@ -131,7 +131,7 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 			}
 		}
 	}
-	return ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: r.ConfigDir}, nil
+	return ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: r.ConfigDir, TranscriptPath: filepath.Join(r.ConfigDir, "kilo.db", nativeID)}, nil
 }
 
 // kiloImportOutput bounds both provider streams and cancels the process tree
@@ -153,6 +153,9 @@ func (b *kiloImportOutput) Write(data []byte) (int, error) {
 }
 
 func (p *Plugin) runKiloImportCommand(ctx context.Context, cwd, root string, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "export" {
+		return nil, errors.New("kilo import is deferred: native export mutates its source store")
+	}
 	binary, err := p.kilocodeBinary(ctx)
 	if err != nil {
 		return nil, err

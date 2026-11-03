@@ -1,6 +1,8 @@
 package kilocode
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -25,5 +27,16 @@ func TestKiloImportedWorkspaceUsesEffectiveLaunchEnvironment(t *testing.T) {
 				t.Fatalf("workspace guard = %v, want refusal=%v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestKiloImportedHookRejectsProjectDatabaseBeforeWorkspaceWrites(t *testing.T) {
+	workspace := t.TempDir()
+	err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{WorkspacePath: workspace, ImportConfigDir: "/native/kilo", NativeSessionID: "ses_new", Env: map[string]string{"KILO_WORKSPACE_ID": "", "KILO_DB": "/other/history.db"}})
+	if err == nil || !strings.Contains(err.Error(), "database filename") {
+		t.Fatalf("project database override = %v", err)
+	}
+	if _, err := os.Stat(kilocodePluginPath(workspace)); !os.IsNotExist(err) {
+		t.Fatal("workspace hooks were written before import validation")
 	}
 }
