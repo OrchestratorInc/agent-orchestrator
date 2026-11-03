@@ -139,7 +139,7 @@ func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader,
 	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
 		if released != "" {
 			if restoreErr := providerkeys.ClaimForHarness(ctx, cfg.DataDir, released, "claude-code"); restoreErr != nil {
-				return fmt.Errorf("%w; the saved Anthropic API key could not be switched back on either: %v", err, restoreErr)
+				return fmt.Errorf("%w; the saved Anthropic API key could not be switched back on either: %w", err, restoreErr)
 			}
 		}
 		return err
