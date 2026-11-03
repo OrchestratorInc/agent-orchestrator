@@ -8,6 +8,8 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("../components/NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
 		existingProjectPaths?: readonly string[];

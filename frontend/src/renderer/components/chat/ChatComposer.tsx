@@ -1,3 +1,5 @@
+import { hasCodeSelection } from "../diffs/SelectionStableContent";
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -17,9 +19,9 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
  * Three completions live in the editor — `/` for AO commands and the agent's own
  * skills, `@` for worktree files, and pasted or dropped files. Completed skills
  * and paths are atomic inline chips but serialize to the plain text the agent
- * expects. The original keyboard contract remains: Enter sends, Shift+Enter makes
- * a newline, and ordinary typing stays local to the editor instead of rerendering
- * the surrounding chat surface.
+ * expects. Enter sends by default; a UI preference reserves Enter for newlines
+ * and sends with Cmd/Ctrl+Enter. Ordinary typing stays local to the editor instead
+ * of rerendering the surrounding chat surface.
  *
  * Every affordance is conditional on being able to deliver. The `/` menu only opens
  * when the provider actually reported skills, and the attach control only appears
@@ -57,6 +59,7 @@ import { formatCapturedFileReferences, type ChatFileReference } from "../../../s
 import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
@@ -141,7 +144,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
-	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// A /btw request the daemon refused never opened a side chat, so a
 	// retry cannot succeed; return the draft instead of locking the composer.
 	"CHAT_SIDE_UNAVAILABLE",
 	"CHAT_SIDE_UNSUPPORTED",
@@ -207,6 +210,7 @@ export const ChatComposer = memo(function ChatComposer({
 	skills = [],
 	filePaths = [],
 	filePathsTruncated,
+	onFileQuery,
 	onStageAttachments,
 	nativeImages,
 	onSteer,
@@ -266,6 +270,8 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
+		/** With text delivery, the message as typed, before its captures were inlined into `text`. */
+		displayText?: string,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -299,6 +305,11 @@ export const ChatComposer = memo(function ChatComposer({
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
+	/**
+	 * Told what follows "@" as it is typed, for a workspace whose files are searched
+	 * rather than listed up front (a Cloud session's): it answers through filePaths.
+	 */
+	onFileQuery?: (query: string) => void;
 	/** The path list was capped, so the menu says so rather than implying it is all. */
 	filePathsTruncated?: boolean;
 	/**
@@ -412,6 +423,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [highlighted, setHighlighted] = useState(0);
 	const highlightedRef = useRef(0);
 	const [isComposing, setIsComposing] = useState(false);
+	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
+	const enterSends = chatSendKeyMode === "enter";
 	const [dragging, setDragging] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
@@ -627,6 +640,10 @@ export const ChatComposer = memo(function ChatComposer({
 		() => suggestionsFor(trigger),
 		[trigger, dismissedKey, suggestionsFor],
 	);
+	const fileQuery = trigger?.kind === "file" ? trigger.query : undefined;
+	useEffect(() => {
+		if (fileQuery !== undefined) onFileQuery?.(fileQuery);
+	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
@@ -710,12 +727,14 @@ export const ChatComposer = memo(function ChatComposer({
 	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
 	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
-	// turn; the send button only shows it while the modifier is held.
+	// turn; the send button only shows it while the modifier is held. When Enter
+	// inserts newlines, Cmd/Ctrl+Enter is the send key, so the modifier delivers
+	// through the ordinary send/queue path instead of steering.
 	// Steering has no excerpt payload, so attached excerpts would be cleared with
 	// the accepted draft without reaching the agent. Queue those drafts instead.
 	const canSteerDraft =
 		Boolean(canSteer && onSteer) && !savingQueuedEdit && contextReferences.length === 0;
-	const steersDraft = modifierHeld && canSteerDraft;
+	const steersDraft = enterSends && modifierHeld && canSteerDraft;
 	const showsSteer = steersDraft && !durableDelivery && !queuedEditRecovery;
 	const sendActionLabel = translateDraft(durableDelivery && !submitting
 		? durableDelivery.state === "accepted"
@@ -747,15 +766,11 @@ export const ChatComposer = memo(function ChatComposer({
 		!hasDraft &&
 		!savingQueuedEdit &&
 		Boolean(queuedDock);
-	const sendHint = menuOpen
-		? "Enter to insert"
-		: savingQueuedEdit
-			? "⏎ save edit"
-			: showsSteer
-				? "Steer into running turn"
-				: willQueue
-					? "⏎ queue"
-					: "Enter to send";
+	const sendKeyHint = enterSends ? "Enter" : "Cmd/Ctrl+Enter";
+	const newlineHint = enterSends ? "Shift+Enter for newline" : "Enter for newline";
+	const sendHint = showsSteer && !menuOpen
+		? "Steer into running turn"
+		: `${sendKeyHint} to ${menuOpen ? "insert" : savingQueuedEdit ? "save edit" : willQueue ? "queue" : "send"}; ${newlineHint}`;
 	const persistedText = persistedDraft?.composer.text;
 	const draftSeedId = draftSeed?.id ?? (draftScopeKey ? `session:${draftScopeKey}` : undefined);
 	const draftSeedText = draftSeed?.text ?? persistedText;
@@ -803,7 +818,11 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
 
+	const previousAutoFocusKey = useRef(autoFocusKey);
 	useEffect(() => {
+		const changedSession = previousAutoFocusKey.current !== autoFocusKey;
+		previousAutoFocusKey.current = autoFocusKey;
+		if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
 		focusEditor();
 	}, [autoFocusKey, focusEditor]);
 
@@ -821,9 +840,12 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (!autoFocus) return;
 
-		const onWindowFocus = () => focusEditor();
+		const onWindowFocus = () => {
+			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			focusEditor();
+		};
 		const onVisibilityChange = () => {
-			if (document.visibilityState === "visible") focusEditor();
+			if (document.visibilityState === "visible") onWindowFocus();
 		};
 
 		window.addEventListener("focus", onWindowFocus);
@@ -1236,7 +1258,6 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
-			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1566,7 +1587,9 @@ export const ChatComposer = memo(function ChatComposer({
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
-      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+      // The text carries the captures for the agent; they are passed too, so the
+      // surface can show the message as typed with its captures beside it.
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText);
      } else {
       await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
      }
@@ -1646,19 +1669,19 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 
-			if (canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
+			if (enterSends && canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
 				setSteerNextRequest((request) => request + 1);
 				return true;
 			}
-			const wantsSteer = (event.metaKey || event.ctrlKey) && canSteerDraft;
+			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, enterSends, fileAttachments, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-		if (event.nativeEvent.isComposing) return;
+		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -2002,6 +2025,7 @@ export const ChatComposer = memo(function ChatComposer({
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
+					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
 					placeholder={

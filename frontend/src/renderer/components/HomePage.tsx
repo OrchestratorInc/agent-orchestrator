@@ -2,12 +2,12 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
-import { isMacPlatform } from "../lib/platform";
+import { formatTimeCompact } from "../lib/format-time";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -23,6 +23,7 @@ import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
 
 /**
@@ -43,7 +44,6 @@ import { Badge } from "./ui/badge";
  *   project: it never appears in the recent rows or counts toward the
  *   heading — the grid's standalone action and the sidebar own it.
  */
-const isMac = isMacPlatform();
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
@@ -65,13 +65,11 @@ function latestProjectTimestamp(project: WorkspaceSummary): string {
 		.at(-1) ?? "";
 }
 
-function relativeProjectTime(timestamp: string | undefined, emptyLabel: string, justNowLabel: string): string {
+// Relative times must follow the app language (i18n catalogs), not the OS locale —
+// formatTimeCompact routes through appI18n like every other time surface.
+function relativeProjectTime(timestamp: string | undefined, emptyLabel: string): string {
 	if (!timestamp) return emptyLabel;
-	const elapsedMinutes = Math.floor((Date.now() - new Date(timestamp).getTime()) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return justNowLabel;
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit);
+	return formatTimeCompact(timestamp);
 }
 
 function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[] {
@@ -80,7 +78,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; justNowLabel: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -109,7 +107,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 				</span>
 			</span>
 			<span className="relative z-[1] ml-auto shrink-0 text-right text-caption tabular-nums text-muted-foreground">
-				{relativeProjectTime(latestProjectFact, emptyTimeLabel, justNowLabel)}
+				{relativeProjectTime(latestProjectFact, emptyTimeLabel)}
 			</span>
 		</button>
 	);
@@ -145,6 +143,17 @@ function HomeActionCard({
 }
 
 export function HomePage() {
+	return (
+		<div className="relative flex h-full min-h-0 flex-col">
+			{/* The welcome page has no header. On macOS an invisible strip keeps
+			    the top edge draggable without moving the content. */}
+			{dragStyle ? <div aria-hidden="true" className="absolute inset-x-0 top-0 z-chrome h-toolbar" style={dragStyle} /> : null}
+			<HomePageContent />
+		</div>
+	);
+}
+
+function HomePageContent() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
@@ -190,24 +199,14 @@ export function HomePage() {
 
 	if (workspaceStartupState === "error" || workspaceQuery.isError) {
 		return (
-			<div className="flex min-h-full items-center justify-center px-6 py-16">
+			<div className="flex min-h-0 flex-1 items-center justify-center px-6 py-16">
 				<p className="text-center text-xs text-passive">{t("shell.couldNotLoadProjects")}</p>
 			</div>
 		);
 	}
 
 	return (
-		<div className="relative flex min-h-full items-center justify-center px-6 py-16">
-			{/* The home route hides the shell topbar, so on macOS this strip is the
-			    center pane's window-drag handle (the sidebar has its own). */}
-			{isMac ? (
-				<div
-					aria-hidden="true"
-					className="absolute inset-x-0 top-0 h-traffic-light-clearance"
-					data-slot="home-drag-region"
-					style={{ WebkitAppRegion: "drag" } as CSSProperties}
-				/>
-			) : null}
+		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
 					<section className="space-y-3 px-3">
@@ -274,7 +273,6 @@ export function HomePage() {
 										openProject(project.id);
 									}}
 										emptyTimeLabel={t("home.never")}
-										justNowLabel={t("time.justNow")}
 									/>
 								))}
 							</div>

@@ -2469,3 +2469,97 @@ func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
 		t.Fatalf("released checkout was modified: %q, %v", data, err)
 	}
 }
+
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func TestManager_AddFirstForInstallIsDurable(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	sink := &captureSink{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: memMilestones{}})
+
+	firstForInstall := func() any {
+		t.Helper()
+		for i := len(sink.events) - 1; i >= 0; i-- {
+			if sink.events[i].Name == "ao.projects.created" {
+				return sink.events[i].Payload["first_for_install"]
+			}
+		}
+		t.Fatalf("no ao.projects.created in %#v", sink.events)
+		return nil
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	if got := firstForInstall(); got != true {
+		t.Fatalf("first add first_for_install = %#v, want true", got)
+	}
+	if _, err := m.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// The table is empty again: the legacy event re-fires, the durable flag must not.
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after remove: %v", err)
+	}
+	if got := firstForInstall(); got != false {
+		t.Fatalf("re-add first_for_install = %#v, want false", got)
+	}
+}
+
+func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	// A build without markers added and then removed (archived) a project.
+	old := project.NewWithDeps(project.Deps{Store: store})
+	if _, err := old.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add on old build: %v", err)
+	}
+	if _, err := old.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	sink := &captureSink{}
+	milestones := memMilestones{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: milestones})
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after upgrade: %v", err)
+	}
+	var created, legacy int
+	for _, ev := range sink.events {
+		switch ev.Name {
+		case "ao.projects.created":
+			created++
+			if got := ev.Payload["first_for_install"]; got != false {
+				t.Fatalf("first_for_install = %#v, want false with an archived prior project", got)
+			}
+		case "ao.onboarding.first_project_added":
+			legacy++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("ao.projects.created count = %d, want 1", created)
+	}
+	// The deprecated event keeps its active-projects behavior.
+	if legacy != 1 {
+		t.Fatalf("first_project_added count = %d, want 1 (no active projects)", legacy)
+	}
+	if !milestones["project_added"] {
+		t.Fatal("marker not claimed")
+	}
+}

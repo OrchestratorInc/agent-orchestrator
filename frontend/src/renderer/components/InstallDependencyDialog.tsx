@@ -200,9 +200,7 @@ export function InstallDependencyDialog({
 	};
 
 	const title = harnessBlocking ? t("startup.blockedTitleAgent") : t("startup.blockedTitleDependency");
-	const opencodeV2Notice = selectedAgent === "opencode-v2"
-		? install.jobFor("opencode-v2")?.notice ?? t("startup.installOpencodeV2ReplacementWarning")
-		: undefined;
+	const opencodeV2Notice = selectedAgent === "opencode-v2" ? install.jobFor("opencode-v2")?.notice : undefined;
 
 	return (
 		<Dialog open onOpenChange={() => {}}>

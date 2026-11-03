@@ -2246,7 +2246,8 @@ export interface paths {
         get: operations["getSession"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Permanently delete a terminated session whose workspace is released */
+        delete: operations["deleteSession"];
         options?: never;
         head?: never;
         /** Rename a session display name */
@@ -4159,6 +4160,23 @@ export interface paths {
         patch: operations["updateSessionInterface"];
         trace?: never;
     };
+    "/api/v1/settings/session-retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose how long archived sessions are kept before they are deleted */
+        patch: operations["updateSessionRetention"];
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -4671,7 +4689,9 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
+            requiresVersion?: string;
             supportsFast?: boolean;
+            unavailableReason?: string;
         };
         AgentModelsResponse: {
             agentId: string;
@@ -5065,6 +5085,8 @@ export interface components {
             skipped: components["schemas"]["CleanupSkippedSession"][];
         };
         CleanupSkippedSession: {
+            /** @enum {string} */
+            code: "dirty" | "locked_worktree" | "missing_repo" | "archived_project_unresolvable" | "permission_error" | "cleanup_script_failed" | "worktree_busy" | "in_use_by_live_session" | "shell_terminal_open" | "cleanup_running" | "attachment_preservation_failed" | "outside_managed_root" | "teardown_failed";
             reason: string;
             sessionId: string;
         };
@@ -5420,6 +5442,7 @@ export interface components {
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
+            hostKey: string;
             token: string;
         };
         ControllersRequestRereviewRequest: {
@@ -5521,6 +5544,7 @@ export interface components {
             updatedAt: string;
             /** @enum {string} */
             workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
+            workspaceCleanupReportOnly?: boolean;
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
@@ -5670,6 +5694,7 @@ export interface components {
             status: string;
         };
         ConversationMessageResponse: {
+            authoredByUser?: boolean;
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
             continuation?: boolean;
@@ -5821,6 +5846,8 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            /** @enum {string} */
+            failureCode?: "provider_key_missing";
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
@@ -5939,6 +5966,7 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            branch?: string;
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
@@ -5952,6 +5980,10 @@ export interface components {
             ok: boolean;
             orchestratorId?: string;
             workerId: string;
+        };
+        DeleteSessionResponse: {
+            ok: boolean;
+            sessionId: string;
         };
         DesktopArtifactLocationResponse: {
             artifactDir: string;
@@ -6182,8 +6214,10 @@ export interface components {
             method?: string;
             /** @description Fixed user-visible consequence to acknowledge before running this install. */
             notice?: string;
-            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
+            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs. */
             output?: string;
+            /** @description While installing, the phase and percentage the installer's output reports. Absent in every other status. */
+            progress?: components["schemas"]["InstallProgress"];
             /** Format: date-time */
             startedAt?: null | string;
             /**
@@ -6200,6 +6234,17 @@ export interface components {
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
             waitingOn?: components["schemas"]["SessionWait"][];
+        };
+        InstallProgress: {
+            /** @description The installer's latest output line. */
+            detail?: string;
+            /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
+            percent?: null | number;
+            /**
+             * @description Installer phase the output names. Absent until a line names one.
+             * @enum {string}
+             */
+            phase?: "downloading" | "installing";
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -6418,6 +6463,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
             endpoints: components["schemas"]["MobileEndpoint"][];
@@ -6434,7 +6480,9 @@ export interface components {
             warning: string;
         };
         MobileTunnelStatus: {
+            fixed: boolean;
             hostname: string;
+            installing: boolean;
             lastError: string;
             location: string;
             ready: boolean;
@@ -6475,8 +6523,12 @@ export interface components {
             shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         OpenShellTerminalRequest: {
+            /** @description Initial terminal columns. With rows, the shell starts immediately at this grid instead of waiting for the client to attach (startOnAttach is then ignored). */
+            cols?: number;
             /** @description Project whose root the shell starts in. Omitted opens the shell in the daemon data dir. */
             projectId?: string;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
             /** @description Agent session the shell is scoped to, so it appears only in that session's tab strip. Omitted makes it a standalone shell. */
             sessionId?: string;
             /** @description Windows shell selector: auto, git-bash, pwsh, powershell, cmd, or a custom executable path. Ignored on macOS and Linux. */
@@ -6559,6 +6611,7 @@ export interface components {
             };
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
+            orchestratorRulesFile?: string;
             postCreate?: string[];
             preRemove?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];
@@ -7321,6 +7374,8 @@ export interface components {
                 [key: string]: components["schemas"]["HarnessDefault"];
             };
             localEnabled: boolean;
+            /** @description Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it. */
+            sessionRetentionDays: number;
             trackerIntakeEnabled: boolean;
             /** @description After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart. */
             versionRefresh: boolean;
@@ -7716,6 +7771,8 @@ export interface components {
             distinctId: string;
             githubLogin?: string;
             installId?: string;
+            isSignedIn?: null | boolean;
+            lifetimeSessions?: null | number;
             optedOut: boolean;
         };
         TrackerIntakeConfig: {
@@ -7804,6 +7861,10 @@ export interface components {
         UpdateSessionInterfaceRequest: {
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
+        };
+        UpdateSessionRetentionRequest: {
+            /** @description Days to keep an archived session whose worktree is released; 0 keeps it. */
+            days: null | number;
         };
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
@@ -15721,6 +15782,68 @@ export interface operations {
             };
         };
     };
+    deleteSession: {
+        parameters: {
+            query?: {
+                /** @description When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete. */
+                cleanup?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     renameSession: {
         parameters: {
             query?: never;
@@ -23373,6 +23496,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateSessionInterfaceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSessionRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionRetentionRequest"];
             };
         };
         responses: {

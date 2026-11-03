@@ -40,7 +40,7 @@ describe("TitlebarNav", () => {
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		expect(nav).toHaveClass("top-0", "h-toolbar", "left-titlebar-cluster-left-fullscreen");
 		// The brand and the history arrows trade places; the hidden one is inert and
 		// aria-hidden (it collapses to width 0 rather than unmounting).
 		const brand = container.querySelector('[data-slot="titlebar-brand"]');

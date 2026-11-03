@@ -44,6 +44,7 @@ type ControlDeps struct {
 //	rendererOrigin → exact renderer-origin boundary for Codex account management
 //	                 and computer use
 //	cors          → CORS allowlist for the Electron renderer / dev origins
+//	surface       → tag the request desktop/mobile/cli for product telemetry
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
 // REST routes, never long-lived terminal streams or health probes.
@@ -62,6 +63,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(rendererOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
+	r.Use(requestSurfaceMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
 	// JSON envelopes for unmatched routes / methods — chi's defaults are

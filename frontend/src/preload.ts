@@ -386,6 +386,9 @@ const api = {
 	},
 	cloudArtifact: {
 		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
+		/** Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it, or shows `reveal` in it. */
+		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string }) =>
+			ipcRenderer.invoke("cloudArtifact:openFolder", input) as Promise<void>,
 		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
 			ipcRenderer.on("cloudArtifact:frameNavigated", wrapped);
@@ -769,7 +772,7 @@ const api = {
 		importAccountHost: (accountId: string, input: { hostId: string; label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:importAccountHost", accountId, input) as Promise<void>,
 		pruneAccountHosts: (accountId: string, hostIds: string[]) => ipcRenderer.invoke("remotes:pruneAccountHosts", accountId, hostIds) as Promise<void>,
-		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<string>,
+		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<{ token: string; hostKey?: string }>,
 		add: (input: { label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
 		// An edit carries only what changed: an omitted password keeps the saved

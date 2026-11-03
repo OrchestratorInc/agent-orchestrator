@@ -5,12 +5,13 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AutomationsView } from "./AutomationsView";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const mocks = vi.hoisted(() => ({
 	automations: [] as Array<Record<string, unknown>>,
 	create: vi.fn(),
 	update: vi.fn(),
 	runsError: null as Error | null,
-	hideShellTopbar: false,
 	capture: vi.fn(),
 	defaultWorker: "codex",
 	defaultsLoaded: true,
@@ -26,7 +27,6 @@ vi.mock("../lib/telemetry", async (importOriginal) => ({
 
 vi.mock("../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/platform")>(),
-	hidesShellTopbar: () => mocks.hideShellTopbar,
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -66,7 +66,7 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -75,12 +75,11 @@ describe("AutomationsView", () => {
 		expect(screen.getAllByRole("button", { name: /create automation/i })).not.toHaveLength(0);
 	});
 
-	it.each([true, false])("shows the page title only when the shell title is hidden (%s)", (hidden) => {
-		mocks.hideShellTopbar = hidden;
+	it("always shows the page title in the topbar", () => {
 		renderView();
 		const title = screen.getByRole("heading", { name: "Automations" });
-		if (hidden) expect(title).not.toHaveClass("sr-only");
-		else expect(title).toHaveClass("sr-only");
+		expect(title).not.toHaveClass("sr-only");
+		expect(title.closest("header")).toHaveClass("workspace-topbar-container");
 	});
 
 	it("preselects the project's resolved default worker like New Task", async () => {

@@ -31,7 +31,7 @@ import (
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -59,7 +59,8 @@ func RunHost(args []string, stdout io.Writer) int {
 	port := tcpAddr.Port
 
 	var pty ptyConn
-	if opts.StartOnAttach {
+	cols, rows, deferred := hostStartGrid(opts)
+	if deferred {
 		pty = newDeferredPTY(func(cols, rows uint16) (ptyConn, error) {
 			conn, err := newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 			if err != nil {
@@ -68,7 +69,7 @@ func RunHost(args []string, stdout io.Writer) int {
 			return conn, err
 		})
 	} else {
-		pty, err = newConPTY(cwd, shellCmd, shellArgs, initialConPTYColumns, initialConPTYRows)
+		pty, err = newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 		if err != nil {
 			_ = ln.Close()
 			fmt.Fprintf(os.Stderr, "pty-host [%s]: newConPTY: %v\n", sessionID, err)

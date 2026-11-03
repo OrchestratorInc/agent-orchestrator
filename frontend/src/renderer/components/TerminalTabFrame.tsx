@@ -58,10 +58,13 @@ export function TerminalTabFrame({
 					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-control leading-none in-data-dragging:cursor-grabbing!"
 					{...buttonProps}
 				>
+					{/* The open-menu rule reaches the icon through child combinators. The
+					    group-has-[[data-state=open]] form (`:has([attr]) *`) made Chromium
+					    restyle the whole document on every DOM change in the app. */}
 					<span
 						className={cn(
 							"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0 in-data-dragging:opacity-0"),
+							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
 						)}
 					>
 						{icon}

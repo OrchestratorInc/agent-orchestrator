@@ -63,7 +63,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return err
 	}
 	ws := workspaceInfo(rec)
-	if err := preflightTUISwitchTarget(ctx, target, targetAgent); err != nil {
+	if err := preflightTUISwitchTarget(ctx, target, targetAgent, m.dataDir); err != nil {
 		return err
 	}
 
@@ -281,7 +281,9 @@ func (m *Manager) confirmTUISwitchTargetAlive(ctx context.Context, rec domain.Se
 // preflightTUISwitchTarget refuses a target with no binary or sign-in while the
 // source still runs, so the user's agent is not stopped for nothing. A probe
 // that cannot answer does not block: the launch itself still validates.
-func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, target ports.Agent) error {
+// The sign-in check uses the credentials the relaunch will get, so a harness
+// signed in through AO itself (Claude's setup-token login) can be a target.
+func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, target ports.Agent, dataDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if resolver, ok := target.(ports.AgentBinaryResolver); ok {
@@ -289,10 +291,15 @@ func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, 
 			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnavailable, Detail: fmt.Sprintf("%s is not installed", harness), Cause: err}
 		}
 	}
-	if checker, ok := target.(ports.AgentAuthChecker); ok {
-		if status, err := checker.AuthStatus(ctx); err == nil && status == ports.AgentAuthStatusUnauthorized {
-			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnavailable, Detail: fmt.Sprintf("%s is not signed in", harness), Cause: ports.ErrAgentAuthRequired}
-		}
+	status := ports.AgentAuthStatusUnknown
+	var err error
+	if runtimeChecker, ok := target.(ports.AgentRuntimeAuthChecker); ok && dataDir != "" {
+		status, _, _, err = runtimeChecker.AuthStatusForRuntime(ctx, dataDir)
+	} else if checker, ok := target.(ports.AgentAuthChecker); ok {
+		status, err = checker.AuthStatus(ctx)
+	}
+	if err == nil && status == ports.AgentAuthStatusUnauthorized {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnavailable, Detail: fmt.Sprintf("%s is not signed in", harness), Cause: ports.ErrAgentAuthRequired}
 	}
 	return nil
 }

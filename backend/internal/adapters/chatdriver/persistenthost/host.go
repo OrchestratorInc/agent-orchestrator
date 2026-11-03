@@ -232,7 +232,12 @@ func readDescriptorOnce(dataDir, sessionID string) (Descriptor, error) {
 	if err != nil {
 		return Descriptor{}, err
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
+	f, err := openHostFile(path)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	b, err := io.ReadAll(f)
+	_ = f.Close()
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -609,7 +614,9 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 			} else if lockErr != nil {
 				return lockErr
 			}
-		} else if readErr != nil {
+		} else if readErr != nil && !hostFileBusy(readErr) {
+			// A busy descriptor is the exiting host deleting it, or another
+			// reader; the next poll sees it gone.
 			return readErr
 		}
 		select {

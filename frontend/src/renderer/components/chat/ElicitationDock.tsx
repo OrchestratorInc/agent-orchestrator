@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
@@ -76,11 +76,14 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 	const groups = claudeQuestionGroups(properties);
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
+	// The line under the question is the answer, or how the question ended when
+	// there is no answer to show. An answer needs no "Answered" label above it.
+	const showsAnswers = answered && properties.length > 0;
+	const ending = showsAnswers ? null : <p className="text-muted-foreground">{outcome}</p>;
 
 	return (
 		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
-			<p className="font-medium text-muted-foreground">{outcome}</p>
-			{groups ? groups.map((group) => {
+			{groups ? groups.map((group, index) => {
 				const question = group[0];
 				if (!question) return null;
 				return (
@@ -88,24 +91,34 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
 							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
 						</p>
-						{answered ? <HistoryAnswers properties={group} content={content} /> : null}
+						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
 				);
 			}) : (
 				<div className="space-y-1">
 					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
 					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
-					{answered && properties.length > 0 ? <HistoryAnswers properties={properties} content={content} /> : null}
+					{activity.detail?.inputMode === "url" && activity.detail.url ? (
+						<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+					) : null}
+					{showsAnswers ? <HistoryAnswers properties={properties} content={content} labelled /> : ending}
 				</div>
 			)}
-			{activity.detail?.inputMode === "url" && activity.detail.url ? (
-				<p className="break-all text-muted-foreground">{activity.detail.url}</p>
-			) : null}
 		</section>
 	);
 }
 
-function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; content?: Record<string, unknown> }) {
+/**
+ * Only what was picked or typed. A Claude question already reads as the answer's
+ * label, so its answers drop the field name; generic forms keep it to tell their
+ * fields apart. Option descriptions and the "(Recommended)" tag only help while
+ * choosing, so neither is repeated here.
+ */
+function HistoryAnswers({ properties, content, labelled = false }: {
+	properties: PropertyEntry[];
+	content?: Record<string, unknown>;
+	labelled?: boolean;
+}) {
 	const answers = properties.filter(([name]) => {
 		const value = content?.[name];
 		return value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0);
@@ -113,35 +126,37 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 	if (answers.length === 0) {
 		return <p className="text-muted-foreground">{content ? "No answer provided" : "Answer unavailable"}</p>;
 	}
+	if (!labelled) {
+		return (
+			<>
+				{answers.map(([name, property]) => (
+					<p key={name} className="whitespace-pre-wrap break-words text-muted-foreground">{answerText(property, content?.[name])}</p>
+				))}
+			</>
+		);
+	}
 	return (
 		<dl className="space-y-1">
-			{answers.map(([name, property]) => {
-				const value = content?.[name];
-				const options = enumOptions(property);
-				function label(value: unknown): string {
-					if (typeof value === "boolean") return value ? "Yes" : "No";
-					if (typeof value === "number") return String(value);
-					if (typeof value !== "string") return "Answer unavailable";
-					const option = options.find((option) => option.value === value);
-					return option ? [option.label, option.description].filter(Boolean).join(" — ") : value;
-				}
-				return (
-					<div key={name} className="min-w-0">
-						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
-						<dd className="mt-0.5 flex min-w-0 items-start gap-2 text-foreground">
-							{/* The same tile the dock marks a picked choice with. */}
-							<span aria-hidden="true" className="mt-0.5 grid size-4 shrink-0 place-items-center rounded bg-logo-accent text-logo-accent-foreground">
-								<Check className="size-3" />
-							</span>
-							<span className="min-w-0 whitespace-pre-wrap break-words">
-								{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
-							</span>
-						</dd>
-					</div>
-				);
-			})}
+			{answers.map(([name, property]) => (
+				<div key={name} className="min-w-0">
+					<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
+					<dd className="mt-0.5 whitespace-pre-wrap break-words text-foreground">{answerText(property, content?.[name])}</dd>
+				</div>
+			))}
 		</dl>
 	);
+}
+
+function answerText(property: Record<string, unknown>, value: unknown): string {
+	const options = enumOptions(property);
+	function label(value: unknown): string {
+		if (typeof value === "boolean") return value ? "Yes" : "No";
+		if (typeof value === "number") return String(value);
+		if (typeof value !== "string") return "Answer unavailable";
+		const option = options.find((option) => option.value === value);
+		return option ? option.label.replace(/\s*\(recommended\)\s*$/i, "") : value;
+	}
+	return Array.isArray(value) ? value.map(label).join(", ") : label(value);
 }
 
 /** The full question stays visible above its answers, alongside the step count. */
@@ -402,14 +417,18 @@ function FormRequest({
 			/>
 			{collapsed ? null : (
 				<>
+				{/* A focused row's ring draws 2px outside it, and the Other row's field sits 4px
+				    inside its row. The padding keeps that ring clear at either end of the list, and
+				    the scroll padding wherever focus scrolls a row in. Both leave room to spare,
+				    because scroll offsets round to whole pixels. */}
 				<div
 					data-testid="elicitation-scroll-body"
-					className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
 				>
 					{!questionGroups && schema?.description ? (
 						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 					) : null}
-					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3")}>
 						{visibleProperties.map(([name, property], index) => (
 							<FormField
 								key={name}

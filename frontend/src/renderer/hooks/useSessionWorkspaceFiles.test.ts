@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	WorkspaceRequestError,
+	isMissingWorkspaceError,
+	isStaleWorkspaceSnapshotError,
+	clearMissingWorkspace,
+	knownMissingWorkspace,
+	recordWorkspaceResult,
 	retryWorkspaceRead,
 	sessionWorkspaceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
@@ -48,6 +53,55 @@ describe("retryWorkspaceRead", () => {
 		expect(retryWorkspaceRead(0, new WorkspaceRequestError("moved", "WORKSPACE_REF_MOVED", 409))).toBe(false);
 		expect(retryWorkspaceRead(0, new WorkspaceRequestError("gone", "WORKSPACE_BRANCH_NOT_FOUND", 404))).toBe(false);
 	});
+});
+
+describe("missing workspace boundary", () => {
+	it("requires the exact code and HTTP status", () => {
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("missing", "PROJECT_FOLDER_MISSING", 404))).toBe(true);
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("busy", "PROJECT_FOLDER_MISSING", 500))).toBe(false);
+		expect(isMissingWorkspaceError(new WorkspaceRequestError("other", "OTHER_NOT_FOUND", 404))).toBe(false);
+	});
+	it("isolates the exact missing folder error by host and session", async () => {
+		const error = { code: "PROJECT_FOLDER_MISSING", message: "missing" };
+		hostAGet.mockResolvedValue({ error, response: new Response(null, { status: 404 }) });
+		try {
+			await expect(sessionWorkspaceFilesQueryOptions("session-1", undefined, "host-a").queryFn()).rejects.toMatchObject({ code: "PROJECT_FOLDER_MISSING" });
+			await expect(sessionWorkspaceFilesQueryOptions("session-1", undefined, "host-a").queryFn()).rejects.toMatchObject({ code: "PROJECT_FOLDER_MISSING" });
+			expect(hostAGet).toHaveBeenCalledTimes(1);
+			expect(knownMissingWorkspace("session-1", "host-b")).toBeUndefined();
+			expect(knownMissingWorkspace("session-2", "host-a")).toBeUndefined();
+		} finally {
+			clearMissingWorkspace("session-1", "host-a");
+		}
+	});
+
+	it("ignores an old missing response after manual recovery starts", () => {
+		const error = { code: "PROJECT_FOLDER_MISSING", message: "missing" };
+		const sessionId = "stale-response";
+		const epoch = 0;
+		clearMissingWorkspace(sessionId);
+		recordWorkspaceResult(sessionId, undefined, error, new Response(null, { status: 404 }), "missing", epoch);
+		expect(knownMissingWorkspace(sessionId)).toBeUndefined();
+	});
+	it("expires a missing folder result so restored folders can be read again", async () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const sessionId = "restored-folder";
+		try {
+			recordWorkspaceResult(sessionId, undefined, { code: "PROJECT_FOLDER_MISSING", message: "missing" }, new Response(null, { status: 404 }), "missing");
+			expect(knownMissingWorkspace(sessionId)?.code).toBe("PROJECT_FOLDER_MISSING");
+			now.mockReturnValue(61_001);
+			expect(knownMissingWorkspace(sessionId)).toBeUndefined();
+		} finally {
+			now.mockRestore();
+			clearMissingWorkspace(sessionId);
+		}
+	});
+});
+
+it("recognizes only the typed stale snapshot conflict", () => {
+	expect(isStaleWorkspaceSnapshotError(new WorkspaceRequestError("changed", "WORKSPACE_SNAPSHOT_STALE", 409))).toBe(true);
+	expect(isStaleWorkspaceSnapshotError(new WorkspaceRequestError("busy", "WORKSPACE_SNAPSHOT_STALE", 500))).toBe(false);
 });
 
 describe("pull request file query keys", () => {

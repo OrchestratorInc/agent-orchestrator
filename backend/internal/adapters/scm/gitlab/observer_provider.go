@@ -220,6 +220,45 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	return result, nil
 }
 
+// ListOpenPRsByBranch lists the open merge requests whose source branch is
+// branch in repo itself, so MRs from forks are not returned, matching the
+// GitHub listing. GitLab filters by branch on the server, so a project's
+// other MRs are never paged through; a fork MR (source project differs from
+// the target project) is dropped here, and each returned MR carries repo as
+// both head and base.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{
+		"state":         {"opened"},
+		"source_branch": {branch},
+		"per_page":      {"100"},
+	}
+	path := fmt.Sprintf("/projects/%s/merge_requests", projectPath(repo.Owner, repo.Name))
+	hc, err := p.clientForRepoErr(repo)
+	if err != nil {
+		return nil, err
+	}
+	var result []ports.SCMPRObservation
+	_, err = hc.doGETPaginated(ctx, path, q, func(body []byte) error {
+		var mrs []restMR
+		if err := json.Unmarshal(body, &mrs); err != nil {
+			return fmt.Errorf("gitlab scm: unmarshal branch MR list: %w", err)
+		}
+		for i := range mrs {
+			if mrs[i].SourceProjectID != 0 && mrs[i].SourceProjectID != mrs[i].TargetProjectID {
+				continue
+			}
+			obs := mrToSCMPRObservation(repo, &mrs[i])
+			obs.BaseRepo = repo.Repo
+			result = append(result, obs)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 type restMR struct {
 	ID                  int64  `json:"id"`
 	IID                 int    `json:"iid"`

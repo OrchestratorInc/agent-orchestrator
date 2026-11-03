@@ -45,7 +45,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 	lock := newLockout(time.Now)
 	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
 	m := &LANManager{
-		handler:     lanControlBlock(auth(handler)),
+		handler:     lanControlBlock(auth(remoteJSONCompression(handler))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,

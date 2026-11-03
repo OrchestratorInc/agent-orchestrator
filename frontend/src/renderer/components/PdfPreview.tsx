@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask, TextLayer } from "pdfjs-dist";
+import { aoBridge } from "../lib/bridge";
 import { formatBytes } from "./ReadOnlyFileView";
 import { PanelMessage } from "./WorkspaceDiffView";
 
@@ -33,8 +34,10 @@ function loadPdfjs(): Promise<Pdfjs> {
  * A PDF's pages, fit to the pane width, with a text layer over each page so
  * its text can be selected. Pages draw as they near the viewport and release
  * their drawing once they are far from it. A file over MAX_PDF_BYTES is not read.
+ * A cloud file is cross-origin to the renderer, so its bytes are read through
+ * the main process.
  */
-export function PdfPreview({ firstPageOnly = false, onError, path, src }: { firstPageOnly?: boolean; onError: () => void; path: string; src: string }) {
+export function PdfPreview({ cloud = false, firstPageOnly = false, onError, path, src }: { cloud?: boolean; firstPageOnly?: boolean; onError: () => void; path: string; src: string }) {
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
@@ -50,14 +53,7 @@ export function PdfPreview({ firstPageOnly = false, onError, path, src }: { firs
 		setTooLarge(null);
 		void (async () => {
 			const pdfjs = await loadPdfjs();
-			const response = await fetch(src);
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			const declaredSize = Number(response.headers.get("content-length")) || 0;
-			if (declaredSize > MAX_PDF_BYTES) {
-				void response.body?.cancel();
-				throw new PdfTooLargeError(declaredSize);
-			}
-			const data = new Uint8Array(await response.arrayBuffer());
+			const data = cloud ? await aoBridge.cloudArtifact.fetch(src) : await readPdf(src);
 			if (data.byteLength > MAX_PDF_BYTES) throw new PdfTooLargeError(data.byteLength);
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });
@@ -76,7 +72,7 @@ export function PdfPreview({ firstPageOnly = false, onError, path, src }: { firs
 			cancelled = true;
 			void loadingTask?.destroy();
 		};
-	}, [firstPageOnly, src]);
+	}, [cloud, firstPageOnly, src]);
 
 	useEffect(() => {
 		const element = scrollRef.current;
@@ -110,6 +106,17 @@ export function PdfPreview({ firstPageOnly = false, onError, path, src }: { firs
 			) : null}
 		</div>
 	);
+}
+
+async function readPdf(src: string): Promise<Uint8Array> {
+	const response = await fetch(src);
+	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	const declaredSize = Number(response.headers.get("content-length")) || 0;
+	if (declaredSize > MAX_PDF_BYTES) {
+		void response.body?.cancel();
+		throw new PdfTooLargeError(declaredSize);
+	}
+	return new Uint8Array(await response.arrayBuffer());
 }
 
 function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {

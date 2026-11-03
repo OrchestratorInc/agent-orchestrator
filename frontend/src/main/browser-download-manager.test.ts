@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,13 +22,14 @@ function setup() {
 	const trashItem = vi.fn(async (filePath: string) => {
 		rmSync(filePath);
 	});
+	let nextId = 0;
 	const manager = createBrowserDownloadManager({
 		downloadsDirectory,
 		historyPath,
 		shell: { openPath, showItemInFolder, trashItem },
 		notify,
 		now: () => 42,
-		createId: () => "download-1",
+		createId: () => `download-${++nextId}`,
 	});
 	const session = new EventEmitter();
 	const sessionOn = vi.spyOn(session, "on");
@@ -89,6 +90,271 @@ class FakeDownloadItem extends EventEmitter {
 }
 
 describe("browser download manager", () => {
+	it.each(["active", "completed", "cancelled"] as const)("preserves a newer %s download when removing older completed history", async (status) => {
+		for (const reload of [false, true]) {
+			const test = setup();
+			const older = new FakeDownloadItem();
+			older.getFilename = () => "a.txt";
+			test.start(older);
+			const savePath = path.join(test.downloadsDirectory, "a.txt");
+			writeFileSync(savePath, "old download");
+			older.emit("done", {}, "completed");
+			rmSync(savePath);
+			const newer = new FakeDownloadItem();
+			newer.getFilename = () => "a.txt";
+			test.start(newer);
+			expect(newer.setSavePath).toHaveBeenCalledWith(savePath);
+			writeFileSync(savePath, "new download");
+			if (status !== "active") newer.emit("done", {}, status);
+			let manager = test.manager;
+			if (reload) {
+				manager.dispose();
+				manager = createBrowserDownloadManager({
+					downloadsDirectory: test.downloadsDirectory,
+					historyPath: test.historyPath,
+					shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+					notify: test.notify,
+				});
+			}
+
+			await manager.action({ id: "download-1", action: "remove" });
+
+			expect(test.trashItem).not.toHaveBeenCalled();
+			expect(readFileSync(savePath, "utf8")).toBe("new download");
+			expect(manager.list().downloads).toMatchObject([{ id: "download-2" }]);
+			expect(test.notify).toHaveBeenLastCalledWith(manager.list());
+			expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toMatchObject([{ id: "download-2" }]);
+		}
+	});
+
+	it("does not regain ownership after the newer cancelled history is removed and reloaded", async () => {
+		const test = setup();
+		const older = new FakeDownloadItem();
+		test.start(older);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "old download");
+		older.emit("done", {}, "completed");
+		rmSync(savePath);
+		const newer = new FakeDownloadItem();
+		test.start(newer);
+		writeFileSync(savePath, "new partial download");
+		newer.emit("done", {}, "cancelled");
+		await test.manager.action({ id: "download-2", action: "remove" });
+		test.manager.dispose();
+		const restored = createBrowserDownloadManager({
+			downloadsDirectory: test.downloadsDirectory,
+			historyPath: test.historyPath,
+			shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+			notify: test.notify,
+		});
+
+		await restored.action({ id: "download-1", action: "remove" });
+
+		expect(test.trashItem).not.toHaveBeenCalled();
+		expect(readFileSync(savePath, "utf8")).toBe("new partial download");
+	});
+
+	it("protects paths reused in legacy newest-first history even after the newer row is removed", async () => {
+		const test = setup();
+		mkdirSync(test.downloadsDirectory, { recursive: true });
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "new partial download");
+		mkdirSync(path.dirname(test.historyPath), { recursive: true });
+		writeFileSync(test.historyPath, JSON.stringify([
+			{ id: "new", fileName: "report.txt", savePath, status: "cancelled", receivedBytes: 10, totalBytes: 100, startedAt: 42, updatedAt: 42 },
+			{ id: "old", fileName: "report.txt", savePath, status: "completed", receivedBytes: 100, totalBytes: 100, startedAt: 42, updatedAt: 99 },
+		]));
+		const restored = createBrowserDownloadManager({
+			downloadsDirectory: test.downloadsDirectory,
+			historyPath: test.historyPath,
+			shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+			notify: test.notify,
+		});
+		await restored.action({ id: "new", action: "remove" });
+		await restored.action({ id: "old", action: "remove" });
+		expect(test.trashItem).not.toHaveBeenCalled();
+		expect(readFileSync(savePath, "utf8")).toBe("new partial download");
+	});
+
+	it("reserves a completed path until asynchronous trash finishes and rejects duplicate removal", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		test.start(item);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "downloaded");
+		item.emit("done", {}, "completed");
+		let finish!: () => void;
+		test.trashItem.mockImplementationOnce(async () => {
+			rmSync(savePath);
+			await new Promise<void>((resolve) => { finish = resolve; });
+		});
+		const removal = test.manager.action({ id: "download-1", action: "remove" });
+		try {
+			await expect(test.manager.action({ id: "download-1", action: "remove" })).rejects.toThrow();
+			const newer = new FakeDownloadItem();
+			test.start(newer);
+			expect(newer.setSavePath).toHaveBeenCalledWith(path.join(test.downloadsDirectory, "report (1).txt"));
+		} finally {
+			finish();
+			await removal;
+		}
+		expect(test.trashItem).toHaveBeenCalledOnce();
+	});
+
+	it("reports completed missing files as history-only without exposing private paths", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		test.start(item);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "downloaded");
+		item.emit("done", {}, "completed");
+		expect(test.manager.list().downloads[0]).toMatchObject({ fileRemovable: true });
+		rmSync(savePath);
+		expect(test.manager.list().downloads[0]).toMatchObject({ fileRemovable: false });
+		expect(JSON.stringify(test.manager.list())).not.toContain(savePath);
+		await test.manager.action({ id: "download-1", action: "remove" });
+		expect(test.trashItem).not.toHaveBeenCalled();
+	});
+
+	it("still deletes the newest owned completed file after reloading shared-path history", async () => {
+		const test = setup();
+		const older = new FakeDownloadItem();
+		test.start(older);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "old download");
+		older.emit("done", {}, "completed");
+		rmSync(savePath);
+		const newer = new FakeDownloadItem();
+		test.start(newer);
+		writeFileSync(savePath, "new download");
+		newer.emit("done", {}, "completed");
+		test.manager.dispose();
+		const restored = createBrowserDownloadManager({
+			downloadsDirectory: test.downloadsDirectory,
+			historyPath: test.historyPath,
+			shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+			notify: test.notify,
+		});
+		expect(restored.list().downloads).toMatchObject([{ id: "download-2", fileRemovable: true }, { id: "download-1", fileRemovable: false }]);
+		expect(JSON.stringify(restored.list())).not.toContain("superseded");
+		await restored.action({ id: "download-2", action: "remove" });
+		await restored.action({ id: "download-1", action: "remove" });
+		expect(test.trashItem).toHaveBeenCalledExactlyOnceWith(savePath);
+		expect(restored.list().downloads).toEqual([]);
+	});
+
+	it("releases the trash reservation on failure so removal can be retried", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		test.start(item);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(savePath, "downloaded");
+		item.emit("done", {}, "completed");
+		test.trashItem.mockRejectedValueOnce(new Error("Trash unavailable"));
+		await expect(test.manager.action({ id: "download-1", action: "remove" })).rejects.toThrow("Could not delete the downloaded file.");
+		await test.manager.action({ id: "download-1", action: "remove" });
+		expect(test.trashItem).toHaveBeenCalledTimes(2);
+		expect(existsSync(savePath)).toBe(false);
+	});
+
+	it("retains the completed-file directory and symlink security checks", async () => {
+		const test = setup();
+		const item = new FakeDownloadItem();
+		test.start(item);
+		item.emit("done", {}, "completed");
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		mkdirSync(savePath);
+		await expect(test.manager.action({ id: "download-1", action: "remove" })).rejects.toThrow("Could not delete the downloaded file.");
+		expect(test.trashItem).not.toHaveBeenCalled();
+		expect(test.manager.list().downloads).toHaveLength(1);
+		rmSync(savePath, { recursive: true });
+		const target = path.join(test.downloadsDirectory, "target.txt");
+		writeFileSync(target, "must survive");
+		symlinkSync(target, savePath);
+		await test.manager.action({ id: "download-1", action: "remove" });
+		expect(test.trashItem).toHaveBeenCalledExactlyOnceWith(savePath);
+		expect(readFileSync(target, "utf8")).toBe("must survive");
+	});
+
+	it("retains deletion ownership for distinct case-sensitive filenames", async () => {
+		const test = setup();
+		const older = new FakeDownloadItem();
+		test.start(older);
+		const olderPath = path.join(test.downloadsDirectory, "report.txt");
+		writeFileSync(olderPath, "older owned file");
+		older.emit("done", {}, "completed");
+		const newer = new FakeDownloadItem();
+		newer.getFilename = () => "Report.txt";
+		test.start(newer);
+		const newerPath = newer.setSavePath.mock.calls[0][0] as string;
+		expect(newerPath).not.toBe(olderPath);
+		writeFileSync(newerPath, "newer owned file");
+		newer.emit("done", {}, "completed");
+
+		await test.manager.action({ id: "download-1", action: "remove" });
+		expect(existsSync(olderPath)).toBe(false);
+		expect(readFileSync(newerPath, "utf8")).toBe("newer owned file");
+		await test.manager.action({ id: "download-2", action: "remove" });
+		expect(test.trashItem).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([false, true])("preserves a newer completed download when removing cancelled history (reload: %s)", async (reload) => {
+		const test = setup();
+		const cancelled = new FakeDownloadItem();
+		test.start(cancelled);
+		await test.manager.action({ id: "download-1", action: "cancel" });
+		cancelled.emit("done", {}, "cancelled");
+		const completed = new FakeDownloadItem();
+		test.start(completed);
+		const savePath = path.join(test.downloadsDirectory, "report.txt");
+		expect(cancelled.setSavePath).toHaveBeenCalledWith(savePath);
+		expect(completed.setSavePath).toHaveBeenCalledWith(savePath);
+		writeFileSync(savePath, "new download");
+		completed.emit("done", {}, "completed");
+		let manager = test.manager;
+		if (reload) {
+			manager.dispose();
+			manager = createBrowserDownloadManager({
+				downloadsDirectory: test.downloadsDirectory,
+				historyPath: test.historyPath,
+				shell: { openPath: test.openPath, showItemInFolder: test.showItemInFolder, trashItem: test.trashItem },
+				notify: test.notify,
+			});
+		}
+
+		await manager.action({ id: "download-1", action: "remove" });
+
+		expect(test.trashItem).not.toHaveBeenCalled();
+		expect(readFileSync(savePath, "utf8")).toBe("new download");
+		expect(manager.list().downloads).toMatchObject([{ id: "download-2", status: "completed" }]);
+		expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toMatchObject([{ id: "download-2" }]);
+		await manager.action({ id: "download-2", action: "open" });
+		expect(test.openPath).toHaveBeenCalledWith(savePath);
+	});
+
+	it.each(["cancelled", "interrupted"])("only removes %s history when its path has been manually reused", async (status) => {
+		for (const replacement of ["file", "directory", "symlink", "missing"] as const) {
+			const test = setup();
+			const item = new FakeDownloadItem();
+			test.start(item);
+			item.emit("done", {}, status);
+			const savePath = path.join(test.downloadsDirectory, "report.txt");
+			if (replacement === "file") writeFileSync(savePath, "replacement");
+			if (replacement === "directory") mkdirSync(savePath);
+			if (replacement === "symlink") symlinkSync("missing-target", savePath);
+			test.trashItem.mockRejectedValue(new Error("Must not trash a reused path"));
+
+			await test.manager.action({ id: "download-1", action: "remove" });
+
+			expect(test.trashItem).not.toHaveBeenCalled();
+			expect(test.manager.list().downloads).toEqual([]);
+			expect(JSON.parse(readFileSync(test.historyPath, "utf8"))).toEqual([]);
+			if (replacement === "file") expect(readFileSync(savePath, "utf8")).toBe("replacement");
+			if (replacement === "directory") expect(lstatSync(savePath).isDirectory()).toBe(true);
+			if (replacement === "symlink") expect(lstatSync(savePath).isSymbolicLink()).toBe(true);
+		}
+	});
+
 	it("contains destination setup failures and reports them without exposing the path", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "ao-browser-download-failure-"));
 		temporaryDirectories.push(root);

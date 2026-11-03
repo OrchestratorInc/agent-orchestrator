@@ -57,6 +57,9 @@ func (c *conversation) RequestPermission(
 	if len(params.Options) == 0 {
 		return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 	}
+	if isQwenUserQuestion(params.ToolCall) {
+		return c.handleQwenUserQuestion(ctx, params)
+	}
 	c.mu.Lock()
 	policy, mode := c.permissionFor, c.permissionMode
 	c.mu.Unlock()

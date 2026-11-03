@@ -1104,6 +1104,8 @@ type ChatEvent struct {
 
 	// TurnState is set on turn.completed.
 	TurnState domain.TurnState
+	// FailureCode is set only when an adapter recognizes a specific failed-turn cause.
+	FailureCode domain.ConversationFailureCode
 
 	// Delta is the text appended by a message.delta, a reasoning.delta, a
 	// command.output.delta, a command.input or an activity.text.

@@ -114,6 +114,44 @@ describe("writeAppStateMarker", () => {
 		expect(m.installSource).toBe("unknown");
 	});
 
+	it("carries keys owned by other writers through a launch write", async () => {
+		const options = { stateDir: dir, appPath: "/Applications/AO.app", version: "1.2.3", now: () => new Date() };
+		await writeAppStateMarker(options);
+		const file = path.join(dir, APP_STATE_FILE_NAME);
+		await writeFile(file, JSON.stringify({ ...(await readMarker(dir)), acq_channel_self_reported: "x" }));
+		await writeAppStateMarker({ ...options, version: "1.2.4" });
+		const m = await readMarker(dir);
+		expect(m.acq_channel_self_reported).toBe("x");
+		expect(m.version).toBe("1.2.4");
+	});
+
+	it("records a detected installer on first creation, and installedVia wins over it", async () => {
+		const options = { appPath: "/Applications/AO.app", version: "1.2.3", now: () => new Date() };
+		await writeAppStateMarker({ ...options, stateDir: dir, detectedInstallSource: "dmg" });
+		expect((await readMarker(dir)).installSource).toBe("dmg");
+
+		const viaDir = await mkdtemp(path.join(os.tmpdir(), "ao-app-state-via-"));
+		try {
+			await writeAppStateMarker({ ...options, stateDir: viaDir, installedVia: "npm-bootstrap", detectedInstallSource: "dmg" });
+			expect((await readMarker(viaDir)).installSource).toBe("npm-bootstrap");
+			// Sticky: a later launch with a detected format keeps the recorded source.
+			await writeAppStateMarker({ ...options, stateDir: viaDir, detectedInstallSource: "brew-cask" });
+			expect((await readMarker(viaDir)).installSource).toBe("npm-bootstrap");
+		} finally {
+			await rm(viaDir, { recursive: true, force: true });
+		}
+	});
+
+	it("refines a recorded 'unknown' with a detected installer", async () => {
+		const options = { stateDir: dir, appPath: "/Applications/AO.app", version: "1.2.3", now: () => new Date() };
+		await writeAppStateMarker(options);
+		expect((await readMarker(dir)).installSource).toBe("unknown");
+		await writeAppStateMarker({ ...options, detectedInstallSource: null });
+		expect((await readMarker(dir)).installSource).toBe("unknown");
+		await writeAppStateMarker({ ...options, detectedInstallSource: "appimage" });
+		expect((await readMarker(dir)).installSource).toBe("appimage");
+	});
+
 	it("atomic write leaves no temp file behind", async () => {
 		await writeAppStateMarker({
 			stateDir: dir,

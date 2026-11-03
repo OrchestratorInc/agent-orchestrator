@@ -74,6 +74,7 @@ import Laptop from "lucide-react-native/icons/laptop";
 import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
+import ListChecks from "lucide-react-native/icons/list-checks";
 import LoaderCircle from "lucide-react-native/icons/loader-circle";
 import LogOut from "lucide-react-native/icons/log-out";
 import Map from "lucide-react-native/icons/map";
@@ -209,6 +210,7 @@ export const glyphs = {
 	"layers": Layers,
 	"link": Link,
 	"list": List,
+	"list-checks": ListChecks,
 	"list-tree": ListTree,
 	"loader": LoaderCircle,
 	"log-out": LogOut,

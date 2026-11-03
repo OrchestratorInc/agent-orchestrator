@@ -1,6 +1,6 @@
 {
 	"name": "agent-orchestrator",
-	"productName": "Agent Orchestrator",
+	"productName": "Orchestrator",
 	"version": "0.13.0",
 	"private": true,
 	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",

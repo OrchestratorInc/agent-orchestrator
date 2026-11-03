@@ -13,6 +13,8 @@ import { CreateProjectAgentSheet } from "./CreateProjectAgentSheet";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 // Routing and daemon requests are external boundaries; every modal, settings
 // form, selector, and recovery action in these tests is the real component.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({

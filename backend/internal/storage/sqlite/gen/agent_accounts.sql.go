@@ -13,6 +13,43 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const addDeletedSessionAccountUsage = `-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos
+`
+
+type AddDeletedSessionAccountUsageParams struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
+func (q *Queries) AddDeletedSessionAccountUsage(ctx context.Context, arg AddDeletedSessionAccountUsageParams) error {
+	_, err := q.db.ExecContext(ctx, addDeletedSessionAccountUsage,
+		arg.AccountID,
+		arg.Day,
+		arg.ModelID,
+		arg.InputTokens,
+		arg.CachedInputTokens,
+		arg.OutputTokens,
+		arg.EstimatedCostNanos,
+	)
+	return err
+}
+
 const agentAccountUsageSince = `-- name: AgentAccountUsageSince :many
 SELECT
     CAST(COALESCE(
@@ -37,9 +74,15 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= ?1
   AND b.harness IN ('claude-code', 'codex')
+  AND (CAST(?2 AS TEXT) = '' OR b.session_id = CAST(?2 AS TEXT))
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3
 `
+
+type AgentAccountUsageSinceParams struct {
+	Since     sql.NullTime
+	SessionID string
+}
 
 type AgentAccountUsageSinceRow struct {
 	AccountID          string
@@ -53,9 +96,11 @@ type AgentAccountUsageSinceRow struct {
 
 // Each usage event counts for the account its session used when the event
 // happened; an event older than the session's first binding counts for that
-// first account. Days are UTC calendar days.
-func (q *Queries) AgentAccountUsageSince(ctx context.Context, since sql.NullTime) ([]AgentAccountUsageSinceRow, error) {
-	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, since)
+// first account. Days are UTC calendar days. A non-empty session_id limits the
+// sum to that session's events (folded into deleted_session_account_usage
+// before the session is deleted).
+func (q *Queries) AgentAccountUsageSince(ctx context.Context, arg AgentAccountUsageSinceParams) ([]AgentAccountUsageSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, arg.Since, arg.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +216,44 @@ DELETE FROM agent_account_defaults WHERE account_id = ?
 func (q *Queries) DeleteAgentAccountDefaultFor(ctx context.Context, accountID string) error {
 	_, err := q.db.ExecContext(ctx, deleteAgentAccountDefaultFor, accountID)
 	return err
+}
+
+const deletedSessionAccountUsageSince = `-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(?1 AS TEXT)
+ORDER BY day, account_id, model_id
+`
+
+func (q *Queries) DeletedSessionAccountUsageSince(ctx context.Context, sinceDay string) ([]DeletedSessionAccountUsage, error) {
+	rows, err := q.db.QueryContext(ctx, deletedSessionAccountUsageSince, sinceDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletedSessionAccountUsage{}
+	for rows.Next() {
+		var i DeletedSessionAccountUsage
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.Day,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAgentAccountDefault = `-- name: GetAgentAccountDefault :one
