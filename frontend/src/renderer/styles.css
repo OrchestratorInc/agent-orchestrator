@@ -6205,7 +6205,9 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
  * copies of the theme, the window clears its canvases, blurs the wallpaper
  * (standing in for native vibrancy) and paints the tint, a little more
  * opaque than the app's 70% so the preview reads clearly. */
-.onboarding-preview-stage {
+/* A translucent app window already holds these solid copies on :root (above),
+ * and its body has cleared the originals, so only an opaque one copies here. */
+html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	--solid-bg-primary: var(--color-bg-primary);
 	--solid-bg-secondary: var(--color-bg-secondary);
 	--solid-bg-tertiary: var(--color-bg-tertiary);
@@ -6214,6 +6216,9 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	--solid-secondary: var(--secondary);
 	--solid-accent: var(--accent);
 	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+.onboarding-preview-stage {
 	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
 	background:
 		linear-gradient(#0a1428, #0a1428),
