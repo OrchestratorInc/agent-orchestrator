@@ -459,6 +459,8 @@ if (typeof window !== "undefined") {
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
+			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+			cancelBinary: () => undefined,
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

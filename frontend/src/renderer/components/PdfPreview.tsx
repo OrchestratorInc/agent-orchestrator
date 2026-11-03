@@ -37,7 +37,15 @@ function loadPdfjs(): Promise<Pdfjs> {
  * A cloud file is cross-origin to the renderer, so its bytes are read through
  * the main process.
  */
-export function PdfPreview({ cloud = false, firstPageOnly = false, onError, path, src }: { cloud?: boolean; firstPageOnly?: boolean; onError: () => void; path: string; src: string }) {
+export function PdfPreview({ cloud = false, firstPageOnly = false, load, onError, path, src }: {
+	cloud?: boolean;
+	firstPageOnly?: boolean;
+	/** Reads the document's bytes itself (a cloud attachment); src then only keys it. */
+	load?: () => Promise<Uint8Array>;
+	onError: () => void;
+	path: string;
+	src: string;
+}) {
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
@@ -45,6 +53,8 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, onError, path
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const onErrorRef = useRef(onError);
 	onErrorRef.current = onError;
+	const loadRef = useRef(load);
+	loadRef.current = load;
 
 	useEffect(() => {
 		let cancelled = false;
@@ -53,7 +63,7 @@ export function PdfPreview({ cloud = false, firstPageOnly = false, onError, path
 		setTooLarge(null);
 		void (async () => {
 			const pdfjs = await loadPdfjs();
-			const data = cloud ? await aoBridge.cloudArtifact.fetch(src) : await readPdf(src);
+			const data = loadRef.current ? await loadRef.current() : cloud ? await aoBridge.cloudArtifact.fetch(src) : await readPdf(src);
 			if (data.byteLength > MAX_PDF_BYTES) throw new PdfTooLargeError(data.byteLength);
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });

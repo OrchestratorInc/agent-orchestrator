@@ -780,7 +780,7 @@ describe("SessionInspector PR section", () => {
         (client) => {
           client.setQueryData(settingsQueryKey, {
             defaultSessionMode: "tui", chatHarnesses: [], client: "", localEnabled: true,
-            cloudOffering: true, cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
+            cloudEnabled: true, cloudControlPlaneUrl: "https://staging-api.aoagents.dev",
           });
           client.setQueryData(["cloud-session-scm-summary", "https://staging-api.aoagents.dev", "cloud-org-1", "sess-1"], { prs: [readyPR], linkedPrs: [] });
         },
