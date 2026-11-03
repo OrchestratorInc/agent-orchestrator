@@ -9,6 +9,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+func TestMiMoCodeAdmissionRemainsDeferred(t *testing.T) {
+	if _, enabled := harnessImporters[domain.HarnessMiMoCode]; enabled {
+		t.Fatal("deferred native export must not admit new MiMo imports")
+	}
+}
+
 func TestMiMoCodeImport(t *testing.T) {
 	root := t.TempDir()
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "mimocode.db")))
