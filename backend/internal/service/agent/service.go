@@ -153,6 +153,9 @@ func NewWithDeps(deps Deps) *Service {
 	svc.modelGate = deps.ModelGate
 	if deps.CodexAccountRoot != "" && deps.CodexGlobalHome != "" {
 		svc.codexAccounts = newCodexAccountManager(deps.Context, deps.CodexAccountRoot, deps.CodexPendingRoot, deps.CodexSwitchStagingRoot, deps.CodexGlobalHome, deps.CodexAccounts, deps.Logger, deps.CodexOperationGate)
+		svc.codexAccounts.resolveBinary = func(ctx context.Context) (string, error) {
+			return svc.ResolveAgentBinary(ctx, string(domain.HarnessCodex))
+		}
 		if deps.Clock != nil {
 			svc.codexAccounts.now = deps.Clock
 		}

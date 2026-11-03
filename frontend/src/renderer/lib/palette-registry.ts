@@ -90,7 +90,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "error-events", section: "general", label: "settings.telemetryEvents.label", keywords: ["crash reports", "sentry", "telemetry"] },
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug"] },
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
-	{ id: "cloud", section: "general", label: "settings.cloud", keywords: ["ao cloud", "enable cloud"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
 	{ id: "accounts", section: "agents", label: "settings.agents", keywords: [] },
 	{ id: "add-account", section: "agents", label: "settings.codexAccounts.add", keywords: ["sign in"] },

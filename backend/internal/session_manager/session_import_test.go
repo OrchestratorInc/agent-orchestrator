@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -175,7 +176,7 @@ func TestImportedIdleHistoryDoesNotRestartUntilResume(t *testing.T) {
 }
 
 func TestDeferredPendingImportPreservesHistoryWithoutPreparingWorkspace(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessKimi} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessKimi, domain.HarnessDroid} {
 		t.Run(string(harness), func(t *testing.T) {
 			rec := domain.SessionRecord{ID: "mer-1", Harness: harness, Mode: domain.SessionModeChat}
 			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "native-session", ConfigDir: "/provider/home"}
@@ -1022,5 +1023,24 @@ func TestPinnedImportLaunchPathKeepsTheRelocatedFolder(t *testing.T) {
 		t.Fatal("a folder outside the workspace was accepted")
 	} else if _, ok := ImportFailureNotice(err); !ok {
 		t.Fatalf("outside folder error is not a user notice: %v", err)
+	}
+}
+
+func TestImportedConfigEnvPointsKimchiAtSourceHome(t *testing.T) {
+	source := t.TempDir()
+	m := &Manager{agents: relocatingAgents{agent: kimchi.New()}}
+	rec := domain.SessionRecord{Harness: domain.HarnessKimchi}
+	rec.Metadata = domain.SessionMetadata{
+		ProviderConversationID: "native",
+		NativeTranscriptPath:   filepath.Join(source, "sessions", "--source--", "t_native.jsonl"),
+		ImportSource:           &domain.SessionImportSource{NativeID: "native", ConfigDir: source},
+	}
+	env := map[string]string{"KIMCHI_CODING_AGENT_DIR": t.TempDir()}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["KIMCHI_CODING_AGENT_DIR"] != source {
+		t.Fatalf("Kimchi launch lost imported home: %v", env)
+	}
+	if importOwnedElsewhere(context.Background(), rec) {
+		t.Fatal("lock-less Kimchi import was marked open elsewhere")
 	}
 }

@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
 import { sessionUiKey } from "./hosts";
 import { probeRemoteSse } from "./remote-sse-probe";
@@ -224,7 +224,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 		const generation = ++stream.generation;
 		try {
 			const source = new EventSource(
-				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
 			);
 			stream.source = source;
 			source.onopen = () => {
