@@ -71,7 +71,7 @@ func TestRepairNormalizesHistoricalLocalEncodings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := db.Query(`SELECT CAST(at AS TEXT) FROM repair_times`)

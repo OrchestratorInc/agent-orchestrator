@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestRepairNormalizesReadableLocalComparisons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	later := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
@@ -92,7 +93,7 @@ func TestRepairHundredThousandDistinctTimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("100001 distinct timestamps repaired in %s", time.Since(start))
@@ -111,7 +112,7 @@ func TestTimestampDetectionPagesLargeCleanTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	column := timestampColumn{table: "repair_times", column: "at"}
-	next, done, err := repairTimestampBatch(context.Background(), db, column, -1<<63)
+	next, done, err := repairTimestampBatch(context.Background(), db, []timestampColumn{column}, -1<<63)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestTimestampDetectionPagesLargeCleanTables(t *testing.T) {
 	}
 	for !done {
 		previous := next
-		next, done, err = repairTimestampBatch(context.Background(), db, column, next)
+		next, done, err = repairTimestampBatch(context.Background(), db, []timestampColumn{column}, next)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,7 +155,7 @@ func TestTimestampRepairCancellationCanRetry(t *testing.T) {
 	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err == nil {
 		t.Fatal("cancelled repair changed the row")
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
@@ -245,7 +246,7 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT
 			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
 				t.Fatal(err)
 			}
-			if err := repairOffsetOnlyTimestamps(db); err != nil {
+			if err := repairTimestamps(context.Background(), db); err != nil {
 				t.Fatal(err)
 			}
 			after, _, err := s.GetSession(context.Background(), "pending")
@@ -378,5 +379,51 @@ func TestPendingSteerNormalizationReusesProjectionTransaction(t *testing.T) {
 	got, _, err := s.GetSession(ctx, "pending")
 	if err != nil || !got.Metadata.LatestInteractionAt.Equal(at) {
 		t.Fatalf("steer did not advance recency: %+v %v", got.Metadata, err)
+	}
+}
+
+func TestRepairConstrainedTimestampRowsAtomically(t *testing.T) {
+	for _, table := range []string{"agent_native_sessions", "agent_switches"} {
+		t.Run(table, func(t *testing.T) {
+			db := openMigratedTestDB(t)
+			const legacy = "2026-10-21 12:00:00.123456789 -0400 EDT"
+			_, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('constrained',1,'aider','idle',?,0,?,?);
+INSERT INTO projects(id,path,registered_at) VALUES('after-constrained','/tmp/constrained',?);`, legacy, legacy, legacy, legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var columns []string
+			if table == "agent_native_sessions" {
+				columns = []string{"created_at", "last_used_at"}
+				_, err = db.Exec(`INSERT INTO agent_native_sessions(id,ao_session_id,harness,created_at,last_used_at) VALUES('legacy','constrained','aider',?,?)`, legacy, legacy)
+			} else {
+				columns = []string{"target_acknowledged_at", "requested_at", "updated_at"}
+				_, err = db.Exec(`INSERT INTO agent_switches(id,session_id,idempotency_key,request_fingerprint,from_harness,target_harness,source_generation_id,target_generation_id,target_acknowledged_at,requested_at,updated_at) VALUES('legacy','constrained','key',?,'aider','codex','source','target',?,?,?)`, "v1:"+strings.Repeat("0", 64), legacy, legacy, legacy)
+			}
+			if err != nil {
+				t.Fatalf("valid legacy fixture: %v", err)
+			}
+			for range 2 {
+				if err := repairTimestamps(context.Background(), db); err != nil {
+					t.Fatal(err)
+				}
+				for _, column := range columns {
+					var raw string
+					if err := db.QueryRow("SELECT CAST(" + column + " AS TEXT) FROM " + table + " WHERE id='legacy'").Scan(&raw); err != nil {
+						t.Fatal(err)
+					}
+					if raw != "2026-10-21 16:00:00.123456789 +0000 UTC" {
+						t.Fatalf("%s.%s left %q", table, column, raw)
+					}
+				}
+			}
+			var raw, integrity string
+			if err := db.QueryRow(`SELECT CAST(registered_at AS TEXT) FROM projects WHERE id='after-constrained'`).Scan(&raw); err != nil || raw != "2026-10-21 16:00:00.123456789 +0000 UTC" {
+				t.Fatalf("repair stopped before projects: %q %v", raw, err)
+			}
+			if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+				t.Fatalf("integrity: %q %v", integrity, err)
+			}
+		})
 	}
 }

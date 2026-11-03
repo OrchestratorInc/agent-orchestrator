@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
 )
@@ -16,24 +15,26 @@ import (
 const offsetOnlyTimestampRepairVersion = 1
 const timestampRepairBatch = 256
 
-func repairOffsetOnlyTimestamps(db *sql.DB) error {
-	return repairTimestamps(context.Background(), db)
-}
-
 // Scan forward by row identity, with bounded memory and write transactions.
-// Each row is visited once per column, regardless of timestamp cardinality.
+// Related timestamps change together so row CHECK constraints remain valid.
 // SQL-side UTC defaults remain unchanged. Invalid dates are preserved.
 func repairTimestamps(ctx context.Context, db *sql.DB) error {
 	columns, err := timestampColumns(ctx, db)
 	if err != nil {
 		return err
 	}
-	for _, c := range columns {
+	for i := 0; i < len(columns); {
+		end := i + 1
+		for end < len(columns) && columns[end].table == columns[i].table {
+			end++
+		}
+		group := columns[i:end]
+		i = end
 		cursor := int64(math.MinInt64)
 		for {
-			next, done, err := repairTimestampBatch(ctx, db, c, cursor)
+			next, done, err := repairTimestampBatch(ctx, db, group, cursor)
 			if err != nil {
-				return fmt.Errorf("repair %s.%s: %w", c.table, c.column, err)
+				return fmt.Errorf("repair %s: %w", group[0].table, err)
 			}
 			if done {
 				break
@@ -51,48 +52,59 @@ func repairTimestamps(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func repairTimestampBatch(ctx context.Context, db *sql.DB, c timestampColumn, cursor int64) (int64, bool, error) {
-	table, column := quoteIdentifier(c.table), quoteIdentifier(c.column)
+func repairTimestampBatch(ctx context.Context, db *sql.DB, columns []timestampColumn, cursor int64) (int64, bool, error) {
+	table := quoteIdentifier(columns[0].table)
+	fields, sets, checks := make([]string, len(columns)), make([]string, len(columns)), make([]string, len(columns))
+	for i, c := range columns {
+		column := quoteIdentifier(c.column)
+		fields[i] = fmt.Sprintf(`CASE WHEN typeof(%[1]s)='text'
+AND ((%[1]s GLOB '* [+-][0-9][0-9][0-9][0-9] *' AND %[1]s NOT GLOB '* +0000 UTC')
+OR %[1]s GLOB '????-??-??T*') THEN CAST(%[1]s AS TEXT) END`, column)
+		sets[i] = fmt.Sprintf("%s=coalesce(?,%s)", column, column)
+		checks[i] = fmt.Sprintf("(? IS NULL OR (typeof(%[1]s)='text' AND CAST(%[1]s AS TEXT)=?))", column)
+	}
 	// Clean rows also consume the scan budget, so detection cannot hold the
 	// sole writer connection for an entire clean or sparsely affected table.
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,
-CASE WHEN typeof(%[2]s)='text'
-AND ((%[2]s GLOB '* [+-][0-9][0-9][0-9][0-9] *' AND %[2]s NOT GLOB '* +0000 UTC')
-OR %[2]s GLOB '????-??-??T*') THEN CAST(%[2]s AS TEXT) END
-FROM %[1]s WHERE rowid>=? ORDER BY rowid LIMIT ?`, table, column), cursor, timestampRepairBatch)
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,%s FROM %s WHERE rowid>=? ORDER BY rowid LIMIT ?`, strings.Join(fields, ","), table), cursor, timestampRepairBatch)
 	if err != nil {
 		return 0, false, err
 	}
 	defer func() { _ = rows.Close() }()
-	type change struct {
-		id     int64
-		before string
-		after  time.Time
+	var changes [][]any
+	var id int64
+	values, dest := make([]sql.NullString, len(columns)), make([]any, len(columns)+1)
+	dest[0] = &id
+	for i := range values {
+		dest[i+1] = &values[i]
 	}
-	var changes []change
 	n, last := 0, cursor
 	for rows.Next() {
-		var id int64
-		var value sql.NullString
-		if err = rows.Scan(&id, &value); err != nil {
-			break
+		if err := rows.Scan(dest...); err != nil {
+			return 0, false, err
 		}
 		n++
 		last = id
-		if !value.Valid {
-			continue
-		}
-		if at, ok := timestamps.ParseLegacy(value.String); ok && at.String() != value.String {
-			if changes == nil {
-				changes = make([]change, 0, timestampRepairBatch)
+		var args, before []any
+		for i, value := range values {
+			if !value.Valid {
+				continue
 			}
-			changes = append(changes, change{id, value.String, at})
+			if at, ok := timestamps.ParseLegacy(value.String); ok && at.String() != value.String {
+				if args == nil {
+					args, before = make([]any, len(columns)+1, 3*len(columns)+1), make([]any, len(columns))
+				}
+				args[i], before[i] = at, value.String
+			}
+		}
+		if args != nil {
+			args[len(columns)] = id
+			for _, value := range before {
+				args = append(args, value, value)
+			}
+			changes = append(changes, args)
 		}
 	}
-	if err == nil {
-		err = rows.Err()
-	}
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return 0, false, err
 	}
 	if len(changes) > 0 {
@@ -101,14 +113,14 @@ FROM %[1]s WHERE rowid>=? ORDER BY rowid LIMIT ?`, table, column), cursor, times
 			return 0, false, err
 		}
 		defer func() { _ = tx.Rollback() }()
-		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %[1]s SET %[2]s=? WHERE rowid=? AND CAST(%[2]s AS TEXT)=?`, table, column))
+		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND ")))
 		if err != nil {
 			return 0, false, err
 		}
 		defer func() { _ = stmt.Close() }()
 		for _, v := range changes {
 			// A concurrent writer may have replaced this value since detection.
-			if _, err = stmt.ExecContext(ctx, v.after, v.id, v.before); err != nil {
+			if _, err = stmt.ExecContext(ctx, v...); err != nil {
 				return 0, false, err
 			}
 		}

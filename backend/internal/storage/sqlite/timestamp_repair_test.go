@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -66,7 +67,7 @@ func TestRepairRewritesOffsetOnlyTimestampsAsUTC(t *testing.T) {
 		}
 	}
 
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 
@@ -100,7 +101,7 @@ func TestRepairLeavesEveryOtherValueAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 
@@ -133,7 +134,7 @@ func TestRepairOnlyTouchesTimestampColumns(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at, plain, day, moment) VALUES (1, ?, ?, ?, ?)`, stored, stored, stored, stored); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	var at, plain, day, moment string
@@ -160,7 +161,7 @@ func TestRepairHandlesTablesNamedWithQuotes(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	if err := canScanTime(db, `SELECT "when" FROM "odd ""name"`); err != nil {
@@ -177,7 +178,7 @@ func TestRepairRewritesEveryRow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	var bad int
@@ -211,7 +212,7 @@ func TestRepairAfterOldWriter(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (1, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("first repair: %v", err)
 	}
 	var version int
@@ -227,7 +228,7 @@ func TestRepairAfterOldWriter(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("second repair: %v", err)
 	}
 	var second string
@@ -239,7 +240,7 @@ func TestRepairAfterOldWriter(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (2, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("marked repair: %v", err)
 	}
 	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id = 2`); err != nil {
@@ -253,7 +254,7 @@ func TestRepairKeepsAHigherUserVersion(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 7`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	var version int
@@ -272,7 +273,7 @@ func TestRepairFailureLeavesTheDatabaseUnmarked(t *testing.T) {
 	if _, err := db.Exec(`CREATE TRIGGER block_rewrite BEFORE UPDATE ON repair_times BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err == nil {
+	if err := repairTimestamps(context.Background(), db); err == nil {
 		t.Fatal("repair succeeded although the rewrite was blocked")
 	}
 	var version int
@@ -283,7 +284,7 @@ func TestRepairFailureLeavesTheDatabaseUnmarked(t *testing.T) {
 	if _, err := db.Exec(`DROP TRIGGER block_rewrite`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id = 1`); err != nil {
@@ -304,7 +305,7 @@ func TestRepairOffsetOnlyTimestampsInRealTables(t *testing.T) {
 	if _, err := db.Exec(`PRAGMA user_version = 0`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairOffsetOnlyTimestamps(db); err != nil {
+	if err := repairTimestamps(context.Background(), db); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	var got sql.NullTime
