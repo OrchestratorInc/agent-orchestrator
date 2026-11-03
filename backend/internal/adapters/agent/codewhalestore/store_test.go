@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -86,7 +87,8 @@ func TestCopyPreservesNativeGraphAndSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.ID == syntheticID || prepared.CWD != launch || len(prepared.Messages) != 2 {
+	wantCWD, pathErr := filepath.EvalSymlinks(launch)
+	if pathErr != nil || prepared.ID == syntheticID || prepared.CWD != wantCWD || len(prepared.Messages) != 2 {
 		t.Fatalf("prepared = %#v", prepared)
 	}
 	after, err := os.ReadFile(source)
@@ -116,7 +118,7 @@ func TestCopyPreservesNativeGraphAndSource(t *testing.T) {
 		t.Fatal("rewrote native conversation graph")
 	}
 	info, err := os.Stat(target)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("permissions = %v, %v", info, err)
 	}
 	change(t, target, func(raw map[string]any) {
