@@ -1370,15 +1370,31 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 	return {
 		api_host: POSTHOG_HOST,
 		defaults: RELEASE_TAG,
-		autocapture: false,
+		// Autocapture clicks, form submits and changes so we can see how people
+		// actually move through the app. Element text and attributes are masked:
+		// AO's UI shows repo names, branches, prompts and file paths, so only the
+		// tag, classes and data-attr survive. Label buttons that matter with
+		// data-attr="..." to make them readable in PostHog.
+		autocapture: {
+			dom_event_allowlist: ["click", "submit", "change"],
+			capture_copied_text: false,
+		},
+		mask_all_text: true,
+		mask_all_element_attributes: true,
+		rageclick: true,
+		capture_dead_clicks: false,
 		capture_pageview: false,
 		capture_exceptions: false,
 		capture_performance: false,
-		// Session replay is billed per recording, not per event, so it bypasses
-		// every limiter in this file. AO never watches replays, so keep the
-		// recorder off in the client instead of relying on the project-side
-		// toggle staying off.
-		disable_session_recording: true,
+		// Session replay, fully masked: every input and every text node is
+		// replaced before it leaves the app, and no headers, bodies or console
+		// output are recorded. Replay is billed per recording, so keep the
+		// sample rate and minimum duration in the PostHog project settings.
+		// Only runs when analytics consent is on (initTelemetry never creates the
+		// client otherwise), and "$autocapture" / "$snapshot" can be silenced
+		// remotely through the disabled-events kill switch.
+		disable_session_recording: false,
+		enable_recording_console_log: false,
 		// Feature flags load (the SDK default) so experiments can target
 		// installs. advanced_disable_flags is deliberately left out: an explicit
 		// init value would override the set_config an in-session opt-out uses to
@@ -1406,8 +1422,19 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 			distinctID: distinctId,
 			isIdentifiedID: identified,
 		},
-		before_send: (event) => (event ? sanitizePostHogCaptureResult(event) : event),
+		before_send: (event) => {
+			if (!event) return event;
+			// The kill switch also covers SDK-generated events ($autocapture,
+			// $rageclick, $snapshot), not just the ones AO captures by hand.
+			if (typeof event.event === "string" && isDeniedEvent(event.event)) return null;
+			return sanitizePostHogCaptureResult(event);
+		},
 		session_recording: {
+			maskAllInputs: true,
+			maskTextSelector: "*",
+			recordHeaders: false,
+			recordBody: false,
+			recordCrossOriginIframes: false,
 			maskCapturedNetworkRequestFn: (request) => {
 				if (request.name) {
 					request.name = sanitizeReplayRequestName(request.name);

@@ -23,6 +23,7 @@ import {
 	startDailyActiveHeartbeat,
 	withTelemetryContext,
 	releaseChannelFrom,
+	setDisabledEventsForTest,
 	versionChannelFrom,
 } from "./telemetry";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
@@ -140,9 +141,7 @@ describe("telemetry sanitizers", () => {
 
 		expect(config.persistence).toBe("memory");
 		expect(config.person_profiles).toBe("identified_only");
-		expect(config.autocapture).toBe(false);
 		expect(config.capture_performance).toBe(false);
-		expect(config.disable_session_recording).toBe(true);
 		expect(config.bootstrap).toEqual({
 			distinctID: "ins_stable-install-id",
 			isIdentifiedID: false,
@@ -318,19 +317,48 @@ describe("telemetry sanitizers", () => {
 	it("disables every billable PostHog product AO does not consume", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
-		// Replay is billed per recording, so it escapes the per-name rate limits
-		// in this module entirely. Disabling it client-side means the project-side
-		// toggle cannot switch it back on for shipped builds.
-		expect(config.disable_session_recording).toBe(true);
 		// Feature flags load (experiments); AO ships no surveys.
 		// Left out so an in-session opt-out can turn flags off through set_config.
 		expect(config).not.toHaveProperty("advanced_disable_flags");
 		expect(config.disable_surveys).toBe(true);
-		// Already-disabled capture paths that would otherwise autocapture volume.
-		expect(config.autocapture).toBe(false);
+		expect(config.capture_dead_clicks).toBe(false);
 		expect(config.capture_pageview).toBe(false);
 		expect(config.capture_exceptions).toBe(false);
 		expect(config.capture_performance).toBe(false);
+	});
+
+	it("autocaptures clicks and records replay with text, inputs and payloads masked", () => {
+		const config = buildPostHogConfig("ins_stable-install-id");
+
+		expect(config.autocapture).toEqual({
+			dom_event_allowlist: ["click", "submit", "change"],
+			capture_copied_text: false,
+		});
+		expect(config.mask_all_text).toBe(true);
+		expect(config.mask_all_element_attributes).toBe(true);
+
+		expect(config.disable_session_recording).toBe(false);
+		expect(config.enable_recording_console_log).toBe(false);
+		expect(config.session_recording).toMatchObject({
+			maskAllInputs: true,
+			maskTextSelector: "*",
+			recordHeaders: false,
+			recordBody: false,
+			recordCrossOriginIframes: false,
+		});
+	});
+
+	it("drops SDK-generated events silenced by the kill switch", () => {
+		const { before_send } = buildPostHogConfig("ins_stable-install-id");
+		const send = before_send as (event: unknown) => unknown;
+		setDisabledEventsForTest(["$snapshot", "$autocapture"]);
+		try {
+			expect(send({ event: "$snapshot", properties: {} })).toBeNull();
+			expect(send({ event: "$autocapture", properties: {} })).toBeNull();
+			expect(send({ event: "$rageclick", properties: {} })).not.toBeNull();
+		} finally {
+			setDisabledEventsForTest([]);
+		}
 	});
 
 	it("emits the stable AO installation id without creating a person profile", () => {
