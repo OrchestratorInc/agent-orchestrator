@@ -10,8 +10,8 @@ import (
 
 type hermesSegment struct {
 	id, parent, reason, source, cwd, title string
-	started, updated                      float64
-	count                                 int64
+	started, updated                       float64
+	count                                  int64
 	hidden, ended, fork                    bool
 }
 
