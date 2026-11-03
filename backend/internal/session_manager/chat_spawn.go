@@ -540,6 +540,16 @@ func (m *Manager) resumeChatController(
 		}
 		rec = relocated
 	}
+	if rec.Metadata.ImportSource != nil && !reconnectOnly {
+		// Imported Chat restores need the same exact-identity workspace guard
+		// as Terminal restores, before an ACP controller can migrate history.
+		m.applyImportedConfigEnv(ctx, rec, env)
+		if agent, ok := m.agents.Agent(rec.Harness); ok {
+			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env, restoredWorkspaceContext(rec, false)); err != nil {
+				return RestoreResult{}, relaunchFailed("import workspace preparation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+			}
+		}
+	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
 	if len(awakeTargets) > 0 {

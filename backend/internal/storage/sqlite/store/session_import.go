@@ -190,6 +190,9 @@ func (s *Store) CommitImportedNativeSessionID(ctx context.Context, id domain.Ses
 		}
 		next := *source
 		next.ResumeNativeID = nativeID
+		// Preparation's path named the former identity. The observed fork's
+		// locator supplies its actual path through the fenced activity signal.
+		next.ResumeTranscriptPath = ""
 		rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = nativeID, nativeID
 		rec.Metadata.AgentSessionIDLaunchID = launchID
 		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
