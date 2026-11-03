@@ -11,11 +11,12 @@ import (
 )
 
 func TestNativeFingerprintPinsSelectionAndFirstOpen(t *testing.T) {
-	for _, change := range []string{"before import", "during import", "before first open", "unset"} {
+	for _, change := range []string{"before import", "during import", "before first open", "first-open workspace drift", "unset"} {
 		t.Run(change, func(t *testing.T) {
 			old := harnessImporters[domain.HarnessGemini]
 			t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
 			root, cwd := canonical(t.TempDir()), canonical(t.TempDir())
+			currentCWD := cwd
 			path := filepath.Join(root, "synthetic-native.jsonl")
 			fingerprint := "synthetic-content-and-wal-v1"
 			if change == "unset" {
@@ -32,7 +33,7 @@ func TestNativeFingerprintPinsSelectionAndFirstOpen(t *testing.T) {
 					if reads == 2 && (change == "during import" || change == "unset") {
 						fingerprint = "synthetic-content-and-wal-v2"
 					}
-					return transcript{harness: domain.HarnessGemini, root: root, path: path, paths: []string{path}, nativeID: "native", cwd: cwd, last: time.Now(), messages: []Message{{Role: domain.MessageRoleUser, Text: "synthetic native history"}}}, nil
+					return transcript{harness: domain.HarnessGemini, root: root, path: path, paths: []string{path}, nativeID: "native", cwd: currentCWD, last: time.Now(), messages: []Message{{Role: domain.MessageRoleUser, Text: "synthetic native history"}}}, nil
 				},
 			}
 			st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: cwd}}}
@@ -68,10 +69,16 @@ func TestNativeFingerprintPinsSelectionAndFirstOpen(t *testing.T) {
 			if rec.Metadata.ImportSource.Fingerprint != "synthetic-content-and-wal-v1" {
 				t.Fatalf("selection evidence was not persisted: %#v", rec.Metadata.ImportSource)
 			}
-			fingerprint = "synthetic-content-and-wal-v2"
 			before := reads
-			if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) || reads != before {
-				t.Fatalf("changed first-open input read or accepted: reads=%d (before %d), err=%v", reads, before, err)
+			wantReads := before
+			if change == "first-open workspace drift" {
+				currentCWD = canonical(t.TempDir())
+				wantReads++
+			} else {
+				fingerprint = "synthetic-content-and-wal-v2"
+			}
+			if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) || reads != wantReads {
+				t.Fatalf("changed first-open input accepted or read unexpectedly: reads=%d want=%d, err=%v", reads, wantReads, err)
 			}
 		})
 	}
