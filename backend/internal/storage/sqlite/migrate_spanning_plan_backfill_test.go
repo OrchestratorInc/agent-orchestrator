@@ -13,7 +13,7 @@ import (
 // not superseded. Other agents' plans, and a switched chat's plans written after
 // it left Claude, are per-turn plans and stay as they were.
 func TestMigrationBackfillsSpanningPlanCopies(t *testing.T) {
-	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261028124744441)
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261102164353715)
 	at := func(minute int) time.Time { return time.Date(2026, time.October, 26, 22, minute, 0, 0, time.UTC) }
 	steps := `[{"text":"Render","status":"in_progress"}]`
 	done := `[{"text":"Render","status":"completed"}]`
@@ -75,7 +75,7 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
     ('forked-edit', 'forked', NULL, 3, 'plan', 'completed', '', '{"event":"plan","steps":`+done+`}', '', ?, ?, 'forked:edit');`,
 		at(5), at(5), at(6), at(6))
 
-	upTo(t, db, 20261101004244943)
+	upTo(t, db, 20261103094403671)
 
 	type flags struct{ spans, superseded bool }
 	row := func(id string) flags {
