@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,10 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{TelemetryIdentity: ident}, ControlDeps{})
+	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{
+		TelemetryIdentity: ident,
+		LifetimeSessions:  func(context.Context) (int64, error) { return 3, nil },
+	}, ControlDeps{})
 
 	post := func(host, origin, body string) int {
 		req := httptest.NewRequest(http.MethodPost, "http://"+host+"/internal/telemetry/identity", strings.NewReader(body))
@@ -46,8 +50,11 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 
 	// Install ID until someone signs in.
-	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false {
+	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) {
 		t.Fatalf("anonymous identity = %#v", got)
+	}
+	if _, ok := get()["isSignedIn"]; ok {
+		t.Fatal("unresolved Cloud sign-in state was reported to the phone")
 	}
 
 	// Only loopback callers without an Origin (Electron main) may set the user.
@@ -67,11 +74,17 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatalf("valid sign-in = %d, want 204", c)
 	}
 	got := get()
-	if got["distinctId"] != "user_01H" || got["cloudUserId"] != "user_01H" || got["installId"] != ident.InstallID() {
+	if got["distinctId"] != "user_01H" || got["cloudUserId"] != "user_01H" || got["installId"] != ident.InstallID() || got["isSignedIn"] != true {
 		t.Fatalf("signed-in identity = %#v", got)
 	}
 	if _, ok := got["email"]; ok {
 		t.Fatal("identity response leaks email")
+	}
+	if c := post("127.0.0.1:3001", "", `{"cloudUserId":""}`); c != http.StatusNoContent {
+		t.Fatalf("sign-out = %d, want 204", c)
+	}
+	if got := get(); got["isSignedIn"] != false {
+		t.Fatalf("known sign-out = %#v", got)
 	}
 
 	// Opt-out hides everything from the phone.
@@ -79,7 +92,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = get()
-	if got["optedOut"] != true || got["distinctId"] != "" || got["installId"] != nil {
+	if got["optedOut"] != true || got["distinctId"] != "" || got["installId"] != nil || got["lifetimeSessions"] != nil || got["isSignedIn"] != nil {
 		t.Fatalf("opted-out identity = %#v", got)
 	}
 }

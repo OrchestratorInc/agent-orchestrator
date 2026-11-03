@@ -140,7 +140,7 @@ export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
  * control routes are 404'd on the LAN listener, which is the only listener a
  * phone can reach.
  */
-async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[]> {
+export async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<Endpoint[]> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), ENDPOINT_REFRESH_TIMEOUT_MS);
 	try {

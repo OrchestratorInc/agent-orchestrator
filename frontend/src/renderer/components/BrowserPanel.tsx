@@ -1,3 +1,4 @@
+import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { BrowserIcon } from "./icons";
 import {
 	memo,
@@ -13,6 +14,7 @@ import {
 	type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -386,6 +388,8 @@ export function BrowserPanel({
 		poppedOut,
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
+		terminated: sessionBrowserUnavailable(session),
+		sessionEnded: session.isTerminated,
 	});
 	const annotationQueue = useBrowserAnnotationQueue({
 		sessionId: session.id,
@@ -415,6 +419,7 @@ export function BrowserPanelView({
 }: BrowserPanelProps & { annotationQueue: BrowserAnnotationQueueModel; browserView: BrowserViewModel }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
+	const browserUnavailable = sessionBrowserUnavailable(session);
 	const {
 		viewId,
 		navState,
@@ -449,6 +454,9 @@ export function BrowserPanelView({
 		annotationAction = async () => undefined,
 	} = browserView;
 	const [urlInput, setUrlInput] = useState(navState.url);
+	// A popped-out panel is portaled outside #root; the popout flag covers that
+	// case, so this one marks only a live page docked inside the shell.
+	useDocumentFlag("data-browser-native-live", Boolean(navState.url) && !poppedOut);
 	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
 	const historyMenuId = useId();
@@ -985,6 +993,7 @@ export function BrowserPanelView({
 							aria-haspopup="listbox"
 							aria-label={t("browser.url")}
 							className="browser-panel__url-input h-browser-url text-xs"
+							disabled={browserUnavailable}
 							onBlur={endUrlEditing}
 							onChange={(event) => handleURLChange(event.target.value)}
 							onClick={() => urlInputRef.current?.select()}
@@ -1135,6 +1144,7 @@ export function BrowserPanelView({
 					<button
 						aria-label={t("browser.openNewTab")}
 						className={cn("browser-panel__tab-new", draggedTopTabId && "browser-panel__tab-new--dragging")}
+						disabled={browserUnavailable}
 						onClick={() => void handleOpenTab()}
 						type="button"
 					>
@@ -1318,7 +1328,7 @@ export function BrowserPanelView({
 							<Button
 								aria-label={t("browser.back")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoBack}
+								disabled={!navState.canGoBack || browserUnavailable}
 								onClick={() => void goBack()}
 								size="icon-sm"
 								type="button"
@@ -1333,7 +1343,7 @@ export function BrowserPanelView({
 							<Button
 								aria-label={t("browser.forward")}
 								className="browser-panel__navigation-btn"
-								disabled={!navState.canGoForward}
+								disabled={!navState.canGoForward || browserUnavailable}
 								onClick={() => void goForward()}
 								size="icon-sm"
 								type="button"
@@ -1346,6 +1356,7 @@ export function BrowserPanelView({
 				<BrowserControlTooltip label={navState.isLoading ? t("browser.stop") : t("browser.reload")}>
 					<Button
 							aria-label={navState.isLoading ? t("browser.stop") : t("browser.reload")}
+							disabled={browserUnavailable}
 							className="browser-panel__navigation-btn"
 							onClick={() => void (navState.isLoading ? stop() : reload())}
 							size="icon-sm"
@@ -1786,7 +1797,7 @@ export function BrowserPanelView({
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
 						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
-							<p>{t("browser.emptyUrl")}</p>
+							<p>{browserUnavailable ? t("browser.sessionEnded") : t("browser.emptyUrl")}</p>
 						</div>
 					) : null}
 					{navState.error ? (

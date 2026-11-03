@@ -1,0 +1,85 @@
+/* AO Browser Bridge pages. Values mirror frontend/src/styles/tokens.css. */
+:root {
+	--background: oklch(0.21 0.002 250);
+	--foreground: oklch(0.97 0.002 250);
+	--card: oklch(0.25 0.002 250);
+	--primary: oklch(0.9 0.002 250);
+	--primary-foreground: oklch(0.21 0.002 250);
+	--muted-foreground: oklch(0.72 0.002 250);
+	--destructive: oklch(0.704 0.191 22.216);
+	--needs-you: #f06445;
+	--ready: #4ade80;
+	--border: oklch(1 0 0 / 7%);
+	--input: oklch(1 0 0 / 4%);
+	--radius: 0.625rem;
+	color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+	:root {
+		--background: oklch(0.97 0 0);
+		--foreground: oklch(0.18 0 0);
+		--card: oklch(1 0 0);
+		--primary: oklch(0.24 0 0);
+		--primary-foreground: oklch(0.97 0 0);
+		--muted-foreground: oklch(0.5 0 0);
+		--destructive: oklch(0.577 0.245 27.325);
+		--border: oklch(0 0 0 / 7%);
+		--input: oklch(0 0 0 / 4%);
+		color-scheme: light;
+	}
+}
+* { box-sizing: border-box; }
+body {
+	margin: 0;
+	padding: 20px;
+	background: var(--background);
+	color: var(--foreground);
+	font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 13px; font-weight: 600; margin: 20px 0 6px; }
+p { margin: 0 0 10px; }
+.muted { color: var(--muted-foreground); }
+code, .mono { font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; }
+.panel {
+	background: var(--card);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 12px 14px;
+	margin: 12px 0;
+}
+ul { margin: 0; padding-left: 18px; }
+li { margin: 2px 0; }
+label.check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; }
+label.check input { margin-top: 3px; }
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+button {
+	font: inherit;
+	border-radius: calc(var(--radius) * 0.8);
+	border: 1px solid var(--border);
+	background: var(--input);
+	color: var(--foreground);
+	padding: 6px 14px;
+	cursor: pointer;
+}
+button.primary { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+button.danger { color: var(--destructive); }
+button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+button:disabled { opacity: 0.5; cursor: default; }
+textarea {
+	width: 100%;
+	min-height: 96px;
+	font: 12px/1.5 "SF Mono", ui-monospace, monospace;
+	background: var(--input);
+	color: var(--foreground);
+	border: 1px solid var(--border);
+	border-radius: calc(var(--radius) * 0.8);
+	padding: 8px;
+}
+.status { display: flex; align-items: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-foreground); flex: none; }
+.dot.ok { background: var(--ready); }
+.dot.bad { background: var(--needs-you); }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.row:first-child { border-top: 0; }
+.error { color: var(--destructive); }

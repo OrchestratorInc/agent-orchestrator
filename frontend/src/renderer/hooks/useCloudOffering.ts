@@ -51,16 +51,21 @@ const EMPTY: ResolvedCloudOffering = {
 	kind: "none",
 	billingMode: undefined,
 	features: [],
+	maxAttachmentBytes: undefined,
 	customCoder: false,
 	artifacts: false,
 	coderWorkerWorkingFolder: false,
 	source: "fallback",
 };
 
-export function useCloudOffering(): UseCloudOfferingResult {
-	const { client, ready, baseUrl, userId } = useCloudCp();
-	const { org } = useCloudOrg();
-	const orgId = org?.id ?? "";
+// enabled=false keeps a caller that may not need the offering (a remote host's
+// board) from reading this machine's settings, as useCloudCp(enabled) does.
+// forOrgId resolves that organization's offering instead of the active one's
+// (a session's own organization).
+export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOfferingResult {
+	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
+	const { org } = useCloudOrg(enabled);
+	const orgId = forOrgId || org?.id || "";
 	const me = useQuery<CloudCpMeResponse>({
 		queryKey: [...cloudMeQueryKey, baseUrl, userId],
 		enabled: ready,

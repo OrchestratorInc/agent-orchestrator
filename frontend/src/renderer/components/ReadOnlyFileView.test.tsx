@@ -1,7 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import * as codeSelection from "./diffs/useCodeSelection";
+import { subscribeChatComposerReferences } from "../lib/chat-context-bus";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ReadOnlyFileView } from "./ReadOnlyFileView";
+import { REVEALED_LINE_HIGHLIGHT_MS, ReadOnlyFileView } from "./ReadOnlyFileView";
 import type { WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 
@@ -26,7 +28,7 @@ vi.mock("../lib/host-clients", () => {
 	};
 });
 vi.mock("@pierre/diffs/react", () => ({
-	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility }: {
+	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility, selectedLines }: {
 		edit?: boolean;
 		editStateKey?: string;
 		file: { name: string; contents: string };
@@ -35,8 +37,9 @@ vi.mock("@pierre/diffs/react", () => ({
 		options: { enableGutterUtility?: boolean; onPostRender?: () => void; overflow: string; unsafeCSS?: string };
 		renderAnnotation?: () => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number }) => ReactNode;
+		selectedLines?: { start: number; end: number } | null;
 	}) => (
-		<div data-edit={String(Boolean(edit))} data-edit-state-key={editStateKey} data-file-name={file.name} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS}>
+		<div data-testid="pierre-file" data-selected-lines={selectedLines ? `${selectedLines.start}-${selectedLines.end}` : undefined} data-edit={String(Boolean(edit))} data-edit-state-key={editStateKey} data-file-name={file.name} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS}>
 			{createElement("diffs-container", { ref: (element: HTMLElement | null) => {
 				if (!element || element.shadowRoot) return;
 				const root = element.attachShadow({ mode: "open" });
@@ -77,6 +80,17 @@ function baseDetail(overrides: Partial<WorkspaceFileDetail> = {}): WorkspaceFile
 }
 
 describe("ReadOnlyFileView", () => {
+	it("captures a supported immutable commit from the center file view", () => {
+		const accept=vi.fn(()=>true), remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection");
+		const sha="a".repeat(40);
+		const view=render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail()} sessionId="sess-1" source={{kind:"snapshot",label:"Commit",commitShas:[sha]}}/>);
+		const args=hook.mock.lastCall!;
+		expect(args[2]).toBe(true);
+		act(()=>{args[1]({host:document.createElement("div"),point:{x:0,y:0},dragging:false,range:{start:1,end:1},rows:[{kind:"context",oldNo:1,newNo:1,text:"captured();"}]})});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"},scope:"committed"}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	it("consumes a requested source line once per request key", async () => {
 		lineScrollIntoView.mockClear();
 		const onRevealLineConsumed = vi.fn();
@@ -117,12 +131,31 @@ describe("ReadOnlyFileView", () => {
 		expect(onRevealLineConsumed).toHaveBeenLastCalledWith(2);
 	});
 
+	it("marks a revealed line, then clears the mark", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(
+				<ReadOnlyFileView
+					annotation={annotation()}
+					detail={baseDetail()}
+					revealLine={{ line: 120, requestKey: 1 }}
+					sessionId="sess-1"
+				/>,
+			);
+			await waitFor(() => expect(screen.getByTestId("pierre-file").dataset.selectedLines).toBe("120-120"));
+			act(() => vi.advanceTimersByTime(REVEALED_LINE_HIGHLIGHT_MS));
+			expect(screen.getByTestId("pierre-file").dataset.selectedLines).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("renders source through the wrapped Pierre/Shiki surface", () => {
 		const { container } = render(<ReadOnlyFileView annotation={annotation()} detail={baseDetail()} sessionId="sess-1" />);
 		expect(screen.getByText("hello world")).toBeInTheDocument();
 		expect(container.querySelector(".ao-pierre-surface")).toHaveClass("select-text");
 		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-overflow", "wrap");
-		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
+		expect(container.querySelector("[data-overflow]")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary))"));
 	});
 
 	it("passes the opened path to Shiki for language inference", () => {

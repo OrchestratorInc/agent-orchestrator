@@ -10,6 +10,7 @@ import type { TLSSocket } from "node:tls";
 import { WebSocket, WebSocketServer } from "ws";
 import { agentBrowserRunning, agentViewerUrl, HOP_BY_HOP_HEADERS, listenOnStablePort } from "./agent-viewer";
 import { getCloudAccessToken } from "./cloud-auth";
+import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-control-plane-url";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 import { previewCertificate } from "./preview-certificate";
 
@@ -77,7 +78,11 @@ export function retryAfterMs(header: string | null): number {
 	return Math.min(Math.max(seconds, 5), 300) * 1_000;
 }
 
-export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy {
+/**
+ * controlPlaneUrl, when given, is the configured control plane: the bearer
+ * goes only there, and a session named on any other gets no agent browser.
+ */
+export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?: ControlPlaneUrlResolver): CloudAgentProxy {
 	const bearer = async (): Promise<string | null> => (await getCloudAccessToken(getDataDir()).catch(() => null)) || null;
 	let secret: Promise<Buffer> | undefined;
 	const loadKey = (): Promise<Buffer> =>
@@ -246,6 +251,10 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 			const base = parseCloudBaseUrl(baseUrl);
 			if (typeof orgId !== "string" || typeof sessionId !== "string" || !ID.test(orgId) || !ID.test(sessionId)) {
 				throw new Error("invalid cloud agent browser session");
+			}
+			if (controlPlaneUrl) {
+				const configured = await controlPlaneUrl();
+				if (!configured || !sameControlPlaneUrl(base.href, configured)) return "";
 			}
 			const target: Target = { base, orgId, sessionId };
 			// Only a sandbox whose agent browser runs has an agent tab: the CP answers

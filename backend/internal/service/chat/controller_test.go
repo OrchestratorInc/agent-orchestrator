@@ -1004,6 +1004,9 @@ func TestOrdinaryResumeRejectsProviderHandleOutsideActiveBranch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("ordinary resume error = %v, want active-branch handle mismatch", err)
 	}
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("mismatch error = %v, want ErrChatResumeFailed so the API answers 409", err)
+	}
 	if resumeCalls != 0 {
 		t.Fatalf("driver resume calls = %d, want mismatch rejected before provider launch", resumeCalls)
 	}
@@ -3127,14 +3130,18 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc        *chatsvc.Service
-	st         *sqlite.Store
-	conv       *fakeConversation
-	ctrl       *chatsvc.Controller
-	activity   *recordingActivity
-	hostStops  atomic.Int32
-	renders    *attachmentstore.Store
-	rendersDir string
+	svc       *chatsvc.Service
+	st        *sqlite.Store
+	conv      *fakeConversation
+	ctrl      *chatsvc.Controller
+	activity  *recordingActivity
+	hostStops atomic.Int32
+	// accountChanges counts refusals and account updates; accountRechecks counts
+	// turns asking to read the session's account again.
+	accountChanges  atomic.Int32
+	accountRechecks atomic.Int32
+	renders         *attachmentstore.Store
+	rendersDir      string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3238,6 +3245,12 @@ func newHarnessWithConversationAndStoreForHarness(
 		Drivers:  fakeRegistry{driver: fakeDriver{conv: conv}},
 		Activity: h.activity,
 		Log:      slog.New(slog.DiscardHandler),
+		OnAccountChanged: func(domain.SessionID, string, domain.AgentHarness) {
+			h.accountChanges.Add(1)
+		},
+		RecheckAccount: func(domain.SessionID, domain.AgentHarness) {
+			h.accountRechecks.Add(1)
+		},
 		NewID: func() string {
 			counterMu.Lock()
 			defer counterMu.Unlock()
@@ -3425,6 +3438,30 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+func TestProviderPromptFailurePersistsConfigurationCodeWithoutReauth(t *testing.T) {
+	h := newHarness(t)
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "missing-key-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("ACP internal detail"),
+		FailureCode: domain.ConversationFailureProviderKeyMissing,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureProviderKeyMissing {
+		t.Fatalf("failure code = %q", got)
+	}
+	if snapshot.Turns[0].ErrorMessage != "ACP internal detail" || snapshot.Conversation.Account != nil && snapshot.Conversation.Account.ReauthRequiredAt != nil {
+		t.Fatalf("turn/account = %+v / %+v", snapshot.Turns[0], snapshot.Conversation.Account)
 	}
 }
 

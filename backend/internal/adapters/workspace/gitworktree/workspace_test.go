@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,6 +100,73 @@ func TestParseWorktreePorcelain(t *testing.T) {
 	}
 	if !recs[3].Bare {
 		t.Fatalf("bare record = %#v", recs[3])
+	}
+}
+
+func TestParseWorktreePorcelainKeepsLockReason(t *testing.T) {
+	recs, err := parseWorktreePorcelain("worktree /managed/a\nHEAD abc\nlocked initializing\n\nworktree /managed/b\nHEAD def\nlocked\n\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(recs) != 2 || !recs[0].Locked || recs[0].LockReason != "initializing" || !recs[1].Locked || recs[1].LockReason != "" {
+		t.Fatalf("records = %#v", recs)
+	}
+}
+
+func TestUntranslatedGitEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{
+			name: "LC_ALL moves to LANG",
+			in:   []string{"HOME=/h", "LC_ALL=de_DE.UTF-8", "LANG=fr_FR.UTF-8", "LC_COLLATE=C", "LC_MESSAGES=de_DE.UTF-8", "LANGUAGE=de"},
+			want: []string{"HOME=/h", "LANGUAGE=de", "LANG=de_DE.UTF-8", "LC_MESSAGES=C"},
+		},
+		{
+			name: "other categories are kept",
+			in:   []string{"LANG=de_DE.UTF-8", "LC_COLLATE=fr_FR.UTF-8", "LC_MESSAGES=de_DE.UTF-8"},
+			want: []string{"LANG=de_DE.UTF-8", "LC_COLLATE=fr_FR.UTF-8", "LC_MESSAGES=C"},
+		},
+		{
+			name: "empty LC_ALL is unset",
+			in:   []string{"LC_ALL=", "LANG=de_DE.UTF-8"},
+			want: []string{"LANG=de_DE.UTF-8", "LC_MESSAGES=C"},
+		},
+		{
+			name: "no locale",
+			in:   []string{"PATH=/bin"},
+			want: []string{"PATH=/bin", "LC_MESSAGES=C"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := untranslatedGitEnv(tc.in); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("env = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Only the commands whose messages are matched run untranslated; fetch and
+// update-ref, which run reference-transaction hooks, keep the user's locale.
+func TestReadsGitMessages(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{worktreeRemoveArgs("/r", "/w"), true},
+		{worktreeAddBranchArgs("/r", "/w", "b", false), true},
+		{worktreeListPorcelainArgs("/r"), true},
+		{statusPorcelainArgs("/w"), true},
+		{fetchBranchArgs("/r", "origin", "b"), false},
+		{updateRefArgs("/w", "refs/ao/x", "abc"), false},
+		{revParseHeadArgs("/w"), false},
+		{[]string{"-c", "core.quotepath=off", "-C", "/w", "status"}, true},
+	} {
+		if got := readsGitMessages(tc.args); got != tc.want {
+			t.Errorf("readsGitMessages(%q) = %v, want %v", tc.args, got, tc.want)
+		}
 	}
 }
 
@@ -496,7 +564,7 @@ func TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale(t *testi
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err != nil {
 		t.Fatalf("createWorkspaceProjectRepo: %v", err)
 	}
@@ -575,7 +643,7 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err != nil {
 		t.Fatalf("createWorkspaceProjectRepo: %v", err)
 	}
@@ -647,7 +715,7 @@ func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 		repoPath:   repo,
 		outputPath: output,
 		baseRef:    "origin/main",
-	}, "feature/test")
+	}, "feature/test", false)
 	if err == nil {
 		t.Fatal("createWorkspaceProjectRepo: want error when recovery fails, got nil")
 	}
@@ -1022,6 +1090,59 @@ func TestCreateRejectsInvalidBranchName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad branch!!") {
 		t.Fatalf("err = %v, want message to include the rejected branch name", err)
+	}
+}
+
+// TestCreateDoesNotCallKilledBranchProbeInvalid covers #5043: a check-ref-format
+// probe that git never finished says nothing about the name, so it must not
+// surface as ports.ErrWorkspaceBranchInvalid (INVALID_BRANCH).
+func TestCreateDoesNotCallKilledBranchProbeInvalid(t *testing.T) {
+	killed := func(t *testing.T) error {
+		if runtime.GOOS == "windows" {
+			t.Skip("needs a POSIX signal")
+		}
+		err := exec.Command("sh", "-c", "kill -KILL $$").Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != -1 {
+			t.Fatalf("setup: want a signal-killed ExitError, got %v", err)
+		}
+		return err
+	}
+	for _, tc := range []struct {
+		name  string
+		ctx   func() context.Context
+		probe func(t *testing.T) error
+		want  string
+	}{
+		{"signal killed", context.Background, killed, "signal: killed"},
+		{"caller cancelled", func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}, func(*testing.T) error { return errors.New("exit status 1") }, "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			ws, err := New(Options{ManagedRoot: t.TempDir(), RepoResolver: StaticRepoResolver{"proj": repo}})
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+			probeErr := tc.probe(t)
+			ws.run = func(_ context.Context, binary string, args ...string) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "check-ref-format") {
+					return nil, commandError{args: append([]string{binary}, args...), err: probeErr}
+				}
+				t.Fatalf("no git beyond check-ref-format should run after a failed probe: %v", args)
+				return nil, nil
+			}
+			_, err = ws.Create(tc.ctx(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "ao/sess/root"})
+			if err == nil || errors.Is(err, ports.ErrWorkspaceBranchInvalid) {
+				t.Fatalf("err = %v, want a non-INVALID_BRANCH failure", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want the real cause %q", err, tc.want)
+			}
+		})
 	}
 }
 

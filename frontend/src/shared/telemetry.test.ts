@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -6,13 +6,16 @@ import {
 	bootstrapDistinctId,
 	buildTelemetryBootstrap,
 	defaultDataDir,
+	EXPERIMENT_COHORT_BUCKETS,
+	loadOrAssignExperimentCohort,
 	loadOrCreateTelemetryInstallId,
 	parseDisabledEvents,
+	readTelemetryInstallContext,
 	rendererTelemetryEnabled,
 } from "./telemetry";
 
 const tempDirs: string[] = [];
-const enabledPolicy = { eventsEnabled: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false };
+const enabledPolicy = { eventsEnabled: true, consentGeneration: "7f80c8a9-ec67-4a16-a067-a444ffcc5cca", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true };
 
 afterEach(async () => {
 	await Promise.all(
@@ -90,6 +93,18 @@ test("failure-reporting opt-out does not withhold PostHog identity", async () =>
 	});
 	expect(bootstrap?.eventsEnabled).toBe(false);
 	expect(bootstrap?.distinctId).toMatch(/^ins_/);
+});
+
+test("buildTelemetryBootstrap provides the install ID file timestamp for event age", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	await loadOrCreateTelemetryInstallId(dir);
+	const installedAt = new Date(Date.now() - 60_000);
+	await utimes(path.join(dir, "telemetry_install_id"), installedAt, installedAt);
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
+	expect(bootstrap?.installTimestampMs).toBeGreaterThan(0);
+	expect(bootstrap?.installTimestampMs).toBeCloseTo(installedAt.getTime(), -3);
+	expect(bootstrap?.daysSinceInstall).toBe(0);
 });
 
 test("buildTelemetryBootstrap carries the deny list across the process boundary", async () => {
@@ -178,4 +193,67 @@ test("bootstrapDistinctId never returns an ID retired between the marker check a
 	});
 	expect(beforeRotation).toMatch(/^anon_/);
 	expect(beforeRotation).not.toBe(retired);
+});
+
+test("readTelemetryInstallContext reads app-state.json and sends only enum and day values", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-install-"));
+	tempDirs.push(dir);
+	const base = { stateDir: dir, arch: "arm64", osVersion: "15.1.2", env: {}, exists: () => false };
+	expect(await readTelemetryInstallContext(base)).toEqual({ arch: "arm64", osVersion: "15.1.2", installSource: "unknown", isCi: false, isContainer: false });
+
+	await writeFile(
+		path.join(dir, "app-state.json"),
+		JSON.stringify({ installSource: "npm-bootstrap", installedAt: "2026-10-20T23:59:59.000Z", appPath: "/Users/me/AO.app" }),
+	);
+	expect(await readTelemetryInstallContext({ ...base, env: { CI: "true" } })).toEqual({
+		arch: "arm64",
+		osVersion: "15.1.2",
+		installSource: "npm-bootstrap",
+		installedAt: "2026-10-20",
+		isCi: true,
+		isContainer: false,
+	});
+
+	await writeFile(path.join(dir, "app-state.json"), JSON.stringify({ installSource: "/Users/me/Downloads" }));
+	expect((await readTelemetryInstallContext({ ...base, stateDir: null })).installSource).toBe("unknown");
+	expect((await readTelemetryInstallContext(base)).installSource).toBe("other");
+});
+
+test("buildTelemetryBootstrap carries the install context", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-bootstrap-install-"));
+	tempDirs.push(dir);
+	const install = { arch: "x64", installSource: "exe", isCi: false, isContainer: false };
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "win32", "/home/test", true, enabledPolicy, install);
+	expect(bootstrap?.install).toEqual(install);
+});
+
+test("loadOrAssignExperimentCohort assigns one sticky bucket shared with the daemon", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	const first = await loadOrAssignExperimentCohort(dir);
+	expect(Number.isInteger(first)).toBe(true);
+	expect(first).toBeGreaterThanOrEqual(0);
+	expect(first).toBeLessThan(EXPERIMENT_COHORT_BUCKETS);
+	const concurrent = await Promise.all(Array.from({ length: 5 }, () => loadOrAssignExperimentCohort(dir)));
+	expect(new Set(concurrent)).toEqual(new Set([first]));
+	// Same file and format the daemon reads (backend/internal/adapters/telemetry/cohort.go).
+	expect((await readFile(path.join(dir, "telemetry_experiment_cohort"), "utf8")).trim()).toBe(String(first));
+});
+
+test("loadOrAssignExperimentCohort keeps the daemon's bucket and omits an invalid one", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	await writeFile(path.join(dir, "telemetry_experiment_cohort"), "42\n");
+	expect(await loadOrAssignExperimentCohort(dir)).toBe(42);
+	await writeFile(path.join(dir, "telemetry_experiment_cohort"), "100\n");
+	expect(await loadOrAssignExperimentCohort(dir)).toBeUndefined();
+	expect(await readFile(path.join(dir, "telemetry_experiment_cohort"), "utf8")).toBe("100\n");
+});
+
+test("buildTelemetryBootstrap carries the experiment cohort", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+	tempDirs.push(dir);
+	await writeFile(path.join(dir, "telemetry_experiment_cohort"), "13\n");
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.0.0", "darwin", "/home/test", true, enabledPolicy);
+	expect(bootstrap?.experimentCohort).toBe(13);
 });

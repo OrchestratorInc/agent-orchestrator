@@ -1,11 +1,11 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -413,16 +413,19 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof payload?.conversationId !== "string" &&
 							typeof payload?.interfaceTransitionId !== "string"
 						) {
-							// Async chat startup changes the session's provisionState, but
-							// does not emit a conversationId. Refresh the open conversation
-							// so its controller state can leave "connecting".
-							pendingConversationSessions.add(decoded.sessionId);
-							pendingEditorHandoffSessions.add(decoded.sessionId);
-							// Only the workspace waits for an id-only update: the session's
-							// own caches above still refresh at once, because such an update
-							// can be what tells an open chat that its start-up finished.
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
+							// Async chat startup changes the session's provisionState, but
+							// does not emit a conversationId, and the controller turning
+							// ready writes nothing of its own: whichever session update
+							// follows is what lets an open chat leave "connecting". Once the
+							// chat is ready or working, an id-only update (usage bookkeeping,
+							// cleanup facts, agent-switch rows) changes nothing in it, and
+							// refetching for each one reloaded its whole page every few seconds.
+							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
+								pendingConversationSessions.add(decoded.sessionId);
+							}
+							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
 					} catch {
 						// A malformed CDC payload still invalidates workspaces; it simply
@@ -467,7 +470,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					accountSource?.close();
 					accountSourceBaseUrl = baseUrl;
 					try {
-						accountSource = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/agents/codex/accounts/events`);
+						accountSource = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/agents/codex/accounts/events`);
 						accountSource.onopen = () => {
 							if (disposed) return;
 							void queryClient.invalidateQueries({ queryKey: codexAccountsQueryKey });
@@ -495,7 +498,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// sends a cursor id, so the browser's own reconnect replays only the gap.
 					// A daemon from before the cursor existed answers 400; that base URL
 					// falls back to the cursorless stream (see probeCursorSupport).
-					const streamUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+					const streamUrl = `${eventStreamBaseUrl(baseUrl)}/api/v1/events`;
 					const useCursor = cursorUnsupportedBaseUrl !== baseUrl;
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;

@@ -255,6 +255,16 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("keeps unknown authentication details on the harness page with a clear label", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("Login status unavailable")).toBeInTheDocument();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -646,6 +656,7 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
 		expect(within(page).queryByText("Credentials not verified")).toBeNull();
@@ -937,9 +948,39 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// A configured credential reads as connected; an unknown one claims nothing.
-		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
+		// Credential presence alone does not imply a failed provider check.
+		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
+	});
+
+	it("offers setup for unknown auth without blocking updates or the model catalog", async () => {
+		const readiness = readyCatalog();
+		readiness.agents[1].authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		const models = { agentId: "codex", models: [{ id: "example-model", label: "Example model" }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "setup", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/{agent}/models") return { data: models } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
+			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		const { client } = renderSection();
+		const listRow = await findListRow("codex");
+		await within(listRow).findByText("Setup status unavailable");
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(page).getByRole("button", { name: "Set up" })).toBeEnabled();
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(list).getByText("Example model")).toBeInTheDocument();
+		backToList();
+		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], { agentId: "codex", status: "current", currentVersion: "1.3.0" }); });
+		const currentRow = await findListRow("codex");
+		await waitFor(() => expect(within(currentRow).queryByRole("img")).toBeNull());
+		expect(currentRow.querySelector(".bg-error")).toBeNull();
 	});
 
 	it.each(["future_status", ""])("keeps an observed version without claiming an update for status %s", async (status) => {
@@ -1397,8 +1438,10 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code as connected and offers to log in again", async () => {
+	it("keeps configured MiMo Code unverified and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		configured.agents[0].authentication.diagnostics = [{ method: "provider_validation", code: "probe_timeout",
+			reason: "Provider check timed out.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }];
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
@@ -1408,7 +1451,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("mimo-code");
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
@@ -1589,7 +1632,7 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 	});
 
-	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+	it("keeps Unreal documentation available with a neutral configured status", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
@@ -1606,6 +1649,9 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("unreal-agent");
 		expect(await within(row).findByText("Configured")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+		await userEvent.click(within(row).getByRole("tab", { name: "Health" }));
+		expect(within(row).getByText("Connection not checked")).toBeInTheDocument();
+		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
@@ -1867,12 +1913,55 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
+
+	for (const tc of [
+		{ name: "post-setup probe", probeStatus: "configured", readinessAfterProbes: 1 },
+		{ name: "readiness recovery", probeStatus: "unauthorized", readinessAfterProbes: 4 },
+	]) {
+		it(`completes Gemini setup from ${tc.name} when credentials are configured`, async () => {
+			const initial = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "unknown" })] };
+			const configured = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "configured" })] };
+			let probeCalls = 0;
+			vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+				if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+				if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "gemini", action: "setup", launchMode: "terminal", available: true }] } } as never;
+				if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+				if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+				return { data: undefined } as never;
+			});
+			vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+				if (path === "/api/v1/agents/{agent}/auth") return { data: {
+					agentId: "gemini", action: "setup", terminal: { handleId: "auth-gemini", projectId: null, sessionId: null, workingDir: "/tmp", title: "Gemini setup", createdAt: "2026-10-11T00:00:00Z" },
+				} } as never;
+				if (path === "/api/v1/agents/{agent}/probe") {
+					probeCalls += 1;
+					return { data: { agent: { id: "gemini", authStatus: tc.probeStatus }, installed: true } } as never;
+				}
+				if (path === "/api/v1/agents/readiness/ensure") return { data: probeCalls >= tc.readinessAfterProbes ? configured : initial } as never;
+				return { data: undefined } as never;
+			});
+			const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+			renderSection();
+			const row = await findAgentRow("gemini");
+			await userEvent.click(await within(row).findByRole("button", { name: "Set up" }));
+			await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
+
+			await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+				params: { path: { handleId: "auth-gemini" } },
+			}), { timeout: 8_000 });
+			if (tc.readinessAfterProbes > 1) expect(probeCalls).toBeGreaterThanOrEqual(4);
+			expect(await within(row).findByText("Configured")).toBeInTheDocument();
+			expect(within(row).queryByText("Connected")).not.toBeInTheDocument();
+			expect(within(row).getByRole("button", { name: "Open setup" })).toBeEnabled();
+			await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		}, 15_000);
+	}
 
 	it("refreshes authentication when the user closes the login terminal", async () => {
 		const authorized = catalogWithInstalled("claude-code");
@@ -1922,11 +2011,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Configured for a completed setup action", async () => {
-		const authorized = catalogWithInstalled("codex");
-		authorized.agents[1].authentication.state = "authorized";
+	it.each(["configured", "authorized"])("offers Open setup for %s setup actions", async (authentication) => {
+		const configured = catalogWithInstalled("codex");
+		configured.agents[1].authentication.state = authentication;
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
@@ -1935,15 +2024,17 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness/ensure") return { data: authorized } as never;
-			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never;
+			if (path === "/api/v1/agents/readiness/ensure") return { data: configured } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: authentication }, supported: true, installed: true } } as never;
 			return { data: undefined } as never;
 		});
 
 		renderSection();
 		const row = await findAgentRow("codex");
 
-		await within(row).findByText("Configured");
+		await within(row).findByText(authentication === "configured" ? "Configured" : "Connected");
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Open setup" })).toBeInTheDocument();
 	});
 
 	it("does not expose manual readiness controls", async () => {
@@ -2396,6 +2487,49 @@ describe("HarnessSettingsSection", () => {
 		expect(within(aiderRow).queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(within(codexRow).getAllByText("Installing…")).toHaveLength(1);
 		expect(within(aiderRow).getAllByText("Installing…")).toHaveLength(1);
+	});
+
+	it("shows the installer's percentage and latest line while an install runs", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") {
+				return { data: { jobs: [{
+					target: "codex", status: "installing", method: "npm", startedAt: new Date().toISOString(),
+					progress: { phase: "downloading", percent: 45, detail: "Downloading codex (60.0MiB)" },
+				}] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByRole("status")).toHaveTextContent("Downloading 45%");
+		expect(within(page).getByRole("progressbar", { name: "Downloading 45%" })).toHaveAttribute("aria-valuenow", "45");
+		expect(within(page).getByText("Downloading codex (60.0MiB)")).toBeInTheDocument();
+		backToList();
+		const listStatus = within(await findListRow("codex")).getByRole("status");
+		expect(listStatus).toHaveTextContent("Downloading 45%");
+	});
+
+	it("fills the bar from a percentage that names no phase and keeps the generic label", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") {
+				return { data: { jobs: [{
+					target: "codex", status: "installing", method: "official-installer", startedAt: new Date().toISOString(),
+					progress: { percent: 45, detail: "############                45.0%" },
+				}] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		// No phase named, so the label stays the generic one for a job this page did not start.
+		expect(await within(page).findByRole("status")).toHaveTextContent("Working…");
+		const bar = within(page).getByRole("progressbar", { name: "Working…" });
+		expect(bar).toHaveAttribute("aria-valuenow", "45");
+		expect(bar.firstElementChild).toHaveStyle({ width: "45%" });
 	});
 
 	it("hydrates interrupted jobs and offers verification", async () => {

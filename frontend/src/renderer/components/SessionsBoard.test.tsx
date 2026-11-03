@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,19 +24,26 @@ const {
 	navigateMock,
 	notificationShowMock,
 	postMock,
+	patchMock,
 	workspaceQueryMock,
-	boardActionsInPanelMock,
+	cloudProjectsMock,
+	spawnCloudOrchestratorMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
+	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	boardActionsInPanelMock: vi.fn(() => false),
+	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
+	spawnCloudOrchestratorMock: vi.fn(),
 }));
 
-vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
+vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
+
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
+
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -49,6 +56,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
+	useCloudProjectsQuery: () => ({ data: cloudProjectsMock() }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
 		return {
@@ -58,6 +66,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 }));
 
+vi.mock("./SessionTopbarActions", async (importOriginal) => ({ ...(await importOriginal<typeof import("./SessionTopbarActions")>()), SessionTopbarActions: () => null }));
 
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 	const { pressureState } = await import("@aoagents/product-ui");
@@ -74,7 +83,7 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 });
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiClient: { POST: (...args: unknown[]) => postMock(...args), PATCH: (...args: unknown[]) => patchMock(...args) },
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
@@ -84,6 +93,7 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onShortcut: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
@@ -98,6 +108,9 @@ vi.mock("../lib/bridge", () => ({
 		clipboard: {
 			writeText: vi.fn(),
 		},
+		editorHandoff: {
+			getState: vi.fn().mockResolvedValue({ targets: [], preferredEditorId: "cursor", workspaceAvailable: true }),
+		},
 		notifications: {
 			show: (...args: unknown[]) => notificationShowMock(...args),
 		},
@@ -108,7 +121,6 @@ vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
 	return {
 		...actual,
-		usesBoardActionsInPanel: () => boardActionsInPanelMock(),
 		isLinuxPlatform: () => false,
 	};
 });
@@ -147,11 +159,11 @@ beforeEach(() => {
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
+	patchMock.mockReset().mockResolvedValue({ data: {}, response: { status: 200 } });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
-	boardActionsInPanelMock.mockReset().mockReturnValue(false);
 });
 
 describe("SessionsBoard", () => {
@@ -167,6 +179,57 @@ describe("SessionsBoard", () => {
 		}
 	});
 
+	it("starts a Freestyle cloud orchestrator in place, on its conversation, and keeps the loader for Coder", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+			renderBoard("p1");
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			const composer = screen.getByRole("combobox", { name: "Message the agent" });
+			expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+			cleanup();
+			// The org default applies to a project with no provider of its own (Coder here).
+			cloudProjectsMock.mockReturnValue([{ id: "p1", config: {} }]);
+			renderBoard("p1");
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
+	it("starts a just-created Freestyle project's orchestrator once, without showing the empty board", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+		spawnCloudOrchestratorMock.mockReset().mockReturnValue(new Promise(() => {}));
+		useUiStore.getState().setAutoStartOrchestrator("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.queryByTestId("board")).not.toBeInTheDocument();
+			expect(screen.getByRole("combobox", { name: "Message the agent" }).closest("form")).toHaveAttribute("data-starting", "true");
+			await waitFor(() => expect(spawnCloudOrchestratorMock).toHaveBeenCalledTimes(1));
+			expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("p1")).toBe(false);
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
+			useUiStore.getState().setAutoStartOrchestrator("p1", false);
+		}
+	});
+
+	it("leaves an unflagged cloud project on its board", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+		spawnCloudOrchestratorMock.mockReset();
+		try {
+			renderBoard("p1");
+			expect(screen.getByTestId("board")).toBeInTheDocument();
+			expect(spawnCloudOrchestratorMock).not.toHaveBeenCalled();
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
+		}
+	});
+
 	it("shows the orchestrator launch surface immediately after project setup", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "New project", path: "/tmp/new-project", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
@@ -178,6 +241,29 @@ describe("SessionsBoard", () => {
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}
+	});
+
+	it("renames a session from its card's context menu", async () => {
+		const user = userEvent.setup();
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s1", title: "Fix login", status: "working" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+
+		fireEvent.contextMenu(await screen.findByText("Fix login"));
+		await user.click(await screen.findByRole("menuitem", { name: "Rename Fix login" }));
+		const dialog = await screen.findByRole("dialog");
+		const input = within(dialog).getByRole("textbox", { name: "Rename Fix login" });
+		await user.clear(input);
+		await user.type(input, "Fix login redirect");
+		await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+		await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "s1" } },
+			body: { displayName: "Fix login redirect" },
+		}));
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("says a session's status could not be verified, without offering a retry", () => {
@@ -232,7 +318,7 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByTestId("app-memory-indicator")).not.toBeInTheDocument();
 	});
 
-	it("shows AO memory pressure in the archive bar even with nothing archived", async () => {
+	it("shows AO memory pressure before the Task button, and no archive bar with nothing archived", async () => {
 		const GIB = 1024 ** 3;
 		appMemoryMock.mockReturnValue({
 			isError: false,
@@ -249,6 +335,10 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
+		// In the board's action row, ahead of the Task button.
+		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
+		const task = screen.getByRole("button", { name: "New task" });
+		expect(indicator.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(indicator).toHaveTextContent("12.0 GB");
 		expect(indicator).toHaveAttribute("data-memory-state", "tight");
 		expect(indicator).toHaveAttribute("aria-label", "Tight · 2.0 GB free of 32.0 GB · AO holds 12.0 GB · pressure 35.0");
@@ -257,7 +347,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it.each(["single_repo", "multi_repo", "cloud", "standalone", undefined] as const)("hides the cue runner for %s projects", (kind) => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [{ ...workspaceWithSessions([]), kind }],
 			isError: false,
@@ -327,7 +416,6 @@ describe("SessionsBoard", () => {
 	});
 
 	it("shows the Board identity and compact actions in the in-panel board chrome", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -369,10 +457,9 @@ describe("SessionsBoard", () => {
 	});
 
 	it.each([
-		["active", "Working", "bg-status-working", true],
-		["idle", "Idle", "bg-status-idle", false],
-	] as const)("shows %s orchestrator activity in the in-panel board toolbar", (state, label, tone, pulses) => {
-		boardActionsInPanelMock.mockReturnValue(true);
+		["active", "Working"],
+		["idle", "Idle"],
+	] as const)("shows %s orchestrator activity in the in-panel board toolbar", (state, label) => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -403,16 +490,12 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
-		const indicator = button.querySelector("span.size-dot-sm") as HTMLElement;
+		const indicator = button.querySelector("span.size-dot-sm");
 		expect(within(button).getByText("Orchestrator").hasAttribute("data-compact-label")).toBe(true);
-		expect(indicator).toHaveAttribute("aria-hidden", "true");
-		expect(indicator).toHaveClass(tone);
-		expect(indicator).toHaveClass(pulses ? "animate-status-pulse" : "size-dot-sm");
-		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
+		expect(indicator).toBeNull();
 	});
 
 	it("shows the Board crumb on the root board when actions live in the panel", () => {
-		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -1600,7 +1683,8 @@ describe("SessionsBoard", () => {
 
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-		expect(await screen.findByRole("alert")).toHaveTextContent("Failed to terminate session (500)");
+		const alerts = await screen.findAllByRole("alert");
+		expect(alerts.some((alert) => alert.textContent?.includes("Failed to terminate session (500)"))).toBe(true);
 		expect(screen.getByRole("button", { name: "Archive merged worker" })).toBeEnabled();
 	});
 

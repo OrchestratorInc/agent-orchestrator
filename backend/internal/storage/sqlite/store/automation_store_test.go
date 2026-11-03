@@ -25,6 +25,9 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 		Prompt:      "Review new issues",
 		Kind:        domain.KindWorker,
 		Harness:     domain.HarnessCodex,
+		Model:       "gpt-5",
+		Mode:        "agent",
+		Effort:      "high",
 		RRuleText:   "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
 		Timezone:    "Asia/Calcutta",
 		Enabled:     true,
@@ -44,6 +47,16 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("automation round trip = %#v, want %#v", got, want)
+	}
+
+	want.Model, want.Mode, want.Effort = "capable", "", "low"
+	want.UpdatedAt = now.Add(time.Minute)
+	if updated, err := store.UpdateAutomation(ctx, want); err != nil || !updated {
+		t.Fatalf("UpdateAutomation: updated=%v err=%v", updated, err)
+	}
+	got, ok, err = store.GetAutomation(ctx, want.ID)
+	if err != nil || !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("updated automation = %#v, want %#v; ok=%v err=%v", got, want, ok, err)
 	}
 }
 

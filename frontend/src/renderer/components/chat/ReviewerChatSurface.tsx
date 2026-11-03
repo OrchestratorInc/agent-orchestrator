@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useReviewerConversation, useReviewerConversationCommands, useReviewerConversationModels } from "../../hooks/useReviewerConversation";
 import { useHostConnection } from "../../hooks/useHostConnection";
+import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -15,6 +16,9 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const draftOwner = useMemo(() => ({ sessionId: sessionUiKey(`review:${reviewId}`, hostId), incarnation: reviewId }), [hostId, reviewId]);
+	// One surface shows each review's chat in turn: a target is for its review, once.
+	const annotationNavigation = useChatNavigationRequest<ChatMessageFocusTarget>(reviewId);
+	useChatMessageFocus(sessionUiKey(workerSessionId, hostId), reviewId, Boolean(snapshot), annotationNavigation.navigate);
 	if (isLoading)
 		return (
 			<Centered>
@@ -31,6 +35,8 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 		);
 	return (
 		<ChatWorkspace
+			annotationNavigationRequest={annotationNavigation.request}
+			onAnnotationNavigationHandled={annotationNavigation.handled}
 			uiSessionId={hostId ? sessionUiKey(reviewId, hostId) : undefined}
 			assetBaseUrl={remoteBase}
 			remoteHostId={hostId}

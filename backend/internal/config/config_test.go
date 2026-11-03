@@ -14,7 +14,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
+	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
 		t.Setenv(k, "")
 	}
 
@@ -271,7 +271,7 @@ func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
 
 func TestLoadOfferingDefaults(t *testing.T) {
 	// Clear the offering vars so we observe pure defaults: no client identity,
-	// cloud off, local on.
+	// cloud on, local on.
 	for _, k := range []string{"AO_CLIENT", "AO_CLOUD_OFFERING", "AO_LOCAL_OFFERING", "AO_CLOUD_CONTROL_PLANE_URL"} {
 		t.Setenv(k, "")
 	}
@@ -282,8 +282,8 @@ func TestLoadOfferingDefaults(t *testing.T) {
 	if cfg.Client != "" {
 		t.Errorf("Client = %q, want empty", cfg.Client)
 	}
-	if cfg.CloudOffering {
-		t.Error("CloudOffering = true, want false by default")
+	if !cfg.CloudOffering {
+		t.Error("CloudOffering = false, want true by default")
 	}
 	if !cfg.LocalOffering {
 		t.Error("LocalOffering = false, want true by default")
@@ -295,7 +295,7 @@ func TestLoadOfferingDefaults(t *testing.T) {
 
 func TestLoadOfferingOverrides(t *testing.T) {
 	t.Setenv("AO_CLIENT", "  eleven_x  ")
-	t.Setenv("AO_CLOUD_OFFERING", "true")
+	t.Setenv("AO_CLOUD_OFFERING", "false")
 	t.Setenv("AO_LOCAL_OFFERING", "false")
 	t.Setenv("AO_CLOUD_CONTROL_PLANE_URL", " https://cp.example.com ")
 
@@ -306,8 +306,8 @@ func TestLoadOfferingOverrides(t *testing.T) {
 	if cfg.Client != "eleven_x" {
 		t.Errorf("Client = %q, want trimmed eleven_x", cfg.Client)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want explicit false to stick")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want explicit false to stick")
@@ -318,17 +318,17 @@ func TestLoadOfferingOverrides(t *testing.T) {
 }
 
 // The offering toggles must accept the numeric spellings the supervisor may
-// hand down: 1 switches cloud on, 0 is the only way local goes off.
+// hand down: 0 is the only way either offering goes off.
 func TestLoadOfferingNumericToggles(t *testing.T) {
-	t.Setenv("AO_CLOUD_OFFERING", "1")
+	t.Setenv("AO_CLOUD_OFFERING", "0")
 	t.Setenv("AO_LOCAL_OFFERING", "0")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true for AO_CLOUD_OFFERING=1")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want false for AO_CLOUD_OFFERING=0")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want false for AO_LOCAL_OFFERING=0")
@@ -651,14 +651,21 @@ func TestLoadVersionRefreshSettings(t *testing.T) {
 func TestLoadPhaseThreeToggles(t *testing.T) {
 	t.Setenv("AO_TUI_VERSION_REFRESH", "")
 	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
 	cfg, err := Load()
-	if err != nil || !cfg.TUIVersionRefresh || !cfg.WindowsUpdateWhenIdle {
-		t.Fatalf("defaults: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	if err != nil || !cfg.TUIVersionRefresh || !cfg.UpdateWhenIdle {
+		t.Fatalf("defaults: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
 	}
 	t.Setenv("AO_TUI_VERSION_REFRESH", "off")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "off")
+	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.UpdateWhenIdle {
+		t.Fatalf("off: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
+	}
+	// The older Windows-only name still turns it off.
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
 	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "off")
-	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.WindowsUpdateWhenIdle {
-		t.Fatalf("off: tui=%t windows=%t err=%v", cfg.TUIVersionRefresh, cfg.WindowsUpdateWhenIdle, err)
+	if cfg, err = Load(); err != nil || cfg.UpdateWhenIdle {
+		t.Fatalf("legacy off: idle=%t err=%v", cfg.UpdateWhenIdle, err)
 	}
 }
 
@@ -753,4 +760,34 @@ func isScrubbedTelemetryEntry(entry string) bool {
 		}
 	}
 	return false
+}
+
+func TestLoadTelemetryRetention(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    time.Duration
+		invalid bool
+	}{
+		{"", 0, false}, {"7", 7 * 24 * time.Hour, false}, {"720h", 30 * 24 * time.Hour, false},
+		{"24h", 24 * time.Hour, false}, {"0", 0, true}, {"-1", 0, true},
+		{"23h", 0, true}, {"one day", 0, true}, {"106752", 0, true},
+		{"213504", 0, true}, {"9223372036854775807", 0, true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("AO_TELEMETRY_RETENTION", tc.raw)
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("expected invalid retention error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Telemetry.LocalRetention != tc.want {
+				t.Fatalf("retention = %v, want %v", cfg.Telemetry.LocalRetention, tc.want)
+			}
+		})
+	}
 }

@@ -136,6 +136,7 @@ type SessionService interface {
 	ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error)
 	GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
+	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
@@ -233,6 +234,7 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Post("/sessions/{sessionId}/conversation/file-references/resolve", c.resolveFileReference)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
@@ -244,6 +246,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/diffs", c.getWorkspaceDiffs)
 	r.Get("/sessions/{sessionId}/workspace/file/revision", c.getWorkspaceFileRevision)
 	r.Get("/sessions/{sessionId}/workspace/search", c.searchWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/search/content", c.searchWorkspaceContent)
 	r.Get("/sessions/{sessionId}/workspace/resolve", c.resolveWorkspacePath)
 	r.Get("/sessions/{sessionId}/workspace/tree", c.listWorkspaceTree)
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/files", c.listPRFiles)
@@ -252,6 +255,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
+	r.Delete("/sessions/{sessionId}", c.deleteSession)
 	r.Patch("/sessions/{sessionId}/merge-policy", c.setMergePolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-review", c.setAutoInjectReviewPolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-ci", c.setAutoInjectCIPolicy)
@@ -1368,6 +1372,23 @@ func (c *SessionsController) searchWorkspaceFiles(w http.ResponseWriter, r *http
 	envelope.WriteJSON(w, http.StatusOK, workspaceFileSearchResponse(result))
 }
 
+func (c *SessionsController) searchWorkspaceContent(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/search/content")
+		return
+	}
+	hits, err := c.Svc.SearchWorkspaceContent(r.Context(), sessionID(r), r.URL.Query().Get("query"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	resp := WorkspaceContentSearchResponse{Results: make([]WorkspaceContentSearchHitResponse, 0, len(hits))}
+	for _, hit := range hits {
+		resp.Results = append(resp.Results, WorkspaceContentSearchHitResponse{Path: hit.Path, Line: hit.Line, Text: hit.Text})
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
+}
+
 // resolveWorkspacePath classifies a path from chat as a workspace file, a
 // session artifact, or neither, so the renderer can open it without knowing
 // where the session's worktree lives.
@@ -2143,6 +2164,28 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, RollbackSessionResponse{OK: true, SessionID: sessionID(r), Deleted: out.Deleted, Killed: out.Killed})
 }
 
+// sessionDeleteService is optional so unrelated controller fakes keep
+// implementing the stable SessionService surface.
+type sessionDeleteService interface {
+	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// deleteSession permanently removes a terminated session's record. The service
+// refuses a live session, and one whose worktree is not cleaned up yet unless
+// the caller asks it to clean it up first.
+func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(sessionDeleteService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+		return
+	}
+	if err := svc.Delete(r.Context(), sessionID(r), r.URL.Query().Get("cleanup") == "true"); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, DeleteSessionResponse{OK: true, SessionID: sessionID(r)})
+}
+
 func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/cleanup")
@@ -2155,7 +2198,7 @@ func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped := make([]CleanupSkippedSession, 0, len(out.Skipped))
 	for _, skip := range out.Skipped {
-		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Reason: skip.Reason})
+		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Code: string(skip.Code), Reason: skip.Reason})
 	}
 	envelope.WriteJSON(w, http.StatusOK, CleanupSessionsResponse{
 		OK: true, Cleaned: out.Cleaned, AlreadyGone: out.AlreadyGone, Skipped: skipped,
@@ -2205,6 +2248,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
+	}
+	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
+		recordUserMessage(r.Context(), recorder, sessionID(r), in.SenderSessionID, false)
 	}
 	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
 }
@@ -2267,6 +2313,7 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		ClientRequestHash: requestHash,
 		ProjectID:         in.ProjectID,
 		Brief:             domain.SanitizeControlChars(in.Brief),
+		Branch:            domain.SanitizeControlChars(strings.TrimSpace(in.Branch)),
 		RequestedAgent:    in.Agent,
 		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
 		Effort:            sanitizedOptionalString(in.Effort),
@@ -2609,7 +2656,7 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	}
 	sess, err := c.Svc.SpawnOrchestrator(r.Context(), in.ProjectID, in.Clean, in.Mode, in.ApprovalMode)
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		envelope.WriteErrorWithCode(w, r, err, "ORCHESTRATOR_SPAWN_FAILED", "Unable to start orchestrator")
 		return
 	}
 	envelope.WriteJSON(w, http.StatusCreated, SpawnOrchestratorResponse{

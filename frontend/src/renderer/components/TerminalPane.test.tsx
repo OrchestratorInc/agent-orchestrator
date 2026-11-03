@@ -67,6 +67,16 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
+// What the pane hands the terminal for dropped files, and the session organization's attachment limit.
+const dropSetup = vi.hoisted(() => ({
+	maxAttachmentBytes: undefined as number | undefined,
+	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
+}));
+// Read through a function: an assignment in a test would otherwise narrow it for the checks that follow.
+const droppedFileProps = () => dropSetup.props;
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
+}));
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
@@ -103,8 +113,11 @@ vi.mock("./XtermTerminal", () => ({
 		onLinkOpen?: (uri: string) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 		supportsCursorColorScheme?: boolean;
+		saveDroppedFile?: unknown;
+		droppedFileMaxBytes?: number;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		dropSetup.props = { saveDroppedFile: props.saveDroppedFile, droppedFileMaxBytes: props.droppedFileMaxBytes };
 		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
 		if (instance.current === 0) {
@@ -261,6 +274,45 @@ describe("cloud terminal routing", () => {
 			expect(cloudTicketMock).toHaveBeenCalledWith("cloud-org", cloudSession.id, {
 				kind: "workspace",
 			});
+		} finally {
+			view.restore();
+		}
+	});
+});
+
+describe("TerminalPane dropped files", () => {
+	it("takes drops on a Cloud terminal only while the control plane takes files, up to its limit", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		dropSetup.maxAttachmentBytes = undefined;
+		const without = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			// A path on this machine means nothing in the sandbox: no drops at all.
+			expect(droppedFileProps()?.saveDroppedFile).toBeNull();
+		} finally {
+			without.restore();
+			without.unmount();
+		}
+		dropSetup.maxAttachmentBytes = 25 * 1024 * 1024;
+		dropSetup.props = undefined;
+		const withFiles = renderPane(cloudSession);
+		try {
+			await waitFor(() => expect(droppedFileProps()?.saveDroppedFile).toBeTypeOf("function"));
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBe(25 * 1024 * 1024);
+		} finally {
+			withFiles.restore();
+			withFiles.unmount();
+			dropSetup.maxAttachmentBytes = undefined;
+		}
+	});
+
+	it("leaves a local terminal's drops to this machine", async () => {
+		dropSetup.props = undefined;
+		const view = renderPane(worker);
+		try {
+			await waitFor(() => expect(droppedFileProps()).toBeDefined());
+			expect(droppedFileProps()?.saveDroppedFile).toBeUndefined();
+			expect(droppedFileProps()?.droppedFileMaxBytes).toBeUndefined();
 		} finally {
 			view.restore();
 		}
@@ -634,7 +686,7 @@ describe("TerminalPane empty states", () => {
 	it("shows a no-selection message when no session is selected", () => {
 		const view = renderPane();
 		try {
-			expect(screen.getByText("Agent Orchestrator")).toBeInTheDocument();
+			expect(screen.getByText("Orchestrator")).toBeInTheDocument();
 			expect(screen.getByText("No session selected. Pick a worker to attach its terminal.")).toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -1281,6 +1333,7 @@ describe("terminal restore", () => {
 			terminalState.value = "exited";
 			const view = renderPane({ ...session, ...exited });
 			try {
+				expect(screen.getByText("Agent exited")).toBeInTheDocument();
 				await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 				await waitFor(() =>
 					expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
@@ -1322,9 +1375,9 @@ describe("terminal restore", () => {
 			},
 		);
 
-		// Cloud sessions recover through the control plane; the local daemon has
-		// never heard of them, so this button must not appear for one.
-		it("does not offer resume for a cloud session", () => {
+		// A Cloud session's exited agent restarts in its live worker through the
+		// control plane (ResumeAgentControl), never through the local daemon.
+		it("offers resume for a cloud session whose agent exited", () => {
 			terminalState.value = "exited";
 			const view = renderPane({
 				...worker,
@@ -1332,7 +1385,8 @@ describe("terminal restore", () => {
 				cloud: { orgId: "org-1" },
 			});
 			try {
-				expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+				expect(screen.getByText("Agent exited")).toBeInTheDocument();
+				expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 			} finally {
 				view.restore();
 			}
@@ -1364,10 +1418,30 @@ describe("terminal restore", () => {
 			terminalHandleId: "term-1",
 		});
 		try {
-			expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+			const restore = screen.getByRole("button", { name: "Restore session" });
+			expect(restore).toBeInTheDocument();
+			// The restore action must be a visible labeled CTA, not an icon-only
+			// button floating in the corner of the strip (issue #3300).
+			expect(restore).toHaveTextContent("Restore session");
 		} finally {
 			view.restore();
 		}
+	});
+
+	it("explains a terminated session with a visible recovery action", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Restore session" })).toHaveTextContent("Restore session");
+		} finally { view.restore(); }
+	});
+
+	it("shows the recorded startup failure rather than guessing an exit reason", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", provisionState: "failed", provisionError: "Workspace checkout failed", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session failed to start")).toBeInTheDocument();
+			expect(screen.getByText("Workspace checkout failed")).toBeInTheDocument();
+		} finally { view.restore(); }
 	});
 
 	it("preserves Restore controls after a cached attachment reports a fatal pane error", async () => {
@@ -1382,7 +1456,7 @@ describe("terminal restore", () => {
 		try {
 			expect(await screen.findByRole("button", { name: "Restore session" })).toBeInTheDocument();
 			expect(screen.getByTestId("xterm")).toBeInTheDocument();
-			expect(screen.getByText("Terminal ended")).toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
 			expect(screen.queryByText("Terminal error: terminal handle missing")).not.toBeInTheDocument();
 		} finally {
 			view.restore();

@@ -57,6 +57,9 @@ func (c *conversation) RequestPermission(
 	if len(params.Options) == 0 {
 		return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 	}
+	if isQwenUserQuestion(params.ToolCall) {
+		return c.handleQwenUserQuestion(ctx, params)
+	}
 	c.mu.Lock()
 	policy, mode := c.permissionFor, c.permissionMode
 	c.mu.Unlock()
@@ -851,6 +854,21 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	}
 	if outputCut {
 		detailMap["outputTruncated"] = true
+	}
+	if c.harness == domain.HarnessHermes {
+		// Hermes omits tool payloads on delegation updates. Keep those fields
+		// absent, and use the timeline's arguments key without changing other
+		// ACP providers' persisted input contract.
+		delete(detailMap, "input")
+		if input, err := json.Marshal(tool.rawInput); err == nil && string(input) != "null" {
+			detailMap["arguments"] = cappedPayload(tool.rawInput)
+		}
+		if len(tool.locations) == 0 {
+			delete(detailMap, "locations")
+		}
+		if len(tool.content) == 0 {
+			delete(detailMap, "content")
+		}
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)

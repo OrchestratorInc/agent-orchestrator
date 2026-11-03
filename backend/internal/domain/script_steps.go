@@ -14,7 +14,7 @@ import (
 // without a limit, as Cleanup always has.
 //
 // The limit is stored with the step, as the Cloud control plane stores it
-// (cloud/internal/domain.TimedScriptCommand): the step's first line is the
+// (the private control plane's internal/domain.TimedScriptCommand): the step's first line is the
 // shell comment "# ao-timeout: <N>m". So a step keeps its limit through any
 // reordering, and the Settings editor reads and writes local and Cloud steps
 // alike.

@@ -25,41 +25,49 @@ export function SpawnAttachmentRow({ attachments, onRemove }: {
 	return <>
 		{/* A ScrollView grows by default. Unpinned, the row split the sheet's
 		    spare height with the prompt and floated in the middle of it, far
-		    from the selectors. */}
-		<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.row} contentContainerStyle={styles.content}>
-			{attachments.map((item, index) => {
-				const preview = spawnAttachmentPreview(item);
-				const remove = (
-					<Pressable
-						hitSlop={8}
-						accessibilityRole="button"
-						accessibilityLabel={`Remove ${item.name}`}
-						onPress={() => { haptics.tap(); onRemove(item); }}
-						style={preview ? styles.thumbRemove : undefined}
-					>
-						<Feather name="x" size={iconSize.xs} color={preview ? "#fff" : t.textTertiary} />
-					</Pressable>
-				);
-				return preview ? (
-					<View key={`${item.name}-${index}`} style={styles.thumb}>
+		    from the selectors.
+		    iOS form sheets (react-native-screens) look for a ScrollView among the
+		    sheet's direct native children and stretch it to the sheet frame at
+		    (0, 0) on every sheet resize, so the keyboard or the image viewer
+		    threw the row to the top-left and left an invisible full-sheet
+		    scroller over the prompt that swallowed taps. A non-collapsable
+		    wrapper keeps it out of that lookup. */}
+		<View collapsable={false} style={styles.row}>
+			<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.content}>
+				{attachments.map((item, index) => {
+					const preview = spawnAttachmentPreview(item);
+					const remove = (
 						<Pressable
-							accessibilityRole="imagebutton"
-							accessibilityLabel={`Open ${item.name}`}
-							onPress={() => { haptics.tap(); setViewing({ name: item.name, uri: preview }); }}
+							hitSlop={8}
+							accessibilityRole="button"
+							accessibilityLabel={`Remove ${item.name}`}
+							onPress={() => { haptics.tap(); onRemove(item); }}
+							style={preview ? styles.thumbRemove : undefined}
 						>
-							<Image accessibilityIgnoresInvertColors source={{ uri: preview }} resizeMode="cover" style={styles.thumbImage} />
+							<Feather name="x" size={iconSize.xs} color={preview ? "#fff" : t.textTertiary} />
 						</Pressable>
-						{remove}
-					</View>
-				) : (
-					<View key={`${item.name}-${index}`} style={styles.chip}>
-						<Feather name="file-text" size={iconSize.sm} color={t.accent} />
-						<Text numberOfLines={1} style={styles.chipName}>{item.name}</Text>
-						{remove}
-					</View>
-				);
-			})}
-		</ScrollView>
+					);
+					return preview ? (
+						<View key={`${item.name}-${index}`} style={styles.thumb}>
+							<Pressable
+								accessibilityRole="imagebutton"
+								accessibilityLabel={`Open ${item.name}`}
+								onPress={() => { haptics.tap(); setViewing({ name: item.name, uri: preview }); }}
+							>
+								<Image accessibilityIgnoresInvertColors source={{ uri: preview }} resizeMode="cover" style={styles.thumbImage} />
+							</Pressable>
+							{remove}
+						</View>
+					) : (
+						<View key={`${item.name}-${index}`} style={styles.chip}>
+							<Feather name="file-text" size={iconSize.sm} color={t.accent} />
+							<Text numberOfLines={1} style={styles.chipName}>{item.name}</Text>
+							{remove}
+						</View>
+					);
+				})}
+			</ScrollView>
+		</View>
 		{viewing ? <ImageViewer visible name={viewing.name} source={{ uri: viewing.uri }} onClose={() => setViewing(undefined)} /> : null}
 	</>;
 }

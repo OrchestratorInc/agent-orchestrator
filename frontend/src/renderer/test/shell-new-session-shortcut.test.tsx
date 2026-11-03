@@ -143,11 +143,14 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
@@ -248,19 +251,21 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	useEnsureAgentReadiness: vi.fn(),
 }));
 
-vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
+vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
+vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
 }));
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
-vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
+vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<
 		typeof import("../stores/ui-store")
 	>("../stores/ui-store");
 	return {
+		useCanGoForward: () => false,
 		TitlebarNav: () => {
 			const isSidebarOpen = useStore(sidebarIsVisible);
 			const toggleSidebar = useStore((state) => state.toggleSidebar);
@@ -297,12 +302,12 @@ vi.mock("../components/ui/sidebar", () => ({
 	),
 }));
 
-vi.mock("../components/GlobalNewTaskDialog", async () => {
+vi.mock("../components/NewTaskNavigator", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
-		GlobalNewTaskDialog: () => {
+		NewTaskNavigator: () => {
 			const request = useStore((state) => state.newTaskRequest);
-			return request ? <div data-testid="new-task-flow" data-project={request.projectId} /> : null;
+			return request ? <div data-testid="new-task-flow" data-project={request.projectId} data-host={request.hostId} /> : null;
 		},
 	};
 });
@@ -403,6 +408,8 @@ function emitShortcut() {
 }
 
 beforeEach(() => {
+	// The shell remembers the last project for ⌘N outside one; start each test clean.
+	window.localStorage.removeItem("ao.newTask.lastProject");
 	shellMocks.navigate.mockReset();
 	shellMocks.onNewSessionShortcut.mockClear();
 	shellMocks.onKeyboardShortcutsHelp.mockClear();
@@ -931,17 +938,7 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 	// Regression: the shell LAYOUT must own this, not the session view. When the
 	// session view owned it, the shortcut did nothing outside a session route —
 	// nothing was mounted to hear it.
-	it("opens a terminal from the dedicated terminals route", async () => {
-		shellMocks.state.matchRouteTarget = "/terminals";
-		await renderShell();
-
-		pressNewShellTerminal();
-
-		expect(useUiStore.getState().newShellTerminalNonce).toBe(1);
-		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(1);
-	});
-
-	// Regression (#4772): ⌘T on the project board must not yank users into /terminals.
+	// Regression (#4772): ⌘T on the project board has no session to open a terminal in.
 	it("ignores the shortcut on the project board", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-1" };
 		await renderShell();
@@ -1097,6 +1094,29 @@ describe("shell new-session shortcut subscription", () => {
 
 		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "__standalone__");
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
+	});
+
+	it("stays with the project the new chat page shows, not the last one opened", async () => {
+		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "proj-2" };
+		await renderShell();
+
+		emitShortcut();
+
+		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "proj-2");
+	});
+
+	it("stays with the project and host a remote new chat page shows", async () => {
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "remote-proj", host: "host-a" };
+		await renderShell();
+
+		emitShortcut();
+
+		const flow = screen.getByTestId("new-task-flow");
+		expect(flow).toHaveAttribute("data-project", "remote-proj");
+		expect(flow).toHaveAttribute("data-host", "host-a");
 	});
 });
 

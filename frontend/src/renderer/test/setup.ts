@@ -128,6 +128,12 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,
@@ -156,6 +162,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -191,6 +198,7 @@ if (typeof window !== "undefined") {
 		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
+			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
@@ -200,7 +208,7 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		sideChats: { capture: async () => undefined },
+		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			getState: async () => ({
 				targets: [
@@ -211,6 +219,8 @@ if (typeof window !== "undefined") {
 				preferredEditorId: "cursor",
 				workspaceAvailable: true,
 			}),
+			getEditors: async () => ({ editors: [{ id: "cursor", name: "Cursor", kind: "editor" }], preferredEditorId: "cursor" }),
+			setPreferredEditor: async (editorId) => editorId,
 			open: async ({ targetId }) => {
 				if (targetId === "file-manager") return { id: "file-manager", name: "Finder", kind: "file_manager" };
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
@@ -228,8 +238,8 @@ if (typeof window !== "undefined") {
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
-			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
-			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
@@ -424,7 +434,7 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			importAccountHost: async () => undefined,
 			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => "",
+			issueAccountToken: async () => ({ token: "" }),
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -450,9 +460,13 @@ if (typeof window !== "undefined") {
 				throw new Error("not available in tests");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
+			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+			cancelBinary: () => undefined,
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

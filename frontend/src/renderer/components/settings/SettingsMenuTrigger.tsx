@@ -48,15 +48,17 @@ const TRIGGER = cn("group/settings-option-trigger", MENU_TRIGGER_CHROME);
  */
 export const SettingsMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement>
->(function SettingsMenuTrigger({ className, children, ...props }, ref) {
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
+>(function SettingsMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
 	return (
 		<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
 			{children}
-			<ChevronDown
-				className="size-icon-sm shrink-0 transition-transform duration-300 ease-out group-data-[state=open]/settings-option-trigger:rotate-180"
-				aria-hidden="true"
-			/>
+			{showCaret ? (
+				<ChevronDown
+					className="size-icon-sm shrink-0 transition-transform duration-300 ease-out group-data-[state=open]/settings-option-trigger:rotate-180"
+					aria-hidden="true"
+				/>
+			) : null}
 		</button>
 	);
 });

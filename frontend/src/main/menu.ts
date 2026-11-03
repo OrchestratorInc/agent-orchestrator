@@ -1,5 +1,28 @@
 import type { MenuItemConstructorOptions } from "electron";
 
+type AppMenuOptions = {
+	allowShellDebugging?: boolean;
+	onReload?: (ignoreCache: boolean) => void;
+};
+
+function reloadItems(options: AppMenuOptions, isMac: boolean): MenuItemConstructorOptions[] {
+	if (options.allowShellDebugging) return [{ role: "reload" }, { role: "forceReload" }];
+	const onReload = options.onReload;
+	if (!onReload) return [];
+	return [
+		{
+			label: "Reload Browser",
+			accelerator: isMac ? "Command+R" : "Ctrl+R",
+			click: () => onReload(false),
+		},
+		{
+			label: "Force Reload Browser",
+			accelerator: isMac ? "Shift+Command+R" : "Ctrl+Shift+R",
+			click: () => onReload(true),
+		},
+	];
+}
+
 // Electron's built-in toggleDevTools role assumes the focused surface belongs
 // to a BrowserWindow. AO uses BaseWindow with WebContentsView children, so the
 // role can receive no focused window and crash the main process. Keep Electron's
@@ -14,6 +37,7 @@ import type { MenuItemConstructorOptions } from "electron";
 export function buildMacAppMenuTemplate(
 	onToggleDevTools: () => void,
 	quit: { appName: string; onQuit: (fromShortcut: boolean) => void },
+	options: AppMenuOptions = {},
 ): MenuItemConstructorOptions[] {
 	return [
 		{
@@ -47,10 +71,9 @@ export function buildMacAppMenuTemplate(
 		{
 			label: "View",
 			submenu: [
-				{ role: "reload" },
-				{ role: "forceReload" },
+				...reloadItems(options, true),
 				{
-					label: "Toggle Developer Tools",
+					label: options.allowShellDebugging ? "Toggle Developer Tools" : "Toggle Browser Developer Tools",
 					accelerator: "Alt+Command+I",
 					click: onToggleDevTools,
 				},
@@ -66,14 +89,14 @@ export function buildMacAppMenuTemplate(
 	];
 }
 
-export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): MenuItemConstructorOptions[] {
-	const devtoolsItem: MenuItemConstructorOptions = onToggleDevTools
-		? {
-			label: "Toggle DevTools",
+export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, options: AppMenuOptions = {}): MenuItemConstructorOptions[] {
+	const devtoolsItems: MenuItemConstructorOptions[] = onToggleDevTools
+		? [{
+			label: options.allowShellDebugging ? "Toggle DevTools" : "Toggle Browser Developer Tools",
 			accelerator: "Ctrl+Shift+I",
 			click: onToggleDevTools,
-		}
-		: { role: "toggleDevTools" };
+		}]
+		: [];
 	return [
 		{
 			label: "Edit",
@@ -90,8 +113,8 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): Menu
 		{
 			label: "View",
 			submenu: [
-				{ role: "reload" },
-				devtoolsItem,
+				...reloadItems(options, false),
+				...devtoolsItems,
 				{ type: "separator" },
 				{ role: "resetZoom" },
 				{ accelerator: "Ctrl+=", role: "zoomIn" },
@@ -108,6 +131,6 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void): Menu
 	];
 }
 
-export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void): MenuItemConstructorOptions[] {
-	return buildWindowsAppMenuTemplate(onToggleDevTools);
+export function buildLinuxAppMenuTemplate(onToggleDevTools?: () => void, options: AppMenuOptions = {}): MenuItemConstructorOptions[] {
+	return buildWindowsAppMenuTemplate(onToggleDevTools, options);
 }

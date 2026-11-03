@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import * as codeSelection from "./useCodeSelection";
+import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type ReactNode } from "react";
@@ -60,7 +62,7 @@ vi.mock("@pierre/diffs/react", () => ({
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
-		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
+		renderAnnotation?: (annotation: { lineNumber: number; side: string }, fileDiff: unknown, item: { id: string }) => ReactNode;
 		renderCodeViewFooter?: () => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
@@ -72,7 +74,7 @@ vi.mock("@pierre/diffs/react", () => ({
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
 					{renderCustomHeader(item)}
 					<pre data-testid="review-patch">{item.fileDiff?.additionLines?.join("\n")}</pre>
-					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item)}</div>)}
+					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item.fileDiff, item)}</div>)}
 				</div>
 			))}
 			{renderCodeViewFooter?.()}
@@ -156,6 +158,19 @@ function ReviewWithCollapseControls(props: ComponentProps<typeof WorkspaceReview
 }
 
 describe("WorkspaceReviewPane", () => {
+	it("keeps Add to chat enabled for one selected workspace commit", () => {
+		const accept=vi.fn(()=>true),remove=subscribeChatComposerReferences("sess-1",accept);
+		const hook=vi.spyOn(codeSelection,"useCodeSelection"),sha="a".repeat(40);
+		const data=committedWorkspace([{path:"src/App.tsx",status:"modified",additions:1,deletions:1,size:20,binary:false}]);
+		data.commits[0].sha=sha;
+		const target=reviewTarget(data,{kind:"commits",shas:[sha]});
+		const view=renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false}/>);
+		const args=hook.mock.lastCall!;expect(args[2]).toBe(true);
+		const host=document.createElement("div"),header=document.createElement("div");header.setAttribute("data-review-item-id",`${target.key}:src/App.tsx`);host.append(header);
+		act(()=>{args[1]({host,point:{x:0,y:0},dragging:false,range:{start:1,end:1,side:"additions"},rows:[{kind:"add",side:"new",oldNo:null,newNo:1,text:"new code"}]})});
+		expect(accept).toHaveBeenCalledWith(expect.objectContaining({commitSha:sha,source:{kind:"workspace"}}));
+		view.unmount();hook.mockRestore();remove();
+	});
 	beforeEach(() => {
 		window.localStorage.clear();
 		getMock.mockReset();
@@ -371,6 +386,115 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock).toHaveBeenCalledTimes(2);
 	});
 
+	it("bounds a 5,123-file review and jumps directly to a distant file without loading intervening pages", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => ({ path: `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
+		const target = reviewTarget(workspace(files));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (filter = "", scrollRequest?: { path: string; key: number }, selected = target) => (
+			<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={selected} filter={filter} scrollRequest={scrollRequest} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane());
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(4), { timeout: 10_000 });
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toEqual(files.slice(0, 96).map((file) => file.path));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(8), { timeout: 10_000 });
+		expect(screen.getByText("Files 97–192 of 5123")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		expect(screen.queryByRole("checkbox", { name: "Mark file-0.ts as viewed" })).not.toBeInTheDocument();
+		view.rerender(pane("", { path: "file-5100.ts", key: 1 }));
+		await waitFor(() => expect(screen.getByText("Files 5089–5123 of 5123")).toBeInTheDocument());
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(10), { timeout: 10_000 });
+		expect(postMock.mock.calls.slice(8).flatMap((call) => call[1].body.paths)).toEqual(files.slice(5088).map((file) => file.path));
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(35);
+		expect(screen.getByRole("button", { name: "Next files" })).toBeDisabled();
+		// Filtering a late page must show its first result immediately.
+		view.rerender(pane("file-4000.ts"));
+		expect(await screen.findByRole("checkbox", { name: "Mark file-4000.ts as viewed" })).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+		view.rerender(pane());
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 97–192 of 5123")).toBeInTheDocument();
+		view.rerender(pane("", undefined, { ...target, selectionKey: "moved-pr-head" }));
+		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
+	}, 60_000);
+
+	it("preserves the review page across manifest refreshes and clamps it when files disappear", async () => {
+		const files = Array.from({ length: 193 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true, fileFingerprint: "before" }));
+		const target = reviewTarget(workspace(files));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (selected = target) => (
+			<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={selected} filter="" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane());
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		const refreshed = { ...target, workspaceVersion: "workspace-2", files: files.map((file) => ({ ...file, fileFingerprint: "after" })) };
+		view.rerender(pane(refreshed));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 193–193 of 193")).toBeInTheDocument();
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-3", files: refreshed.files.slice(0, 100) }));
+		expect(screen.getByText("Files 97–100 of 100")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(4);
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-4", files: refreshed.files.slice(0, 50) }));
+		expect(await screen.findByRole("checkbox", { name: "Mark file-0.dat as viewed" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Next files" })).not.toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(50);
+	}, 60_000);
+
+	it("bounds binary and deferred fallback rows, including Expand all", async () => {
+		const files = Array.from({ length: 5123 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 600_000, binary: index % 2 === 0 }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await waitFor(() => expect(postMock.mock.calls.flatMap((call) => call[1].body.paths)).toContain("file-95.dat"));
+		expect(postMock.mock.calls.flatMap((call) => call[1].body.paths).every((path: string) => files.slice(0, 96).some((file) => file.path === path))).toBe(true);
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+	}, 60_000);
+
+	it("keeps other pages' viewed and deferred files collapsed when collapsing or expanding a page", async () => {
+		const files = Array.from({ length: 99 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: index === 98 ? 600_000 : 20, binary: index !== 98 }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark file-96.dat as viewed" }));
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("checkbox", { name: "Mark file-96.dat as not viewed" })).toBeChecked();
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+	}, 60_000);
+
+	it("keeps a deferred diff loaded after expanding all on another page", async () => {
+		const files = [
+			...Array.from({ length: 96 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true })),
+			{ path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 600_000, binary: false },
+		];
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand src/App.tsx" }));
+		await screen.findByTestId("review-patch");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(await screen.findByTestId("review-patch")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Collapse src/App.tsx" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
+	}, 60_000);
+
 	it("reuses prefetched batches when opening a review with more than 24 files", async () => {
 		const files = Array.from({ length: 57 }, (_, index) => ({ path: index === 0 ? "src/App.tsx" : `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
 		const data = workspace(files);
@@ -416,7 +540,7 @@ describe("WorkspaceReviewPane", () => {
 		}));
 		expect(screen.getByTestId("code-view")).toHaveClass("overflow-y-auto");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-overflow", "wrap");
-		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
+		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary))"));
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");

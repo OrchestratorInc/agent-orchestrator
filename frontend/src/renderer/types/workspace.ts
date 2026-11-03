@@ -103,6 +103,8 @@ export type SessionStaleBinary = { version: string; since: string; switchFailedA
 
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
+	/** The cleanup was started by a sweep, not an archive: its state raises no app feedback. */
+	workspaceCleanupReportOnly?: boolean;
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;
@@ -237,6 +239,10 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Reached through a share link: what this person may do comes from its grant. */
+		shared?: boolean;
+		/** The guest the session was started for, when someone the project was shared with asked for it. */
+		requestedBy?: { userId: string; name: string };
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
@@ -425,6 +431,12 @@ export type { AttentionZone } from "../lib/session-presentation";
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
+	/**
+	 * Set on a cloud project someone in another organization shared with this
+	 * person. It carries no role: each shared session has its own grant, which
+	 * the session's live state reports.
+	 */
+	shared?: { byName?: string };
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;

@@ -73,6 +73,12 @@ describe("SpawnAttachmentRow", () => {
 		expect(root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(0);
 	});
 
+	it("keeps its scroll view out of the form sheet's scroll view lookup", async () => {
+		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo]} onRemove={vi.fn()} />); });
+		const wrapper = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.collapsable === false)[0];
+		expect(wrapper?.findAll((node) => String(node.type) === "ScrollView")).toHaveLength(1);
+	});
+
 	it("removes the tapped attachment", async () => {
 		const onRemove = vi.fn();
 		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo, notes]} onRemove={onRemove} />); });

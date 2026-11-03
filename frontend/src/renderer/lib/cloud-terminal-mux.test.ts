@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudTerminalMux } from "./cloud-terminal-mux";
 import { subscribeCloudNotificationHints } from "./cloud-notification-hints";
+import { useUiStore } from "../stores/ui-store";
 
 // Minimal fake WebSocket: records its URL and every frame it sends, lets the
 // test deliver frames, and reports OPEN so sendJSON works.
@@ -337,6 +338,25 @@ describe("createCloudTerminalMux cloud notification hints", () => {
 	});
 });
 
+describe("createCloudTerminalMux shared session input", () => {
+	it("tells the person once when the agent refuses keystrokes someone else's turn blocks", async () => {
+		FakeWebSocket.instances = [];
+		useUiStore.setState({ globalToasts: [] });
+		const mux = makeMux();
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		const output: number[] = [];
+		mux.onData("pane", (bytes) => output.push(bytes.length));
+		ws.deliver({ type: "input_refused", inputId: "in-1", message: "Someone else is writing to the agent." });
+		ws.deliver({ type: "input_refused", inputId: "in-2", message: "Someone else is writing to the agent." });
+		const toasts = useUiStore.getState().globalToasts.filter((toast) => toast.dedupeKey === "composer-terminal-refused");
+		expect(toasts).toHaveLength(1);
+		expect(toasts[0].title).toBe("Someone else is writing to the agent. Request a turn in Chat to type.");
+		expect(output).toEqual([]);
+		mux.dispose();
+	});
+});
+
 describe("createCloudTerminalMux ticket refusals", () => {
 	function refusingMux(error: object) {
 		const mux = createCloudTerminalMux({
@@ -370,6 +390,28 @@ describe("createCloudTerminalMux ticket refusals", () => {
 		await settle();
 		expect(errors).toEqual([]);
 		expect(states).toEqual(["waiting"]);
+		mux.dispose();
+	});
+});
+
+describe("createCloudTerminalMux initial input", () => {
+	it("types its initial input once, after the shell first reports ready", async () => {
+		FakeWebSocket.instances = [];
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "workspace",
+			mintTicket: async () => "ticket-1",
+			initialInput: "npm test\r",
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		ws.emit("open", {});
+		ws.deliver({ type: "starting" });
+		expect(sentJSON(ws).filter((frame) => frame.type === "input")).toEqual([]);
+		ws.deliver({ type: "ready", sequence: 0 });
+		ws.deliver({ type: "ready", sequence: 0 });
+		expect(sentJSON(ws).filter((frame) => frame.type === "input")).toEqual([{ type: "input", data: "npm test\r" }]);
 		mux.dispose();
 	});
 });

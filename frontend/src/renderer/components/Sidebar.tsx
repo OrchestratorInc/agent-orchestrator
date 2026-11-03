@@ -20,7 +20,9 @@ import {
 	Archive,
 	CalendarClock,
 	ChevronRight,
+	Copy,
 	Download,
+	LayoutGrid,
 	File,
 	Folder,
 	FolderOpen,
@@ -28,7 +30,6 @@ import {
 	LogOut,
 	MoreVertical,
 	PanelLeft,
-	Pencil,
 	Pin,
 	PinOff,
 	Plus,
@@ -67,6 +68,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 	sortedWorkerSessions,
+	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
 	workerSessions,
 	CLOUD_PROJECT_KIND,
@@ -74,6 +76,7 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import { getSessionStatusDotView } from "../lib/session-presentation";
+import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
@@ -88,7 +91,6 @@ import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
 import { useLatestCallback, useStableArray } from "../hooks/useStable";
-import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useShellMaybe } from "../lib/shell-context";
@@ -100,6 +102,7 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
 import {
@@ -479,6 +482,30 @@ function readExpandedProjectIds(): ReadonlySet<string> {
 	}
 }
 
+const sectionsStorageKey = "ao.sidebar.sections";
+type SidebarSection = "pinned" | "projects" | "scratchpad";
+
+/** Saved open state per section. A missing entry means open. */
+function readSectionsOpen(): Record<SidebarSection, boolean> {
+	const open = { pinned: true, projects: true, scratchpad: true };
+	if (typeof window === "undefined" || !window.localStorage) return open;
+	try {
+		const saved: unknown = JSON.parse(window.localStorage.getItem(sectionsStorageKey) ?? "null");
+		if (saved && typeof saved === "object") {
+			for (const key of Object.keys(open) as SidebarSection[]) {
+				if ((saved as Record<string, unknown>)[key] === false) open[key] = false;
+			}
+		}
+	} catch {}
+	return open;
+}
+
+function saveSectionOpen(section: SidebarSection, open: boolean) {
+	try {
+		window.localStorage?.setItem(sectionsStorageKey, JSON.stringify({ ...readSectionsOpen(), [section]: open }));
+	} catch {}
+}
+
 type SidebarProps = {
 	underTopbar?: boolean;
 	/** Chrome height to clear when underTopbar is set. Defaults to --size-toolbar. */
@@ -522,7 +549,8 @@ function useSelection() {
 	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
-	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
+	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
+	const goConnectMobile = useCallback(() => openGlobalSettings("mobile", { startPairing: true }), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
@@ -694,9 +722,14 @@ export function Sidebar({
 		});
 	}, [dismissedInitialActiveProjectIds, expandedIds, initialActiveSessionProjectId]);
 	// Section disclosure: every section header collapses its own body.
-	const [pinnedOpen, setPinnedOpen] = useState(true);
-	const [projectsOpen, setProjectsOpen] = useState(true);
-	const [scratchpadOpen, setScratchpadOpen] = useState(true);
+	// Header clicks are saved. Opening a section to reveal the active session is not.
+	const [pinnedOpen, setPinnedOpen] = useState(() => readSectionsOpen().pinned);
+	const [projectsOpen, setProjectsOpen] = useState(() => readSectionsOpen().projects);
+	const [scratchpadOpen, setScratchpadOpen] = useState(() => readSectionsOpen().scratchpad);
+	const toggleSection = (section: SidebarSection, open: boolean, setOpen: (open: boolean) => void) => {
+		setOpen(!open);
+		saveSectionOpen(section, !open);
+	};
 
 	// Keyboard navigation (⌘⇧[ / ⌘⇧], ⌘1-9, attention jumps) can land on a row
 	// that is scrolled out, in a collapsed project or inside a closed section.
@@ -726,11 +759,16 @@ export function Sidebar({
 				row.scrollIntoView?.({ block: "nearest" });
 				return;
 			}
-			// Not rendered yet: its section may be closed. Open them all once, then retry.
+			// Not rendered yet: its section may be closed. Open only the sections
+			// that hold it, once, then retry. An orchestrator has no row (its
+			// button sits on the project row), so it must not open Scratchpad.
 			if (attempts === 0) {
-				setPinnedOpen(true);
-				setProjectsOpen(true);
-				setScratchpadOpen(true);
+				if (pinnedSessions.some((session) => session.id === activeSessionKey)) setPinnedOpen(true);
+				if (standaloneWorkspace?.sessions.some((session) => session.id === activeSessionKey)) {
+					setScratchpadOpen(true);
+				} else {
+					setProjectsOpen(true);
+				}
 			}
 			if (attempts++ < 3) frame = requestAnimationFrame(reveal);
 		};
@@ -971,7 +1009,7 @@ export function Sidebar({
 					<span
 						className="sidebar-expanded-chrome min-w-0 flex-1 truncate text-base font-semibold leading-tight tracking-tight-lg text-foreground group-data-[collapsible=icon]:hidden"
 					>
-						<BuildInfoTooltip>Orchestrator.inc</BuildInfoTooltip>
+						<BuildInfoTooltip>Orchestrator</BuildInfoTooltip>
 					</span>
 				</button>
 				<Tooltip>
@@ -1034,7 +1072,7 @@ export function Sidebar({
 						<SectionDisclosure
 							label={t("shell.pinned")}
 							open={pinnedOpen}
-							onToggle={() => setPinnedOpen((v) => !v)}
+							onToggle={() => toggleSection("pinned", pinnedOpen, setPinnedOpen)}
 							className="mb-1"
 						/>
 						<AnimatedSectionBody open={pinnedOpen}>
@@ -1065,7 +1103,7 @@ export function Sidebar({
 					<SectionDisclosure
 						label={t("shell.projects")}
 						open={projectsOpen}
-						onToggle={() => setProjectsOpen((open) => !open)}
+						onToggle={() => toggleSection("projects", projectsOpen, setProjectsOpen)}
 						trailing={
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
@@ -1190,7 +1228,7 @@ export function Sidebar({
 								selection={selection}
 								isCollapsed={isIconRail}
 								open={scratchpadOpen}
-								onToggle={() => setScratchpadOpen((open) => !open)}
+								onToggle={() => toggleSection("scratchpad", scratchpadOpen, setScratchpadOpen)}
 							/>
 						) : null}
 					</SidebarGroupContent>
@@ -1463,9 +1501,15 @@ const ProjectItem = memo(function ProjectItem({
 	// Keep completed PR sessions reachable while their runtime still exists.
 	// Only termination removes a worker from the sidebar; archived sessions stay
 	// reachable through SessionsBoard.
+	// A project shared from another organization lists every session shared
+	// with this person, its orchestrator included: a guest has no orchestrator
+	// of their own to reach it through.
 	const visibleSessions = useMemo(
-		() => sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true),
-		[workspace.sessions],
+		() => (workspace.shared
+			? [...workspace.sessions].sort((a, b) => Number(isOrchestratorSession(b)) - Number(isOrchestratorSession(a)))
+			: sortedWorkerSessions(workspace.sessions)
+		).filter((session) => session.isTerminated !== true),
+		[workspace.sessions, workspace.shared],
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
@@ -1544,7 +1588,7 @@ const ProjectItem = memo(function ProjectItem({
 		onToggle(workspace.id);
 	};
 
-	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
+	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
 	// Expand a collapsed project so opening the orchestrator also reveals its
 	// session list — otherwise the tree stays shut while you're inside it.
@@ -1582,6 +1626,8 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, orchestrator.id);
 			return;
 		}
+		// A guest cannot start an orchestrator in someone else's project.
+		if (workspace.shared) return;
 		// A cloud project has no local orchestrator-agent config, so the settings
 		// fallback below would dead-end it. Spawn the orchestrator as a cloud
 		// session in its own sandbox instead.
@@ -1648,6 +1694,7 @@ const ProjectItem = memo(function ProjectItem({
 		setRemoveError(null);
 		setConfirmOpen(true);
 	};
+	const copyToClipboard = useCopyToClipboard();
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
@@ -1808,70 +1855,80 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<button
-												aria-current={orchestratorActive ? "page" : undefined}
-												aria-label={
-													orchestrator
-														? t("shell.openProjectOrchestrator", {
-														name: nameWithHost,
-															})
-														: t("shell.spawnProjectOrchestrator", {
-														name: nameWithHost,
-															})
-												}
-													className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
-													disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
-												onClick={() => void openOrchestrator()}
-												type="button"
-											>
-												<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
-											</button>
-										</span>
-									</TooltipTrigger>
-										<TooltipContent>
-											{isProjectProvisioning || isProjectRestarting
-												? t("shell.restarting")
-												: isSpawning
-												? t("shell.spawning")
-												: orchestrator
-													? t("shell.orchestrator")
-													: t("shell.spawnOrchestratorLower")}
-									</TooltipContent>
-								</Tooltip>
-								<DropdownMenu>
-									<DropdownMenuTrigger asChild>
-										<button
-											aria-label={t("shell.projectActions", {
-														name: nameWithHost,
-											})}
-											className={HOVER_ACTION_CLASS}
-											type="button"
-										>
-											<MoreVertical aria-hidden="true" />
-										</button>
-									</DropdownMenuTrigger>
-									<DropdownMenuContent side="right" align="start" className="min-w-44">
-										<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-											<Plus aria-hidden="true" />
-											{t("shell.newTask")}
-										</DropdownMenuItem>
-						<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
-											<Settings aria-hidden="true" />
-											{t("shell.projectSettings")}
-										</DropdownMenuItem>
-										<DropdownMenuItem
-											className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-											disabled={isRemoving}
-											onSelect={() => void removeProject()}
-										>
-											<Trash2 aria-hidden="true" />
-											{t("shell.removeProjectTitle")}
-										</DropdownMenuItem>
-									</DropdownMenuContent>
-								</DropdownMenu>
+								{/* A guest may open a shared orchestrator but never start one, and the
+								    project's own actions belong to its organization. */}
+								{!workspace.shared || orchestrator ? (
+									<>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span className="inline-flex">
+													<button
+														aria-current={orchestratorActive ? "page" : undefined}
+														aria-label={
+															orchestrator
+																? t("shell.openProjectOrchestrator", {
+																name: nameWithHost,
+																	})
+																: t("shell.spawnProjectOrchestrator", {
+																name: nameWithHost,
+																	})
+														}
+															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
+															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+														onClick={() => void openOrchestrator()}
+														type="button"
+													>
+														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
+													</button>
+												</span>
+											</TooltipTrigger>
+												<TooltipContent>
+													{isProjectProvisioning || isProjectRestarting
+														? t("shell.restarting")
+														: isSpawning
+														? t("shell.spawning")
+														: orchestrator
+															? t("shell.orchestrator")
+															: t("shell.spawnOrchestratorLower")}
+											</TooltipContent>
+										</Tooltip>
+									</>
+								) : null}
+								{workspace.shared ? null : (
+									<>
+										<DropdownMenu>
+											<DropdownMenuTrigger asChild>
+												<button
+													aria-label={t("shell.projectActions", {
+																name: nameWithHost,
+													})}
+													className={HOVER_ACTION_CLASS}
+													type="button"
+												>
+													<MoreVertical aria-hidden="true" />
+												</button>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent side="right" align="start" className="min-w-44">
+												<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+													<Plus aria-hidden="true" />
+													{t("shell.newTask")}
+												</DropdownMenuItem>
+								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+													<Settings aria-hidden="true" />
+													{t("shell.projectSettings")}
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+													disabled={isRemoving}
+													onSelect={() => void removeProject()}
+												>
+													<Trash2 aria-hidden="true" />
+													{t("shell.removeProjectTitle")}
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									</>
+								)}
 							</div>}
 						</div>
 						{/* end outer relative */}
@@ -1977,6 +2034,32 @@ const ProjectItem = memo(function ProjectItem({
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
 				</ContextMenuItem>
+				{!isStandalone && (!workspace.shared || orchestrator) ? (
+					<ContextMenuItem
+						disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+						onSelect={() => void openOrchestrator()}
+					>
+						<OrchestratorIcon aria-hidden="true" />
+						{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
+					</ContextMenuItem>
+				) : null}
+				{!isStandalone ? (
+					<ContextMenuItem onSelect={() => selection.goProject(workspace.id)}>
+						<LayoutGrid aria-hidden="true" />
+						{t("shell.openDashboard")}
+					</ContextMenuItem>
+				) : null}
+				{/* A remote host's path names a folder on that machine, not this one. */}
+				{workspace.path && !workspace.hostId ? (
+					<>
+						<ContextMenuSeparator />
+						<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>
+							<Copy aria-hidden="true" />
+							{t("editor.copyPath")}
+						</ContextMenuItem>
+					</>
+				) : null}
+				{!isStandalone ? <ContextMenuSeparator /> : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -2068,59 +2151,75 @@ function ScratchpadSection({
 			className="sidebar-expanded-chrome mb-2 flex min-h-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
 		>
-			<SectionDisclosure
-				label={workspace.name}
-				open={open}
-				onToggle={onToggle}
-				className="group/scratchpad mt-1"
-				trailing={
-					<div className="relative inline-flex items-center">
-						<span
-							className={cn(
-								"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
-								"transition-[scale] duration-normal ease-[var(--ease-out)]",
-								"motion-reduce:transition-none",
-								"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
-							)}
-							data-scratchpad-archive-action=""
-						>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex">
-										<button
-											aria-label={t("shell.archivedSessions")}
-											className={ROW_ACTION_BUTTON_CLASS}
-											onClick={(event) => {
-												event.stopPropagation();
-												selection.goStandaloneBoard();
-											}}
-											type="button"
-										>
-											<Archive aria-hidden="true" />
-										</button>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
-							</Tooltip>
-						</span>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<span className="inline-flex">
-									<button
-										aria-label={t("shell.openNewAgent")}
-										className={ROW_ACTION_BUTTON_CLASS}
-										onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-										type="button"
+			<ContextMenu>
+				<ContextMenuTrigger asChild>
+					<div className="shrink-0">
+						<SectionDisclosure
+							label={workspace.name}
+							open={open}
+							onToggle={onToggle}
+							className="group/scratchpad mt-1"
+							trailing={
+								<div className="relative inline-flex items-center">
+									<span
+										className={cn(
+											"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
+											"transition-[scale] duration-normal ease-[var(--ease-out)]",
+											"motion-reduce:transition-none",
+											"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
+										)}
+										data-scratchpad-archive-action=""
 									>
-										<Plus aria-hidden="true" />
-									</button>
-								</span>
-							</TooltipTrigger>
-							<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
-						</Tooltip>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span className="inline-flex">
+													<button
+														aria-label={t("shell.archivedSessions")}
+														className={ROW_ACTION_BUTTON_CLASS}
+														onClick={(event) => {
+															event.stopPropagation();
+															selection.goStandaloneBoard();
+														}}
+														type="button"
+													>
+														<Archive aria-hidden="true" />
+													</button>
+												</span>
+											</TooltipTrigger>
+											<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
+										</Tooltip>
+									</span>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<span className="inline-flex">
+												<button
+													aria-label={t("shell.openNewAgent")}
+													className={ROW_ACTION_BUTTON_CLASS}
+													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+													type="button"
+												>
+													<Plus aria-hidden="true" />
+												</button>
+											</span>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
+									</Tooltip>
+								</div>
+							}
+						/>
 					</div>
-				}
-			/>
+				</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-44">
+					<ContextMenuItem onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+						<Plus aria-hidden="true" />
+						{t("shell.openNewAgent")}
+					</ContextMenuItem>
+					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
+						<Archive aria-hidden="true" />
+						{t("shell.archivedSessions")}
+					</ContextMenuItem>
+				</ContextMenuContent>
+			</ContextMenu>
 			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
@@ -2402,9 +2501,13 @@ const SessionRow = memo(function SessionRow({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
+	// A session shared from another organization is the sharer's to name.
+	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
-		rename.begin();
-	}, [rename.begin]);
+		if (renamable) rename.begin();
+	}, [rename.begin, renamable]);
+	// Owned here so both the hover Archive button and the context menu open the same confirm.
+	const [archiveOpen, setArchiveOpen] = useState(false);
 
 	if (rename.isEditing) {
 		return (
@@ -2545,7 +2648,9 @@ const SessionRow = memo(function SessionRow({
 					{/* The timestamp is stable at the right edge. Pin and kill use label
 					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
+						archiveOpen={archiveOpen}
 						isDragging={Boolean(reorder?.isDragging)}
+						onArchiveOpenChange={setArchiveOpen}
 						onKilled={onKilled}
 						session={session}
 					/>
@@ -2554,10 +2659,7 @@ const SessionRow = memo(function SessionRow({
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={beginRename}>
-					<Pencil aria-hidden="true" />
-					{t("shell.rename")}
-				</ContextMenuItem>
+				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2583,16 +2685,19 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 const SessionActions = memo(function SessionActions({
 	session,
 	isDragging,
+	archiveOpen,
+	onArchiveOpenChange,
 	onKilled,
 }: {
 	session: WorkspaceSession;
 	isDragging: boolean;
+	archiveOpen: boolean;
+	onArchiveOpenChange: (open: boolean) => void;
 	onKilled?: (session: WorkspaceSession) => void;
 }) {
 	const { t } = useTranslation();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
-	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Optimistic: navigate + drop the row as soon as kill starts (onMutate),
 	// not after the daemon round-trip.
 	const onKilledRef = useRef(onKilled);
@@ -2607,11 +2712,11 @@ const SessionActions = memo(function SessionActions({
 	// first; both surfaces now open the same confirm before anything moves.
 	const handleArchive = (event: React.MouseEvent) => {
 		event.stopPropagation();
-		setConfirmOpen(true);
+		onArchiveOpenChange(true);
 	};
 
 	const confirmArchive = ({ deleteArtifacts }: SessionArchiveChoice) => {
-		setConfirmOpen(false);
+		onArchiveOpenChange(false);
 		terminateSession({ ...session, deleteArtifacts });
 	};
 
@@ -2633,7 +2738,7 @@ const SessionActions = memo(function SessionActions({
 				)}
 				data-session-action-buttons=""
 			>
-				<Tooltip>
+				{session.cloud?.shared ? null : <Tooltip>
 					<TooltipTrigger asChild>
 						<button
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
@@ -2654,14 +2759,14 @@ const SessionActions = memo(function SessionActions({
 					<TooltipContent side="top">
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 					</TooltipContent>
-				</Tooltip>
+				</Tooltip>}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
 							<SessionArchiveDialog
 								onConfirm={confirmArchive}
-								onOpenChange={setConfirmOpen}
-								open={confirmOpen}
+								onOpenChange={onArchiveOpenChange}
+								open={archiveOpen}
 								session={session}
 								trigger={
 									<button
@@ -2685,17 +2790,15 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
-// AO account sign-in is shared by Cloud execution and developer-mode remote hosts.
+// AO account sign-in is shared by Cloud execution and remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<button
@@ -2717,14 +2820,12 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 // Icon-rail variant for the collapsed sidebar.
 function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<Tooltip>
@@ -2751,13 +2852,11 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 // session (the signed-in state). The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 	const name = accountName(session?.user);
 
 	return (
@@ -2834,10 +2933,8 @@ function AccountAvatar({ user }: { user: { displayName?: string; email?: string;
 // Icon-rail variant for collapsed sidebar.
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 
 	return (
 		<Tooltip>

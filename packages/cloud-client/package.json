@@ -22,12 +22,13 @@
   ],
   "scripts": {
     "generate": "openapi-typescript ../../contracts/cloud/openapi.yaml -o src/schema.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsgo -p tsconfig.json",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p tsconfig.test.json",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "openapi-typescript": "7.4.4",
     "typescript": "~5.9.2",
     "vitest": "^4.1.10"

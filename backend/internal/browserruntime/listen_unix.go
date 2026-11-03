@@ -25,6 +25,12 @@ var runtimeAliasPattern = regexp.MustCompile(`^ao-brd-(\d+)-[0-9a-f]{16}$`)
 
 // Listen creates the local daemon-to-Electron browser bridge listener.
 func Listen(runFilePath string) (net.Listener, string, error) {
+	return ListenNamed(runFilePath, "browser")
+}
+
+// ListenNamed creates a browser bridge listener whose socket is named after
+// the runtime it serves, so several runtimes can share one run directory.
+func ListenNamed(runFilePath, name string) (net.Listener, string, error) {
 	aliasRoot := os.TempDir()
 	if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
 		// os.TempDir can inherit an arbitrarily long TMPDIR. /tmp is the stable,
@@ -32,10 +38,10 @@ func Listen(runFilePath string) (net.Listener, string, error) {
 		// normally a symlink to /private/tmp).
 		aliasRoot = "/tmp"
 	}
-	return listenUnix(runFilePath, aliasRoot)
+	return listenUnix(runFilePath, aliasRoot, name+".sock")
 }
 
-func listenUnix(runFilePath, aliasRoot string) (net.Listener, string, error) {
+func listenUnix(runFilePath, aliasRoot, socketName string) (net.Listener, string, error) {
 	runtimeDir, err := filepath.Abs(filepath.Dir(runFilePath))
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve browser runtime directory: %w", err)
@@ -49,12 +55,12 @@ func listenUnix(runFilePath, aliasRoot string) (net.Listener, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	sockPath := filepath.Join(aliasPath, "browser.sock")
+	sockPath := filepath.Join(aliasPath, socketName)
 	if len([]byte(sockPath)) > maxUnixSocketPathBytes {
 		_ = os.Remove(aliasPath)
 		return nil, "", fmt.Errorf("browser runtime socket path is %d bytes; maximum is %d", len([]byte(sockPath)), maxUnixSocketPathBytes)
 	}
-	_ = os.Remove(filepath.Join(runtimeDir, "browser.sock"))
+	_ = os.Remove(filepath.Join(runtimeDir, socketName))
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		_ = os.Remove(aliasPath)

@@ -23,7 +23,7 @@ describe("spawn composer", () => {
 
 	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {
 		expect(spawn).toContain("<SpawnAttachmentRow");
-		expect(attachmentRow).toContain("style={styles.row} contentContainerStyle={styles.content}");
+		expect(attachmentRow).toContain("<View collapsable={false} style={styles.row}>");
 		expect(attachmentRow).toContain("row: { flexGrow: 0, flexShrink: 0 }");
 	});
 

@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -29,6 +29,8 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.CloudOffering,
 		&i.HarnessDefaults,
 		&i.VersionRefresh,
+		&i.ComputerUse,
+		&i.SessionRetentionDays,
 	)
 	return i, err
 }
@@ -50,17 +52,17 @@ func (q *Queries) ResetHarnessDefault(ctx context.Context, arg ResetHarnessDefau
 	return err
 }
 
-const setCloudOffering = `-- name: SetCloudOffering :exec
-UPDATE app_settings SET cloud_offering = ?, updated_at = ? WHERE id = 1
+const setComputerUse = `-- name: SetComputerUse :exec
+UPDATE app_settings SET computer_use = ?, updated_at = ? WHERE id = 1
 `
 
-type SetCloudOfferingParams struct {
-	CloudOffering bool
-	UpdatedAt     time.Time
+type SetComputerUseParams struct {
+	ComputerUse bool
+	UpdatedAt   time.Time
 }
 
-func (q *Queries) SetCloudOffering(ctx context.Context, arg SetCloudOfferingParams) error {
-	_, err := q.db.ExecContext(ctx, setCloudOffering, arg.CloudOffering, arg.UpdatedAt)
+func (q *Queries) SetComputerUse(ctx context.Context, arg SetComputerUseParams) error {
+	_, err := q.db.ExecContext(ctx, setComputerUse, arg.ComputerUse, arg.UpdatedAt)
 	return err
 }
 
@@ -93,6 +95,20 @@ type SetHarnessDefaultParams struct {
 
 func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setSessionRetentionDays = `-- name: SetSessionRetentionDays :exec
+UPDATE app_settings SET session_retention_days = ?, updated_at = ? WHERE id = 1
+`
+
+type SetSessionRetentionDaysParams struct {
+	SessionRetentionDays int64
+	UpdatedAt            time.Time
+}
+
+func (q *Queries) SetSessionRetentionDays(ctx context.Context, arg SetSessionRetentionDaysParams) error {
+	_, err := q.db.ExecContext(ctx, setSessionRetentionDays, arg.SessionRetentionDays, arg.UpdatedAt)
 	return err
 }
 

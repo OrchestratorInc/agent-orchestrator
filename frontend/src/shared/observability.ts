@@ -85,6 +85,8 @@ const CODE: Record<string, Partial<Base>> = {
 	WORKSPACE_LOCKED: { severity: "P1", owner: "ours" },
 	BRANCH_CHECKED_OUT_ELSEWHERE: { severity: "P1", owner: "ours" },
 	WORKSPACE_CWD_MISMATCH: { severity: "P1", owner: "ours" },
+	// agent relaunch failed (resume/restore answers 409, not 500) — still ours to fix
+	AGENT_RESUME_FAILED: { severity: "P1", owner: "ours" },
 	// git / project setup — user
 	NOT_A_GIT_REPO: { severity: "P2", owner: "user" },
 	BRANCH_NOT_FETCHED: { severity: "P2", owner: "user" },
@@ -122,24 +124,15 @@ export function classifyError(input: ClassifyInput): Triage {
 	// Code override wins where present.
 	if (code && CODE[code]) base = { ...base, ...CODE[code] };
 
-	// A daemon 503 is deliberate backpressure, not a fault: the daemon now returns
-	// a typed SERVICE_UNAVAILABLE for retryable contention (#4325/#4334) and skips
-	// it in its own Sentry capture. Mirror that here so it rides as a breadcrumb
-	// and never becomes a paged issue — otherwise every contention spike, the exact
-	// thing 503 exists to absorb, would flood Sentry.
-	// Scoped to the daemon's own backpressure signal (the SERVICE_UNAVAILABLE code,
-	// or a 503 from a live daemon). The synthetic `daemon_unavailable` category —
-	// the client couldn't reach the daemon at all — is a distinct condition and
-	// keeps its own P1 routing.
-	const unavailable =
-		code === "SERVICE_UNAVAILABLE" || (input.httpStatus === 503 && category !== "daemon_unavailable");
+	// The daemon excludes its typed 503 envelopes from Sentry. Mirror that
+	// policy for API responses while keeping untyped and synthetic 503s visible.
+	const unavailable = input.httpStatus === 503 && category === "http_5xx" && !!code;
 
 	// An unhandled crash is always at least P1 (the app hit something it didn't expect).
 	let severity = base.severity;
 	if (input.unhandled && (severity === "P2" || severity === "P3")) severity = "P1";
-	// A 5xx status is never below P1 even if the category was coarse — but 503 is
-	// backpressure, handled above, so it is excluded from the escalation.
-	if (input.httpStatus && input.httpStatus >= 500 && input.httpStatus !== 503 && severity === "P2")
+	// An unclassified server failure is at least P1.
+	if (input.httpStatus && input.httpStatus >= 500 && !unavailable && severity === "P2")
 		severity = "P1";
 	// Cap backpressure at P2 so it can be suppressed as a breadcrumb below.
 	if (unavailable) severity = "P2";
