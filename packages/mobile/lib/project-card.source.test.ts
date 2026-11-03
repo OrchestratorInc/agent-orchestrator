@@ -6,19 +6,23 @@ const page = readFileSync(new URL("../app/project/[id].tsx", import.meta.url), "
 const projects = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", import.meta.url), "utf8");
 
 describe("project row", () => {
-	// Matches a worker row: a divider, not a bordered card.
-	it("is a flat row with a divider inset to its text", () => {
-		expect(card).toMatch(/divider:\s*\{\s*marginLeft:\s*space\.lg,\s*height:\s*rowDividerWidth/);
-		expect(card).toMatch(/body:\s*\{\s*paddingLeft:\s*space\.lg/);
+	// A filled card, no outline, as a Settings group is.
+	it("is a filled card with no outline", () => {
+		expect(card).toMatch(/card:\s*\{[^}]*borderRadius:\s*radius\.lg[^}]*backgroundColor:\s*t\.bgElevated/s);
+		expect(card).not.toMatch(/card:\s*\{[^}]*borderWidth/s);
 	});
 
-	// The full-width button outweighed the project name; a compact pill does
-	// not, and is still the only solid control on the row.
-	it("carries the orchestrator as a capsule pill in a trailing slot", () => {
-		expect(card).toContain("trailing={<OrchestratorPill");
-		expect(card).toContain("<OrchestratorIcon");
-		expect(card).toContain("copy.short");
-		expect(card).toMatch(/pill:\s*\{[^}]*minHeight:\s*PILL_HEIGHT[^}]*borderRadius:\s*radius\.pill/s);
+	// A round button at the card's end, play to start or resume the orchestrator
+	// and a chevron to open a running one. The card itself opens the project.
+	it("ends in the orchestrator's round button, with no bar under it", () => {
+		expect(card).toContain("trailing={<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />}");
+		expect(card).not.toContain("ProjectCardActions");
+		expect(card).not.toContain(">Expand</Text>");
+	});
+
+	it("leads with the project's initials on its own colour", () => {
+		expect(card).toContain("backgroundColor: projectHue(row.project.name)");
+		expect(card).toContain("{projectInitials(row.project.name)}");
 	});
 
 	it("keeps counts as quiet text rather than chips", () => {

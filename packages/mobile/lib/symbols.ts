@@ -59,6 +59,7 @@ export const symbols = {
 	openExternal: { ios: "arrow.up.right.square", android: "open_in_new" },
 	refresh: { ios: "arrow.clockwise", android: "refresh" },
 	stop: { ios: "stop.fill", android: "stop" },
+	play: { ios: "play.fill", android: "play_arrow" },
 
 	// Destinations and content
 	workers: { ios: "square.3.layers.3d", android: "stacks" },

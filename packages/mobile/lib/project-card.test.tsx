@@ -25,6 +25,10 @@ vi.mock("./orchestrator-icon", async () => {
 	const React = await import("react");
 	return { OrchestratorIcon: (props: object) => React.createElement("OrchestratorIcon", props) };
 });
+vi.mock("./AppSymbol", async () => {
+	const React = await import("react");
+	return { AppSymbol: (props: object) => React.createElement("AppSymbol", props) };
+});
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	return { Dot: (props: object) => React.createElement("Dot", props) };
@@ -69,9 +73,9 @@ describe("ProjectCard", () => {
 		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
 	});
 
-	// Side by side, never nested: each is its own control for a screen reader,
-	// and the slot takes the pill's width instead of a fixed reservation.
-	it("puts the orchestrator pill beside the row's body, not inside it", () => {
+	// Only the text block pressed before: a tap beside it did nothing. The whole
+	// card opens the project; its round button starts or opens the orchestrator.
+	it("opens the project from the card, and the orchestrator from its button", () => {
 		const onOpenProject = vi.fn();
 		const onOrchestrator = vi.fn();
 		let renderer!: ReactTestRenderer;
@@ -79,14 +83,16 @@ describe("ProjectCard", () => {
 			renderer = create(<ProjectCard row={projectRow()} busy={false} onOpenProject={onOpenProject} onOrchestrator={onOrchestrator} />);
 		});
 		const pressables = renderer.root.findAllByType("Pressable" as never);
-		const body = pressables.find((node) => node.props.accessibilityHint === "Opens the project")!;
-		const pill = pressables.find((node) => node.props.accessibilityLabel === "Start orchestrator, AO Mobile")!;
-		expect(body.findAllByType("OrchestratorIcon" as never)).toHaveLength(0);
-		expect(pill.findAllByType("OrchestratorIcon" as never)).toHaveLength(1);
-		act(() => body.props.onPress());
-		act(() => pill.props.onPress());
+		const card = pressables.find((node) => node.props.accessibilityHint === "Opens the project")!;
+		const start = pressables.find((node) => node.props.accessibilityLabel === "Start orchestrator, AO Mobile")!;
+		expect(pressables.some((node) => node.props.accessibilityLabel === "Expand AO Mobile")).toBe(false);
+		act(() => card.props.onPress());
+		act(() => start.props.onPress());
 		expect(onOpenProject).toHaveBeenCalledTimes(1);
 		expect(onOrchestrator).toHaveBeenCalledTimes(1);
+		// A screen reader hears the card as one element and reaches the orchestrator as its action.
+		act(() => card.props.onAccessibilityAction({ nativeEvent: { actionName: "trailing" } }));
+		expect(onOrchestrator).toHaveBeenCalledTimes(2);
 	});
 
 	it("shows the routed machine rather than the default machine in a project header", async () => {

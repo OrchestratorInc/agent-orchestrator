@@ -36,6 +36,7 @@ const codepoints: Record<RegistryAndroidSymbol, number> = {
 	open_in_new: 0xe89e,
 	refresh: 0xe5d5,
 	stop: 0xe047,
+	play_arrow: 0xe037,
 	stacks: 0xf500,
 	folder: 0xe2c7,
 	draft: 0xe66d,
