@@ -94,6 +94,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 import { SessionsBoard } from "../../components/SessionsBoard";
 import { GitHubSetupPanel } from "../../components/FirstRunSteps";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import { shellTerminalsQueryKey } from "../../hooks/useShellTerminals";
 import type { WorkspaceSummary } from "../../types/workspace";
 import { ShellProvider, type ShellContextValue } from "../../lib/shell-context";
 import { useUiStore } from "../../stores/ui-store";
@@ -336,8 +337,11 @@ describe("global board first launch", () => {
 				? { error: new Error("Terminal list unavailable") }
 				: originalGet(url));
 			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
+			// Keep the retry, without racing its default one-second delay against findByRole.
+			lastQueryClient!.setQueryDefaults(shellTerminalsQueryKey, { retryDelay: 0 });
 			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
 			expect(await screen.findByRole("alert")).toHaveTextContent("Terminal list unavailable");
+			expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/shell-terminals")).toHaveLength(2);
 			expect(postMock).not.toHaveBeenCalled();
 		});
 
