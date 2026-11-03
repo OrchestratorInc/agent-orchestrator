@@ -111,6 +111,11 @@ type ImportedSessionRelocation struct {
 	// LaunchCWD is the directory AO starts the provider in. Adapters apply the
 	// provider's own path normalization, such as resolving symlinks.
 	LaunchCWD string
+	// SourceFingerprint is optional immutable selection evidence. An adapter
+	// that sets a discovery fingerprint must compare it with the exact native
+	// inputs it snapshots before copying, including sidecars such as a WAL.
+	// A mismatch is an error; a verified private copy may be reused on retry.
+	SourceFingerprint string
 }
 
 // AgentImportedSessionRelocator is implemented by adapters whose provider finds

@@ -56,6 +56,8 @@ type transcript struct {
 	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
+	// fingerprint is the optional native-input evidence captured by discovery.
+	fingerprint string
 }
 
 type textBlock struct{ Type, Text string }
