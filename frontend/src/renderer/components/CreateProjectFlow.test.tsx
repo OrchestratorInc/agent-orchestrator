@@ -10,6 +10,17 @@ import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
 import { CloudCpError } from "../lib/cloud-cp";
 
+// Import preparation assumes GitHub is ready. The setup panel's real auth and
+// terminal lifecycle are covered in the board empty states integration suite.
+vi.mock("../hooks/useSystemRequirementsGate", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useSystemRequirementsGate")>()),
+	useSystemRequirementsGate: () => ({
+		query: { isSuccess: true, isError: false },
+		requirements: [{ id: "gh", satisfied: true }],
+	}),
+	useGitHubAuthRequirement: () => ({ isSuccess: true, isError: false, data: { satisfied: true } }),
+}));
+
 const bridgeMocks = vi.hoisted(() => ({
 	checkAncestorRepo: vi.fn(),
 	checkGitRepository: vi.fn(),
