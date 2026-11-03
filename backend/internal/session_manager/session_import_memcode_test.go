@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
@@ -257,5 +258,99 @@ func TestMemcodePreparedRetryKeepsArchiveAlignedWithNativeSnapshot(t *testing.T)
 	data, err = os.ReadFile(path)
 	if err != nil || string(data) != changed {
 		t.Fatalf("source changed during retry: %q, %v", data, err)
+	}
+}
+
+func TestMemcodeRecoversPublishedHistoryAfterLostCheckpoint(t *testing.T) {
+	for _, sourceState := range []string{"removed", "changed"} {
+		for _, damage := range []string{"none", "missing proof", "bad proof", "corrupt copy"} {
+			t.Run(sourceState+"/"+damage, func(t *testing.T) {
+				source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv("MEMCODE_ENDPOINT_URL", "")
+				t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				if err := os.WriteFile(filepath.Join(binDir, "memcode"), []byte("#!/bin/sh\necho 'memcode synthetic fixture'\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				id := "sess_01234567"
+				original := `{"session_id":"sess_01234567","messages":[{"role":"user","content":[{"type":"text","text":"original prompt"}]}]}`
+				dir := filepath.Join(source, ".memcode", "sessions", id)
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, "messages.json")
+				if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m, st, rt, msg := interactiveManager(t, false, &interactiveTestAgent{})
+				m.agents = singleAgent{agent: memcode.New()}
+				m.runtime = &memcodeImportRuntime{fakeRuntime: rt, data: m.dataDir, session: "mer-1", target: id, messages: msg}
+				project := st.projects["mer"]
+				project.Path, project.Kind = source, domain.ProjectKindSingleRepo
+				st.projects["mer"] = project
+				archive := &memcodeNativeArchiveStore{fakeStore: st}
+				svc := sessionimport.New(archive, m.dataDir, nil)
+				m.SetImportArchiveRefresher(svc)
+				preview, err := svc.Scan(context.Background())
+				if err != nil || len(preview.Candidates) != 1 {
+					t.Fatalf("scan = %+v, %v", preview, err)
+				}
+				results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+				if err != nil || len(results) != 1 || results[0].Status != "created" {
+					t.Fatalf("import = %+v, %v", results, err)
+				}
+				rec := st.sessions["mer-1"]
+				rec.Metadata.WorkspacePath, rec.Metadata.Branch = workspace, "ao/import"
+				rec.Metadata.ImportSource.Transferred, rec.Metadata.ImportSource.Prepared = true, true
+				st.sessions[rec.ID] = rec
+				store := &failingImportWorkspaceStore{fakeStore: st, failAt: 1}
+				m.store = store
+				if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil || store.calls != 1 || rt.created != 0 {
+					t.Fatalf("checkpoint failure was not isolated: %v, calls=%d launches=%d", err, store.calls, rt.created)
+				}
+				pending := st.sessions[rec.ID].Metadata.ImportSource
+				if pending.ResumeNativeID != "" || pending.ResumeCwd != "" {
+					t.Fatal("failed checkpoint unexpectedly persisted")
+				}
+				if sourceState == "removed" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte(strings.Replace(original, "original prompt", "changed source prompt", 1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				targetDir := filepath.Join(workspace, ".memcode", "sessions", id)
+				proof, target := filepath.Join(targetDir, ".ao-import.json"), filepath.Join(targetDir, "messages.json")
+				want := original
+				switch damage {
+				case "missing proof":
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+				case "bad proof":
+					if err := os.WriteFile(proof, []byte(`{}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "corrupt copy":
+					want = strings.Replace(original, "original prompt", "altered private context", 1)
+					if err := os.WriteFile(target, []byte(want), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				m.agents = singleAgent{agent: memcode.New()}
+				result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+				if damage == "none" {
+					if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || result.Session.Metadata.AgentSessionID != id || result.Session.Metadata.NativeTranscriptPath != target || rt.lastCfg.WorkspacePath != workspace || rt.created != 1 || len(msg.msgs) != 1 || msg.msgs[0] != "/resume "+id {
+						t.Fatalf("private recovery = %#v, %v, input=%v", result, err, msg.msgs)
+					}
+				} else if err == nil || rt.created != 0 || !st.sessions[rec.ID].NeedsImportResume() || len(msg.msgs) != 0 {
+					t.Fatalf("unproven private recovery = %#v, %v, launches=%d", result, err, rt.created)
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != want || len(archive.messages) != 1 || archive.messages[0].Text != "original prompt" {
+					t.Fatalf("native/archive snapshot changed: %q, %v, %+v", data, err, archive.messages)
+				}
+			})
+		}
 	}
 }

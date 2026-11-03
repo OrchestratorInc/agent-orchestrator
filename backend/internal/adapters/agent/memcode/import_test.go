@@ -154,6 +154,72 @@ func TestMemcodeTransferredHistoryRequiresPinnedSnapshot(t *testing.T) {
 	}
 }
 
+func TestMemcodePrivateProofRecoversWithoutOriginalSource(t *testing.T) {
+	for _, sourceState := range []string{"removed", "changed"} {
+		for _, damage := range []string{"none", "missing proof", "bad proof", "corrupt copy", "symlink proof"} {
+			t.Run(sourceState+"/"+damage, func(t *testing.T) {
+				r := memcodeRelocationFixture(t)
+				r.SourceFingerprint = NativeHistoryFingerprint([]byte(validHistory))
+				if _, err := (&Plugin{}).PrepareImportedSession(context.Background(), r); err != nil {
+					t.Fatal(err)
+				}
+				if sourceState == "removed" {
+					if err := os.RemoveAll(r.ConfigDir); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(r.TranscriptPath, []byte(strings.Replace(validHistory, `"role":"user"`, `"role":"tool"`, 1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dir := filepath.Join(r.LaunchCWD, ".memcode", "sessions", testID)
+				proof, target := filepath.Join(dir, memcodePreparationFile), filepath.Join(dir, "messages.json")
+				want := validHistory
+				switch damage {
+				case "missing proof":
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+				case "bad proof":
+					if err := os.WriteFile(proof, []byte(`{}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "corrupt copy":
+					want = strings.Replace(validHistory, `"role":"user"`, `"role":"tool"`, 1)
+					if err := os.WriteFile(target, []byte(want), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink proof":
+					data, err := os.ReadFile(proof)
+					if err != nil {
+						t.Fatal(err)
+					}
+					backing := filepath.Join(t.TempDir(), "proof.json")
+					if err := os.WriteFile(backing, data, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(backing, proof); err != nil {
+						t.Skip(err)
+					}
+				}
+				prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+				if damage == "none" {
+					if err != nil || prepared.NativeSessionID != r.NativeSessionID || prepared.ConfigDir != r.LaunchCWD {
+						t.Fatalf("durable private recovery = %+v, %v", prepared, err)
+					}
+				} else if err == nil {
+					t.Fatal("unproven private history was recovered")
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != want {
+					t.Fatalf("private history overwritten = %q, %v", data, err)
+				}
+			})
+		}
+	}
+}
+
 func TestMemcodeImportRejectsEscapingSourceAndWrongID(t *testing.T) {
 	for _, mode := range []string{"symlink", "wrong-id", "wrong-path"} {
 		t.Run(mode, func(t *testing.T) {

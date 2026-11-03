@@ -133,16 +133,8 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), rel) {
 		return errors.New("memcode import source path changed")
 	}
-	source, err := filepath.EvalSymlinks(r.ConfigDir)
-	if err != nil {
-		return err
-	}
 	launch, err := filepath.EvalSymlinks(r.LaunchCWD)
 	if err != nil {
-		return err
-	}
-	if source == launch {
-		_, err := memcodeImportSnapshot(ctx, source, r.NativeSessionID, rel, r.SourceFingerprint)
 		return err
 	}
 	dst, err := os.OpenRoot(launch)
@@ -150,8 +142,18 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		return err
 	}
 	defer func() { _ = dst.Close() }()
-	sum := sha256.Sum256([]byte(filepath.Join(source, rel)))
-	wantMarker := hex.EncodeToString(sum[:]) + "\n"
+	if recovered, err := recoverMemcodePreparation(ctx, dst, r); err != nil || recovered {
+		return err
+	}
+	source, err := filepath.EvalSymlinks(r.ConfigDir)
+	if err != nil {
+		return err
+	}
+	if source == launch {
+		_, err := memcodeImportSnapshot(ctx, source, r.NativeSessionID, rel, r.SourceFingerprint)
+		return err
+	}
+	wantMarker := memcodeImportOrigin(r.TranscriptPath)
 	marker := filepath.Join(filepath.Dir(rel), ".ao-import")
 	if _, err := dst.Lstat(rel); err == nil {
 		existing, err := memcodeImportFile(ctx, dst, rel, 16<<20)
@@ -183,8 +185,10 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		if r.SourceFingerprint != "" && NativeHistoryFingerprint(installed) != r.SourceFingerprint {
 			return errors.New("memcode worktree history changed during preparation")
 		}
-		_, _, err = transcript(launch, r.NativeSessionID)
-		return err
+		if _, _, err := transcript(launch, r.NativeSessionID); err != nil {
+			return err
+		}
+		return writeMemcodePreparation(ctx, dst, r)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -212,8 +216,10 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if NativeHistoryFingerprint(installed) != NativeHistoryFingerprint(data) {
 		return errors.New("memcode worktree history changed during preparation")
 	}
-	_, _, err = transcript(launch, r.NativeSessionID)
-	return err
+	if _, _, err := transcript(launch, r.NativeSessionID); err != nil {
+		return err
+	}
+	return writeMemcodePreparation(ctx, dst, r)
 }
 
 // LocateTranscript checks exact native wire history at the registered project.
