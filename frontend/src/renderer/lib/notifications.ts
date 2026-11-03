@@ -1,7 +1,7 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { aoBridge } from "./bridge";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 export type NotificationDTO = components["schemas"]["NotificationResponse"];
@@ -647,7 +647,7 @@ export function createNotificationsTransport(
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/notifications/stream`);
+					source = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/notifications/stream`);
 					source.onopen = () => {
 						retries = 0;
 						invalidateNotifications();
