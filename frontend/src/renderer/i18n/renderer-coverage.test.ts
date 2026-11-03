@@ -26,6 +26,8 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	],
 	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
 	"components/onboarding/FirstRunOnboarding.tsx": ["https://github.com/owner/repo"],
+	// The app name in the preview window's titlebar, as TitlebarNav shows it.
+	"components/onboarding/OnboardingPreviews.tsx": ["Orchestrator"],
 	// Technical branch/prefix examples moved with the common settings fields.
 	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
 	// Key-cap hint beside Cancel.
