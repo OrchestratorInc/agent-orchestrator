@@ -39,7 +39,7 @@ func TestMiMoCodeImport(t *testing.T) {
 	if err != nil || len(files) != 1 || files[0].nativeID() != "ses_synthetic" {
 		t.Fatalf("discover = %v, %v", files, err)
 	}
-	got, err := readTranscript(context.Background(), domain.HarnessMiMoCode, root, files[0].paths...)
+	got, err := readMiMoCodeTranscript(context.Background(), root, files[0].paths...)
 	if err != nil {
 		t.Fatal(err)
 	}
