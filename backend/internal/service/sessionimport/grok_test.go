@@ -74,7 +74,9 @@ func TestGrokRewindDropsDiscardedPrompts(t *testing.T) {
 		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"final answer"}}`,
 		`{"sessionUpdate":"rewind_marker","target_prompt_index":99}`,
 	} {
-		var kind struct{ SessionUpdate string `json:"sessionUpdate"` }
+		var kind struct {
+			SessionUpdate string `json:"sessionUpdate"`
+		}
 		if err := json.Unmarshal([]byte(update), &kind); err != nil {
 			t.Fatal(err)
 		}
