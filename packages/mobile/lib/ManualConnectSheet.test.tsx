@@ -28,6 +28,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 24, left: 0 }) }));
 vi.mock("@expo/ui", () => ({ Host: "Host" }));
 vi.mock("@expo/ui/swift-ui", async () => (await import("./nativeFormTestDoubles")).swiftUIDouble());
 vi.mock("@expo/ui/swift-ui/modifiers", async () => {
@@ -229,5 +230,17 @@ describe("ManualConnectSheet on Android", () => {
 		expect(field("manual-connect-host").props.isError).toBe(false);
 		// Supporting text is read only with its field focused, so TalkBack is told.
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+	});
+
+	// At the sheet's first detent, Connect at the form's end sat half under the
+	// gesture bar; it is pinned below the scrolling form, clear of the bar.
+	it("pins Connect and what it waits for below the form, clear of the gesture bar", async () => {
+		await renderAndroid();
+		const connect = renderer!.root.findByType("RNButton" as never);
+		const scroll = renderer!.root.findByType("ScrollView" as never);
+		expect(scroll.findAll((node) => node === connect)).toHaveLength(0);
+		const footer = renderer!.root.findAll((node) => node.type === ("View" as never) && node.findAll((child) => child === connect).length > 0 && node.findAll((child) => child === scroll).length === 0)[0];
+		expect(Object.assign({}, ...[footer.props.style].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
+		expect(footer.findByProps({ children: "Add a name and a host to connect." })).toBeTruthy();
 	});
 });
