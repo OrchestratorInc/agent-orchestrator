@@ -423,7 +423,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	composerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	composerInput: { flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
 	composerPlain: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center" },
-	composerSend: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+	composerSend: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	disabled: { opacity: stateOpacity.disabled },
 
 	inlineWrap: { paddingRight: space.md, paddingTop: space.xs, paddingBottom: space.sm, backgroundColor: t.bgBase },
@@ -433,7 +433,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	inlineAuthor: { fontFamily: font.semibold, fontSize: type.footnote.fontSize, color: t.textPrimary },
 	inlineMeta: { flex: 1, fontFamily: font.regular, fontSize: type.footnote.fontSize, color: t.textTertiary },
 	inlineState: { ...type.footnote, fontFamily: font.medium, color: t.textTertiary },
-	inlineAction: { width: INLINE_ACTION, height: INLINE_ACTION, borderRadius: INLINE_ACTION / 2, marginRight: -space.xs, alignItems: "center", justifyContent: "center" },
+	inlineAction: { width: INLINE_ACTION, height: INLINE_ACTION, borderRadius: INLINE_ACTION / 2, overflow: "hidden", marginRight: -space.xs, alignItems: "center", justifyContent: "center" },
 	inlineText: { ...type.subheadline, color: t.textPrimary, paddingLeft: 20 + space.xs },
 
 });

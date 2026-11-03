@@ -16,10 +16,13 @@ describe("the Files list", () => {
 		expect(source("../../app/files/[sessionId]/folder.tsx")).toContain("navigation.setOptions({ title: name })");
 	});
 
-	// An active UIKit search controller, or an expanded Android search view,
-	// taken out of the header leaves it as the open search had it.
-	it("searches only while All files shows, closing an open search before switching to Changes", () => {
-		expect(index).toContain('{tab === "all" ? <FileSearchBar search={search} /> : null}');
+	// A bar in the header on All files only moved the tabs under it on every
+	// switch. Its results are All files', so typing on Changes moves there, and
+	// going back to Changes clears the search.
+	it("keeps the search on both tabs, its results on All files", () => {
+		expect(index).toContain("<FileSearchBar search={search} />");
+		expect(index).not.toContain('tab === "all" ? <FileSearchBar');
+		expect(index).toContain('if (searchActive) setTab("all");');
 		expect(index).toContain('if (next !== "all") dismissSearch();');
 		expect(source("./FileSearch.tsx")).toContain("bar.current?.cancelSearch();");
 	});

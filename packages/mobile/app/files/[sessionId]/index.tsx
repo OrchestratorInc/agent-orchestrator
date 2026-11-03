@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "../../../lib/AppSymbol";
@@ -54,8 +54,9 @@ function SessionFilesContent() {
 	const toast = useToast();
 	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
 	const insets = useSafeAreaInsets();
-	const search = useFileSearch(hostMatches && tab === "all" ? config : null, id);
+	const search = useFileSearch(hostMatches ? config : null, id);
 	const dismissSearch = search.dismiss;
+	const searchActive = search.active;
 	const groups = useMemo(() => manifest ? changeGroups(manifest) : [], [manifest]);
 	const commentsByPath = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -68,10 +69,15 @@ function SessionFilesContent() {
 	}, [navigation, title]);
 
 	const chooseTab = useCallback((next: Tab) => {
-		// The search belongs to All files and leaves with it.
+		// A search's results are All files'; going to Changes clears it.
 		if (next !== "all") dismissSearch();
 		setTab(next);
 	}, [dismissSearch]);
+	// The search finds files anywhere in the worktree, so typing on Changes
+	// moves to All files, where its results show.
+	useEffect(() => {
+		if (searchActive) setTab("all");
+	}, [searchActive]);
 	const openChange = useCallback((file: ChangeEntry) => openFile(file.path, "diff", file.previousPath), [openFile]);
 	const changeAction = useCallback((action: FileRowAction, file: ChangeEntry) => act(action, file), [act]);
 	const openPath = useCallback((path: string, changed: boolean) => openFile(path, changed ? "diff" : "file"), [openFile]);
@@ -136,8 +142,9 @@ function SessionFilesContent() {
 
 	return (
 		<View style={styles.screen}>
-			{/* Finding a file belongs to All files, and is gone again on Changes. */}
-			{tab === "all" ? <FileSearchBar search={search} /> : null}
+			{/* On both tabs: in the header only on All files, its coming and going
+			    moved the tabs under it up and down on every switch. */}
+			<FileSearchBar search={search} />
 			{body}
 			<ReviewButton count={review.comments.length} onPress={openReview} />
 			<ToastHost toast={toast} bottomOffset={review.comments.length ? insets.bottom + REVIEW_BUTTON_RISE : undefined} />
