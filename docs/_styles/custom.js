@@ -1472,7 +1472,7 @@ function aoCurLangName() {
   window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { init(); }, 200); });
 })();
 
-/* v39: floating "Ask Assistant" chat launcher (bottom-right): AO logo + small greeting above */
+/* v39/v52: floating "Ask Assistant" chat launcher (bottom-right): AO logo FAB only - greeting cloud removed (user request, Nov 3) */
 (function () {
   function openChat() {
     var m = document.getElementById("assistant-entry-mobile");
@@ -1501,13 +1501,6 @@ function aoCurLangName() {
     }
     fab.addEventListener("click", openChat);
     document.body.appendChild(fab);
-    var bubble = document.createElement("button");
-    bubble.id = "ao-chat-bubble";
-    bubble.type = "button";
-    bubble.setAttribute("aria-label", "Ask Assistant");
-    bubble.textContent = "Hi! Ask me anything about Orchestrator";
-    bubble.addEventListener("click", openChat);
-    document.body.appendChild(bubble);
     function sync() {
       var open = false;
       var sheets = document.querySelectorAll('[class*="chat-assistant-sheet"]');
@@ -1517,7 +1510,6 @@ function aoCurLangName() {
       }
       var state = open ? "open" : "closed";
       fab.dataset.state = state;
-      bubble.dataset.state = state;
     }
     setInterval(sync, 800);
     sync();
