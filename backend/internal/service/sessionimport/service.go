@@ -691,7 +691,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 
 // RefreshArchive rereads an imported conversation just before its first open,
 // so turns added in another app since the import stay in the visible history.
-// The store ignores it once the session's conversation exists.
+// Once native preparation is checkpointed, retain the matching archive on
+// retries: later source turns need not exist in the pinned native copy.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
 	replacer, ok := s.store.(interface {
@@ -700,7 +701,10 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	if source == nil || source.Adopted {
 		return nil
 	}
-	if source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == "" {
+	if source.ResumeNativeID != "" || source.ResumeCwd != "" {
+		return nil
+	}
+	if source.Fingerprint != "" {
 		dests, err := s.destinations(ctx)
 		if err != nil {
 			return err
