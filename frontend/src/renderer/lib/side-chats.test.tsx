@@ -12,7 +12,7 @@ const session: WorkspaceSession = {
 beforeEach(() => useUiStore.setState({ developerMode: true, sideChats: true }));
 afterEach(() => useUiStore.setState({ developerMode: false, sideChats: false }));
 
-it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "kimchi", "pi", "cursor", "omp", "qwen", "unreal-agent", "deepseek-harness", "command-code"] as const)(
+it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "kimchi", "pi", "cursor", "omp", "qwen", "unreal-agent", "deepseek-harness", "command-code", "devin"] as const)(
 	"allows admitted local Chat sessions for %s without a provider allowlist",
 	(provider) => {
 		const { result } = renderHook(() => useSideChatsAvailable({ ...session, provider }));
