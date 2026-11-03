@@ -3508,14 +3508,21 @@ const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
 const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
-function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
+// A sign-in completed through the website's return page also hands over that
+// visit's id, once, with its own notification (see CloudSignInContext); every
+// other notification carries the account alone.
+function notifyRenderersOfCloudSession(
+	account: import("./shared/cloud-account").CloudAccount | null,
+	signIn?: import("./shared/cloud-account").CloudSignInContext,
+): void {
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
 	}
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
-	contents.send("cloud:sessionChanged", account);
+	if (account && signIn) contents.send("cloud:sessionChanged", account, signIn);
+	else contents.send("cloud:sessionChanged", account);
 }
 
 installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession);
@@ -3575,9 +3582,12 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		return;
 	}
 	try {
-		const session = await handleCloudDeepLink(url, cloudDataDir());
-		if (!session) return;
-		notifyRenderersOfCloudSession(session);
+		const signIn = await handleCloudDeepLink(url, cloudDataDir());
+		if (!signIn) return;
+		notifyRenderersOfCloudSession(
+			signIn.account,
+			signIn.webDistinctId ? { webDistinctId: signIn.webDistinctId } : undefined,
+		);
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);

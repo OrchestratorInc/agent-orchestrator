@@ -51,7 +51,7 @@ import {
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
-import type { CloudAccount } from "./shared/cloud-account";
+import type { CloudAccount, CloudSignInContext } from "./shared/cloud-account";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type {
 	CloudCpProxyRequestInit,
@@ -834,8 +834,11 @@ const api = {
 			ipcRenderer.invoke("cloud:localRegister", input) as Promise<CloudAccount>,
 		localLogin: (input: LocalLoginInput) =>
 			ipcRenderer.invoke("cloud:localLogin", input) as Promise<CloudAccount>,
-		onSessionChanged: (listener: (account: CloudAccount | null) => void) => {
-			const wrapped = (_event: Electron.IpcRendererEvent, account: CloudAccount | null) => listener(account);
+		// A sign-in that just completed may add its CloudSignInContext, once;
+		// refreshes and sign-outs carry the account alone.
+		onSessionChanged: (listener: (account: CloudAccount | null, signIn?: CloudSignInContext) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, account: CloudAccount | null, signIn?: CloudSignInContext) =>
+				listener(account, signIn);
 			ipcRenderer.on("cloud:sessionChanged", wrapped);
 			return () => {
 				ipcRenderer.off("cloud:sessionChanged", wrapped);

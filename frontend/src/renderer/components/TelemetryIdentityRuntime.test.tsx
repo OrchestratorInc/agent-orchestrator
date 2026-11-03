@@ -7,10 +7,27 @@ const hooks = vi.hoisted(() => ({
 	setCloudUser: vi.fn(async (_id: string | null): Promise<boolean | "unsupported"> => true),
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
+	noteCloudSignInWebVisitor: vi.fn(),
+	sessionListeners: [] as ((account: unknown, signIn?: { webDistinctId?: string }) => void)[],
+	unsubscribe: vi.fn(),
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: hooks.session, status: hooks.status }) }));
-vi.mock("../lib/bridge", () => ({ aoBridge: { telemetry: { setCloudUser: hooks.setCloudUser } } }));
-vi.mock("../lib/telemetry", () => ({ identifyCloudUser: hooks.identifyCloudUser, clearCloudUser: hooks.clearCloudUser }));
+vi.mock("../lib/bridge", () => ({
+	aoBridge: {
+		telemetry: { setCloudUser: hooks.setCloudUser },
+		cloud: {
+			onSessionChanged: (listener: (typeof hooks.sessionListeners)[number]) => {
+				hooks.sessionListeners.push(listener);
+				return hooks.unsubscribe;
+			},
+		},
+	},
+}));
+vi.mock("../lib/telemetry", () => ({
+	identifyCloudUser: hooks.identifyCloudUser,
+	clearCloudUser: hooks.clearCloudUser,
+	noteCloudSignInWebVisitor: hooks.noteCloudSignInWebVisitor,
+}));
 
 import { BINDING_RETRY_MS, TelemetryIdentityRuntime } from "./TelemetryIdentityRuntime";
 
@@ -23,6 +40,7 @@ const account = (authProvider: "workos" | "local") => ({
 describe("TelemetryIdentityRuntime", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		hooks.sessionListeners.length = 0;
 		hooks.status = "authenticated";
 		hooks.setCloudUser.mockImplementation(async () => true);
 	});
@@ -175,5 +193,26 @@ describe("TelemetryIdentityRuntime", () => {
 		render(<TelemetryIdentityRuntime />);
 		expect(hooks.clearCloudUser).toHaveBeenCalled();
 		expect(hooks.setCloudUser).toHaveBeenCalledWith(null);
+	});
+
+	it("hands each session notification, and a sign-in's website visitor id, to telemetry", () => {
+		hooks.session = account("workos");
+		const view = render(<TelemetryIdentityRuntime />);
+		expect(hooks.sessionListeners).toHaveLength(1);
+		const [notify] = hooks.sessionListeners;
+
+		notify(account("workos"), { webDistinctId: "019a3f5e-8c2b" });
+		notify(account("workos"));
+		notify(account("local"), { webDistinctId: "019a3f5e-8c2b" });
+		notify(null);
+		expect(hooks.noteCloudSignInWebVisitor.mock.calls).toEqual([
+			["user_01H", "019a3f5e-8c2b"],
+			["user_01H", undefined],
+			[null, "019a3f5e-8c2b"],
+			[null, undefined],
+		]);
+
+		view.unmount();
+		expect(hooks.unsubscribe).toHaveBeenCalledTimes(1);
 	});
 });

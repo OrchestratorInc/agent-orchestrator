@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
-import { clearCloudUser, identifyCloudUser } from "../lib/telemetry";
+import { clearCloudUser, identifyCloudUser, noteCloudSignInWebVisitor } from "../lib/telemetry";
 
 // Waits between attempts to get the daemon to acknowledge the current user (or
 // the sign-out). The daemon is usually still starting when the session resolves;
@@ -20,6 +20,16 @@ export function TelemetryIdentityRuntime() {
 	const { session, status } = useCloudSession();
 	const userId = session?.authProvider === "workos" ? session.user.id : null;
 	const email = session?.authProvider === "workos" ? session.user.email : "";
+	// A sign-in completed through the website's return page carries that visit's
+	// id, once, on its own notification. Telemetry links it to the account when it
+	// identifies the user, and only if analytics are on.
+	useEffect(() => {
+		const cloud = aoBridge.cloud;
+		if (!cloud) return;
+		return cloud.onSessionChanged((account, signIn) => {
+			noteCloudSignInWebVisitor(account?.authProvider === "workos" ? account.user.id : null, signIn?.webDistinctId);
+		});
+	}, []);
 	useEffect(() => {
 		// Until the session resolves, "no user" only means "not known yet"; telling
 		// the daemon would be read as a sign-out and retire the install ID.
