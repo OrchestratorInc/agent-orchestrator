@@ -549,6 +549,11 @@ func (m *Manager) resumeChatController(
 			return RestoreResult{}, relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, relocateErr))
 		}
 		rec = relocated
+		if m.hasFingerprintImportPreparer(rec) {
+			if err := m.refreshImportArchive(ctx, rec); err != nil {
+				return RestoreResult{}, err
+			}
+		}
 	}
 	if rec.Metadata.ImportSource != nil && !reconnectOnly {
 		// Imported Chat restores need the same exact-identity workspace guard
