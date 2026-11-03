@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
-import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -342,10 +342,6 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialWindowTranslucency() {
-	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
-}
-
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
 }
@@ -410,7 +406,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	windowTranslucency: initialWindowTranslucency(),
+	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
