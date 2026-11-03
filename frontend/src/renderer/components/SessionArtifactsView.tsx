@@ -8,6 +8,7 @@ import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
+import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
@@ -460,6 +461,8 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
+	// A local file the agent rewrites while it is open shows the new content.
+	useArtifactFileChanges(session.id, Boolean(selected) && !cloud && !hostId);
 	// Versions are read back as text, so a binary file such as an image gets no
 	// History. This shares the viewer's cached read of the file, which for a
 	// cloud file also shows when its access link was refused.

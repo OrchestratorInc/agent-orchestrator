@@ -24,7 +24,8 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 	};
 });
 
-const { cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+const { artifactFileChangesMock, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
+	artifactFileChangesMock: vi.fn(),
 	cloudAccessMock: vi.fn(),
 	createArtifactAccessMock: vi.fn(),
 	listArtifactsMock: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}`, editable: true, fileFingerprint: "fingerprint" }),
 	}),
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: artifactFileChangesMock }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
@@ -335,6 +337,29 @@ describe("SessionArtifactsView", () => {
 		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false, refetch: vi.fn() });
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
+		artifactFileChangesMock.mockReset();
+	});
+
+	it("follows an open local file's changes on disk only while it is open", async () => {
+		renderView(<SessionArtifactsView session={session()} />);
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+	});
+
+	it("does not follow a remote host's or a cloud session's files through the local daemon", async () => {
+		const { rerender } = renderView(<SessionArtifactsView hostId="host-1" session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("sess-1", false);
+
+		rerender(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith("cloud-1", false);
 	});
 
 	it("lists every artifact newest first", () => {

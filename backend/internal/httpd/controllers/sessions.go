@@ -284,10 +284,11 @@ func (c *SessionsController) Register(r chi.Router) {
 }
 
 // RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree notifications remain active only while a client is
-// actually viewing that session's files.
+// middleware. Worktree and artifact notifications remain active only while a
+// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
+	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
 }
 
 func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {

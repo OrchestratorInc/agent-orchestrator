@@ -55,6 +55,13 @@ export function ArtifactsView() {
 	const [projectId, setProjectId] = useState("");
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = (row: ArtifactRow, projectName: string) => setPreview({ row, projectName });
+	// The open preview follows its row as the list refreshes, so a file an
+	// agent rewrites shows its new content.
+	const previewRow = useMemo(() => {
+		if (!preview) return null;
+		const key = artifactKey(preview.row);
+		return groups.flatMap((group) => group.rows).find((row) => artifactKey(row) === key) ?? preview.row;
+	}, [groups, preview]);
 	const view = useArtifactsViewStore((state) => state.view);
 	const setView = useArtifactsViewStore((state) => state.setView);
 	const pinnedArtifactIds = useArtifactsViewStore((state) => state.pinnedArtifactIds);
@@ -231,7 +238,7 @@ export function ArtifactsView() {
 					</ScrollArea.Scrollbar>
 				</main>
 			</ScrollArea.Root>
-			<ArtifactPreviewModal artifact={preview?.row ?? null} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
+			<ArtifactPreviewModal artifact={previewRow} projectName={preview?.projectName ?? ""} onClose={() => setPreview(null)} />
 		</div>
 	);
 }
