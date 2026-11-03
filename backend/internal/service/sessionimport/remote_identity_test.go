@@ -1,6 +1,10 @@
 package sessionimport
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"testing"
+)
 
 func TestRemoteIdentityMatchesFormsOfOneRepository(t *testing.T) {
 	same := []string{
@@ -29,5 +33,26 @@ func TestRemoteIdentityMatchesFormsOfOneRepository(t *testing.T) {
 		if got, ok := remoteIdentity(local); ok {
 			t.Errorf("local path %q read as a network remote %q", local, got)
 		}
+	}
+}
+
+func TestRemoteIdentityPreservesCaseSensitiveRepositoryPaths(t *testing.T) {
+	upper, ok := remoteIdentity("git@INTERNAL.example:team/Lib.git")
+	if !ok || upper != "internal.example/team/Lib" {
+		t.Fatalf("case-sensitive identity=%q, %v", upper, ok)
+	}
+	same, ok := remoteIdentity("ssh://git@internal.example:22/team/Lib.git")
+	if !ok || same != upper {
+		t.Fatalf("same remote over SSH=%q, %v", same, ok)
+	}
+	lower, ok := remoteIdentity("https://internal.example/team/lib.git")
+	if !ok || lower == upper {
+		t.Fatalf("distinct-case repositories matched: %q and %q", upper, lower)
+	}
+	source, destination := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(source, ".git", "config"), "[remote \"origin\"]\nurl = git@internal.example:team/Lib.git\n")
+	writeFile(t, filepath.Join(destination, ".git", "config"), "[remote \"origin\"]\nurl = git@internal.example:team/lib.git\n")
+	if SameRepository(context.Background(), source, destination) {
+		t.Fatal("case-sensitive repositories passed the workspace safety check")
 	}
 }
