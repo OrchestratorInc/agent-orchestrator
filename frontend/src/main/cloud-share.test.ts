@@ -278,7 +278,7 @@ describe("uploadShare", () => {
 describe("cloud control-plane proxy", () => {
 	it("lets the renderer read share links but never change them", async () => {
 		const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
-		const proxy = createCloudCpProxy(() => dataDir, { fetchImpl });
+		const proxy = createCloudCpProxy(() => dataDir, { controlPlaneUrl: async () => "https://cp.test", fetchImpl });
 		const request = (method: string, path: string) => proxy.request({ baseUrl: "https://cp.test", path, method });
 		await expect(request("GET", "/api/cloud/v1/me/artifact-shares")).resolves.toMatchObject({ status: 200 });
 		for (const [method, path] of [

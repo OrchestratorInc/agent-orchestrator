@@ -237,7 +237,7 @@ function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCp
  * resolves dot segments (including percent-encoded ones) and backslashes, so
  * a raw-string prefix check alone would let "/api/cloud/v1/../../x" escape.
  */
-function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">): string {
+function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">): string {
 	const base = new URL(init.baseUrl);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const target = new URL(base.origin + basePath + init.path);
@@ -310,7 +310,7 @@ interface ActiveStream {
  * baseUrl, but only the configured one is ever dialed: any other is refused.
  */
 export async function pinnedTargetUrl(
-	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">,
+	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">,
 	controlPlaneUrl: ControlPlaneUrlResolver,
 ): Promise<string> {
 	const configured = await controlPlaneUrl();
@@ -319,7 +319,7 @@ export async function pinnedTargetUrl(
 	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
 		throw invalid("baseUrl is not the configured AO Cloud control plane.");
 	}
-	return resolveTargetUrl({ baseUrl: configured, path: init.path });
+	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
 }
 
 export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions): CloudCpProxy {
