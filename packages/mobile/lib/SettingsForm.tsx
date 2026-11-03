@@ -5,6 +5,7 @@ import {
 	accessibilityHidden,
 	background,
 	buttonStyle,
+	defaultScrollAnchor,
 	disabled as disabledModifier,
 	font,
 	frame,
@@ -59,6 +60,11 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 				testID={testID}
 				modifiers={[
 					scrollContentBackground("hidden"),
+					// Opens at the top. The Form is laid out under the clear glass bar,
+					// and the bar's inset reaches it after its first layout, which left
+					// the page opening scrolled by the bar's height, its first section
+					// under the title.
+					defaultScrollAnchor("top"),
 					background(t.bgBase),
 					// Every row's text in the app's family, scaled with Dynamic Type.
 					appFont("body"),

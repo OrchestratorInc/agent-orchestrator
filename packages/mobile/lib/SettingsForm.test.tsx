@@ -25,7 +25,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "disabled", "font", "foregroundStyle", "frame", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "defaultScrollAnchor", "disabled", "font", "foregroundStyle", "frame", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
@@ -72,6 +72,8 @@ describe("the iOS settings form", () => {
 		expect(form.props.testID).toBe("form");
 		expect(has(form, "scrollContentBackground", "hidden")).toBe(true);
 		expect(has(form, "background", "#base")).toBe(true);
+		// Opens at the top rather than under the glass bar.
+		expect(has(form, "defaultScrollAnchor", "top")).toBe(true);
 		expect(has(form, "font", { family: "DMSans-Regular", size: 16, textStyle: "body" })).toBe(true);
 	});
 
