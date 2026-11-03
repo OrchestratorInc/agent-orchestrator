@@ -86,7 +86,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessCopilot: "COPILOT_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -216,6 +216,10 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Kimi publishes a per-session lock file holding the live writer's pid;
 		// its transcript is append-open-close so it is never held open for lsof.
 		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
+	case domain.HarnessOMP:
+		if ompSessionLocked(ctx, source.ConfigDir, source.NativeID) {
+			return true
+		}
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
 		// per-session lock or live-session registry, and its transcript path is a
@@ -247,6 +251,8 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Copilot has no process-bound live-session registry. A writable log
 		// descriptor is positive evidence; idle clients cannot always be detected.
 		return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
+	case domain.HarnessOMP:
+		return ompSessionLocked(ctx, source.ConfigDir, nativeID)
 	}
 	return false
 }
@@ -322,7 +328,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid") || strings.Contains(command, "copilot")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid") || strings.Contains(command, "copilot") || strings.Contains(command, "omp")) {
 			return true
 		}
 	}
