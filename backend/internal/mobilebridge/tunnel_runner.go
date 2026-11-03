@@ -226,7 +226,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 
 	var upgraded, withdrawn atomic.Bool
-	// unserved holds why a fixed connector looks unable to serve its tunnel.
+	// unserved holds why the connector looks unable to serve its tunnel.
 	var unserved atomic.Pointer[string]
 	// next is the tunnel a watcher stopped this run to start.
 	var next atomic.Pointer[NamedTunnel]
@@ -234,11 +234,13 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		unserved.CompareAndSwap(nil, &reason)
 		stopRun()
 	}
-	var health *connectorHealth
+	// Every connector is watched: a quick tunnel Cloudflare deleted while the
+	// machine slept keeps retrying forever, and only a new one gets an address
+	// that resolves.
+	health := newConnectorHealth(time.Now())
+	go t.watchConnector(runCtx, health, markUnserved)
 	switch {
 	case fixed:
-		health = newConnectorHealth(time.Now())
-		go t.watchConnector(runCtx, health, markUnserved)
 		go t.watchFixedTunnel(runCtx, named, health, func(n *NamedTunnel) { next.Store(n); withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
 		go t.awaitFixedTunnel(runCtx, t.repair, func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
@@ -250,8 +252,8 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		line := scanner.Text()
 		t.Runtime.Line(line)
 		t.logger().Debug("cloudflared", "line", line)
-		if health != nil && health.feed(line, time.Now()) {
-			markUnserved("cloudflare kept refusing the fixed tunnel's connector")
+		if health.feed(line, time.Now()) {
+			markUnserved("cloudflare kept refusing the tunnel's connector")
 		}
 	}
 
@@ -264,7 +266,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// A tunnel that served is not owed the replacement asked for before. Only
 	// one that stayed up starts the backoff over: a connector that connects
 	// and soon dies would otherwise ask for a replacement every repairSpacing.
-	if health != nil && health.servedOnce() {
+	if fixed && health.servedOnce() {
 		t.repair = false
 		if time.Since(started) >= stableTunnelRun {
 			t.unhelped = 0
@@ -286,7 +288,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		waitErr = errFixedTunnelChanged
 	case unserved.Load() != nil:
 		waitErr = errors.New(*unserved.Load())
-		replace()
+		if fixed {
+			replace()
+		}
 	case upgraded.Load():
 		waitErr = errFixedTunnelReady
 	case fixed && ctx.Err() == nil:
@@ -310,7 +314,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	return errors.New("connector exited")
 }
 
-// watchConnector calls stop once a fixed connector has had no live edge
+// watchConnector calls stop once a connector has had no live edge
 // connection for deadAfter, from its start or from when its last one
 // dropped. A tunnel deleted while connected looks like this: measured, the
 // connector printed only "Connection terminated" and "Retrying connection",
@@ -325,7 +329,7 @@ func (t *TunnelRunner) watchConnector(ctx context.Context, h *connectorHealth, s
 		case <-time.After(after / 10):
 		}
 		if since, dead := h.deadSince(); dead && time.Since(since) >= after {
-			stop("the fixed tunnel's connector had no live connection for " + after.String())
+			stop("the tunnel's connector had no live connection for " + after.String())
 			return
 		}
 	}
@@ -404,10 +408,11 @@ func (h *connectorHealth) deadSince() (time.Time, bool) {
 	return h.downAt, !h.downAt.IsZero()
 }
 
-// A fixed connector is restarted on a replacement tunnel after it exits, has
-// no live connection for three minutes, or is refused four times in a row; a
-// replacement is asked for at most every two minutes. A tunnel the sweep
-// released is remade without one.
+// A connector is restarted after it exits, has no live connection for three
+// minutes, or is refused four times in a row. A quick tunnel comes back on a
+// new address; a fixed one on a replacement tunnel at the same address, asked
+// for at most every two minutes. A tunnel the sweep released is remade
+// without one.
 const (
 	connectorDeadAfter = 3 * time.Minute
 	connectorRefusals  = 4

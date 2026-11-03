@@ -165,6 +165,19 @@ func clientSource(r *http.Request) string {
 	return src
 }
 
+// lockoutKey is what failed attempts count against. A global IPv6 client is
+// grouped by its /64: one subscriber holds a whole /64, so counting single
+// addresses would hand an attacker billions of fresh allowances. Link-local
+// and private addresses stay separate, so devices on one LAN do not lock each
+// other out.
+func lockoutKey(src string) string {
+	ip := net.ParseIP(src)
+	if ip == nil || ip.To4() != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return src
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {
@@ -287,7 +300,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			remoteSrc := sourceKey(r)
-			src := clientSource(r) // for the lockout only
+			src := lockoutKey(clientSource(r)) // for the lockout only
 			if lock.blocked(src) {
 				envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "LOCKED_OUT",
 					"too many failed attempts; try again shortly", nil)
