@@ -107,6 +107,16 @@ func commandProjectBucket(cwd string) (string, error) {
 	return slug, nil
 }
 
+func commandNativeProjectBucket(cwd string) (string, error) {
+	// The native catalog uses Node's process.cwd(), which is the physical
+	// working directory rather than an alias supplied to the runtime launcher.
+	real, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", err
+	}
+	return commandProjectBucket(real)
+}
+
 // RelocateImportedSession copies only this native conversation and its sidecars
 // into the launch project's bucket. Native tools use the launch cwd; the saved
 // header's cwd is historical metadata, not an execution override.
@@ -117,7 +127,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if !commandNativeID.MatchString(r.NativeSessionID) {
 		return errors.New("invalid command-code native session id")
 	}
-	bucket, err := commandProjectBucket(r.LaunchCWD)
+	bucket, err := commandNativeProjectBucket(r.LaunchCWD)
 	if err != nil {
 		return err
 	}
@@ -148,7 +158,7 @@ func PrepareNativeResume(ctx context.Context, dataDir string, sessionID domain.S
 	if !commandNativeID.MatchString(nativeID) || SessionHomeDir(dataDir, sessionID) == "" {
 		return nil // Existing managed identities retain their provider behavior.
 	}
-	bucket, err := commandProjectBucket(cwd)
+	bucket, err := commandNativeProjectBucket(cwd)
 	if err != nil {
 		return nil // Import relocation already refuses unsupported workspace paths.
 	}

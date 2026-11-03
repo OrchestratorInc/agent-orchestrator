@@ -19,12 +19,13 @@ func TestImportedCommandCodeCopyAndStrictResume(t *testing.T) {
 	writeHomeFile(t, source, body)
 	writeHomeFile(t, filepath.Join(filepath.Dir(source), id+".meta.json"), []byte(`{"title":"synthetic"}`))
 	cwd := filepath.Join(t.TempDir(), "AORepo")
+	makeHomeDir(t, cwd)
 	r := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, SourceCWD: "/old/repo", LaunchCWD: cwd}
 	p := New()
 	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := commandProjectBucket(cwd)
+	bucket, err := commandNativeProjectBucket(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestCommandCodeRefusesUnreadableNativeBundle(t *testing.T) {
 		}
 	}
 	writeHomeFile(t, path, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
-	bucket, err := commandProjectBucket(cwd)
+	bucket, err := commandNativeProjectBucket(cwd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,5 +107,27 @@ func TestCommandCodeRefusesUnreadableNativeBundle(t *testing.T) {
 	}
 	if string(readHomeFile(t, foreign)) != "other native conversation" {
 		t.Fatal("destination changed after refusal")
+	}
+}
+
+func TestCommandCodeRelocationUsesPhysicalWorkspace(t *testing.T) {
+	root, real := t.TempDir(), t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	id := "11111111-2222-4333-8444-555555555555"
+	source := filepath.Join(root, "projects", "source", id+".jsonl")
+	writeHomeFile(t, source, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	r := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: alias}
+	if err := New().RelocateImportedSession(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := commandNativeProjectBucket(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", bucket, id+".jsonl")); err != nil {
+		t.Fatalf("native physical-cwd bucket missing: %v", err)
 	}
 }
