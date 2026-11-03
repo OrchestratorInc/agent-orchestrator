@@ -93,12 +93,13 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	const hostId = offer.hostId || outcome.hostId;
 	const repair = options.repairHost;
 	// Only an explicitly selected, id-less pairing may adopt a scanned identity.
-	// Match the endpoint that actually answered, not an unreachable address the
-	// code merely advertises. The race checked its daemon id; verify checked
-	// the scanned credential above. An address alone is never an identity.
-	const replacingLegacy = repair?.id === "" && hostId !== "" &&
-		repair.endpoints?.some((endpoint) => endpoint.host === outcome.endpoint.host &&
-			endpoint.port === outcome.endpoint.port && endpoint.secure === outcome.endpoint.secure) === true;
+	// Prove its saved address belongs to the scanned machine independently of
+	// the main race: LAN can win before a saved Tailscale address answers.
+	// This probe checks identity only; the scanned credential verified above.
+	const legacyProof = repair?.id === "" && hostId !== "" && repair.endpoints?.length
+		? await deps.race(repair.endpoints, hostId)
+		: null;
+	const replacingLegacy = legacyProof?.ok === true;
 	const repairing = repair !== undefined && (repair.id === hostId || replacingLegacy);
 	const saved = repairing ? repair : hostId ? await deps.findHost(hostId) : null;
 	let name = saved?.name.trim() ?? "";
