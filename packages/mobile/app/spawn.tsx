@@ -15,7 +15,7 @@ import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { claudeAliasModel, defaultEffortModel, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -176,7 +176,7 @@ export default function SpawnScreen() {
 	// "Default model" when the project pins nothing, because that is the truth:
 	// the provider picks, and naming a model here promised one the session never
 	// ran. Not "Automatic", which reads as an approval mode.
-	const displayedModelLabel = displayedModel ? currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Default model";
+	const displayedModelLabel = displayedModel ? menuModelName(currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel) : "Default model";
 	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
 	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";

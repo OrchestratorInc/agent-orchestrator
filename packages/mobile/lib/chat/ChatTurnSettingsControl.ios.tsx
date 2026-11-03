@@ -12,7 +12,7 @@ import type { IOSSymbol } from "../symbols";
 import { useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
+import { splitModelChoices, turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
 const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopic>>, IOSSymbol>> = {
 	fast: "bolt",
@@ -35,6 +35,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const effortRow = select("effort");
 	const approvalRow = select("permissions");
 	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
 	// A SwiftUI menu keeps showing the choice it was given when the save fails
@@ -59,7 +60,16 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
 					modifiers={useTriggerModifiers({ label: parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
 				>
-					{modelRow?.choices.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow, choice.value)} />)}
+					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow!, choice.value)} />)}
+					{/* Older versions one level down, as on Android: the newest of
+					    each family is what most turns want. */}
+					{modelChoices.older.length ? (
+						<Section>
+							<Menu label="Older models" systemImage="clock.arrow.circlepath">
+								{modelChoices.older.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow!, choice.value)} />)}
+							</Menu>
+						</Section>
+					) : null}
 					{otherRows.length ? (
 						<Section>
 							{otherRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => { haptics.select(); choose(row, choice); }} />)}

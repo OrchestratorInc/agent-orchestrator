@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeAliasModel, defaultEffortModel, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {
@@ -108,9 +108,28 @@ describe("menuModels", () => {
 			{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
 			{ id: "opus", label: "Opus 5.5", isDefault: true },
 		];
-		expect(menuModels(claude, "__auto__").models.map((model) => model.label)).toEqual(["Claude Fable 5.1"]);
+		expect(menuModels(claude, "__auto__").models.map((model) => model.label)).toEqual(["Fable 5.1"]);
 		expect(menuModels(claude, "__auto__").defaultLabel).toBe("Opus 5.5");
-		expect(menuModels(claude, "claude-opus-5-5").models.map((model) => model.id)).toEqual(["claude-fable-5-1", "claude-opus-5-5"]);
+		expect(menuModels(claude, "claude-opus-5-5").models.map((model) => model.id)).toEqual(["claude-opus-5-5", "claude-fable-5-1"]);
+	});
+
+	// New task and chat name and order one model the same way (#7419 review).
+	it("names and orders Claude's models as the chat's menu does", () => {
+		const alphabetical = [
+			{ id: "claude-fable-5", label: "Claude Fable 5" },
+			{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+			{ id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+			{ id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+		];
+		expect(menuModels(alphabetical, "__auto__").models.map((model) => model.label)).toEqual(["Sonnet 5.5", "Fable 5.1", "Fable 5", "Opus 4.8", "Haiku 4.5"]);
+		expect(menuModelName("Claude Opus 5.5")).toBe("Opus 5.5");
+		expect(menuModelName("Claude Code")).toBe("Claude Code");
+	});
+
+	it("leaves other providers' catalogs in their own order and names", () => {
+		const codex = [{ id: "gpt-6-astra", label: "GPT-6 Astra" }, { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }];
+		expect(menuModels(codex, "__auto__").models.map((model) => model.label)).toEqual(["GPT-6 Astra", "GPT-5.6 Sol"]);
 	});
 });
 

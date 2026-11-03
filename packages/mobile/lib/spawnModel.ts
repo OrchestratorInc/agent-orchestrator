@@ -67,22 +67,54 @@ export const MENU_MODEL_LIMIT = 12;
  * and some catalogs hold thousands (opencode's lists every provider's), so it
  * lists the first few and the whole catalog opens in a sheet. The picked model
  * is always among them, so the menu can show it checked.
+ *
+ * Named and ordered as the chat's menu lists them, so one model reads the same
+ * on both pages: Claude's models without the maker's name ("Fable 5.1", not
+ * "Claude Fable 5.1") and newest first, where the catalog comes alphabetical.
  */
 export function menuModels(models: readonly AgentModelInfo[], selected: string, limit = MENU_MODEL_LIMIT): { models: { id: string; label: string }[]; total: number; defaultLabel?: string } {
 	const fallback = models.find((model) => model.isDefault);
 	// The default row stands for the catalog's default, so no other row repeats
 	// it: Claude Code's catalog lists the newest Opus by alias ("Opus 5.5") and by
 	// id ("Claude Opus 5.5"). A pinned copy stays, so the menu can tick it.
-	const listed = fallback
+	const listed = newestClaudeFirst(fallback
 		? models.filter((model) => model.id === selected || !sameModelName(model.label, fallback.label))
-		: models;
+		: models);
 	const shown = listed.slice(0, limit);
 	const picked = selected && !shown.some((model) => model.id === selected) ? models.find((model) => model.id === selected) : undefined;
 	return {
-		models: [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: model.label })),
+		models: [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: menuModelName(model.label) })),
 		total: models.length,
-		defaultLabel: fallback?.label,
+		defaultLabel: fallback ? menuModelName(fallback.label) : undefined,
 	};
+}
+
+/** A model's name as the chat's menu shows it: "Claude Opus 5.5" reads "Opus 5.5". */
+export function menuModelName(label: string): string {
+	return label.trim().replace(new RegExp(`^claude\\s+(?=(${CLAUDE_FAMILIES.join("|")})\\b)`, "i"), "");
+}
+
+/**
+ * Claude's models newest first, by version across the families, as Claude
+ * Code's own picker lists them. A model with no Claude version (any other
+ * provider's) keeps its catalog place after them, so other catalogs are left
+ * as they come.
+ */
+function newestClaudeFirst(models: readonly AgentModelInfo[]): AgentModelInfo[] {
+	const versioned = models.map((model, index) => ({ model, index, version: claudeVersion(model) }));
+	return versioned
+		.sort((a, b) => {
+			if (a.version && b.version) return compareVersions(b.version, a.version) || a.index - b.index;
+			if (a.version || b.version) return a.version ? -1 : 1;
+			return a.index - b.index;
+		})
+		.map((entry) => entry.model);
+}
+
+function claudeVersion(model: AgentModelInfo): number[] | undefined {
+	const text = `${model.label} ${model.id}`.toLowerCase();
+	const family = CLAUDE_FAMILIES.find((name) => text.includes(name));
+	return family ? claudeFamilyVersion(model, family) : undefined;
 }
 
 /** "Opus 5.5" and "Claude Opus 5.5": one model, with and without its maker's name. */

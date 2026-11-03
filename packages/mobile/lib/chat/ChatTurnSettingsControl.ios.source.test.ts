@@ -9,8 +9,10 @@ const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios
 
 describe("iOS chat controls row", () => {
 	// The turn has no settings sheet: everything is in the row's own menus.
-	it("lists the agent's models as checkable items, then any other setting", () => {
-		expect(source).toContain("{modelRow?.choices.map((choice) => <Choice");
+	it("lists the agent's models as checkable items, older versions one level down, then any other setting", () => {
+		expect(source).toContain("{modelChoices.latest.map((choice) => <Choice");
+		expect(source).toContain('<Menu label="Older models"');
+		expect(source).toContain("{modelChoices.older.map((choice) => <Choice");
 		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
 		expect(source).not.toContain("Turn settings");
 	});
