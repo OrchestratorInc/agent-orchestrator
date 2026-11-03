@@ -13,7 +13,8 @@ import (
 // hardware: it signs a copy of Node the way the broken release did (hardened
 // runtime with allow-jit but without allow-unsigned-executable-memory),
 // checks that V8 really crashes, and checks that the repair yields a Node that
-// runs JIT-compiled code. It needs an Intel Mac with node on PATH.
+// runs JIT-compiled code. It needs an Intel Mac that enforces the entitlement
+// (the reports are on macOS 15) and node on PATH; elsewhere it skips.
 func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 	source, err := exec.LookPath("node")
 	if err != nil {
@@ -46,7 +47,10 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 		t.Fatalf("smoke test broken Node: %v", err)
 	}
 	if !crashed {
-		t.Fatal("Node signed without allow-unsigned-executable-memory did not crash; the test no longer reproduces #6621")
+		// Not every Intel Mac enforces it: macOS 26 runners run this Node
+		// fine, while the #6621 reports are on macOS 15. Without the crash
+		// there is nothing to repair, and jitCapableNode keeps the Node.
+		t.Skip("Node signed without allow-unsigned-executable-memory did not crash on this Mac; #6621 does not reproduce here")
 	}
 
 	root := filepath.Join(t.TempDir(), "node-jit")
