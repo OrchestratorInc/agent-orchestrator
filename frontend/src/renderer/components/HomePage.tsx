@@ -24,7 +24,6 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
@@ -226,6 +225,12 @@ function HomePageContent() {
 		return () => { cancelled = true; };
 	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
 
+	const setFirstRunPromptActive = useUiStore((state) => state.setFirstRunPromptActive);
+	useEffect(() => {
+		setFirstRunPromptActive(firstRunStatus !== "seen");
+		return () => setFirstRunPromptActive(false);
+	}, [firstRunStatus, setFirstRunPromptActive]);
+
 	const recordFirstRunPromptAction = (action: FirstRunPromptAction) => {
 		if (firstRunVariant.current !== "prompt" || firstRunActionRecorded.current) return;
 		firstRunActionRecorded.current = true;
@@ -336,7 +341,6 @@ function HomePageContent() {
 						)}
 					</section>
 
-					<GitHubOnboardingNotice />
 				</div>
 
 				<CreateProjectFlow

@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Folder, FolderOpen, Link2, LoaderCircle, MessageSquarePlus, X } from "lucide-react";
+import { ChevronLeft, Folder, Link2, LoaderCircle, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,6 +7,8 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, NO_PRESS_EFFECT, WithGitHubState } from "./FirstRunSteps";
+import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -88,6 +90,7 @@ export default function CloneRepositoryDialog({
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
+	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
@@ -258,25 +261,61 @@ export default function CloneRepositoryDialog({
 	};
 
 	return (
-		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && onClose()}>
+		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && !firstRun && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] ${firstRun ? "w-[min(460px,calc(100vw-24px))]" : "w-[min(560px,calc(100vw-24px))]"} -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+					{(() => {
+						const render = (gh: GitHubState) => {
+						const showRepoPicker = firstRun && gh.hasGitHub;
+						// Setup is offered only once the user reaches something git-related.
+						const gate = (run: () => void) => {
+							if (gh.needsSetup) setFirstRunStep("github");
+							else run();
+						};
+						const stepContent = (<>
+					{firstRun && firstRunStep === "welcome" ? (
+						<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+					) : null}
+					{firstRun && firstRunStep === "github" ? <FirstRunGitHubStep
+						onBack={() => setFirstRunStep("sources")}
+						onClose={onClose}
+						onDone={() => setFirstRunStep("clone")}
+					/> : null}
+					{firstRun && firstRunStep === "sources" ? (
+						<FirstRunSources
+							disabled={disabled}
+							gh={gh}
+							onBack={() => setFirstRunStep("welcome")}
+							onClose={onClose}
+							onPickRepo={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								setFirstRunStep("clone");
+							}}
+							onSubmitUrl={(remoteUrl) => {
+								onChange({ ...value, remoteUrl });
+								gate(() => setFirstRunStep("clone"));
+							}}
+							onOpenLocalFolder={onOpenLocalFolder}
+							onStartStandaloneAgent={onStartStandaloneAgent}
+						/>
+					) : null}
+					{!firstRun || firstRunStep === "clone" ? <>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-						{!firstRun ? <Button
+						<Button
 							type="button"
 							variant="outline"
 							size="icon"
 							aria-label={t("createProject.cloneBack")}
 							disabled={disabled || choosingDestination}
-							onClick={onBack}
+							onClick={firstRun ? () => setFirstRunStep("sources") : onBack}
 						>
 							<ChevronLeft className="size-4" aria-hidden="true" />
-						</Button> : null}
+						</Button>
 						<div className="min-w-0 flex-1 pr-8">
-							<Dialog.Title className={`${firstRun ? "text-[16px]" : "text-[18px]"} text-balance font-semibold text-[var(--color-text-import-title)]`}>
+							<Dialog.Title className="text-[18px] text-balance font-semibold text-[var(--color-text-import-title)]">
 								{firstRun ? t("firstRun.startProject") : t("createProject.cloneTitle")}
 							</Dialog.Title>
-							<Dialog.Description className={firstRun ? "mt-1 text-xs text-muted-foreground" : "sr-only"}>
+							<Dialog.Description className={firstRun ? "mt-1 text-[13px] leading-5 text-muted-foreground" : "sr-only"}>
 								{firstRun ? t("firstRun.description") : t(remote ? "remote.cloneDescription" : "createProject.cloneDescription")}
 							</Dialog.Description>
 						</div>
@@ -302,7 +341,7 @@ export default function CloneRepositoryDialog({
 							<div className="space-y-2">
 								<div className="relative">
 									<Label htmlFor="cloneRepositoryUrl" className="text-[13px] font-semibold text-[var(--color-text-import-title)]">
-										{t("createProject.cloneRepositoryUrl")}
+										{showRepoPicker ? t("firstRun.pickRepo") : t("createProject.cloneRepositoryUrl")}
 									</Label>
 									<AnimatePresence initial={false}>
 										{inlineRepositoryError ? (
@@ -321,7 +360,9 @@ export default function CloneRepositoryDialog({
 										) : null}
 									</AnimatePresence>
 								</div>
-								<div className="relative">
+								{showRepoPicker ? (
+									<GitHubRepoPicker disabled={disabled} value={value.remoteUrl} onChange={(remoteUrl) => onChange({ ...value, remoteUrl })} />
+								) : <div className="relative">
 									<Input
 										id="cloneRepositoryUrl"
 										autoFocus
@@ -329,7 +370,7 @@ export default function CloneRepositoryDialog({
 										autoComplete="off"
 										aria-describedby={`cloneRepositoryUrlHelp${inlineRepositoryError ? " cloneRepositoryUrlError" : ""}`}
 										aria-invalid={urlError || duplicateError ? true : undefined}
-										className="bg-[var(--color-bg-import-card)] pl-10 pr-10 font-mono text-[13px]"
+										className={`bg-[var(--color-bg-import-card)] pl-10 pr-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 										disabled={disabled}
 										placeholder={t("createProject.cloneRepositoryUrlPlaceholder")}
 										spellCheck={false}
@@ -341,7 +382,7 @@ export default function CloneRepositoryDialog({
 										<LoaderCircle className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label={t("createProject.cloneCheckingRepository", { defaultValue: "Checking destination" })} />
 									) : null}
 									<RepositoryOwnerIcon owner={repositoryAvatar?.owner ?? null} avatarUrl={repositoryAvatar?.url ?? null} />
-								</div>
+								</div>}
 								<span id="cloneRepositoryUrlHelp" className="sr-only">
 									{t("createProject.cloneRepositoryUrlHelp")}
 								</span>
@@ -356,7 +397,7 @@ export default function CloneRepositoryDialog({
 										<Folder className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-text-import-muted)]" aria-hidden="true" />
 										<Input
 											id="cloneDestination"
-											className="border-transparent bg-transparent pl-10 font-mono text-[13px]"
+											className={`border-transparent bg-transparent pl-10 text-[13px] ${firstRun ? "" : "font-mono"}`}
 											aria-describedby={`cloneDestinationHelp${destinationError ? " cloneDestinationError" : ""}`}
 											aria-invalid={Boolean(destinationError)}
 											disabled={disabled || choosingDestination}
@@ -410,24 +451,21 @@ export default function CloneRepositoryDialog({
 							<p className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(activity === "cloning" ? "createProject.cloneInProgress" : "createProject.cloneVerifying", { seconds: elapsed })}</p>
 							{activity === "cloning" ? <p>{t("createProject.cloneSlowHint")}</p> : null}
 						</div> : null}
-						<div className={`flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3 ${firstRun ? "w-full" : ""}`}>
-							<div className={`flex items-center justify-end gap-3 ${firstRun ? "w-full" : ""}`}>
+						<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
+							<div className="flex items-center justify-end gap-3">
 								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
-								<Button type="submit" variant="primary" className={firstRun ? "w-full" : undefined} disabled={!canContinue}>
-									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : firstRun ? "firstRun.cloneAndContinue" : "createProject.cloneContinue")}
+								<Button type="submit" variant="primary" className={firstRun ? NO_PRESS_EFFECT : undefined} disabled={!canContinue}>
+									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>
 					</form>
-					{firstRun && !activity ? (
-						<div className="px-4 pb-4">
-							<div className="mb-3 flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">{t("firstRun.or")}</div>
-							<div className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-2">
-								<Button type="button" variant="outline" disabled={disabled || choosingDestination} onClick={onOpenLocalFolder}><FolderOpen className="size-4" aria-hidden="true" />{t("createProject.openLocal")}</Button>
-								<Button type="button" variant="outline" disabled={disabled || choosingDestination} onClick={onStartStandaloneAgent}><MessageSquarePlus className="size-4" aria-hidden="true" />{t("home.newStandaloneAgent")}</Button>
-							</div>
-						</div>
-					) : null}
+					</> : null}
+						</>);
+						return firstRun ? <AnimatedStepBody>{stepContent}</AnimatedStepBody> : stepContent;
+						};
+						return firstRun ? <WithGitHubState>{render}</WithGitHubState> : render(NO_GITHUB_STATE);
+					})()}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>

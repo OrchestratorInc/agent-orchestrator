@@ -3136,6 +3136,37 @@ async function refreshGitHubOwners(): Promise<GitHubOwner[]> {
 	}
 }
 
+type GitHubRepoSummary = { fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string };
+
+// Repositories the signed-in `gh` account can access. An empty query lists the
+// user's own and organization repos by recent push; a query searches every
+// repository the account is allowed to see.
+async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
+	await ensureShellEnv();
+	const term = query.trim().slice(0, 100);
+	const args = term
+		? ["search", "repos", term, "--limit", "30", "--json", "fullName,description,isPrivate,url,owner"]
+		: ["repo", "list", "--limit", "100", "--json", "nameWithOwner,description,isPrivate,url,owner"];
+	try {
+		const { stdout } = await execFileAsync("gh", args, { env: daemonEnv(), timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+		const rows = JSON.parse(stdout) as Array<{ fullName?: string; nameWithOwner?: string; description?: string | null; isPrivate?: boolean; url?: string; owner?: { login?: string } }>;
+		return rows.flatMap((row) => {
+			const fullName = row.fullName ?? row.nameWithOwner;
+			if (!fullName || !row.url) return [];
+			return [{
+				fullName,
+				description: row.description ?? "",
+				isPrivate: row.isPrivate === true,
+				url: row.url,
+				avatarUrl: `https://github.com/${encodeURIComponent(row.owner?.login ?? fullName.split("/")[0] ?? "")}.png?size=40`,
+			}];
+		});
+	} catch {
+		return [];
+	}
+}
+
+ipcMain.handle("app:listGitHubRepos", (_event, query: unknown) => listGitHubRepos(typeof query === "string" ? query : ""));
 ipcMain.handle("app:getCachedGitHubOwners", () => cachedGitHubOwners);
 ipcMain.handle("app:refreshGitHubOwners", () => refreshGitHubOwners());
 ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { owner: string; name: string }) => {

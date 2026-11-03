@@ -69,6 +69,8 @@ import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
 import { CreateProjectAgentSheet, RequiredAgentField, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
+import { GitHubSetupPanel, WithGitHubState } from "./FirstRunSteps";
+import { GitHubIcon } from "./GitHubIcon";
 import CloneRepositoryDialog, { type CloneRepositoryDetails, type CloneRepositorySelection } from "./CloneRepositoryDialog";
 // GitHubTokenField is used via inline Input components in CloudProjectCard
 import { PathRow } from "./PathRow";
@@ -113,14 +115,6 @@ type ProjectGitHubRepository = { owner: string; name: string; private: boolean }
 type GitHubOwner = { login: string; avatarUrl: string };
 type GitHubRepositoryAvailability = { state: "idle" | "checking" | "available" | "unavailable"; message?: string };
 
-function GitHubIcon({ className }: { className?: string }) {
-	return (
-		<svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-			<path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.38 7.86 10.9.58.1.79-.25.79-.56v-2.15c-3.2.7-3.88-1.37-3.88-1.37-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.2 1.77 1.2 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.26-1.28-5.26-5.7 0-1.26.45-2.29 1.19-3.1-.12-.3-.52-1.47.11-3.05 0 0 .97-.31 3.18 1.18A10.96 10.96 0 0 1 12 5.99c.98 0 1.97.13 2.9.38 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.7 5.4-5.27 5.69.41.36.78 1.07.78 2.16v3.2c0 .31.21.67.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
-		</svg>
-	);
-}
-
 type CreateProjectFlowMode = ProjectKind | "choose";
 type ProjectSource = "clone" | "local" | "workspace";
 
@@ -131,7 +125,7 @@ type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean }
 function initialCloneDetails(hostId?: string, firstRun = false): CloneRepositoryDetails {
 	return {
 		remoteUrl: "",
-		destinationParent: hostId || firstRun ? "" :
+		destinationParent: hostId ? "" :
 			typeof window === "undefined" ? "~/ao/projects" : (window.localStorage.getItem(LAST_CLONE_DESTINATION_KEY) || "~/ao/projects"),
 	};
 }
@@ -2360,6 +2354,8 @@ function ProjectImportDialog({
 	const [customGitHubOwner, setCustomGitHubOwner] = useState(remote);
 	const selectedGitHubOwner = githubOwners.find((owner) => owner.login === githubOwner);
 	const [availability, setAvailability] = useState<GitHubRepositoryAvailability>({ state: "idle" });
+	// Bumped when GitHub setup finishes, so owner and name checks that ran while signed out run again.
+	const [githubReadyNonce, setGitHubReadyNonce] = useState(0);
 	const githubNameDescription = [
 		availability.state === "unavailable" ? "githubRepoNameError" : null,
 		githubNameWasNormalized ? "githubRepoNameNormalization" : null,
@@ -2381,7 +2377,7 @@ function ProjectImportDialog({
 		void aoBridge.app.getCachedGitHubOwners().then(applyOwners).catch(() => undefined);
 		void aoBridge.app.refreshGitHubOwners().then(applyOwners).catch(() => undefined);
 		return () => { cancelled = true; };
-	}, [customGitHubOwner, githubRepository, needsRemote, onChangeGitHubRepository, onChangeRemote, open, remote]);
+	}, [customGitHubOwner, githubReadyNonce, githubRepository, needsRemote, onChangeGitHubRepository, onChangeRemote, open, remote]);
 	useEffect(() => {
 		if (remote) {
 			setAvailability({ state: "idle" });
@@ -2407,7 +2403,7 @@ function ProjectImportDialog({
 			cancelled = true;
 			window.clearTimeout(timer);
 		};
-	}, [githubName, githubOwner, needsRemote, open, remote, t]);
+	}, [githubName, githubOwner, githubReadyNonce, needsRemote, open, remote, t]);
 	if (!validation || !step) return null;
 	const hasChildRepos = (validation.childRepos?.length ?? 0) > 0;
 	const mustImportAsWorkspace = step === "blocked" && validation.nextStep === "choose_import_kind" && hasChildRepos;
@@ -2485,6 +2481,8 @@ function ProjectImportDialog({
 									</span>
 								) : null}
 								{needsRemote ? (
+									<WithGitHubState>
+									{(gh) => (remote || !gh.needsSetup) ? (
 									<div className="space-y-3 pt-1">
 											<div className="space-y-1.5">
 												<Label htmlFor="githubRepoOwner" className="text-[12px] font-medium text-[var(--color-text-import-title)]">{t("createProject.githubOwner")}</Label>
@@ -2638,6 +2636,8 @@ function ProjectImportDialog({
 												/>
 											</div>
 									</div>
+									) : <GitHubSetupPanel onReady={() => setGitHubReadyNonce((nonce) => nonce + 1)} />}
+									</WithGitHubState>
 								) : (
 										<div className="space-y-2 rounded-md border border-border/70 bg-background/40 p-3">
 											<GitSetupFields

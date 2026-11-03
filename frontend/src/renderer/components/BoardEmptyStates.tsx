@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShell } from "../lib/shell-context";
 import { CreateProjectFlow } from "./CreateProjectFlow";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { WelcomePanel } from "./WelcomePanel";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -38,7 +37,6 @@ export function BoardWelcome() {
 							requestNewTask(STANDALONE_WORKSPACE_ID);
 						}}
 					/>
-					<GitHubOnboardingNotice />
 				</div>
 			</div>
 		</WelcomePanel>
