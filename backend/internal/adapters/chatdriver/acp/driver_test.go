@@ -4708,7 +4708,7 @@ func TestACPDriverSendTurnPropagatesMethodNotFound(t *testing.T) {
 }
 
 func TestACPDriverRejectsUnsupportedTurnSettingsAtStartAndSend(t *testing.T) {
-	agent := &fakeAgent{}
+	agent := &legacyKimiAgent{}
 	driver := New(Config{
 		Harness:      domain.HarnessKimi,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
@@ -4721,7 +4721,7 @@ func TestACPDriverRejectsUnsupportedTurnSettingsAtStartAndSend(t *testing.T) {
 			return ports.ErrChatPermissionModeUnsupported
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	driver.useTestProcess(fakeSpawn(agent))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
 
 	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto,
@@ -4735,6 +4735,13 @@ func TestACPDriverRejectsUnsupportedTurnSettingsAtStartAndSend(t *testing.T) {
 		t.Fatalf("Start default permissions: %v", err)
 	}
 	defer conv.Close()
+	agent.mu.Lock()
+	modeCalls := agent.modeCalls
+	agent.mu.Unlock()
+	if modeCalls != 0 {
+		t.Fatalf("default-only Kimi launch sent %d session/set_mode requests", modeCalls)
+	}
+
 	_, err = conv.SendTurn(context.Background(), ports.ChatUserMessage{
 		Text: "do work", Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeAuto},
 	})

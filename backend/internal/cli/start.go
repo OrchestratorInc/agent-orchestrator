@@ -294,7 +294,7 @@ func (c *commandContext) registerLinuxProtocolHandler(
 	}
 	entry := fmt.Sprintf(`[Desktop Entry]
 Type=Application
-Name=Agent Orchestrator
+Name=Orchestrator
 Exec=%s %%u
 Terminal=false
 NoDisplay=true

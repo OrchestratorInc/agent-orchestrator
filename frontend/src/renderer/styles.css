@@ -5533,6 +5533,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 	white-space: nowrap;
 }
 
+/* Match the title line box to the icon so flex centering aligns both. */
+.side-chat__tab-row .browser-panel__tab-title {
+	line-height: 16px;
+}
+
 .browser-panel__tab-close {
 	position: relative;
 	top: 1px;

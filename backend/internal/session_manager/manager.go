@@ -1073,6 +1073,21 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
 	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
+	if mode == domain.SessionModeChat && m.chat != nil && cfg.AgentConfig.Permissions == "" &&
+		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
+		// Auto is AO's generic default, not a provider capability. An agent
+		// with no alternate modes keeps its native approval behavior. Never
+		// select bypass implicitly for agents without an approval channel.
+		if catalog, ok := m.chat.(interface {
+			PermissionModes(context.Context, domain.AgentHarness) ([]ports.PermissionMode, error)
+		}); ok {
+			modes, err := catalog.PermissionModes(ctx, cfg.Harness)
+			if err == nil && len(modes) == 1 && modes[0] == ports.PermissionModeDefault && agentConfig.Permissions != ports.PermissionModeDefault {
+				cfg.AgentConfig.Permissions = ports.PermissionModeDefault
+				agentConfig.Permissions = ports.PermissionModeDefault
+			}
+		}
+	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {

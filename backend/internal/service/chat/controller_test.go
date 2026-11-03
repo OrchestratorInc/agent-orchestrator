@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
@@ -7252,5 +7253,62 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 	if keptSource.ProviderConversationID != ancestor ||
 		keptSource.ProviderScopeID != sourceBranch.ProviderScopeID {
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
+	}
+}
+
+// No real executable is started by capability discovery or admission.
+type kimiCapabilityPlugin struct{}
+
+func (kimiCapabilityPlugin) ResolveBinary(context.Context) (string, error) { return "/fake/kimi", nil }
+func (kimiCapabilityPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusAuthorized, nil
+}
+
+func TestPermissionModeCatalogMatchesPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		driver ports.ChatDriver
+		want   []ports.PermissionMode
+	}{
+		{"kimi", kimiacp.New(kimiCapabilityPlugin{}, nil), []ports.PermissionMode{ports.PermissionModeDefault}},
+		{"full approvals", fakeDriver{}, ports.PermissionModesStrictestFirst},
+		{"no approval channel", fakeDriver{caps: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true, ports.ChatCapabilityResume: true}}, []ports.PermissionMode{ports.PermissionModeBypassPermissions}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := chatsvc.New(chatsvc.Options{Store: openStore(t), Drivers: fakeRegistry{driver: tc.driver}, Log: slog.New(slog.DiscardHandler)})
+			modes, err := svc.PermissionModes(context.Background(), tc.driver.Harness())
+			if err != nil || !reflect.DeepEqual(modes, tc.want) {
+				t.Fatalf("modes = %v, %v; want %v", modes, err, tc.want)
+			}
+			for _, mode := range ports.PermissionModesStrictestFirst {
+				err := svc.PreflightChat(context.Background(), tc.driver.Harness(), mode)
+				if slices.Contains(tc.want, mode) != (err == nil) {
+					t.Fatalf("preflight %s = %v; modes %v", mode, err, modes)
+				}
+				if tc.name == "kimi" && mode != ports.PermissionModeDefault && !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+					t.Fatalf("Kimi rejection = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
+	launched := false
+	svc := chatsvc.New(chatsvc.Options{
+		Store: openStore(t), Drivers: fakeRegistry{driver: fakeDriver{
+			supports: func(mode ports.PermissionMode) bool { return mode == ports.PermissionModeDefault },
+			start: func(ports.ChatStartConfig) (ports.ChatConversation, error) {
+				launched = true
+				return newFakeConversation(), nil
+			},
+		}}, Log: slog.New(slog.DiscardHandler),
+	})
+	_, err := svc.Start(context.Background(), chatsvc.StartConfig{SessionID: testSession, Harness: domain.HarnessKimi, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto})
+	if !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+		t.Fatalf("Start = %v", err)
+	}
+	if launched {
+		t.Fatal("unsupported permission reached provider launch")
 	}
 }

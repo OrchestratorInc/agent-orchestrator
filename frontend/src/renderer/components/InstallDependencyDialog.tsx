@@ -66,7 +66,7 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
  *  which command is running. */
-function useInstallRunner(onSucceeded: () => void) {
+export function useInstallRunner(onSucceeded: () => void) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
@@ -158,7 +158,6 @@ export function InstallDependencyDialog({
 }) {
 	const { t } = useTranslation();
 	const [selectedAgent, setSelectedAgent] = useState<AgentInstallTarget | null>(null);
-	const [ghDismissed, setGhDismissed] = useState(false);
 	const [isCheckingAgain, setIsCheckingAgain] = useState(false);
 	const [checkAgainError, setCheckAgainError] = useState<string | undefined>();
 	const install = useInstallRunner(() => void onRefetchRequirements());
@@ -167,19 +166,13 @@ export function InstallDependencyDialog({
 	const git = byId.get("git");
 	const tmux = byId.get("tmux");
 	const harness = byId.get("harness");
-	const gh = byId.get("gh");
 	const gitBlocking = Boolean(git && git.required && !git.satisfied);
 	const tmuxBlocking = Boolean(tmux && tmux.required && !tmux.satisfied);
 	const harnessBlocking = Boolean(harness && harness.required && !harness.satisfied);
-	const ghAdvisory = Boolean(gh && !gh.satisfied);
 
 	useEffect(() => {
 		if (tmuxBlocking) void install.inspect("tmux");
 	}, [install.inspect, tmuxBlocking]);
-
-	useEffect(() => {
-		if (ghAdvisory) void install.inspect("gh");
-	}, [ghAdvisory, install.inspect]);
 
 	useEffect(() => {
 		if (selectedAgent) void install.inspect(selectedAgent);
@@ -286,31 +279,6 @@ export function InstallDependencyDialog({
 							</div>
 						</IssueSection>
 					) : null}
-
-					{ghAdvisory && gh && !ghDismissed ? (
-						<div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-xs leading-body-md">
-							<p className="font-medium text-settings-title">{t("startup.recommendedInstallGh")}</p>
-							<p className="mt-0.5 text-settings-muted">{requirementDetailText(gh, t)}</p>
-							<div className="mt-2">
-								<InstallAction
-									primaryLabel={t("startup.installGh")}
-									disabled={install.running && install.target !== "gh"}
-									job={install.jobFor("gh")}
-									planChecked={install.inspectionFinished("gh")}
-									error={install.target === "gh" ? install.startError : undefined}
-									onInstall={() => void install.start("gh")}
-									t={t}
-								/>
-							</div>
-							<button
-								type="button"
-								className="mt-2 text-caption text-settings-muted underline-offset-2 hover:underline"
-								onClick={() => setGhDismissed(true)}
-							>
-								{t("startup.dismissGhSession")}
-							</button>
-						</div>
-					) : null}
 				</div>
 
 				<div className={settingsDialogFooterClass}>
@@ -363,7 +331,7 @@ function IssueSection({
 	);
 }
 
-function InstallAction({
+export function InstallAction({
 	primaryLabel,
 	disabled,
 	job,
