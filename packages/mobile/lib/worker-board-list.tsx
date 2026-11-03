@@ -2,6 +2,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
 import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
+import { SafeAreaListener } from "react-native-safe-area-context";
 import {
 	absorbNewHosts,
 	groupSessions,
@@ -480,6 +481,20 @@ export function WorkerBoardList({
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, showMachine, projectNameFor,
 		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
 
+	// An empty board's message is centred in what the bars leave of the page.
+	// Grown to the list's frame, as `flexGrow` grows it, an iOS list inset for
+	// a clear header and tab bar (`contentInsetAdjustmentBehavior`) sat the
+	// message below the middle and scrolled the rest under the tab bar. The
+	// bars are what the page's safe area takes from its frame.
+	const [visibleHeight, setVisibleHeight] = useState(0);
+	const measureVisible = useCallback(({ insets, frame }: { insets: { top: number; bottom: number }; frame: { height: number } }) => {
+		setVisibleHeight(Math.max(0, frame.height - insets.top - insets.bottom));
+	}, []);
+	const insetsForBars = Platform.OS === "ios" && contentInsetAdjustmentBehavior === "automatic";
+	const contentContainerStyle = insetsForBars && visibleHeight && listData.length === 0
+		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
+		: { flexGrow: 1, paddingBottom: contentBottomInset };
+
 	return (
 		<View style={styles.listWrap}>
 			{/* A filter/search scope is a wholesale replacement, not rows moving
@@ -494,7 +509,7 @@ export function WorkerBoardList({
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
-					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
+					contentContainerStyle={contentContainerStyle}
 					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
@@ -509,6 +524,10 @@ export function WorkerBoardList({
 					scrollEventThrottle={onScroll ? 16 : undefined}
 				/>
 			</LayoutAnimationConfig>
+			{/* After the list, never before it: iOS's large title follows the page's
+			    first subviews down to a scroll view, and a view ahead of the list
+			    left the title expanded over the rows as they scrolled. */}
+			{insetsForBars ? <SafeAreaListener pointerEvents="none" style={StyleSheet.absoluteFill} onChange={measureVisible} /> : null}
 		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}
 		</View>
 	);
@@ -665,6 +684,6 @@ const makeStyles = (t: Theme) =>
 		archiveCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600", fontFamily: t.fontMono },
 		archiveStatus: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, minHeight: 56, paddingHorizontal: space.lg },
 		archiveStatusText: { flexShrink: 1, fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		archiveRetry: { minHeight: touchTarget, justifyContent: "center", paddingHorizontal: space.sm, borderRadius: radius.sm, borderCurve: "continuous" },
+		archiveRetry: { minHeight: touchTarget, justifyContent: "center", paddingHorizontal: space.sm, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
 		archiveStatusAction: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	});

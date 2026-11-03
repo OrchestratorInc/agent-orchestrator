@@ -159,6 +159,9 @@ function ProjectScreenContent() {
 					archiveSources={archiveSources}
 					showProject={false}
 					contentBottomInset={insets.bottom + addFabClearance + space.xxl}
+					// The "N updated" pill floats below the glass header, not under the
+					// status bar, where it covered the Dynamic Island and took no taps.
+					overlayTopInset={glassInset}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={

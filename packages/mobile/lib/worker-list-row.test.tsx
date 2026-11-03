@@ -80,6 +80,7 @@ vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: (props: { chi
 vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appContext) }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
+vi.mock("react-native-safe-area-context", () => ({ SafeAreaListener: "SafeAreaListener" }));
 vi.mock("react-native-reanimated", () => ({
 	default: { FlatList: TestList },
 	LayoutAnimationConfig: ({ children }: { children: React.ReactNode }) => <>{children}</>,
