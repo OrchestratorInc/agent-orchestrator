@@ -29,6 +29,9 @@ import (
 // callback that requests a graceful shutdown.
 type ControlDeps struct {
 	RequestShutdown func()
+	// IPv6Loopback reports that the daemon also serves [::1] at its port; the
+	// health probes carry it as ipv6Loopback.
+	IPv6Loopback bool
 }
 
 // NewRouterWithControl builds the root router with the standard middleware
@@ -72,7 +75,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.NotFound(notFoundJSON)
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
-	mountHealth(r, cfg)
+	mountHealth(r, cfg, control.IPv6Loopback)
 	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
@@ -116,12 +119,12 @@ func previewOriginMiddleware(sessions *controllers.SessionsController) func(http
 
 // mountHealth registers the liveness and readiness probes the Electron
 // supervisor polls before letting the renderer connect.
-func mountHealth(r chi.Router, cfg config.Config) {
+func mountHealth(r chi.Router, cfg config.Config, ipv6Loopback bool) {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ok", cfg))
+		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ok", cfg, ipv6Loopback))
 	})
 	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ready", cfg))
+		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ready", cfg, ipv6Loopback))
 	})
 }
 
@@ -416,11 +419,15 @@ func localControlRequest(r *http.Request) bool {
 // daemonProbePayload is shared by /healthz and /readyz. Dependency
 // initialization happens before the server is constructed, so a listening
 // daemon is ready to answer requests.
-func daemonProbePayload(status string, cfg config.Config) map[string]any {
+//
+// ipv6Loopback says the daemon also serves [::1] at its port, so a *.localhost
+// name the desktop uses for event streams reaches this daemon.
+func daemonProbePayload(status string, cfg config.Config, ipv6Loopback bool) map[string]any {
 	payload := map[string]any{
-		"status":  status,
-		"service": daemonmeta.ServiceName,
-		"pid":     os.Getpid(),
+		"status":       status,
+		"service":      daemonmeta.ServiceName,
+		"pid":          os.Getpid(),
+		"ipv6Loopback": ipv6Loopback,
 	}
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		payload["executablePath"] = exe
