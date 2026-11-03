@@ -407,7 +407,6 @@ function ShellLayout() {
 		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	// Shells open on the daemon that owns the session on screen (local or remote).
 	const openShellTerminal = useOpenShellTerminal(routeParams.hostId);
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
