@@ -76,6 +76,9 @@ type sourceFiles struct {
 	key     string
 	modTime time.Time
 	size    int64
+	// fingerprint covers additional native inputs (for example SQLite WAL and
+	// manifest stats) without changing the existing size/mtime contract.
+	fingerprint string
 }
 
 type parsed struct {
@@ -121,6 +124,9 @@ func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) boo
 		roots[domain.HarnessOpenCode] = opencode
 	}
 	for harness, importer := range harnessImporters {
+		if importer.root == nil {
+			continue
+		}
 		if root := importer.root(home); root != "" {
 			roots[harness] = root
 		}
@@ -214,7 +220,7 @@ func originURL(config, worktree string) string {
 // remoteIdentity reduces a network remote to host/path, so the SSH, scp-style
 // and HTTPS forms of one repository, with or without a user, a default port or
 // .git, compare equal. Hosts such as GitHub ignore case in owner and repository
-// names, so the identity is lowercase. ok is false for a local path.
+// names. Other hosts may have case-sensitive paths. ok is false for a local path.
 func remoteIdentity(remote string) (string, bool) {
 	if filepath.IsAbs(remote) || filepath.VolumeName(remote) != "" {
 		return "", false
@@ -244,7 +250,11 @@ func remoteIdentity(remote string) (string, bool) {
 	if host == "" || path == "" {
 		return "", false
 	}
-	return strings.ToLower(host + "/" + path), true
+	host = strings.ToLower(host)
+	if host == "github.com" {
+		path = strings.ToLower(path)
+	}
+	return host + "/" + path, true
 }
 
 // SameRepository recognizes linked worktrees and separate clones of the same origin.
@@ -536,7 +546,7 @@ func (f sourceFiles) nativeID() string {
 }
 
 func (f sourceFiles) cacheKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"), f.fingerprint)
 }
 
 // Scan hides missing, malformed and unreadable sources; recent means activity within 30 days.
@@ -577,17 +587,28 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
+	projects := s.registeredDiscoveryRoots(dests)
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
-		if !ok {
+		importer := harnessImporters[harness]
+		if !ok && importer.discoverRegistered == nil {
 			continue
 		}
 		root := canonical(configured)
-		files, err := s.discover(ctx, harness, root)
+		var files []sourceFiles
+		var err error
+		if importer.discoverRegistered != nil {
+			files, err = importer.discoverRegistered(ctx, projects)
+			files = registeredSources(files, projects)
+		} else if importer.discoverWithProjects != nil {
+			files, err = importer.discoverWithProjects(ctx, root, projects)
+		} else {
+			files, err = s.discover(ctx, harness, root)
+		}
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Preview{}, ctxErr
@@ -606,7 +627,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		for i, file := range files {
 			// AO's own sessions are never offered; skip reading their histories.
 			if _, own := managed[file.nativeID()]; own {
-				if _, wasImported := imported[[2]string{root, file.nativeID()}]; !wasImported {
+				if _, wasImported := imported[[2]string{file.root, file.nativeID()}]; !wasImported {
 					results[i] = parsed{err: errManagedByAO}
 					continue
 				}
@@ -616,7 +637,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				continue
 			}
 			group.Go(func() error {
-				source, err := readTranscript(groupCtx, harness, root, file.paths...)
+				source, err := readTranscriptForProjects(groupCtx, harness, file.root, projects, file.paths...)
 				if ctxErr := groupCtx.Err(); ctxErr != nil {
 					return ctxErr
 				}
@@ -636,7 +657,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			}
 			cache[file.cacheKey()] = result
 			source := result.source
-			id := candidateID(harness, root, source.nativeID)
+			id := candidateID(harness, source.root, source.nativeID)
 			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
 				continue
 			}
@@ -649,7 +670,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				title = "Imported conversation"
 			}
 			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last, Suggested: source.last.After(recent), MessageCount: result.count, Shortened: source.shortened}
-			if sessionID, ok := imported[[2]string{root, source.nativeID}]; ok {
+			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if sessionID, ok := managed[source.nativeID]; ok {
 				c.SessionID = sessionID
@@ -679,6 +700,9 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		return nil
 	}
 	paths := []string{rec.Metadata.NativeTranscriptPath}
+	if source.SourceTranscriptPath != "" {
+		paths = []string{source.SourceTranscriptPath}
+	}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -689,12 +713,22 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
+	dests, err := s.destinations(ctx)
 	if err != nil {
 		return err
 	}
-	if fresh.nativeID != source.NativeID || len(fresh.messages) == 0 {
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, s.registeredDiscoveryRoots(dests), paths...)
+	if err != nil {
+		return err
+	}
+	if fresh.nativeID != source.NativeID {
 		return errors.New("the source no longer holds this conversation")
+	}
+	if len(fresh.messages) == 0 {
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
+			return nil // A native server-side conversation need not expose a transcript.
+		}
+		return errors.New("the source no longer holds readable conversation history")
 	}
 	return replacer.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
 }
@@ -726,6 +760,9 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	mode := domain.SessionModeTUI
 	if s.supportsChat != nil && s.supportsChat(source.harness) {
 		mode = domain.SessionModeChat
+	}
+	if harnessImporters[source.harness].mode == domain.SessionModeTUI {
+		mode = domain.SessionModeTUI
 	}
 	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: mode, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
@@ -783,7 +820,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 			}
 			group.Go(func() error {
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-				reads[i].source, reads[i].err = readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
+				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, s.registeredDiscoveryRoots(dests), item.source.paths...)
 				return nil
 			})
 		}

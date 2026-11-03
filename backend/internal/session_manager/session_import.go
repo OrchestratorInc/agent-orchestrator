@@ -83,7 +83,11 @@ var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there
 // relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
-	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
+	if source == nil {
+		return
+	}
+	ref := importedNativeRef(source)
+	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return
 	}
 	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
@@ -97,10 +101,10 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		if provider, ok := agent.(ports.AgentNativeSessionConfigProvider); ok {
 			if current, err := provider.NativeSessionConfigDir(ctx, env); err == nil {
-				if sameDirectory(current, source.ConfigDir) {
+				if sameDirectory(current, ref.ConfigDir) {
 					return
 				}
-				if rel, err := filepath.Rel(source.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
+				if rel, err := filepath.Rel(ref.ConfigDir, rec.Metadata.NativeTranscriptPath); err == nil && filepath.IsLocal(rel) {
 					// Codex compresses an inactive rollout in place and restores it on resume.
 					plain := strings.TrimSuffix(rel, ".zst")
 					for _, name := range []string{plain, plain + ".zst"} {
@@ -112,14 +116,14 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 			}
 		}
 	}
-	value := source.ConfigDir
+	value := ref.ConfigDir
 	if rec.Harness == domain.HarnessDroid {
 		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
 		// not the state dir itself, so point it at the parent of the config dir.
-		value = filepath.Dir(source.ConfigDir)
+		value = filepath.Dir(ref.ConfigDir)
 	}
 	if hooks.configValue != nil {
-		value = hooks.configValue(source.ConfigDir)
+		value = hooks.configValue(ref.ConfigDir)
 	}
 	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
@@ -142,6 +146,9 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return rec, nil
+	}
+	if preparer, ok := agent.(ports.AgentImportedSessionPreparer); ok {
+		return m.prepareImportedNativeSession(ctx, rec, launchPath, preparer)
 	}
 	relocator, ok := agent.(ports.AgentImportedSessionRelocator)
 	if !ok {
@@ -367,6 +374,9 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
+	if rec.Harness == domain.HarnessOpenCode || rec.Harness == domain.HarnessKimi {
+		return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("this harness cannot yet resume an import safely in AO's workspace; the imported history is preserved"))
+	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}
@@ -376,7 +386,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	source := rec.Metadata.ImportSource
 	if prober, ok := agent.(ports.AgentNativeSessionProber); ok {
-		available, err := prober.ProbeNativeSession(ctx, ports.NativeSessionRef{NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir})
+		available, err := prober.ProbeNativeSession(ctx, importedNativeRef(source))
 		if err != nil {
 			return rec, err
 		}
