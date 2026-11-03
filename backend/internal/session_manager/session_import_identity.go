@@ -22,6 +22,21 @@ func importedNativeRef(source *domain.SessionImportSource) ports.NativeSessionRe
 	return ref
 }
 
+// Fingerprinted preparers verify the selected source or recover their proven
+// private copy before checkpointing. Original-source reads must not prevent
+// that recovery after publication succeeds but checkpoint persistence fails.
+func (m *Manager) hasFingerprintImportPreparer(rec domain.SessionRecord) bool {
+	if rec.Metadata.ImportSource == nil || rec.Metadata.ImportSource.Fingerprint == "" || m.agents == nil {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	_, ok = agent.(ports.AgentImportedSessionPreparer)
+	return ok
+}
+
 func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.SessionRecord, launchPath string, preparer ports.AgentImportedSessionPreparer, env map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source.ResumeNativeID == "" {
