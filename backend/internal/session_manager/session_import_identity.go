@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,7 +22,7 @@ func importedNativeRef(source *domain.SessionImportSource) ports.NativeSessionRe
 	return ref
 }
 
-func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.SessionRecord, launchPath string, preparer ports.AgentImportedSessionPreparer) (domain.SessionRecord, error) {
+func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.SessionRecord, launchPath string, preparer ports.AgentImportedSessionPreparer, env map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source.ResumeNativeID == "" {
 		ref, err := preparer.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{
@@ -31,6 +32,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			SourceCWD:         source.CWD,
 			LaunchCWD:         launchPath,
 			SourceFingerprint: source.Fingerprint,
+			Env:               maps.Clone(env),
 		})
 		if err != nil {
 			return rec, err
