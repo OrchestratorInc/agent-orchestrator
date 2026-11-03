@@ -2661,7 +2661,8 @@ const SessionRow = memo(function SessionRow({
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
+				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
@@ -2762,7 +2763,7 @@ const SessionActions = memo(function SessionActions({
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 					</TooltipContent>
 				</Tooltip>}
-				<Tooltip>
+				{session.cloud?.shared ? null : <Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
 							<SessionArchiveDialog
@@ -2785,7 +2786,7 @@ const SessionActions = memo(function SessionActions({
 						</span>
 					</TooltipTrigger>
 					<TooltipContent side="top">{t("shell.archiveSession")}</TooltipContent>
-				</Tooltip>
+				</Tooltip>}
 			</div>
 			<SessionMessageAge session={session} />
 		</div>

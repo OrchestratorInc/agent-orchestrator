@@ -1502,6 +1502,17 @@ describe("Sidebar", () => {
 		expect(screen.getByText("fix login")).toBeTruthy();
 	});
 
+	it("offers a guest no Archive on a session shared with them, and keeps it on the owner's own", async () => {
+		const sharedSession: WorkspaceSession = { ...session, cloud: { orgId: "org-elsewhere", shared: true } };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [sharedSession] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByText("fix login")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Archive session" })).toBeNull();
+		cleanup();
+		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] }], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
+	});
+
 	it("keeps the owner's project actions on a project of their own", () => {
 		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [session] }], expandedProjectIds: ["proj-1"] });
 		expect(screen.getByRole("button", { name: "Project actions for Project One" })).toBeTruthy();

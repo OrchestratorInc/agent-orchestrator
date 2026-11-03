@@ -224,7 +224,8 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	// Archiving is the owner workspace's; a guest's archive would always be refused.
+	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
