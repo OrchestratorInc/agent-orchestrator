@@ -1913,9 +1913,9 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-			onClick={(e) => {
-					if (controlsDisabled) return;
-					// Portal menus still bubble clicks here; focusing the editor would close them.
+				onMouseDown={(e) => {
+					if (controlsDisabled || e.button !== 0) return;
+					// Portal menus still bubble mouse events here; focusing the editor would close them.
 					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
@@ -1923,6 +1923,8 @@ export const ChatComposer = memo(function ChatComposer({
 						e.target === e.currentTarget ||
 						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
+						// Preserve the live caret before the browser selects the padding.
+						e.preventDefault();
 						editor.current?.focus();
 					}
 				}}

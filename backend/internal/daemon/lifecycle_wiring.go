@@ -734,6 +734,10 @@ func (c chatLauncher) SupportsChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
+func (c chatLauncher) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	return c.svc.PermissionModes(ctx, harness)
+}
+
 func (c chatLauncher) PreflightChat(
 	ctx context.Context,
 	harness domain.AgentHarness,
