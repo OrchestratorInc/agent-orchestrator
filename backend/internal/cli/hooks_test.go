@@ -1504,6 +1504,34 @@ func TestHooks_PiSessionStartReportsUsageTranscriptPath(t *testing.T) {
 	}
 }
 
+func TestHooks_GeminiSessionStartReportsUsageTranscriptPath(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	transcript := "/home/u/.gemini/tmp/proj/chats/session-2026-11-03T10-00-gemini-n.jsonl"
+	_, _, err := executeCLI(t, Deps{
+		In: strings.NewReader(`{
+			"session_id":"gemini-native-1",
+			"transcript_path":"` + transcript + `",
+			"model":"gemini-2.5-pro"
+		}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "gemini", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.AgentSessionID != "gemini-native-1" || req.Usage == nil ||
+		req.Usage.Harness != "gemini" || req.Usage.TranscriptPath != transcript || req.Usage.ModelID != "" {
+		t.Fatalf("body = %+v usage = %+v", req, req.Usage)
+	}
+}
+
 func TestHooks_CodexBlankSessionIDIsIgnored(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)

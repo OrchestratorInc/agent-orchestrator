@@ -1984,6 +1984,35 @@ func TestQwenUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGeminiUsageEventRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessGemini)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "gemini-session", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceGeminiSession,
+		NativeSessionID: "gemini-session", ArtifactPath: "/tmp/gemini/chats/session-2026-11-03T12-00-gemini-s.jsonl",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	event := usageEvent("gemini-event", canonicalUsageTokens(125, 40, 85, 38))
+	event.ModelID = "gemini-2.5-pro"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}); err != nil {
+		t.Fatalf("apply Gemini usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 1 || models[0].Harness != domain.HarnessGemini ||
+		models[0].ModelID != "gemini-2.5-pro" ||
+		usageTokenValue(models[0].Tokens.InputTokens) != 125 ||
+		usageTokenValue(models[0].Tokens.OutputTokens) != 38 {
+		t.Fatalf("Gemini aggregate = %+v", models)
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"

@@ -310,7 +310,8 @@ func hookLaunchID(payload []byte) string {
 func hookUsageMetadata(agent string, payload []byte) *usageHookMetadata {
 	payload = normalizeHookPayload(payload)
 	harness := domain.AgentHarness(agent)
-	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex && harness != domain.HarnessPi {
+	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex && harness != domain.HarnessPi &&
+		harness != domain.HarnessGemini {
 		return nil
 	}
 	var native struct {
@@ -329,7 +330,9 @@ func hookUsageMetadata(agent string, payload []byte) *usageHookMetadata {
 		SubagentID:             strings.TrimSpace(native.SubagentID),
 		SubagentTranscriptPath: strings.TrimSpace(native.SubagentTranscriptPath),
 	}
-	if harness == domain.HarnessPi {
+	if harness == domain.HarnessPi || harness == domain.HarnessGemini {
+		// Only the transcript path is trusted here; the transcript itself
+		// names the model of every billed response.
 		meta.ModelID = ""
 		meta.SubagentID = ""
 		meta.SubagentTranscriptPath = ""
