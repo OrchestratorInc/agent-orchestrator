@@ -23,7 +23,7 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 		return CodexAccountLoginTerminalStart{}, err
 	}
 	defer release()
-	if m.terminal == nil || m.executable == nil {
+	if m.terminal == nil || m.executable == nil || m.resolveBinary == nil {
 		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal is unavailable")
 	}
 	targetAccountID = strings.TrimSpace(targetAccountID)
@@ -80,11 +80,18 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 		m.clearLoginReservation(id)
 		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal is unavailable")
 	}
+	// Keep account login on the session resolver; PATH may select another install.
+	codex, err := m.resolveBinary(ctx)
+	if err != nil || strings.TrimSpace(codex) == "" {
+		_ = os.RemoveAll(pendingDir)
+		m.clearLoginReservation(id)
+		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex executable could not be resolved. Check the Codex installation and try again.")
+	}
 	title := "Add Codex account"
 	if targetAccountID != "" {
 		title = "Sign in to Codex account"
 	}
-	terminal, err := m.terminal.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: []string{executable, "codex-login"}, Env: map[string]string{"CODEX_HOME": home}, WorkingDir: home, Title: title})
+	terminal, err := m.terminal.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: []string{executable, "codex-login", "--executable", codex}, Env: map[string]string{"CODEX_HOME": home}, WorkingDir: home, Title: title})
 	if err != nil {
 		_ = os.RemoveAll(pendingDir)
 		m.clearLoginReservation(id)

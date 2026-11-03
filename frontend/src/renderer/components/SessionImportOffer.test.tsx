@@ -46,11 +46,11 @@ it("groups several agents under one menu, each opening that agent's Import tab",
 
 it("shows only logos for harnesses with import enabled", () => {
 	renderOffer(...["claude-code", "codex", "droid", "kimi", "opencode", "pi"].map((id) => agent(id, true, "authorized")));
-	expect(screen.getByRole("img", { name: "Claude Code, Codex, Droid, Pi" })).not.toHaveTextContent("+2");
+	expect(screen.getByRole("img", { name: "Claude Code, Codex, Pi" })).not.toHaveTextContent("+2");
 });
 
 it("does not offer imports when only deferred harnesses are configured", () => {
-	renderOffer(agent("opencode", true, "authorized"), agent("kimi", true, "authorized"));
+	renderOffer(agent("opencode", true, "authorized"), agent("kimi", true, "authorized"), agent("droid", true, "authorized"));
 	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
 });
 
@@ -66,4 +66,13 @@ it("stays hidden once dismissed", () => {
 	unmount();
 	renderOffer(agent("codex", true, "authorized"));
 	expect(screen.queryByRole("button", { name: "Import Codex chats" })).not.toBeInTheDocument();
+});
+
+it("opens Copilot's import tab only when Copilot is installed and signed in", () => {
+	const view = renderOffer(agent("copilot", true, "unauthorized"));
+	expect(screen.queryByRole("button", { name: "Import GitHub Copilot chats" })).not.toBeInTheDocument();
+	view.unmount();
+	renderOffer(agent("copilot", true, "authorized"));
+	fireEvent.click(screen.getByRole("button", { name: "Import GitHub Copilot chats" }));
+	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "copilot", harnessTab: "import" });
 });
