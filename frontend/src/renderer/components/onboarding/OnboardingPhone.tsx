@@ -19,30 +19,27 @@ const SAFE_TOP = 59;
 const SAFE_BOTTOM = 34;
 
 const SANS = "var(--font-family-base)";
-const MONO = "var(--font-family-mono)";
 /** iOS draws the status bar in SF Pro, not the app's font. */
 const SYSTEM = "-apple-system, BlinkMacSystemFont, system-ui, sans-serif";
 
 /** tokens.ts `space`. */
 const space = { hair: 2, xxs: 4, xs: 6, sm: 8, md: 12, lg: 16 } as const;
 
-export type PhoneWorkerStatus = "working" | "needs_input" | "mergeable";
+export type PhoneWorkerStatus = "working" | "needs_input" | "approved";
 
 export type PhoneWorker = {
 	id: string;
 	provider: string;
 	title: string;
-	branch: string;
 	status: PhoneWorkerStatus;
 	minutesAgo: number;
-	prNumber?: number;
 };
 
 /** agentsView.ts workerStatusGlyph, as lucide's matches for the Feather names. */
 const STATUS_GLYPH: Record<PhoneWorkerStatus, LucideIcon> = {
 	working: Loader,
 	needs_input: MessageSquare,
-	mergeable: CircleCheckBig,
+	approved: CircleCheckBig,
 };
 
 function usePhoneTheme(): { theme: MobileTheme; dark: boolean } {
@@ -150,7 +147,8 @@ function SectionHeader({ label, theme }: { label: string; theme: MobileTheme }) 
 	);
 }
 
-/** worker-list-row.tsx WorkerRowContents: eyebrow, title, details. */
+/** worker-list-row.tsx WorkerRowContents: eyebrow and title (the details line
+ * shows only with a branch or pull request, which the sample work has none of). */
 function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: string; theme: MobileTheme }) {
 	const { t } = useTranslation();
 	const color = statusColor(theme, worker.status);
@@ -160,10 +158,7 @@ function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: s
 			? t("displayStatus.working")
 			: worker.status === "needs_input"
 				? t("firstRun.phoneNeedsInput")
-				: t("displayStatus.mergeable");
-	// prLine: an open PR reads "PR #42 open" in the success tone; without one
-	// the row names its branch.
-	const details = worker.prNumber ? t("firstRun.phonePrOpen", { number: worker.prNumber }) : worker.branch;
+				: t("displayStatus.approved");
 	const caption: CSSProperties = { fontFamily: SANS, fontSize: 12, lineHeight: "16px", fontWeight: 500 };
 	return (
 		<div
@@ -191,12 +186,6 @@ function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: s
 				style={{ fontFamily: SANS, fontSize: 16, lineHeight: "21px", fontWeight: 600, letterSpacing: -0.15, color: theme.textPrimary }}
 			>
 				{worker.title}
-			</span>
-			<span
-				className="truncate"
-				style={{ fontFamily: MONO, fontSize: 12, lineHeight: "16px", color: worker.prNumber ? theme.green : theme.textTertiary }}
-			>
-				{details}
 			</span>
 		</div>
 	);

@@ -6301,6 +6301,13 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 	background-color: color-mix(in srgb, var(--background) 100%, transparent);
 }
 
+/* The preview board never scrolls; letting its lanes overflow means a card
+ * moving between lanes stays visible for the whole trip instead of being
+ * clipped at its lane's edge. */
+.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-scrollbar) {
+	overflow: visible;
+}
+
 .onboarding-preview-window :is(.z-overlay, [role="dialog"], [role="tooltip"]) {
 	--color-bg-primary: var(--solid-bg-primary);
 	--color-bg-secondary: var(--solid-bg-secondary);

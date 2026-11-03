@@ -1,11 +1,7 @@
 import {
-	SessionInspectorShellView,
-	SessionInspectorSummaryView,
-	type InspectorTab,
 	SessionCardView,
 	SessionsBoardGridView,
 	boardKanbanColumnOrder,
-	type BoardPullRequestPresentation,
 	type BoardSessionPresentation,
 	type KanbanColumn,
 	type ProductUITranslator,
@@ -22,12 +18,8 @@ import {
 	EllipsisVertical,
 	File,
 	FlaskConical,
-	FolderClosed,
-	MessageSquare,
-	SearchCheck,
 	Folder,
 	FolderOpen,
-	GitBranch,
 	LayoutDashboard,
 	LogIn,
 	PanelLeft,
@@ -43,8 +35,8 @@ import {
 	Undo2,
 	WandSparkles,
 } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
-import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { AnimatePresence, animate as animateElement, motion, useIsPresent, useReducedMotion } from "motion/react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { formatTimeCompact, formatTimeTerse } from "../../lib/format-time";
@@ -62,9 +54,6 @@ import { ProductExternalLink } from "../ProductExternalLink";
 import { sessionsBoardLabels } from "../SessionsBoardAdapters";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import { TopbarButton } from "../TopbarButton";
-import { BrowserIcon } from "../icons";
-import { PRSummaryCard } from "../SessionInspector";
-import type { SessionPRSummary } from "../../hooks/useSessionScmSummary";
 
 // The right half of each onboarding step: the real desktop window, drawn at
 // the app's true size (1320x860 CSS px) and scaled down as one piece so every
@@ -99,6 +88,10 @@ const PHONE_GAP = 32;
 /** Turned on its vertical axis, its face angled away, then squared up as it lands. */
 const PHONE_TURN = 40;
 const SLIDE_SPRING = { type: "spring", visualDuration: 0.4, bounce: 0.12 } as const;
+/** Rows and cards settling into place: quick, with the faintest overshoot. */
+const ROW_SPRING = { type: "spring", visualDuration: 0.35, bounce: 0.1 } as const;
+/** Pages sliding across the center panel. */
+const PAGE_SPRING = { type: "spring", visualDuration: 0.5, bounce: 0.05 } as const;
 
 /** A plain iPhone body: thin titanium band, black bezel, the display, and the
  * side buttons. No gloss. The screen lays out at the phone's logical width
@@ -151,13 +144,20 @@ function sameRect(a: AppRect | null, b: AppRect | null): boolean {
 	return Math.abs(a.left - b.left) < 0.5 && Math.abs(a.top - b.top) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
 }
 
-/** An element's rect in the window's own (unscaled) coordinates. */
-function appRect(box: HTMLElement, element: HTMLElement): AppRect | null {
-	const boxRect = box.getBoundingClientRect();
-	const k = boxRect.width / APP_WIDTH;
-	if (!k) return null;
-	const rect = element.getBoundingClientRect();
-	return { left: (rect.left - boxRect.left) / k, top: (rect.top - boxRect.top) / k, width: rect.width / k, height: rect.height / k };
+/** An element's laid-out rect in the window's own (unscaled) coordinates,
+ * from the offset chain, so the camera, a sliding page or a card in flight
+ * (all transforms) never move what it measures: it is where things land. */
+function layoutRect(box: HTMLElement, element: HTMLElement): AppRect | null {
+	let left = 0;
+	let top = 0;
+	let node: HTMLElement | null = element;
+	while (node && node !== box) {
+		left += node.offsetLeft;
+		top += node.offsetTop;
+		node = node.offsetParent as HTMLElement | null;
+	}
+	if (node !== box) return null;
+	return { left, top, width: element.offsetWidth, height: element.offsetHeight };
 }
 
 /** How far the camera may zoom past the fitted window, so text stays crisp. */
@@ -198,12 +198,12 @@ export function PreviewStage({
 		if (!box) return;
 		const measure = () => {
 			const surface = box.querySelector<HTMLElement>(".center-panel-surface");
-			const nextPanel = surface ? appRect(box, surface) : null;
+			const nextPanel = surface ? layoutRect(box, surface) : null;
 			if (nextPanel) setPanel((current) => (sameRect(current, nextPanel) ? current : nextPanel));
-			const targets = [...box.querySelectorAll<HTMLElement>("[data-preview-focus]")].filter((element) => !element.closest("[data-stage-exiting]"));
+			const targets = [...box.querySelectorAll<HTMLElement>("[data-preview-focus]")];
 			let union: AppRect | null = null;
 			for (const target of targets) {
-				const rect = appRect(box, target);
+				const rect = layoutRect(box, target);
 				if (!rect) continue;
 				if (!union) union = rect;
 				else {
@@ -218,7 +218,7 @@ export function PreviewStage({
 		};
 		measure();
 		const observer = new MutationObserver(measure);
-		observer.observe(box, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-preview-focus", "data-stage-exiting"] });
+		observer.observe(box, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-preview-focus"] });
 		return () => observer.disconnect();
 	}, [hasSize]);
 	useLayoutEffect(() => {
@@ -262,6 +262,7 @@ export function PreviewStage({
 				<motion.div className="absolute inset-0" initial={{ x: 0 }} animate={{ x: windowShift }} transition={transition}>
 					<motion.div
 						ref={boxRef}
+						data-preview-box=""
 						className="absolute left-0 top-0"
 						style={{ width: APP_WIDTH, height: APP_HEIGHT, originX: 0, originY: 0 }}
 						initial={false}
@@ -480,22 +481,17 @@ export type PreviewSidebarProject = {
  * with Stay Awake). */
 export function PreviewSidebar({
 	projects = [],
-	dimBody = false,
 	account,
-	dimFooter = false,
 }: {
 	projects?: PreviewSidebarProject[];
-	/** Dim everything above the footer. */
-	dimBody?: boolean;
 	/** The signed-in cloud account; the footer shows Sign in to cloud without one. */
 	account?: { name: string; avatarUrl?: string } | null;
-	dimFooter?: boolean;
 }) {
 	const { t } = useTranslation();
 	const [now] = useState(() => Date.now());
 	return (
 		<>
-			<div className={cn("flex min-h-0 flex-1 flex-col", dimBody && "opacity-35")}>
+			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="flex flex-col gap-0 p-0 px-3 pt-2" />
 				<div className="flex shrink-0 flex-col gap-0 px-2">
 					<div className="relative flex w-full min-w-0 flex-col p-0 pb-0.5">
@@ -516,20 +512,18 @@ export function PreviewSidebar({
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden gap-0 px-2">
 					<ul className="flex w-full min-w-0 flex-col relative gap-0.5 rounded-lg">
 						{projects.map((project) => (
-							<motion.li
-								key={project.name}
-								className="relative"
-								initial={{ opacity: 0 }}
-								animate={{ opacity: 1 }}
-								transition={{ duration: DURATION_NORMAL, ease: EASE_OUT }}
-							>
+							<li key={project.name} className="relative">
 								<PreviewProjectRow project={project} />
-								{project.sessions?.length ? (
-									<ul className="flex min-w-0 flex-col border-sidebar-border py-0.5 mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1 pb-px">
-										{project.sessions.map((session) => <PreviewSessionRow key={session.title} now={now} session={session} />)}
-									</ul>
-								) : null}
-							</motion.li>
+								{/* Session rows unfold under the project as workers start, and
+								    fold away again when the story starts over. */}
+								<ul className="flex min-w-0 flex-col border-sidebar-border mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0">
+									<AnimatePresence initial={false}>
+										{project.sessions?.map((session, index) => (
+											<PreviewSessionRow key={session.title} index={index} now={now} session={session} />
+										))}
+									</AnimatePresence>
+								</ul>
+							</li>
 						))}
 					</ul>
 					<div className="mb-2 flex min-h-0 flex-col overflow-hidden">
@@ -542,10 +536,10 @@ export function PreviewSidebar({
 			{/* Sidebar.tsx footer. */}
 			<div className="flex flex-col p-2 relative mt-auto gap-0 overflow-hidden border-t border-border-strong px-2 !py-2">
 				<div className="relative flex w-full min-w-46.5 flex-col gap-0.5">
-					<div className={cn(dimFooter && "opacity-35")}>
+					<div className="relative h-9 overflow-hidden">
 						<SidebarAccountRow account={account ?? null} />
 					</div>
-					<div className={cn("flex flex-col gap-0.5", dimFooter && "opacity-35")}>
+					<div className="flex flex-col gap-0.5">
 						<button type="button" tabIndex={-1} className={FOOTER_ROW_CLASS}>
 							<span className={FOOTER_ROW_INNER_CLASS}>
 								<Smartphone aria-hidden="true" />
@@ -604,21 +598,30 @@ function PreviewProjectRow({ project }: { project: PreviewSidebarProject }) {
 	);
 }
 
-/** Mirrors Sidebar.tsx SessionRow: status dot, name, and the message age. */
-function PreviewSessionRow({ session, now }: { session: PreviewSidebarSession; now: number }) {
+/** Mirrors Sidebar.tsx SessionRow: status dot, name, and the message age.
+ * A new row unfolds into the list (its height opening, sliding in from the
+ * left); its dot changes colour in place as the session's status changes. */
+function PreviewSessionRow({ session, now, index }: { session: PreviewSidebarSession; now: number; index: number }) {
+	const reduceMotion = useReducedMotion();
 	const dot = getSessionStatusDotView({
 		status: session.status,
 		activity: session.working ? { state: "active", lastActivityAt: new Date(now).toISOString() } : undefined,
 	});
 	const at = new Date(now - (session.minutesAgo ?? 0) * 60_000).toISOString();
 	return (
-		<li className="relative pl-0.5">
+		<motion.li
+			className="relative overflow-hidden pl-0.5"
+			initial={reduceMotion ? false : { height: 0, x: -10, opacity: 0 }}
+			animate={{ height: 32, x: 0, opacity: 1 }}
+			exit={reduceMotion ? undefined : { height: 0, x: -10, opacity: 0 }}
+			transition={{ ...ROW_SPRING, delay: reduceMotion ? 0 : index * 0.08 }}
+		>
 			<div className={cn("relative flex h-8 w-full items-center rounded-lg", session.active && "text-foreground")}>
 				{session.active ? <NavRowHighlight active /> : null}
 				<div className="relative z-[1] flex min-w-0 flex-1">
 					<button type="button" tabIndex={-1} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm pr-[36px]">
 						<span className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5">
-							<span className={cn("size-2 rounded-full", dot.className, dot.breathe && "animate-status-pulse")} />
+							<span className={cn("size-2 rounded-full transition-colors duration-300", dot.className, dot.breathe && "animate-status-pulse")} />
 						</span>
 						<span className="flex min-w-0 flex-1 items-center gap-1.5">
 							<span className={cn("min-w-0 flex-1 truncate", session.active ? "text-foreground" : "text-muted-foreground")}>{session.title}</span>
@@ -631,30 +634,34 @@ function PreviewSessionRow({ session, now }: { session: PreviewSidebarSession; n
 					</time>
 				</div>
 			</div>
-		</li>
+		</motion.li>
 	);
 }
 
 /** Mirrors Sidebar.tsx CloudSignInRow / CloudAccountRow: the row sign-in changes. */
-export function SidebarAccountRow({ account, highlight = false }: { account: { name: string; avatarUrl?: string } | null; highlight?: boolean }) {
+export function SidebarAccountRow({ account }: { account: { name: string; avatarUrl?: string } | null }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
+	// Signing in rolls the row over: Sign in to cloud lifts out as the account
+	// rises into its place.
 	return (
-		<motion.button
-			type="button"
-			tabIndex={-1}
-			key={account ? "account" : "signin"}
-			className={cn(FOOTER_ROW_CLASS, highlight && "text-foreground")}
-			initial={reduceMotion ? false : { opacity: 0 }}
-			animate={{ opacity: 1 }}
-			transition={{ duration: DURATION_NORMAL, ease: EASE_OUT }}
-		>
-			{highlight ? <NavRowHighlight active /> : null}
-			<span className={FOOTER_ROW_INNER_CLASS}>
-				{account ? <PreviewAccountAvatar account={account} /> : <LogIn aria-hidden="true" />}
-				<span className="min-w-0 truncate tracking-tight">{account ? account.name : t("shell.signInToAOCloud")}</span>
-			</span>
-		</motion.button>
+		<AnimatePresence initial={false}>
+			<motion.button
+				type="button"
+				tabIndex={-1}
+				key={account ? "account" : "signin"}
+				className={cn(FOOTER_ROW_CLASS, "absolute inset-x-0 top-0")}
+				initial={reduceMotion ? false : { y: 36 }}
+				animate={{ y: 0 }}
+				exit={reduceMotion ? undefined : { y: -36 }}
+				transition={ROW_SPRING}
+			>
+				<span className={FOOTER_ROW_INNER_CLASS}>
+					{account ? <PreviewAccountAvatar account={account} /> : <LogIn aria-hidden="true" />}
+					<span className="min-w-0 truncate tracking-tight">{account ? account.name : t("shell.signInToAOCloud")}</span>
+				</span>
+			</motion.button>
+		</AnimatePresence>
 	);
 }
 
@@ -679,54 +686,93 @@ function PreviewAccountAvatar({ account }: { account: { name: string; avatarUrl?
 export type PreviewCard = {
 	id: string;
 	title: string;
-	branch?: string;
 	provider: string;
+	column: KanbanColumn;
 	status: BoardSessionPresentation["status"];
 	displayStatus?: string;
 	minutesAgo: number;
-	prs?: Array<Pick<BoardPullRequestPresentation, "number" | "state">>;
 	working?: boolean;
 };
-export type PreviewLane = { column: KanbanColumn; cards: PreviewCard[] };
+
+/**
+ * Cards keep their identity across renders (data-flip-id): when one changes
+ * lane it glides from where it was to where it now sits, and a new one rises
+ * into its slot. Positions come from layoutRect, the window's own unscaled
+ * coordinates, so the camera's zoom never skews the motion.
+ */
+function useCardFlip(rootRef: RefObject<HTMLElement | null>, signature: string, reduceMotion: boolean) {
+	const rects = useRef(new Map<string, AppRect>());
+	useLayoutEffect(() => {
+		const root = rootRef.current;
+		const box = root?.closest<HTMLElement>("[data-preview-box]");
+		if (!root || !box) return;
+		const next = new Map<string, AppRect>();
+		let entering = 0;
+		for (const element of root.querySelectorAll<HTMLElement>("[data-flip-id]")) {
+			const id = element.dataset.flipId!;
+			const rect = layoutRect(box, element);
+			if (!rect) continue;
+			next.set(id, rect);
+			if (reduceMotion) continue;
+			const previous = rects.current.get(id);
+			if (!previous) {
+				const delay = 0.1 * entering++;
+				element.style.opacity = "0";
+				void animateElement(element, { y: [26, 0], scale: [0.95, 1], opacity: [0, 1] }, { ...ROW_SPRING, delay });
+				continue;
+			}
+			const dx = previous.left - rect.left;
+			const dy = previous.top - rect.top;
+			if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+			// Above the lanes it crosses while it travels.
+			element.style.zIndex = "20";
+			void animateElement(element, { x: [dx, 0], y: [dy, 0] }, CARD_SPRING).then(() => {
+				element.style.zIndex = "";
+			});
+		}
+		rects.current = next;
+	}, [rootRef, signature, reduceMotion]);
+}
+
+/** A card crossing the board: a touch slower than a row, settling softly. */
+const CARD_SPRING = { type: "spring", visualDuration: 0.6, bounce: 0.12 } as const;
 
 /** The board page as SessionsBoard.tsx renders it: the page topbar (Board,
  * Task, Orchestrator) over the real SessionsBoardGridView with all four lanes,
- * each card the real SessionCardView with BoardSessionCardAdapter's props. */
+ * each card the real SessionCardView with BoardSessionCardAdapter's props.
+ * Cards move between lanes, rise in and lift as the story changes them. */
 export function PreviewBoard({
-	lanes,
-	stagger = false,
-	focusCards = false,
-	layoutCards = false,
+	cards,
+	focus = false,
+	liftedId,
 }: {
-	lanes: PreviewLane[];
-	stagger?: boolean;
+	cards: PreviewCard[];
 	/** Frame the cards with the stage's camera. */
-	focusCards?: boolean;
-	/** Cards glide to their new lane when it changes, instead of jumping. */
-	layoutCards?: boolean;
+	focus?: boolean;
+	/** The card that needs the person: it lifts off the board. */
+	liftedId?: string;
 }) {
 	const { t } = useTranslation();
-	const reduceMotion = useReducedMotion();
+	const reduceMotion = useReducedMotion() ?? false;
 	const [now] = useState(() => Date.now());
+	const gridRef = useRef<HTMLDivElement>(null);
+	useCardFlip(gridRef, cards.map((card) => `${card.id}:${card.column}:${card.status}`).join("|"), reduceMotion);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 	const prLabels = {
 		short: t("pr.short"),
 		states: { closed: t("pr.state.closed"), draft: t("pr.state.draft"), merged: t("pr.state.merged"), open: t("pr.state.open") },
 	};
-	const cards = lanes.flatMap((lane) => lane.cards.map((card) => ({ card, column: lane.column })));
-	const order = new Map(cards.map(({ card }, index) => [card.id, index]));
-	const sessions: BoardSessionPresentation[] = cards.map(({ card, column }) => ({
+	const sessions: BoardSessionPresentation[] = cards.map((card) => ({
 		id: card.id,
 		title: card.title,
-		branch: card.branch,
 		provider: card.provider,
 		status: card.status,
 		displayStatus: card.displayStatus,
-		kanbanColumn: column,
+		kanbanColumn: card.column,
 		activity: card.working ? { state: "active", lastActivityAt: new Date(now).toISOString() } : undefined,
 		updatedAt: new Date(now - card.minutesAgo * 60_000).toISOString(),
 	}));
-	const byId = new Map(cards.map(({ card }) => [card.id, card]));
+	const byId = new Map(cards.map((card) => [card.id, card]));
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground">
 			{/* PageTopbar + PageTopbarTitle + ProjectBoardActions (header). */}
@@ -751,7 +797,7 @@ export function PreviewBoard({
 					</span>
 				</div>
 			</header>
-			<div className="min-h-0 flex-1 overflow-hidden">
+			<div ref={gridRef} className="onboarding-preview-board min-h-0 flex-1 overflow-hidden">
 				{sessions.length === 0 ? (
 					// A project with no work yet: SessionsBoard shows ProjectBoardEmpty
 					// with ProjectBoardActions' "empty" placement.
@@ -779,40 +825,42 @@ export function PreviewBoard({
 					sessions={sessions}
 					renderSessionCard={(session) => {
 						const card = byId.get(session.id)!;
+						const lifted = card.id === liftedId;
 						return (
-							<motion.div
-								data-preview-focus={focusCards ? "" : undefined}
-								layoutId={layoutCards && !reduceMotion ? `preview-card-${card.id}` : undefined}
-								initial={reduceMotion || !stagger ? false : { opacity: 0, y: 4 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: DURATION_NORMAL, ease: EASE_OUT, delay: stagger ? (order.get(session.id) ?? 0) * 0.12 : 0 }}
-							>
-								<SessionCardView
-									artifacts={<Fragment />}
-									branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
-									externalLink={ProductExternalLink}
-									interactive
-									labels={{
-										formatTime: (timestamp) => formatTimeCompact(timestamp, { now }),
-										intakeIssue: (id) => t("shell.intakeIssue", { id }),
-										pr: prLabels,
-										updatedAt: (timestamp) => t("shell.lastMessageAt", { time: formatTimeCompact(timestamp, { now }) }),
-									}}
-									onOpen={() => undefined}
-									overlay={
-										// BoardSessionCardAdapter's hover-only archive button.
-										<span className="inline-flex">
-											<span className="inline-flex size-control-md items-center justify-center rounded-sm text-passive pointer-events-none opacity-0">
-												<Archive className="size-icon-sm" aria-hidden="true" />
+							<div data-flip-id={card.id} data-preview-focus={focus ? "" : undefined} className="relative">
+								<motion.div
+									className="rounded-lg"
+									initial={false}
+									animate={lifted
+										? { y: -4, scale: 1.03, boxShadow: "0 18px 36px -12px rgba(0,0,0,0.55)" }
+										: { y: 0, scale: 1, boxShadow: "0 0px 0px 0px rgba(0,0,0,0)" }}
+									transition={reduceMotion ? { duration: 0 } : ROW_SPRING}
+								>
+									<SessionCardView
+										artifacts={<Fragment />}
+										externalLink={ProductExternalLink}
+										interactive
+										labels={{
+											formatTime: (timestamp) => formatTimeCompact(timestamp, { now }),
+											intakeIssue: (id) => t("shell.intakeIssue", { id }),
+											pr: prLabels,
+											updatedAt: (timestamp) => t("shell.lastMessageAt", { time: formatTimeCompact(timestamp, { now }) }),
+										}}
+										onOpen={() => undefined}
+										overlay={
+											// BoardSessionCardAdapter's hover-only archive button.
+											<span className="inline-flex">
+												<span className="inline-flex size-control-md items-center justify-center rounded-sm text-passive pointer-events-none opacity-0">
+													<Archive className="size-icon-sm" aria-hidden="true" />
+												</span>
 											</span>
-										</span>
-									}
-									prs={card.prs?.map((pr) => ({ ...pr, url: "" }))}
-									renderAvatar={(provider) => <AgentAvatar provider={provider} />}
-									session={session}
-									translate={translate}
-								/>
-							</motion.div>
+										}
+										renderAvatar={(provider) => <AgentAvatar provider={provider} />}
+										session={session}
+										translate={translate}
+									/>
+								</motion.div>
+							</div>
 						);
 					}}
 				/>}
@@ -975,6 +1023,81 @@ function ComposerToolbar({
 	);
 }
 
+/** Reveals text word by word over `duration`, after `delay` (seconds). */
+function useStreamedText(text: string, delay: number, duration: number, enabled: boolean): string {
+	const [shown, setShown] = useState(enabled ? 0 : text.length);
+	useEffect(() => {
+		if (!enabled) {
+			setShown(text.length);
+			return;
+		}
+		setShown(0);
+		let frame = 0;
+		const start = performance.now() + delay * 1000;
+		const tick = (now: number) => {
+			const progress = Math.min(1, Math.max(0, (now - start) / (duration * 1000)));
+			setShown(Math.round(progress * text.length));
+			if (progress < 1) frame = requestAnimationFrame(tick);
+		};
+		frame = requestAnimationFrame(tick);
+		return () => cancelAnimationFrame(frame);
+	}, [text, delay, duration, enabled]);
+	if (shown >= text.length) return text;
+	// Whole words only, as a streaming reply arrives.
+	const cut = text.lastIndexOf(" ", shown);
+	return cut > 0 ? text.slice(0, cut) : "";
+}
+
+/** The person's message in the human bubble, rising into the timeline, then
+ * the orchestrator's reply streaming in under it with its turn actions. */
+function ChatExchange({ message, reply }: { message: string; reply?: string }) {
+	const reduceMotion = useReducedMotion() ?? false;
+	const streamed = useStreamedText(reply ?? "", 0.7, 1.1, !reduceMotion);
+	const done = streamed.length === (reply ?? "").length;
+	return (
+		<div className="flex min-w-0 flex-col gap-2.5">
+			<motion.div
+				className="group/message flex origin-bottom-right flex-col items-end gap-1"
+				initial={reduceMotion ? false : { y: 24, scale: 0.96, opacity: 0 }}
+				animate={{ y: 0, scale: 1, opacity: 1 }}
+				transition={ROW_SPRING}
+			>
+				<div className={humanBubbleClass()}>
+					<p className="break-words whitespace-pre-wrap text-pretty">{message}</p>
+				</div>
+				<div className="mt-1 flex h-7 items-center gap-1" />
+			</motion.div>
+			{reply ? (
+				<div className="group/message relative">
+					<div>
+						<div className="chat-md text-sm text-foreground">
+							<p className="my-2 min-h-[1lh] first:mt-0 last:mb-0">{streamed}</p>
+						</div>
+					</div>
+					<div className="flex min-w-0 flex-col gap-1 mt-1">
+						<motion.div
+							className="-ml-1.5 flex h-7 items-center gap-0.5"
+							initial={false}
+							animate={done ? { y: 0, opacity: 1 } : { y: 4, opacity: 0 }}
+							transition={ROW_SPRING}
+						>
+							<span className="shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground pl-1.5 pr-0.5">4s</span>
+							<div className="size-7 shrink-0">
+								<button type="button" tabIndex={-1} className="flex shrink-0 items-center justify-center rounded-md text-muted-foreground size-7 px-0 py-0">
+									<Copy className="size-3" aria-hidden="true" />
+								</button>
+							</div>
+							<button type="button" tabIndex={-1} className="flex shrink-0 items-center justify-center rounded-md text-muted-foreground size-7">
+								<Undo2 className="size-3" aria-hidden="true" />
+							</button>
+						</motion.div>
+					</div>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
 /** An orchestrator's chat (ChatWorkspace, docked composer): the user's
  * message in the real human bubble, the reply as chat markdown with its turn
  * actions, and the composer. */
@@ -984,6 +1107,7 @@ export function PreviewChat({
 	message,
 	reply,
 	focus = false,
+	runId = 0,
 }: {
 	title: string;
 	provider?: string;
@@ -991,6 +1115,8 @@ export function PreviewChat({
 	reply?: string;
 	/** Frame the conversation with the stage's camera. */
 	focus?: boolean;
+	/** A new id replays the exchange: the message rises in, then the reply streams. */
+	runId?: number;
 }) {
 	return (
 		<div className="flex h-full min-h-0 flex-col">
@@ -1006,39 +1132,8 @@ export function PreviewChat({
 						<div className="flex min-h-0 flex-1 flex-col" data-composer-placement="dock">
 							<div className="relative min-h-0 flex-1">
 								<div className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 overflow-hidden px-4 pt-5 pb-0">
-									<div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5" data-preview-focus={focus && message ? "" : undefined}>
-										{message ? (
-											<div className="flex min-w-0 flex-col gap-2.5">
-												<div className="group/message flex flex-col items-end gap-1">
-													<div className={humanBubbleClass()}>
-														<p className="break-words whitespace-pre-wrap text-pretty">{message}</p>
-													</div>
-													<div className="mt-1 flex h-7 items-center gap-1" />
-												</div>
-												{reply ? (
-													<div className="group/message relative">
-														<div>
-															<div className="chat-md text-sm text-foreground">
-																<p className="my-2 first:mt-0 last:mb-0">{reply}</p>
-															</div>
-														</div>
-														<div className="flex min-w-0 flex-col gap-1 mt-1">
-															<div className="-ml-1.5 flex h-7 items-center gap-0.5">
-																<span className="shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground pl-1.5 pr-0.5">4s</span>
-																<div className="size-7 shrink-0">
-																	<button type="button" tabIndex={-1} className="flex shrink-0 items-center justify-center rounded-md text-muted-foreground size-7 px-0 py-0">
-																		<Copy className="size-3" aria-hidden="true" />
-																	</button>
-																</div>
-																<button type="button" tabIndex={-1} className="flex shrink-0 items-center justify-center rounded-md text-muted-foreground size-7">
-																	<Undo2 className="size-3" aria-hidden="true" />
-																</button>
-															</div>
-														</div>
-													</div>
-												) : null}
-											</div>
-										) : null}
+									<div className="mx-auto flex min-h-[260px] w-full min-w-0 max-w-3xl flex-col gap-4.5" data-preview-focus={focus && message ? "" : undefined}>
+										{message ? <ChatExchange key={runId} message={message} reply={reply} /> : null}
 									</div>
 								</div>
 							</div>
@@ -1080,13 +1175,31 @@ const MENU_SURFACE_CLASS = "z-overlay settings-menu-surface rounded-(--radius-se
 
 /** Mirrors AgentSwitchPicker open on its Agent submenu (option-menu surface,
  * search field, Agent / Model / Effort rows, the agent list). */
+/** How the app's dropdowns open (data-[state=open] zoom-in-95 from the
+ * trigger side): a short scale-up with a fade, from the trigger's corner. */
+const MENU_OPEN = { opacity: 1, scale: 1, y: 0 };
+const MENU_CLOSED = { opacity: 0, scale: 0.95, y: 4 };
+
 function AgentPickerMenus({ agents, selectedId }: { agents: Array<{ id: string; label: string; dimmed?: boolean }>; selectedId?: string }) {
 	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion() ?? false;
+	// While closing, the menus stop asking the camera to frame them.
+	const present = useIsPresent();
+	const focus = present ? "" : undefined;
 	const selected = agents.find((agent) => agent.id === selectedId);
 	const defaults = selected ? composerAgent(selected.id, selected.label) : undefined;
+	const menuTransition = (delay: number) => (reduceMotion ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT, delay });
 	return (
 		<>
-			<div data-preview-focus="" className={cn(MENU_SURFACE_CLASS, "absolute bottom-[calc(100%+6px)] left-0 min-w-[14rem] w-64")}>
+			<motion.div
+				data-preview-focus={focus}
+				className={cn(MENU_SURFACE_CLASS, "absolute bottom-[calc(100%+6px)] left-0 min-w-[14rem] w-64")}
+				style={{ transformOrigin: "bottom left" }}
+				initial={reduceMotion ? false : MENU_CLOSED}
+				animate={MENU_OPEN}
+				exit={reduceMotion ? undefined : { ...MENU_CLOSED, transition: { duration: DURATION_NORMAL, ease: EASE_OUT } }}
+				transition={menuTransition(0)}
+			>
 				<div className="flex min-h-0 flex-col">
 					<div className="relative shrink-0 pb-1 mb-1 border-b border-border">
 						<div className="relative">
@@ -1124,24 +1237,43 @@ function AgentPickerMenus({ agents, selectedId }: { agents: Array<{ id: string; 
 						</div>
 					</div>
 				</div>
-			</div>
+			</motion.div>
 			{/* The Agent submenu, opened beside its row (positions as Radix places
-			    them, relative to the trigger). */}
-			<div data-preview-focus="" className={cn(MENU_SURFACE_CLASS, "absolute left-[257px] top-[-99px] h-fit! overflow-hidden! min-w-48")}>
+			    them, relative to the trigger), a beat after the menu. */}
+			<motion.div
+				data-preview-focus={focus}
+				className={cn(MENU_SURFACE_CLASS, "absolute left-[257px] top-[-99px] h-fit! overflow-hidden! min-w-48")}
+				style={{ transformOrigin: "top left" }}
+				initial={reduceMotion ? false : { ...MENU_CLOSED, y: 0, x: -4 }}
+				animate={{ ...MENU_OPEN, x: 0 }}
+				exit={reduceMotion ? undefined : { ...MENU_CLOSED, y: 0, x: -4, transition: { duration: DURATION_NORMAL, ease: EASE_OUT } }}
+				transition={menuTransition(0.08)}
+			>
 				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-hidden">
-					{agents.map((agent) => (
-						<div
-							key={agent.id}
-							className={cn(MENU_ROW_CLASS, "gap-2.5", agent.dimmed && "opacity-50")}
-							data-highlighted={agent.id === selectedId ? "" : undefined}
-						>
-							<AgentAvatar provider={agent.id} decorative className="size-icon-base shrink-0 mr-2 size-3.5" />
-							<span className="min-w-0 truncate">{agent.label}</span>
-						</div>
-					))}
+					{/* An agent that becomes ready unfolds into the list where it belongs. */}
+					<AnimatePresence initial={false}>
+						{agents.map((agent) => (
+							<motion.div
+								key={agent.id}
+								className="overflow-hidden"
+								initial={reduceMotion ? false : { height: 0, x: -6, opacity: 0 }}
+								animate={{ height: "auto", x: 0, opacity: 1 }}
+								exit={reduceMotion ? undefined : { height: 0, x: -6, opacity: 0 }}
+								transition={ROW_SPRING}
+							>
+								<div
+									className={cn(MENU_ROW_CLASS, "gap-2.5 transition-opacity duration-300", agent.dimmed && "opacity-50")}
+									data-highlighted={agent.id === selectedId ? "" : undefined}
+								>
+									<AgentAvatar provider={agent.id} decorative className="size-icon-base shrink-0 mr-2 size-3.5" />
+									<span className="min-w-0 truncate">{agent.label}</span>
+								</div>
+							</motion.div>
+						))}
+					</AnimatePresence>
 				</div>
 				<div className={cn(MENU_ROW_CLASS, "mt-1 border-t border-border pt-1")}>{t("agentSelector.manage")}</div>
-			</div>
+			</motion.div>
 		</>
 	);
 }
@@ -1152,10 +1284,13 @@ export function PreviewNewChat({
 	agents,
 	selectedId,
 	project,
+	menuOpen = false,
 }: {
 	agents: Array<{ id: string; label: string; dimmed?: boolean }>;
 	selectedId?: string;
 	project: string;
+	/** The agent picker is open (it opens and closes as the app's menus do). */
+	menuOpen?: boolean;
 }) {
 	const { t } = useTranslation();
 	const selected = agents.find((agent) => agent.id === selectedId) ?? agents[0];
@@ -1202,8 +1337,12 @@ export function PreviewNewChat({
 											</div>
 											<ComposerToolbar
 												agent={selected ? composerAgent(selected.id, selected.label) : undefined}
-												menu={agents.length > 0 ? <AgentPickerMenus agents={agents} selectedId={selected?.id} /> : null}
-												menuOpen={agents.length > 0}
+												menu={
+													<AnimatePresence>
+														{menuOpen && agents.length > 0 ? <AgentPickerMenus key="picker" agents={agents} selectedId={selected?.id} /> : null}
+													</AnimatePresence>
+												}
+												menuOpen={menuOpen && agents.length > 0}
 												permission="Auto-approve"
 											/>
 										</div>
@@ -1226,110 +1365,60 @@ export function PreviewNewChat({
 	);
 }
 
-// ── Session page with the inspector (a worker's pull request) ──────────────
+// ── The scene: one window whose parts animate between steps ────────────────
 
-/** The inspector rail's width in the preview: SessionInspectorRail's narrowest
- * utility width, as a 1040px window leaves it. */
-const PREVIEW_INSPECTOR_WIDTH = 340;
+export type ScenePage = "chat" | "board" | "new";
+const PAGE_ORDER: Record<ScenePage, number> = { chat: 0, board: 1, new: 2 };
+const PAGES: readonly ScenePage[] = ["chat", "board", "new"];
 
-/** SessionInspector's tabs (VIEW_DEFS), Summary selected. */
-function inspectorTabs(t: (key: MessageKey) => string): InspectorTab[] {
-	return [
-		{
-			id: "summary",
-			label: t("inspector.summary"),
-			icon: (
-				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-					<line x1="8" y1="7" x2="20" y2="7" />
-					<line x1="8" y1="12" x2="20" y2="12" />
-					<line x1="8" y1="17" x2="16" y2="17" />
-					<circle cx="4" cy="7" r="1" />
-					<circle cx="4" cy="12" r="1" />
-					<circle cx="4" cy="17" r="1" />
-				</svg>
-			),
-		},
-		{ id: "reviews", label: t("inspector.reviewTab"), icon: <SearchCheck aria-hidden="true" /> },
-		{ id: "browser", label: t("inspector.browser"), icon: <BrowserIcon aria-hidden="true" /> },
-		{ id: "sideChat", label: t("inspector.sideChat"), icon: <MessageSquare aria-hidden="true" /> },
-		{ id: "files", label: t("inspector.files"), icon: <FolderClosed aria-hidden="true" /> },
-		{ id: "artifacts", label: t("artifacts.title"), icon: <File aria-hidden="true" /> },
-	];
-}
-
-/** A worker's session page (SessionView's session-split): its chat, and the
- * inspector rail open on Summary with the pull request it opened, which is
- * ready to merge, so the real PRSummaryCard shows its Merge button. The PR
- * section is the camera's focus. */
-export function PreviewSessionPullRequest({
-	sessionId,
-	title,
-	provider,
-	message,
-	reply,
-	pr,
+/**
+ * One app window for the whole onboarding: the chrome and sidebar stay put,
+ * and the center panel's pages (the orchestrator's chat, the board, New chat)
+ * are all mounted side by side, sliding across as the page changes, the way
+ * the app moves between them. Only the two pages involved travel; the third
+ * waits off to the side. Each page's own parts animate their changes.
+ */
+export function PreviewScene({
+	page,
+	sidebar,
+	chat,
+	board,
+	newChat,
 }: {
-	sessionId: string;
-	title: string;
-	provider: string;
-	message: string;
-	reply: string;
-	pr: { number: number; title: string; branch: string };
+	page: ScenePage;
+	sidebar: ReactNode;
+	chat: ReactNode;
+	board: ReactNode;
+	newChat: ReactNode;
 }) {
-	const { t } = useTranslation();
-	const [now] = useState(() => new Date().toISOString());
-	const url = `https://github.com/owner/repo/pull/${pr.number}`;
-	const summary: SessionPRSummary = {
-		additions: 42,
-		author: "you",
-		changedFiles: 3,
-		ci: { autoInjectCI: false, failingChecks: [], state: "passing" },
-		deletions: 9,
-		headSha: "4f1c2e7",
-		htmlUrl: url,
-		mergeability: { prUrl: url, reasons: [], state: "mergeable" },
-		number: pr.number,
-		provider: "github",
-		repo: "owner/repo",
-		review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
-		sourceBranch: pr.branch,
-		state: "open",
-		targetBranch: "main",
-		title: pr.title,
-		updatedAt: now,
-		url,
-	};
+	const reduceMotion = useReducedMotion();
+	const previous = useRef(page);
+	const leaving = previous.current;
+	useEffect(() => {
+		previous.current = page;
+	}, [page]);
+	const content: Record<ScenePage, ReactNode> = { chat, board, new: newChat };
 	return (
-		<div className="session-split relative flex h-full min-h-0 flex-1 overflow-hidden">
-			<div className="flex min-w-0 flex-1 flex-col">
-				<PreviewChat title={title} provider={provider} message={message} reply={reply} />
+		<PreviewWindow page={page === "chat" ? "session" : page} sidebar={sidebar}>
+			<div className="absolute inset-0 overflow-hidden">
+				{PAGES.map((candidate) => {
+					const side = Math.sign(PAGE_ORDER[candidate] - PAGE_ORDER[page]);
+					const travels = candidate === page || candidate === leaving;
+					return (
+						<motion.div
+							key={candidate}
+							data-scene-page={candidate}
+							aria-hidden={candidate !== page}
+							className="absolute inset-0 flex flex-col"
+							initial={false}
+							animate={{ x: `${side * 100}%` }}
+							transition={reduceMotion || !travels ? { duration: 0 } : PAGE_SPRING}
+						>
+							{content[candidate]}
+						</motion.div>
+					);
+				})}
 			</div>
-			<div aria-hidden="true" className="relative shrink-0" style={{ width: PREVIEW_INSPECTOR_WIDTH }} />
-			<div className="absolute inset-y-0 right-0 z-chrome flex h-full flex-col overflow-hidden border-l border-border-strong bg-background" style={{ width: PREVIEW_INSPECTOR_WIDTH }}>
-				<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-					<div className="session-inspector contents">
-						<SessionInspectorShellView
-							activeView="summary"
-							ariaLabel={t("inspector.aria")}
-							browserPoppedOut={false}
-							onViewChange={() => undefined}
-							tabs={inspectorTabs(t)}
-							summaryView={
-								<SessionInspectorSummaryView
-									activity={null}
-									activityTitle={t("inspector.activity")}
-									pullRequestTitle={t("inspector.pullRequest")}
-									pullRequestCards={
-										<div data-preview-focus="">
-											<PRSummaryCard canOpenReviews={false} onOpenReviews={() => undefined} pr={summary} sessionId={sessionId} />
-										</div>
-									}
-								/>
-							}
-						/>
-					</div>
-				</div>
-			</div>
-		</div>
+		</PreviewWindow>
 	);
 }
