@@ -2,11 +2,37 @@ package sessionimport
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestScanDoesNotOfferDroidWithReadableHistory(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	id := "7f0c09e2-ce0e-43f6-ad51-a2925a075e70"
+	start, err := json.Marshal(map[string]string{"type": "session_start", "id": id, "cwd": home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(start) + "\n" + `{"type":"message","id":"u1","timestamp":"2026-07-08T17:00:00Z","message":{"role":"user","content":[{"type":"text","text":"keep tools in AO"}]}}
+`
+	path := writeFile(t, filepath.Join(root, "sessions", "-home", id+".jsonl"), body)
+	if got, err := readTranscript(context.Background(), domain.HarnessDroid, root, path); err != nil || len(got.messages) != 1 {
+		t.Fatalf("readable Droid fixture: %+v %v", got, err)
+	}
+	svc := New(&importStore{}, "")
+	svc.home = canonical(home)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessDroid: root}
+	preview, err := svc.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Candidates) != 0 {
+		t.Fatalf("Droid must not be offered until resumed tool cwd is verified: %+v", preview.Candidates)
+	}
+}
 
 // Shapes below are trimmed from real Factory Droid session JSONL.
 func TestDroidTranscriptShapes(t *testing.T) {

@@ -101,7 +101,7 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -131,7 +131,17 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
+// The dictation helper records the microphone itself (it disclaims the app as
+// its responsible process), and the hardened runtime blocks audio input
+// without this entitlement. osx-sign signs its executable, then its bundle.
+const DICTATION_HELPER_PATHS = [
+	"/Contents/Resources/dictation-helper/Orchestrator.app",
+	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
+];
+const DICTATION_HELPER_ENTITLEMENTS = ["com.apple.security.device.audio-input"];
+
 export function macSignOptionsForFile(filePath: string): { entitlements?: string[] } {
+	if (DICTATION_HELPER_PATHS.some((helper) => filePath.endsWith(helper))) return { entitlements: DICTATION_HELPER_ENTITLEMENTS };
 	// Cheap gate first: optionsForFile is invoked for every Mach-O in the
 	// bundle, and only the nested Node path can need an override.
 	if (!filePath.endsWith(ACP_RUNTIME_NODE_PATH)) return {};
@@ -225,6 +235,9 @@ const config: ForgeConfig = {
                 const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
                 if (wakeBuild.error) throw wakeBuild.error;
                 if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
+				const dictationBuild = spawnSync(process.execPath, [path.resolve("scripts/build-dictation-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+				if (dictationBuild.error) throw dictationBuild.error;
+				if (dictationBuild.status !== 0) throw new Error("macOS dictation helper build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -263,6 +276,7 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
 					// Run it: remote access depends on this signed copy starting, not just existing.
 					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
 					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
