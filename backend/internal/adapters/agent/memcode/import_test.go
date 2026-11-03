@@ -91,6 +91,69 @@ func TestMemcodeNativeProbeWithoutProjectLocationIsUnknown(t *testing.T) {
 	}
 }
 
+func TestMemcodeTransferredHistoryRequiresPinnedSnapshot(t *testing.T) {
+	for _, mode := range []string{"match", "digest mismatch", "size mismatch", "missing fingerprint", "changed source", "symlink", "escaping symlink", "wrong marker"} {
+		t.Run(mode, func(t *testing.T) {
+			r := memcodeRelocationFixture(t)
+			r.SourceFingerprint = NativeHistoryFingerprint([]byte(validHistory))
+			copied := validHistory
+			switch mode {
+			case "digest mismatch", "changed source":
+				copied = strings.Replace(validHistory, `"role":"user"`, `"role":"tool"`, 1)
+			case "size mismatch":
+				copied += "\n"
+			case "missing fingerprint":
+				r.SourceFingerprint = ""
+			}
+			seedHistory(t, r.LaunchCWD, copied)
+			target := filepath.Join(r.LaunchCWD, ".memcode", "sessions", testID, "messages.json")
+			if mode == "changed source" {
+				seedHistory(t, r.ConfigDir, copied)
+			}
+			if mode == "symlink" || mode == "escaping symlink" {
+				if err := os.Remove(target); err != nil {
+					t.Fatal(err)
+				}
+				backing := filepath.Join(r.LaunchCWD, "other-history.json")
+				if mode == "escaping symlink" {
+					backing = filepath.Join(t.TempDir(), "other-history.json")
+				}
+				if err := os.WriteFile(backing, []byte(copied), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(backing, target); err != nil {
+					t.Skip(err)
+				}
+			}
+			if mode == "wrong marker" {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(target), ".ao-import"), []byte("another import\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+			if mode == "match" {
+				if err != nil || prepared.NativeSessionID != testID || prepared.ConfigDir != r.LaunchCWD {
+					t.Fatalf("pinned transferred history = %+v, %v", prepared, err)
+				}
+			} else if err == nil {
+				t.Fatal("accepted unproven transferred history")
+			}
+			data, err := os.ReadFile(target)
+			if err != nil || string(data) != copied {
+				t.Fatalf("destination overwritten = %q, %v", data, err)
+			}
+			data, err = os.ReadFile(r.TranscriptPath)
+			wantSource := validHistory
+			if mode == "changed source" {
+				wantSource = copied
+			}
+			if err != nil || string(data) != wantSource {
+				t.Fatalf("source overwritten = %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestMemcodeImportRejectsEscapingSourceAndWrongID(t *testing.T) {
 	for _, mode := range []string{"symlink", "wrong-id", "wrong-path"} {
 		t.Run(mode, func(t *testing.T) {

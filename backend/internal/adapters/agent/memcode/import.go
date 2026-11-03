@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -19,6 +20,12 @@ var (
 	_ ports.AgentNativeSessionProber      = (*Plugin)(nil)
 	_ ports.AgentTranscriptLocator        = (*Plugin)(nil)
 )
+
+// NativeHistoryFingerprint pins the exact native wire bytes by size and SHA256.
+func NativeHistoryFingerprint(data []byte) string {
+	sum := sha256.Sum256(data)
+	return strconv.Itoa(len(data)) + ":" + hex.EncodeToString(sum[:])
+}
 
 func memcodeImportFile(ctx context.Context, root *os.Root, name string, limit int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
@@ -36,6 +43,13 @@ func memcodeImportFile(ctx context.Context, root *os.Root, name string, limit in
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("memcode native file changed while opening")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
@@ -43,7 +57,33 @@ func memcodeImportFile(ctx context.Context, root *os.Root, name string, limit in
 	if int64(len(data)) > limit {
 		return nil, errors.New("memcode import exceeds read budget")
 	}
+	after, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(opened, after) {
+		return nil, errors.New("memcode native file changed while reading")
+	}
 	return data, ctx.Err()
+}
+
+func memcodeImportSnapshot(ctx context.Context, source, id, rel, fingerprint string) ([]byte, error) {
+	src, err := os.OpenRoot(source)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = src.Close() }()
+	data, err := memcodeImportFile(ctx, src, rel, 16<<20)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint != "" && NativeHistoryFingerprint(data) != fingerprint {
+		return nil, errors.New("memcode source changed since import")
+	}
+	if _, _, err := transcript(source, id); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // PrepareImportedSession checkpoints the selected native copy in the AO
@@ -102,7 +142,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		return err
 	}
 	if source == launch {
-		_, _, err := transcript(launch, r.NativeSessionID)
+		_, err := memcodeImportSnapshot(ctx, source, r.NativeSessionID, rel, r.SourceFingerprint)
 		return err
 	}
 	dst, err := os.OpenRoot(launch)
@@ -114,33 +154,48 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	wantMarker := hex.EncodeToString(sum[:]) + "\n"
 	marker := filepath.Join(filepath.Dir(rel), ".ao-import")
 	if _, err := dst.Lstat(rel); err == nil {
-		got, err := memcodeImportFile(ctx, dst, marker, 128)
-		if err != nil || string(got) != wantMarker {
+		existing, err := memcodeImportFile(ctx, dst, rel, 16<<20)
+		if err != nil {
+			return err
+		}
+		got, markerErr := memcodeImportFile(ctx, dst, marker, 128)
+		if r.SourceFingerprint != "" {
+			if NativeHistoryFingerprint(existing) != r.SourceFingerprint {
+				return errors.New("memcode worktree history differs from the imported snapshot")
+			}
+			if _, err := memcodeImportSnapshot(ctx, source, r.NativeSessionID, rel, r.SourceFingerprint); err != nil {
+				return err
+			}
+			if errors.Is(markerErr, os.ErrNotExist) {
+				if err := installMemcodeImport(ctx, dst, marker, []byte(wantMarker)); err != nil && !errors.Is(err, os.ErrExist) {
+					return err
+				}
+				got, markerErr = memcodeImportFile(ctx, dst, marker, 128)
+			}
+		}
+		if markerErr != nil || string(got) != wantMarker {
 			return errors.New("memcode destination belongs to another conversation")
 		}
-		if _, err := memcodeImportFile(ctx, dst, rel, 16<<20); err != nil {
+		installed, err := memcodeImportFile(ctx, dst, rel, 16<<20)
+		if err != nil {
 			return err
+		}
+		if r.SourceFingerprint != "" && NativeHistoryFingerprint(installed) != r.SourceFingerprint {
+			return errors.New("memcode worktree history changed during preparation")
 		}
 		_, _, err = transcript(launch, r.NativeSessionID)
 		return err
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	src, err := os.OpenRoot(source)
+	data, err := memcodeImportSnapshot(ctx, source, r.NativeSessionID, rel, r.SourceFingerprint)
 	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-	data, err := memcodeImportFile(ctx, src, rel, 16<<20)
-	if err != nil {
-		return err
-	}
-	// Reuse the interactive restorer's native wire/identity validation, then
-	// validate the installed bytes again before PrepareNativeRestore sees them.
-	if _, _, err := transcript(source, r.NativeSessionID); err != nil {
 		return err
 	}
 	if err := dst.MkdirAll(filepath.Dir(rel), 0o700); err != nil {
+		return err
+	}
+	if err := installMemcodeImport(ctx, dst, rel, data); err != nil {
 		return err
 	}
 	if err := installMemcodeImport(ctx, dst, marker, []byte(wantMarker)); err != nil && !errors.Is(err, os.ErrExist) {
@@ -150,8 +205,12 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil || string(got) != wantMarker {
 		return errors.New("memcode destination marker changed")
 	}
-	if err := installMemcodeImport(ctx, dst, rel, data); err != nil && !errors.Is(err, os.ErrExist) {
+	installed, err := memcodeImportFile(ctx, dst, rel, 16<<20)
+	if err != nil {
 		return err
+	}
+	if NativeHistoryFingerprint(installed) != NativeHistoryFingerprint(data) {
+		return errors.New("memcode worktree history changed during preparation")
 	}
 	_, _, err = transcript(launch, r.NativeSessionID)
 	return err

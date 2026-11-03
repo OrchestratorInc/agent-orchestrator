@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -67,7 +68,15 @@ func discoverMemcodeProject(ctx context.Context, project string) ([]sourceFiles,
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 16<<20 {
 			continue
 		}
-		out = append(out, sourceFiles{harness: domain.HarnessMemcode, root: project, key: entry.Name(), paths: []string{filepath.Join(project, rel)}, modTime: info.ModTime(), size: info.Size()})
+		path := filepath.Join(project, rel)
+		snapshot, err := readMemcodeTranscript(ctx, project, path)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		out = append(out, sourceFiles{harness: domain.HarnessMemcode, root: project, key: entry.Name(), paths: []string{path}, modTime: info.ModTime(), size: info.Size(), fingerprint: snapshot.fingerprint})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })
 	return out, nil
@@ -107,6 +116,7 @@ func readMemcodeTranscript(ctx context.Context, root string, paths ...string) (t
 	if len(data) > 16<<20 {
 		return t, errors.New("memcode native transcript exceeds read budget")
 	}
+	t.fingerprint = memcode.NativeHistoryFingerprint(data)
 	var history struct {
 		ID       string    `json:"session_id"`
 		SavedAt  time.Time `json:"saved_at"`
