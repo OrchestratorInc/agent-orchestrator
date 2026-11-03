@@ -1790,7 +1790,10 @@ export interface CloudCpShareLink {
 	/** Only in the creation response: the raw token is never stored. */
 	token?: string;
 	url?: string;
-	/** Only in the creation response, from a control plane with short links: the link's short code. */
+	/**
+	 * Only in the creation response, and only when the control plane has short
+	 * links turned on: the link's 22-character code (letters and digits).
+	 */
 	code?: string;
 }
 

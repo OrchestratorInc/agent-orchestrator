@@ -7,7 +7,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpShareLink } from "../lib/cloud-cp";
-import { shareCodeLinkUrl, shareLinkUrl } from "../lib/share-links";
+import { isShareCode, shareCodeLinkUrl, shareLinkUrl } from "../lib/share-links";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -52,17 +52,17 @@ export function shareLinkRequest({ scope, access, modeCap, expiry, sessionId }: 
 	};
 }
 
-/** What an active link lets people do, naming a whole-project link as such. */
 /**
  * The link to copy for a link just created: its short link when the control
- * plane minted a code, else the token link an older control plane returns, or
- * undefined when the response carries neither.
+ * plane minted a well-formed code, else the token link (what a control plane
+ * with codes off returns), or undefined when the response carries neither.
  */
 export function createdShareLinkUrl(baseUrl: string, orgId: string, link: Pick<CloudCpShareLink, "code" | "token">): string | undefined {
-	if (link.code) return shareCodeLinkUrl(baseUrl, link.code);
+	if (isShareCode(link.code)) return shareCodeLinkUrl(baseUrl, link.code);
 	return link.token ? shareLinkUrl(baseUrl, orgId, link.token) : undefined;
 }
 
+/** What an active link lets people do, naming a whole-project link as such. */
 export function shareLinkLabel(link: Pick<CloudCpShareLink, "role" | "sessionId">, t: (key: "share.accessEditor" | "share.accessViewer" | "share.accessStartSessions" | "share.wholeProject") => string): string {
 	if (link.sessionId) return link.role === "editor" ? t("share.accessEditor") : t("share.accessViewer");
 	return `${t("share.wholeProject")} · ${link.role === "editor" ? t("share.accessStartSessions") : t("share.accessViewer")}`;
