@@ -1074,6 +1074,9 @@ export function useIndependentSideChats(
 				}
 
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
+				// The first accepted question may have named this tab. A list refresh
+				// failure must not turn an accepted delivery into a failed send.
+				void refreshList().catch(() => undefined);
 			} catch (cause) {
 				if (sessionRef.current === sessionId && !closedSidesRef.current.has(sideId)) setError(apiErrorMessage(cause));
 				if (propagateError) throw cause;
@@ -1082,7 +1085,7 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList],
 	);
 
 	const close = useCallback(
