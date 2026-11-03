@@ -20,41 +20,8 @@ func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 	s, session, conversation := seededChatConversation(t)
 	root := conversation.ActiveBranchID
 
-	writePlan := func(turnID, providerTurnID string, written time.Time) {
-		t.Helper()
-		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, generationOf(t, s, session.ID), domain.ConversationMessage{
-			ID: "message-" + turnID, Origin: domain.MessageOriginHuman, Text: "work on " + turnID,
-			ClientMessageID: "client-" + turnID,
-		}, turnID, written)
-		if err != nil || !created {
-			t.Fatalf("AppendUserMessage %s: created=%v err=%v", turnID, created, err)
-		}
-		if err := s.BindTurnToProvider(ctx, turnID, providerTurnID, written); err != nil {
-			t.Fatalf("BindTurnToProvider %s: %v", turnID, err)
-		}
-		plan := domain.ConversationPlan{SpansTurns: true, Steps: []domain.ConversationPlanStep{
-			{Text: "Render " + turnID, Status: domain.PlanStepInProgress},
-		}}
-		if _, err := s.SetTurnPlan(ctx, conversation.ID, providerTurnID, plan); err != nil {
-			t.Fatalf("SetTurnPlan %s: %v", turnID, err)
-		}
-		detail, _ := json.Marshal(map[string]any{
-			"event": "plan", "spansTurns": true, "writtenAt": written,
-			"steps": []map[string]string{{"text": "Render " + turnID, "status": "in_progress"}},
-		})
-		if err := s.UpsertActivity(ctx, conversation.ID, providerTurnID, domain.ConversationActivity{
-			ID: "plan-" + turnID, Kind: domain.ActivityKindPlan, Status: domain.ActivityStatusRunning,
-			Detail: detail, ProviderItemID: "ao-plan-" + providerTurnID,
-		}, written); err != nil {
-			t.Fatalf("UpsertActivity %s: %v", turnID, err)
-		}
-		if err := s.ReconcileSpanningPlans(ctx, conversation.ID, written); err != nil {
-			t.Fatalf("ReconcileSpanningPlans after %s: %v", turnID, err)
-		}
-	}
-
 	// The original branch writes the list on its first turn.
-	writePlan("turn-a", "provider-turn-a", testNow)
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-a", "provider-turn-a", testNow)
 	forkAfter := latestSequence(t, s, conversation.ID)
 
 	// An edited branch forks after that turn and writes its own copy.
@@ -68,7 +35,7 @@ func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 	if err := s.ActivateConversationBranch(ctx, session.ID, conversation.ID, branch.ID, "thread-edited", "generation-edited", testNow.Add(time.Minute)); err != nil {
 		t.Fatalf("ActivateConversationBranch edited: %v", err)
 	}
-	writePlan("turn-b", "provider-turn-b", testNow.Add(2*time.Minute))
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-b", "provider-turn-b", testNow.Add(2*time.Minute))
 	edited := loadSnapshot(t, s, conversation.ID)
 	if !planOf(t, edited, "turn-a").Superseded || planOf(t, edited, "turn-b").Superseded {
 		t.Fatalf("on the edited branch, want turn-a's copy superseded and turn-b's current")
@@ -82,15 +49,88 @@ func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 	if planOf(t, original, "turn-a").Superseded {
 		t.Fatalf("back on the original branch, turn-a's plan is still superseded")
 	}
-	for _, activity := range original.Activities {
-		if activity.Kind == domain.ActivityKindPlan && activity.TurnID == "turn-a" {
+	if planRowSuperseded(t, original, "turn-a") {
+		t.Fatalf("back on the original branch, turn-a's plan row is still superseded")
+	}
+}
+
+// Editing a message forks and activates a branch in one step. Its path drops the
+// copies written after the fork, so the copy before it is current again; left
+// superseded, the edited branch shows no plan until the agent revises the list.
+func TestSpanningPlanIsCurrentOnABranchForkedByAnEdit(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-a", "provider-turn-a", testNow)
+	forkAfter := latestSequence(t, s, conversation.ID)
+	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-b", "provider-turn-b", testNow.Add(time.Minute))
+	if !planOf(t, loadSnapshot(t, s, conversation.ID), "turn-a").Superseded {
+		t.Fatalf("before the edit, want turn-a's copy superseded by turn-b's")
+	}
+
+	branch := domain.ConversationBranch{
+		ID: "branch-edited", ConversationID: conversation.ID, ProviderConversationID: "thread-edited",
+		ParentBranchID: conversation.ActiveBranchID, ForkAfterTurnID: "turn-a", ForkAfterSequence: forkAfter,
+	}
+	if err := s.CreateAndActivateConversationBranch(ctx, session.ID, branch, "generation-edited", testNow.Add(2*time.Minute)); err != nil {
+		t.Fatalf("CreateAndActivateConversationBranch: %v", err)
+	}
+	edited := loadSnapshot(t, s, conversation.ID)
+	if planOf(t, edited, "turn-a").Superseded {
+		t.Fatalf("on the edited branch, turn-a's plan is the only copy but is still superseded")
+	}
+	if planRowSuperseded(t, edited, "turn-a") {
+		t.Fatalf("on the edited branch, turn-a's plan row is the only copy but is still superseded")
+	}
+}
+
+// writeSpanningPlan starts a turn and writes its copy of a list that spans turns,
+// the way the controller does: the turn's plan, its plan row, then a reconcile.
+func writeSpanningPlan(t *testing.T, s *sqlite.Store, sessionID domain.SessionID, conversationID, turnID, providerTurnID string, written time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	created, err := s.AppendUserMessage(ctx, conversationID, sessionID, generationOf(t, s, sessionID), domain.ConversationMessage{
+		ID: "message-" + turnID, Origin: domain.MessageOriginHuman, Text: "work on " + turnID,
+		ClientMessageID: "client-" + turnID,
+	}, turnID, written)
+	if err != nil || !created {
+		t.Fatalf("AppendUserMessage %s: created=%v err=%v", turnID, created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, turnID, providerTurnID, written); err != nil {
+		t.Fatalf("BindTurnToProvider %s: %v", turnID, err)
+	}
+	plan := domain.ConversationPlan{SpansTurns: true, Steps: []domain.ConversationPlanStep{
+		{Text: "Render " + turnID, Status: domain.PlanStepInProgress},
+	}}
+	if _, err := s.SetTurnPlan(ctx, conversationID, providerTurnID, plan); err != nil {
+		t.Fatalf("SetTurnPlan %s: %v", turnID, err)
+	}
+	detail, _ := json.Marshal(map[string]any{
+		"event": "plan", "spansTurns": true, "writtenAt": written,
+		"steps": []map[string]string{{"text": "Render " + turnID, "status": "in_progress"}},
+	})
+	if err := s.UpsertActivity(ctx, conversationID, providerTurnID, domain.ConversationActivity{
+		ID: "plan-" + turnID, Kind: domain.ActivityKindPlan, Status: domain.ActivityStatusRunning,
+		Detail: detail, ProviderItemID: "ao-plan-" + providerTurnID,
+	}, written); err != nil {
+		t.Fatalf("UpsertActivity %s: %v", turnID, err)
+	}
+	if err := s.ReconcileSpanningPlans(ctx, conversationID, written); err != nil {
+		t.Fatalf("ReconcileSpanningPlans after %s: %v", turnID, err)
+	}
+}
+
+func planRowSuperseded(t *testing.T, snapshot store.ConversationSnapshot, turnID string) bool {
+	t.Helper()
+	for _, activity := range snapshot.Activities {
+		if activity.Kind == domain.ActivityKindPlan && activity.TurnID == turnID {
 			var detail struct{ Superseded bool }
 			_ = json.Unmarshal(activity.Detail, &detail)
-			if detail.Superseded {
-				t.Fatalf("back on the original branch, turn-a's plan row is still superseded")
-			}
+			return detail.Superseded
 		}
 	}
+	t.Fatalf("no plan row on %s in snapshot of %d activities", turnID, len(snapshot.Activities))
+	return false
 }
 
 func generationOf(t *testing.T, s *sqlite.Store, id domain.SessionID) string {

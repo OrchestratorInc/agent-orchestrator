@@ -669,7 +669,8 @@ func insertAndActivateConversationBranchTx(ctx context.Context, q *gen.Queries, 
 	if rows != 1 {
 		return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
 	}
-	return nil
+	// An edited branch's path drops the copies written after its fork.
+	return reconcileSpanningPlans(ctx, q, branch.ConversationID, now)
 }
 
 // CommitChatSpawn publishes a reserved fresh-provider boundary and the complete
