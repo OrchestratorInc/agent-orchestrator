@@ -102,26 +102,28 @@ describe("useLargeTitle", () => {
 		expect(fixtures.setOptions.mock.calls[0][0]).toMatchObject({ headerTransparent: true, headerStyle: { backgroundColor: "transparent" } });
 		const BarTitle = fixtures.setOptions.mock.calls[0][0].headerTitle;
 		const bar = mount(<BarTitle />);
-		expect(bar.root.findByType("AnimatedText" as never).props).toMatchObject({ children: "Workers", accessibilityRole: "header" });
+		const title = bar.root.findByType("AnimatedText" as never).props;
+		expect(title).toMatchObject({ children: "Workers", accessibilityRole: "header" });
+		// As heavy as iOS's large title, in the app's own face rather than its semibold.
+		expect(title.style[0]).toMatchObject({ fontFamily: "DMSans_700Bold", fontSize: 26 });
+		// A bold weight would send Android looking for a bold style of the family, which is not registered.
+		expect(title.style[0]).not.toHaveProperty("fontWeight");
 	});
 
-	// The frost comes up on the first move and goes at rest; the title scales
-	// down only once the list is past the threshold.
-	it("moves the frost and the title on their crossings alone, and still calls the page's own handler on every move", () => {
+	it("scales the title on its crossings alone, and still calls the page's own handler on every move", () => {
 		const onScroll = vi.fn();
 		const result = renderHook(onScroll);
 		for (const y of [10, 20, 40, 60, 80, 20, 5, 0]) result.current.onScroll!(scrollTo(y));
-		expect(fixtures.writes).toEqual(["frost:1", "title:1", "title:0", "frost:0"]);
+		expect(fixtures.writes).toEqual(["title:1", "title:0"]);
 		expect(onScroll).toHaveBeenCalledTimes(8);
 	});
 
-	it("frosts the clear bar and its tail, behind the bar's items", () => {
+	it("always frosts the bar and its tail, even at rest, so the bar never reads as see-through", () => {
 		const result = renderHook();
 		const edge = mount(<>{result.current.edge}</>);
 		const frost = edge.root.findByType("Frost" as never);
 		expect(frost.props).toMatchObject({ from: "top", stops: [[0, 80]] });
-		const layer = edge.root.findByType("AnimatedView" as never);
-		expect(layer.props.pointerEvents).toBe("none");
-		expect(Object.assign({}, ...layer.props.style).height).toBe(80 + 32);
+		expect(Object.assign({}, ...frost.props.style).height).toBe(80 + 32);
+		expect(edge.root.findAllByType("AnimatedView" as never)).toHaveLength(0);
 	});
 });

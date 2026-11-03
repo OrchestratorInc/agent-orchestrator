@@ -39,6 +39,8 @@ export const font = {
 	regular: "DMSans_400Regular",
 	medium: "DMSans_500Medium",
 	semibold: "DMSans_600SemiBold",
+	/** Display only: the board tabs' large title on Android (see `largeTitle`). */
+	bold: "DMSans_700Bold",
 	mono: "GeistMono_400Regular",
 } as const;
 

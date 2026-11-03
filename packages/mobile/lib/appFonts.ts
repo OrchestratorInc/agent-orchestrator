@@ -12,4 +12,5 @@ export const appFonts: Record<string, FontSource> = {
 	[font.regular]: require("../assets/fonts/dm-sans/DMSans_400Regular.ttf"),
 	[font.medium]: require("../assets/fonts/dm-sans/DMSans_500Medium.ttf"),
 	[font.semibold]: require("../assets/fonts/dm-sans/DMSans_600SemiBold.ttf"),
+	[font.bold]: require("../assets/fonts/dm-sans/DMSans_700Bold.ttf"),
 };
