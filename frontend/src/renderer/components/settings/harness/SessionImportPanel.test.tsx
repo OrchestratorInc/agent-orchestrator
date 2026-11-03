@@ -17,7 +17,7 @@ it("gates session import to the agents with a readable local history", () => {
 	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
 	expect(IMPORTABLE_AGENTS.has("gemini")).toBe(true);
-	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
+	expect(IMPORTABLE_AGENTS.has("aider")).toBe(true);
 });
 
 it("does not offer OpenCode imports while resumed tools use the saved directory", () => {

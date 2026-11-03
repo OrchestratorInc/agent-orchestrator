@@ -60,7 +60,7 @@ func discoverAiderProject(ctx context.Context, project string) ([]sourceFiles, e
 
 func readAiderTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessAider, root: canonical(root)}
-	if len(paths) != 1 || filepath.Clean(paths[0]) != filepath.Join(t.root, aiderImportHistory) {
+	if len(paths) != 1 || canonical(paths[0]) != filepath.Join(t.root, aiderImportHistory) {
 		return t, errors.New("aider native history must be at the project root")
 	}
 	provider, err := os.OpenRoot(t.root)
