@@ -2,13 +2,13 @@ package sessionimport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -22,29 +22,11 @@ func readCommandCodeTranscript(ctx context.Context, root string, paths ...string
 	if len(paths) != 1 {
 		return t, errors.New("no command-code transcript")
 	}
-	provider, err := os.OpenRoot(t.root)
-	if err != nil {
+	id := strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
+	if err := commandcode.ValidateNativeImport(ctx, t.root, paths[0], id); err != nil {
 		return t, err
 	}
-	defer func() { _ = provider.Close() }()
-	first := true
-	if err := readOne(provider, t.root, paths[0], func(line []byte) error {
-		if !first {
-			return nil
-		}
-		first = false
-		var header struct {
-			Type    string `json:"type"`
-			Version int    `json:"version"`
-		}
-		if json.Unmarshal(line, &header) != nil || header.Type != "session" || header.Version != 3 {
-			return errors.New("unsupported command-code native history")
-		}
-		return nil
-	}); err != nil {
-		return t, err
-	}
-	t, err = readPiTranscript(ctx, t.root, paths...)
+	t, err := readPiTranscript(ctx, t.root, paths...)
 	t.harness = domain.HarnessCommandCode
 	t.title = importTitle(t.title)
 	return t, err

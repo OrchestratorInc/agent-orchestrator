@@ -16,10 +16,10 @@ func TestCommandCodeV3ActiveBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := `{"type":"session","version":3,"id":"` + id + `","cwd":"/work/repo","timestamp":"2026-11-03T00:00:00Z"}` + "\n" +
-		`{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"repair widget"}]}}` + "\n" +
-		`{"type":"message","id":"old","parentId":"u1","message":{"role":"assistant","content":"abandoned"}}` + "\n" +
-		`{"type":"message","id":"tool","parentId":"u1","message":{"role":"toolResult","content":"tool noise"}}` + "\n" +
-		`{"type":"message","id":"a1","parentId":"tool","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"repaired"}]}}` + "\n"
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"2026-11-03T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"repair widget"}]}}` + "\n" +
+		`{"type":"message","id":"old","parentId":"u1","timestamp":"2026-11-03T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"abandoned"}]}}` + "\n" +
+		`{"type":"message","id":"tool","parentId":"u1","timestamp":"2026-11-03T00:00:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call","content":"tool noise"}]}}` + "\n" +
+		`{"type":"message","id":"a1","parentId":"tool","timestamp":"2026-11-03T00:00:00Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"repaired"}]}}` + "\n"
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,14 @@ func TestCommandCodeV3ActiveBranch(t *testing.T) {
 	got, err := readCommandCodeTranscript(context.Background(), root, path)
 	if err != nil || got.cwd != "/work/repo" || got.title != "repair widget" || len(got.messages) != 2 || got.messages[1].Text != "repaired" {
 		t.Fatalf("transcript=%+v err=%v", got, err)
+	}
+	// The native v3 loader discards entries without required timestamps.
+	invalid := strings.ReplaceAll(text, `"parentId":null,"timestamp":"2026-11-03T00:00:00Z"`, `"parentId":null`)
+	if err := os.WriteFile(path, []byte(invalid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCommandCodeTranscript(context.Background(), root, path); err == nil {
+		t.Fatal("accepted history the native loader would discard")
 	}
 	if err := os.WriteFile(path, []byte(strings.Replace(text, `"version":3`, `"version":2`, 1)), 0o600); err != nil {
 		t.Fatal(err)

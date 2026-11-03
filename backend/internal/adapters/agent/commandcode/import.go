@@ -60,7 +60,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 			continue
 		}
 		rel := filepath.Join(entry.Name(), ref.NativeSessionID+".jsonl")
-		if err := commandReadable(projects, rel, ref.NativeSessionID); err != nil {
+		if err := commandReadable(ctx, projects, rel, ref.NativeSessionID); err != nil {
 			continue
 		}
 		found = filepath.Join(ref.ConfigDir, "projects", rel)
@@ -140,7 +140,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != r.NativeSessionID+".jsonl" {
 		return errors.New("command-code transcript is outside its profile")
 	}
-	if err := commandReadable(root, rel, r.NativeSessionID); err != nil {
+	if err := commandReadable(ctx, root, rel, r.NativeSessionID); err != nil {
 		return err
 	}
 	return copyCommandBundle(ctx, root, filepath.Dir(rel), r.ConfigDir, bucket, r.NativeSessionID)
@@ -205,10 +205,29 @@ func verifyImportedCommandResume(ctx context.Context, dataDir string, sessionID 
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	return commandReadable(root, filepath.Join("projects", bucket, nativeID+".jsonl"), nativeID)
+	return commandReadable(ctx, root, filepath.Join("projects", bucket, nativeID+".jsonl"), nativeID)
 }
 
-func commandReadable(root *os.Root, rel, id string) error {
+// ValidateNativeImport verifies the selected v3 native tree without running the
+// provider. Sharing this with discovery prevents admitting a file the native
+// loader would discard and replace with an empty conversation.
+func ValidateNativeImport(ctx context.Context, root, path, id string) error {
+	if !commandNativeID.MatchString(id) {
+		return errors.New("invalid command-code native session id")
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != id+".jsonl" {
+		return errors.New("command-code transcript is outside its profile")
+	}
+	provider, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = provider.Close() }()
+	return commandReadable(ctx, provider, rel, id)
+}
+
+func commandReadable(ctx context.Context, root *os.Root, rel, id string) error {
 	info, err := root.Lstat(rel)
 	if err != nil {
 		return err
@@ -224,33 +243,84 @@ func commandReadable(root *os.Root, rel, id string) error {
 	scanner := bufio.NewScanner(io.LimitReader(f, 1<<30))
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
 	var header struct {
-		Type    string `json:"type"`
-		Version int    `json:"version"`
-		ID      string `json:"id"`
+		Type      string  `json:"type"`
+		Version   int     `json:"version"`
+		ID        string  `json:"id"`
+		Timestamp *string `json:"timestamp"`
+		CWD       *string `json:"cwd"`
 	}
-	if !scanner.Scan() || json.Unmarshal(scanner.Bytes(), &header) != nil || header.Type != "session" || header.Version != 3 || header.ID != id {
+	if !scanner.Scan() || json.Unmarshal(scanner.Bytes(), &header) != nil || header.Type != "session" || header.Version != 3 || header.ID != id || header.Timestamp == nil || header.CWD == nil {
 		return errors.New("command-code native header is missing or mismatched")
 	}
-	sawUser := false
+	type link struct {
+		parent string
+		user   bool
+	}
+	links := map[string]link{}
+	leaf := ""
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var entry struct {
-			Type    string `json:"type"`
-			Message struct {
-				Role string `json:"role"`
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Parent    json.RawMessage `json:"parentId"`
+			Timestamp *string         `json:"timestamp"`
+			Message   struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			return errors.New("command-code native history is corrupt")
 		}
+		var parent *string
+		if entry.ID == "" || len(entry.ID) > 256 || entry.Timestamp == nil || json.Unmarshal(entry.Parent, &parent) != nil {
+			return errors.New("command-code native entry is missing required fields")
+		}
+		switch entry.Type {
+		case "message", "model_change", "effort_change", "compaction", "branch_summary", "custom", "custom_message", "label", "session_info":
+		default:
+			return errors.New("unsupported command-code native entry")
+		}
+		node := link{}
+		if parent != nil {
+			node.parent = *parent
+		}
 		if entry.Type == "message" && entry.Message.Role == "user" {
-			sawUser = true
+			var text string
+			if json.Unmarshal(entry.Message.Content, &text) == nil {
+				node.user = strings.TrimSpace(text) != ""
+			} else {
+				var blocks []struct{ Type, Text string }
+				if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+					for _, block := range blocks {
+						if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+							node.user = true
+						}
+					}
+				}
+			}
+		}
+		links[entry.ID], leaf = node, entry.ID
+		if len(links) > 1<<20 {
+			return errors.New("command-code native tree exceeds read budget")
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	if sawUser {
-		return nil
+	seen := map[string]bool{}
+	for leaf != "" && !seen[leaf] {
+		node, ok := links[leaf]
+		if !ok {
+			break
+		}
+		if node.user {
+			return nil
+		}
+		seen[leaf], leaf = true, node.parent
 	}
 	return errors.New("command-code native history has no conversation")
 }
@@ -273,7 +343,7 @@ func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot
 	}
 	dest := filepath.Join("projects", bucket)
 	if _, err := target.Lstat(filepath.Join(dest, id+".jsonl")); err == nil {
-		return commandReadable(target, filepath.Join(dest, id+".jsonl"), id)
+		return commandReadable(ctx, target, filepath.Join(dest, id+".jsonl"), id)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -327,7 +397,7 @@ func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot
 	if err != nil {
 		return err
 	}
-	readErr := commandReadable(prepared, id+".jsonl", id)
+	readErr := commandReadable(ctx, prepared, id+".jsonl", id)
 	_ = prepared.Close()
 	if readErr != nil {
 		return readErr

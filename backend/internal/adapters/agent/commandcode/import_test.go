@@ -2,6 +2,7 @@ package commandcode
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,12 +11,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+const commandImportUser = `{"type":"message","id":"u","parentId":null,"timestamp":"2026-11-03T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"synthetic request"}]}}` + "\n"
+
+func commandImportHeader(t *testing.T, id string) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]any{"type": "session", "version": 3, "id": id, "cwd": t.TempDir(), "timestamp": "2026-11-03T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(header) + "\n"
+}
+
 func TestImportedCommandCodeCopyAndStrictResume(t *testing.T) {
 	home := isolatedHome(t)
 	root := filepath.Join(home, ".commandcode")
 	id := "11111111-2222-4333-8444-555555555555"
 	source := filepath.Join(root, "projects", "old-repo", id+".jsonl")
-	body := []byte(`{"type":"session","version":3,"id":"` + id + `","cwd":"/old/repo"}` + "\n" + `{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"synthetic request"}}` + "\n")
+	body := []byte(commandImportHeader(t, id) + commandImportUser)
 	writeHomeFile(t, source, body)
 	writeHomeFile(t, filepath.Join(filepath.Dir(source), id+".meta.json"), []byte(`{"title":"synthetic"}`))
 	cwd := filepath.Join(t.TempDir(), "AORepo")
@@ -48,7 +60,7 @@ func TestImportedCommandCodeCopyAndStrictResume(t *testing.T) {
 	if err := verifyImportedCommandResume(context.Background(), data, "imported", cwd, id); err != nil {
 		t.Fatal(err)
 	}
-	updated := append(append([]byte(nil), body...), []byte(`{"type":"message","id":"a","parentId":"u","message":{"role":"assistant","content":"AO turn"}}`+"\n")...)
+	updated := append(append([]byte(nil), body...), []byte(`{"type":"message","id":"a","parentId":"u","timestamp":"2026-11-03T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"AO turn"}]}}`+"\n")...)
 	writeHomeFile(t, copyPath, updated)
 	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
 		t.Fatal(err)
@@ -85,17 +97,21 @@ func TestCommandCodeRefusesUnreadableNativeBundle(t *testing.T) {
 	path := filepath.Join(dir, id+".jsonl")
 	cwd := t.TempDir()
 	r := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: path, LaunchCWD: cwd}
+	header := commandImportHeader(t, id)
 	for _, body := range []string{
-		`{"type":"session","version":3,"id":"other"}` + "\n",
-		`{"type":"session","version":3,"id":"` + id + `"}` + "\n",
-		`{"type":"session","version":3,"id":"` + id + `"}` + "\n" + `{"type":"message","message":{"role":"user"}}` + "\n" + `{"torn":`,
+		commandImportHeader(t, "other") + commandImportUser,
+		`{"type":"session","version":3,"id":"` + id + `"}` + "\n" + commandImportUser,
+		header,
+		header + `{"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"synthetic"}}` + "\n",
+		header + commandImportUser + `{"torn":`,
+		header + commandImportUser + `{"type":"message","id":"orphan","parentId":null,"timestamp":"2026-11-03T00:00:00Z","message":{"role":"assistant","content":"unrelated"}}` + "\n",
 	} {
 		writeHomeFile(t, path, []byte(body))
 		if err := New().RelocateImportedSession(context.Background(), r); err == nil {
 			t.Fatalf("accepted unreadable native history: %s", body)
 		}
 	}
-	writeHomeFile(t, path, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	writeHomeFile(t, path, []byte(header+commandImportUser))
 	bucket, err := commandNativeProjectBucket(cwd)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +134,7 @@ func TestCommandCodeRelocationUsesPhysicalWorkspace(t *testing.T) {
 	}
 	id := "11111111-2222-4333-8444-555555555555"
 	source := filepath.Join(root, "projects", "source", id+".jsonl")
-	writeHomeFile(t, source, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	writeHomeFile(t, source, []byte(commandImportHeader(t, id)+commandImportUser))
 	r := ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: alias}
 	if err := New().RelocateImportedSession(context.Background(), r); err != nil {
 		t.Fatal(err)
@@ -137,7 +153,7 @@ func TestCommandCodeAdoptedImportCannotReseedMissingHistory(t *testing.T) {
 	root, cwd, data := filepath.Join(home, ".commandcode"), t.TempDir(), t.TempDir()
 	id := "11111111-2222-4333-8444-555555555555"
 	source := filepath.Join(root, "projects", "source", id+".jsonl")
-	writeHomeFile(t, source, []byte(`{"type":"session","version":3,"id":"`+id+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":"synthetic"}}`+"\n"))
+	writeHomeFile(t, source, []byte(commandImportHeader(t, id)+commandImportUser))
 	p := New()
 	if err := p.RelocateImportedSession(context.Background(), ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: cwd}); err != nil {
 		t.Fatal(err)
