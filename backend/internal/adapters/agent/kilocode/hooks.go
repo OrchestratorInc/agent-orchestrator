@@ -69,6 +69,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := validateKiloImportedWorkspace(cfg); err != nil {
+		return err
+	}
 	if strings.TrimSpace(cfg.WorkspacePath) == "" {
 		return errors.New("kilocode.GetAgentHooks: WorkspacePath is required")
 	}

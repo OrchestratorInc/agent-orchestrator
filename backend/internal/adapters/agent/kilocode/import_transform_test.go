@@ -26,10 +26,11 @@ func kiloSyntheticExport() ([]byte, string) {
 
 func TestKiloExportRemapPreservesGraphAndContent(t *testing.T) {
 	data, source := kiloSyntheticExport()
+	cwd := t.TempDir()
 	original := append([]byte(nil), data...)
 	gen := kiloImportID{random: bytes.NewReader(make([]byte, 70))}
 	checks := 0
-	out, id, err := remapKiloExport(data, source, "/work/ao", gen.next, func(string) (bool, error) {
+	out, id, err := remapKiloExport(data, source, cwd, gen.next, func(string) (bool, error) {
 		checks++
 		return false, nil
 	})
@@ -44,7 +45,7 @@ func TestKiloExportRemapPreservesGraphAndContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := result["info"].(map[string]any)
-	if info["directory"] != "/work/ao" || info["workspaceID"] != nil || info["id"] != id {
+	if info["directory"] != cwd || info["workspaceID"] != nil || info["id"] != id {
 		t.Fatalf("worktree identity = %#v", info)
 	}
 	messages := result["messages"].([]any)
@@ -82,7 +83,7 @@ func TestKiloExportRemapRefusesIdentityFailures(t *testing.T) {
 			case "duplicate message":
 				data = bytes.ReplaceAll(data, []byte("msg_"+strings.Repeat("c", 26)), []byte("msg_"+strings.Repeat("b", 26)))
 			}
-			if _, _, err := remapKiloExport(data, source, "/work/ao", next, exists); err == nil {
+			if _, _, err := remapKiloExport(data, source, t.TempDir(), next, exists); err == nil {
 				t.Fatal("unsafe native import accepted")
 			}
 		})
@@ -94,7 +95,7 @@ func TestKiloExportRemapCompactionReference(t *testing.T) {
 	user := "msg_" + strings.Repeat("b", 26)
 	data = bytes.Replace(data, []byte(`"type":"text","text":"Synthetic reply"`), []byte(`"type":"compaction","auto":true,"tail_start_id":"`+user+`"`), 1)
 	gen := kiloImportID{random: bytes.NewReader(make([]byte, 70))}
-	out, _, err := remapKiloExport(data, source, "/work/ao", gen.next, func(string) (bool, error) { return false, nil })
+	out, _, err := remapKiloExport(data, source, t.TempDir(), gen.next, func(string) (bool, error) { return false, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
