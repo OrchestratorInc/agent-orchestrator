@@ -79,9 +79,6 @@ type recordingLauncher struct {
 	providerBoundary *domain.ConversationBranch
 	liveReconnect    bool
 
-	// Harness-specific resume tests must report the native ID they loaded.
-	providerConversationID string
-
 	preflighted          []domain.AgentHarness
 	preflightPermissions []ports.PermissionMode
 	started              []ChatStart
