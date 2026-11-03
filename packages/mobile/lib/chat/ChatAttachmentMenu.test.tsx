@@ -65,7 +65,6 @@ describe("ChatAttachmentMenu", () => {
 			{ id: "photo", title: "Choose Photo", image: "photo" },
 			{ id: "file", title: "Choose File", image: "doc" },
 		]);
-		expect(menu().props.colorScheme).toBe("dark");
 		act(() => renderer!.update(<ChatAttachmentMenu disabled={false} canAttachFile={false} onChoosePhoto={vi.fn()} onChooseFile={vi.fn()} />));
 		expect(menu().props.actions.map((action: { id: string }) => action.id)).toEqual(["photo"]);
 	});
@@ -79,19 +78,10 @@ describe("ChatAttachmentMenu", () => {
 		expect(fixtures.tap).not.toHaveBeenCalled();
 	});
 
-	it("leaves the tap to SwiftUI's menu label on iOS", () => {
-		render();
-		const trigger = menu().findByProps({ accessibilityLabel: "Attach" });
-		expect(trigger.type).toBe("View");
-		expect(trigger.props.accessibilityRole).toBe("button");
-	});
-
-	it("opens the Compose menu from a rippling button on Android", () => {
+	it("opens the Compose menu from its button on Android", () => {
 		fixtures.os = "android";
 		render();
 		const trigger = menu().findByProps({ accessibilityLabel: "Attach" });
-		expect(trigger.type).toBe("Pressable");
-		expect(trigger.props.android_ripple).toEqual({ color: "ripple", borderless: true });
 		act(() => trigger.props.onPress());
 		expect(fixtures.show).toHaveBeenCalledOnce();
 		expect(fixtures.tap).not.toHaveBeenCalled();

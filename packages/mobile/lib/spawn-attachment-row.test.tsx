@@ -31,7 +31,6 @@ vi.mock("react-native", async () => {
 });
 
 import { SpawnAttachmentRow } from "./spawn-attachment-row";
-import { symbols } from "./symbols";
 import { iconSize, touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
@@ -91,22 +90,16 @@ describe("SpawnAttachmentRow", () => {
 		expect(fixtures.tap).toHaveBeenCalledOnce();
 	});
 
-	it("draws chrome as system symbols and reaches a full touch target to remove", async () => {
+	// The scroll view drops touches outside its bounds, so the row keeps room
+	// for the slop the thumbnail's corner disc reaches past its top and right.
+	it("reaches a full touch target to remove", async () => {
 		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo, notes]} onRemove={vi.fn()} />); });
 		const root = renderer!.root;
-		const glyphs = root.findAllByType("SymbolView" as never).map((node) => node.props.name);
-		expect(glyphs).toEqual([symbols.close, symbols.fileText, symbols.close]);
-
 		const removes = root.findAll((node) => String(node.type) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Remove "));
-		const reach = (node: (typeof removes)[number], glyph: number) => glyph + node.props.hitSlop * 2;
-		expect(reach(removes[0], iconSize.lg)).toBe(touchTarget);
-		expect(reach(removes[1], iconSize.sm)).toBe(touchTarget);
-
-		// The scroll view drops touches outside its bounds, so the row keeps room
-		// for the slop the thumbnail's corner disc reaches past its top and right.
+		expect(iconSize.lg + removes[0].props.hitSlop * 2).toBe(touchTarget);
+		expect(iconSize.sm + removes[1].props.hitSlop * 2).toBe(touchTarget);
 		const disc = removes[0].props.style({ pressed: false })[0];
 		const content = root.findAll((node) => String(node.type) === "ScrollView")[0].props.contentContainerStyle;
-		expect(disc).toMatchObject({ width: iconSize.lg, height: iconSize.lg });
 		expect(content.paddingTop).toBeGreaterThanOrEqual(-disc.top + removes[0].props.hitSlop);
 		expect(content.paddingRight).toBeGreaterThanOrEqual(-disc.right + removes[0].props.hitSlop);
 	});

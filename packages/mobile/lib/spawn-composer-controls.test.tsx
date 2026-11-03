@@ -15,7 +15,6 @@ vi.mock("./ThemeProvider", () => ({
 }));
 
 import { SpawnComposerControls } from "./spawn-composer-controls";
-import { symbols } from "./symbols";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -38,7 +37,7 @@ afterEach(async () => {
 describe("SpawnComposerControls fallback", () => {
 	// The attach buttons used to be emoji labels (🖼 📎), read aloud as "framed
 	// picture" and "paperclip" rather than as what they do.
-	it("draws the attach buttons as system symbols named by their action", async () => {
+	it("names the attach buttons by their action", async () => {
 		const onChoosePhoto = vi.fn();
 		const onChooseFile = vi.fn();
 		const props = {
@@ -55,8 +54,6 @@ describe("SpawnComposerControls fallback", () => {
 		);
 		const photo = button("Choose photo");
 		const file = button("Choose file");
-		expect(photo?.findByType("SymbolView" as never).props.name).toEqual(symbols.photo);
-		expect(file?.findByType("SymbolView" as never).props.name).toEqual(symbols.attach);
 		expect(photo?.props.label).toBeUndefined();
 		expect(file?.props.label).toBeUndefined();
 

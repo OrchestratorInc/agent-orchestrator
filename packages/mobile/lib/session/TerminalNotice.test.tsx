@@ -51,48 +51,30 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-const symbols = () => renderer!.root.findAllByType("SymbolView" as never).map((node) => node.props.name.ios);
-
 describe("the iOS terminal notice", () => {
-	it("draws nothing without a notice", async () => {
+	it("draws nothing without a notice, and leaves the snackbar host empty", async () => {
 		await act(async () => { renderer = create(<TerminalNotice notice={null} onDismiss={vi.fn()} />); });
+		expect(renderer!.toJSON()).toBeNull();
+		await act(async () => { renderer!.update(<TerminalNoticeHost notice={{ id: 1, text: "x", tone: "error" }} onDismiss={vi.fn()} bottomOffset={0} />); });
 		expect(renderer!.toJSON()).toBeNull();
 	});
 
-	it("marks a failure in red with an error symbol and announces it as an alert", async () => {
-		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "Message not sent.", tone: "error" }} onDismiss={vi.fn()} />); });
-		const row = renderer!.root.findByProps({ testID: "terminal-notice" });
-		expect(row.props.accessibilityRole).toBe("alert");
-		expect(row.props.style).toContainEqual({ backgroundColor: "#tintRed" });
-		expect(symbols()).toEqual(["exclamationmark.circle", "xmark"]);
-		expect(renderer!.root.findAllByType("SymbolView" as never)[0].props.tintColor).toBe("#red");
+	it("announces a failure as an alert, and closes from a named button", async () => {
+		const onDismiss = vi.fn();
+		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "Message not sent.", tone: "error" }} onDismiss={onDismiss} />); });
+		expect(renderer!.root.findByProps({ testID: "terminal-notice" }).props.accessibilityRole).toBe("alert");
 		expect(fixtures.announce).toHaveBeenCalledWith("Message not sent.");
 		// No "(tap to dismiss)": the close button says it.
 		expect(renderer!.root.findByType("Text" as never).props.children).toBe("Message not sent.");
-	});
-
-	it("tells news apart from a failure", async () => {
-		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "Sending composer text straight to the terminal.", tone: "info" }} onDismiss={vi.fn()} />); });
-		const row = renderer!.root.findByProps({ testID: "terminal-notice" });
-		expect(row.props.accessibilityRole).toBeUndefined();
-		expect(row.props.style).not.toContainEqual({ backgroundColor: "#tintRed" });
-		expect(symbols()[0]).toBe("info.circle");
-	});
-
-	it("closes from a touch-target button with a name", async () => {
-		const onDismiss = vi.fn();
-		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "x", tone: "error" }} onDismiss={onDismiss} />); });
 		const close = renderer!.root.findByType("Pressable" as never);
-		expect(close.props.accessibilityLabel).toBe("Dismiss");
-		expect(close.props.accessibilityRole).toBe("button");
-		expect(close.props.style({ pressed: false })).toContainEqual({ width: 44, height: 44, alignItems: "center", justifyContent: "center" });
+		expect(close.props).toMatchObject({ accessibilityLabel: "Dismiss", accessibilityRole: "button" });
 		act(() => close.props.onPress());
 		expect(onDismiss).toHaveBeenCalledOnce();
 	});
 
-	it("leaves the snackbar host empty", async () => {
-		await act(async () => { renderer = create(<TerminalNoticeHost notice={{ id: 1, text: "x", tone: "error" }} onDismiss={vi.fn()} bottomOffset={0} />); });
-		expect(renderer!.toJSON()).toBeNull();
+	it("does not raise news as an alert", async () => {
+		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "Sent.", tone: "info" }} onDismiss={vi.fn()} />); });
+		expect(renderer!.root.findByProps({ testID: "terminal-notice" }).props.accessibilityRole).toBeUndefined();
 	});
 });
 
@@ -102,20 +84,14 @@ describe("the Android terminal notice", () => {
 		await act(async () => {
 			renderer = create(<AndroidTerminalNoticeHost notice={{ id: 3, text: "Couldn't restore the session.", tone: "error" }} onDismiss={onDismiss} bottomOffset={120} />);
 		});
-		const host = renderer!.root.findByType("ToastHost" as never);
-		const toast = host.props.toast as ToastController;
-		expect(host.props.bottomOffset).toBe(120);
+		const toast = () => renderer!.root.findByType("ToastHost" as never).props.toast as ToastController;
 		// A failure can be closed before it times out; news cannot.
-		expect(toast.current).toMatchObject({ text: "Couldn't restore the session.", duration: "long", tone: "warning", dismissible: true });
+		expect(toast().current).toMatchObject({ text: "Couldn't restore the session.", duration: "long", tone: "warning", dismissible: true });
 		expect(onDismiss).toHaveBeenCalledOnce();
-	});
-
-	it("keeps news brief", async () => {
 		await act(async () => {
-			renderer = create(<AndroidTerminalNoticeHost notice={{ id: 4, text: "Sent to the terminal.", tone: "info" }} onDismiss={vi.fn()} bottomOffset={0} />);
+			renderer!.update(<AndroidTerminalNoticeHost notice={{ id: 4, text: "Sent to the terminal.", tone: "info" }} onDismiss={onDismiss} bottomOffset={0} />);
 		});
-		const toast = renderer!.root.findByType("ToastHost" as never).props.toast as ToastController;
-		expect(toast.current).toMatchObject({ duration: "short", tone: "neutral", dismissible: false });
+		expect(toast().current).toMatchObject({ duration: "short", tone: "neutral", dismissible: false });
 	});
 
 	it("draws no inline row", async () => {

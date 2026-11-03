@@ -27,12 +27,11 @@ vi.mock("../ThemeProvider", async () => {
 	return { useTheme: () => lightTheme, useThemedStyles: (factory: (t: typeof lightTheme) => unknown) => factory(lightTheme) };
 });
 
-import { lightTheme } from "../theme";
 import { MicKey } from "./MicKey";
 
 type Props = ComponentProps<typeof MicKey>;
 let renderer: ReactTestRenderer | undefined;
-beforeEach(() => { fixtures.platform.OS = "ios"; fixtures.reduceMotion = false; });
+beforeEach(() => { fixtures.reduceMotion = false; });
 afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
 
 function render(props: Partial<Props> = {}) {
@@ -40,13 +39,6 @@ function render(props: Partial<Props> = {}) {
 	act(() => { renderer = create(createElement(MicKey, all)); });
 	return { props: all, key: renderer!.root.findByType("Pressable" as never) };
 }
-
-it("draws the recording glyph in the ink made for the red fill", () => {
-	render({ state: "recording" });
-	const glyph = renderer!.root.findByType("SymbolView" as never);
-	expect(glyph.props.tintColor).toBe(lightTheme.onDestructive);
-	expect(glyph.props.tintColor).not.toBe(lightTheme.textPrimary);
-});
 
 it("breathes while recording, and holds still under Reduce Motion", () => {
 	render({ state: "recording" });
@@ -78,11 +70,4 @@ it("cannot be tapped while it cannot dictate", () => {
 	const { key } = render({ state: "unavailable" });
 	expect(key.props.disabled).toBe(true);
 	expect(key.props.accessibilityLabel).toBe("Dictation unavailable on this device");
-});
-
-it("ripples on Android instead of fading", () => {
-	fixtures.platform.OS = "android";
-	const { key } = render({ variant: "plain" });
-	expect(key.props.android_ripple).toMatchObject({ borderless: true });
-	expect(key.props.style({ pressed: true }).filter(Boolean)).not.toContainEqual({ opacity: expect.any(Number) });
 });

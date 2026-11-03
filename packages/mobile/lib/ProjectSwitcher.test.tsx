@@ -77,32 +77,18 @@ describe("ProjectSwitcher", () => {
 		]);
 	});
 
+	// The trigger spans the row, so a longer name chosen later still has room.
 	it("names the current project on its trigger", () => {
-		const trigger = render().findAll((node) => node.props.accessibilityRole === "button" && typeof node.type === "string")[0];
-		expect(trigger.props.accessibilityLabel).toBe("Project, API");
-	});
-
-	// The menu's host keeps the width it first measured, so its trigger spans
-	// the row: a longer name chosen later still has the room to show.
-	it("opens from anywhere on the row", () => {
 		const trigger = render().findByType("MenuView" as never).children[0] as ReactTestInstance;
 		expect(trigger.props.accessibilityLabel).toBe("Project, API");
-		expect(trigger.findAllByType("Text" as never).map((node) => node.props.children)).toEqual(["Project", "API"]);
 	});
 
-	// A project the machine no longer lists falls back to All, and the check
-	// follows what the list actually shows.
-	it("checks All when the saved project is gone", () => {
+	// A project the machine no longer lists falls back to All, and the dead id
+	// must not outlive the choice and come back on the next cold start.
+	it("checks All when the saved project is gone, and saves All over it without a tick", () => {
 		fixture.app.activeProjectId = "deleted";
 		const menu = render().findByType("MenuView" as never);
 		expect(menu.props.actions.filter((action: { state: string }) => action.state === "on").map((action: { id: string }) => action.id)).toEqual(["all"]);
-	});
-
-	// The list already shows All, but the dead id must not outlive the choice
-	// and come back on the next cold start.
-	it("saves All over a project that is gone, without a selection tick", () => {
-		fixture.app.activeProjectId = "deleted";
-		const menu = render().findByType("MenuView" as never);
 		act(() => menu.props.onPressAction({ nativeEvent: { event: "all" } }));
 		expect(fixture.app.setActiveProject).toHaveBeenCalledWith("all");
 		expect(fixture.select).not.toHaveBeenCalled();

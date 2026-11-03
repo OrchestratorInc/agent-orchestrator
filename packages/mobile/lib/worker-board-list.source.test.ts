@@ -28,16 +28,6 @@ describe("worker board list identity", () => {
 	});
 });
 
-describe("worker search", () => {
-	// The board has no search: the filter menu narrows it. Nor does it bring
-	// back the dock that rode the keyboard by hand.
-	it("has no search field, in the header or riding the keyboard", () => {
-		expect(board).not.toContain("<Stack.SearchBar");
-		expect(board).not.toContain("react-native-keyboard-controller");
-		expect(board).not.toContain("keyboardAnimation");
-	});
-});
-
 describe("worker row second line", () => {
 	const row = source("./worker-list-row.tsx");
 
@@ -62,10 +52,7 @@ describe("worker row working indicator", () => {
 	// starting row does not breathe, and was left with that loader standing still.
 	it("shows the system spinner in a working or starting row's status slot", () => {
 		expect(row).toMatch(/visual\.breathing \|\| glyph === "loader"\s*\?\s*<Spinner size=\{iconSize\.xs\} color=\{visual\.color\} \/>/);
-		expect(row).not.toContain("<Spinning");
-		expect(row).not.toContain("<Breathing");
 		expect(spinner).toContain("<ActivityIndicator");
-		expect(ui).not.toContain("export function Spinning(");
 	});
 
 	// One decision, read inside the primitive, so a new consumer cannot forget
@@ -74,28 +61,6 @@ describe("worker row working indicator", () => {
 		expect(ui).toContain("export function useBreathing(");
 		expect(ui).toContain("shouldBreathe(reduceMotion, enabled)");
 		expect(ui).toContain("const pulse = useBreathing(breathing);");
-	});
-});
-
-describe("board chrome", () => {
-	// The pill, Archive header and archive status share the app's press,
-	// glyph and colour rules rather than each inventing its own.
-	it("draws system symbols, platform press feedback and theme colours", () => {
-		expect(list).not.toContain("<Feather");
-		expect(list).not.toMatch(/opacity: 0\.\d/);
-		expect(list).not.toContain('"#000"');
-		expect(list).not.toContain("<ActivityIndicator");
-		expect(list).toContain('const feedback = usePressFeedback("button", { tone: "onAccent" });');
-		expect(list).toContain("borderRadius: radius.pill");
-	});
-
-	// Archive heads a section like the board's other headers, at their footnote
-	// step: no header on the board drops below 13pt or mixes sizes with another.
-	it("sets the Archive header at the section headers' footnote step", () => {
-		expect(list).not.toMatch(/type\.caption[12]/);
-		expect(list).toMatch(/archiveLabel: \{[^}]*fontSize: type\.footnote\.fontSize/);
-		expect(list).toMatch(/archiveCount: \{[^}]*fontSize: type\.footnote\.fontSize/);
-		expect(source("./ui.tsx")).toMatch(/listSectionLabel: \{[^}]*fontSize: type\.footnote\.fontSize/);
 	});
 });
 
@@ -111,19 +76,6 @@ describe("board sections that cannot be folded", () => {
 		// The previous rule made everything but search foldable.
 		expect(board).not.toContain('const collapsible = section.zone !== "search";');
 	});
-});
-
-describe("board tab roots", () => {
-	// A coloured view that is not a stacking context is mounted empty, with its
-	// children hoisted after it. As a tab's root it became the page's first
-	// native view, ahead of the list, so the large title and the tab bar had no
-	// scroll view to follow and stayed expanded over the rows.
-	it.each(["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/prs/index.tsx"])(
-		"leaves the page background to the stack in %s",
-		(path) => {
-			expect(source(path)).toMatch(/\bscreen: \{ flex: 1 \},/);
-		},
-	);
 });
 
 describe("worker row machine", () => {

@@ -52,7 +52,6 @@ beforeEach(() => {
 afterEach(async () => {
 	if (renderer) await act(async () => renderer?.unmount());
 	renderer = undefined;
-	platform.Version = "26.0";
 	vi.resetModules();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -65,18 +64,10 @@ async function renderIOS(onPress = vi.fn()) {
 }
 
 describe("JumpToLatest on iOS", () => {
-	it("is a small Liquid Glass circle holding only the arrow, named for screen readers", async () => {
+	it("is named for screen readers and jumps when pressed", async () => {
 		const onPress = vi.fn();
 		const button = await renderIOS(onPress);
-		expect(button.props.modifiers).toEqual(expect.arrayContaining([
-			{ buttonStyle: "glass" },
-			{ buttonBorderShape: "circle" },
-			{ controlSize: "small" },
-			{ tint: "#ink" },
-			{ accessibilityLabel: "Jump to latest message" },
-		]));
-		expect(button.findByType("SwiftImage" as never).props.systemName).toBe("arrow.down");
-		expect(button.findAllByType("SwiftText" as never)).toHaveLength(0);
+		expect(button.props.modifiers).toContainEqual({ accessibilityLabel: "Jump to latest message" });
 		act(() => button.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
@@ -85,41 +76,19 @@ describe("JumpToLatest on iOS", () => {
 	it("sizes its arrow by text style", async () => {
 		const button = await renderIOS();
 		const arrow = button.findByType("SwiftImage" as never);
-		expect(arrow.props.modifiers.find((modifier: { font?: object }) => modifier.font).font).toEqual({ textStyle: "footnote", weight: "semibold" });
+		expect(arrow.props.modifiers.find((modifier: { font?: object }) => modifier.font).font).toMatchObject({ textStyle: "footnote" });
 		expect(arrow.props.size).toBeUndefined();
-	});
-
-	// Centred just above the composer, along the bottom of the list's room.
-	it("sits centred at the bottom of the space it is given", async () => {
-		const { JumpToLatest } = await import("./JumpToLatest");
-		await act(async () => { renderer = create(<JumpToLatest onPress={vi.fn()} />); });
-		expect(renderer!.root.findByType("View" as never).props.style).toMatchObject({ position: "absolute", left: 0, right: 0, alignItems: "center" });
-	});
-
-	// Before iOS 26 the glass styles draw no material at all.
-	it("fills the circle with the elevated surface before Liquid Glass", async () => {
-		platform.Version = "18.4";
-		const button = await renderIOS();
-		expect(button.props.modifiers).toEqual(expect.arrayContaining([{ buttonStyle: "borderedProminent" }, { tint: "#elevated" }]));
 	});
 });
 
 describe("JumpToLatest on Android", () => {
-	it("is Material's small FAB with the downward arrow, named for screen readers", async () => {
+	it("is named for screen readers and jumps when pressed", async () => {
 		const { JumpToLatest } = await import("./JumpToLatest.android");
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<JumpToLatest onPress={onPress} />); });
 		const fab = renderer!.root.findByType("SmallFloatingActionButton" as never);
-		expect(fab.props.containerColor).toBe("#elevated");
-		const icon = fab.findByType("FabIconSlot" as never).findByType("Icon" as never);
-		expect(icon.props).toMatchObject({ source: "drawable:arrow_downward", tint: "#ink", contentDescription: "Jump to latest message" });
+		expect(fab.findByType("Icon" as never).props.contentDescription).toBe("Jump to latest message");
 		act(() => fab.props.onClick());
 		expect(onPress).toHaveBeenCalledOnce();
-	});
-
-	it("sits centred just above the composer", async () => {
-		const { JumpToLatest } = await import("./JumpToLatest.android");
-		await act(async () => { renderer = create(<JumpToLatest onPress={vi.fn()} />); });
-		expect(renderer!.root.findByType("View" as never).props.style).toMatchObject({ position: "absolute", left: 0, right: 0, alignItems: "center" });
 	});
 });

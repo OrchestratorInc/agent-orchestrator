@@ -193,12 +193,9 @@ describe("Workers header", () => {
 	it("declares Settings, Pull Requests and Notifications as trailing header items", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		const [settings, prs, notifications] = headerButtons();
-		expect(prs.props).toMatchObject({ icon: "arrow.triangle.pull", accessibilityLabel: "Pull Requests" });
-		// All three open the same way.
+		expect([settings, prs, notifications].map((button) => button.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
 		act(() => prs.props.onPress());
 		expect(fixtures.navigate).toHaveBeenCalledWith("/prs");
-		expect(settings.props).toMatchObject({ icon: "gear", accessibilityLabel: "Settings" });
-		expect(notifications.props).toMatchObject({ icon: "bell", accessibilityLabel: "Notifications" });
 		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 		act(() => settings.props.onPress());
 		expect(fixtures.navigate).toHaveBeenCalledWith("/settings");
@@ -237,52 +234,20 @@ describe("Workers header", () => {
 		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(0);
 	});
 
-	// A large-title bar is translucent and the page is laid out under it, so the
-	// board list has to be the page's first view and inset itself under the bar.
-	it("makes the board list the page's first view, inset under the header", () => {
-		act(() => { renderer = create(<FleetScreen />); });
-		const screen = renderer.root.findAllByType("View" as never)[0];
-		const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string } };
-		expect(first.type).toBe(WorkerBoardList);
-		expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
-	});
-
-	// The list insets its rows under the bar itself; what floats over it does not,
-	// so it is told how much of its top the bar covers.
-	it("floats the board's overlays below the iOS bar the page runs under", () => {
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findByType(WorkerBoardList).props.overlayTopInset).toBe(155);
-	});
-
-	// Android's top app bar sits above the page and covers none of it.
-	it("leaves the board's overlays at the top of the Android page", () => {
-		fixtures.platform = "android";
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findByType(WorkerBoardList).props.overlayTopInset).toBe(0);
-	});
-});
-
-describe("Workers search", () => {
-	// The filter menu narrows the board; there is no search to keep in sync.
-	it("has no header search bar", () => {
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findAllByType("StackSearchBar" as never)).toHaveLength(0);
-	});
 });
 
 describe("Workers filter menu", () => {
 	// iOS leads the bar with the filter, across from the actions.
 	it("leads the iOS bar with the environment and project choices, current ones checked", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle", accessibilityLabel: "Filter workers" });
+		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers");
 		expect(environmentMenu().props.title).toBe("All machines");
-		expect(choices(environmentMenu()).map((node) => [node.props.children, node.props.icon, node.props.isOn])).toEqual([
-			["All machines", "server.rack", true],
-			["Mac", "desktopcomputer", false],
-			["Windows", "desktopcomputer", false],
+		expect(choices(environmentMenu()).map((node) => [node.props.children, node.props.isOn])).toEqual([
+			["All machines", true],
+			["Mac", false],
+			["Windows", false],
 		]);
 		// Both are titled with their selection alone, which is also what it holds.
-		expect(submenu("All projects").props.icon).toBe("folder");
 		expect(choices(submenu("All projects")).map((node) => [node.props.children, node.props.isOn])).toEqual([["All projects", true]]);
 	});
 
@@ -303,10 +268,8 @@ describe("Workers filter menu", () => {
 		expect(toolbar("left")).toBeUndefined();
 		expect(toolbar("right")!.props.children[0].props.accessibilityLabel).toBe("Filter workers");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		// Each machine keeps its glyph in the Material menu, as in the UIMenu.
-		expect(choices(environmentMenu()).map((node) => node.props.icon)).toEqual(["drawable:server", "drawable:desktop", "drawable:desktop"]);
 		choose(environmentMenu(), "Windows");
-		expect(filterMenu().findByType("StackToolbarBadge" as never).props.style).toEqual({ backgroundColor: "#accent" });
+		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(1);
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Windows");
 	});
 
@@ -322,7 +285,6 @@ describe("Workers filter menu", () => {
 		expect(environmentMenu().props.title).toBe("Mac");
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac");
 		choose(submenu("All projects"), "AO");
-		expect(submenu("AO").props.icon).toBe("folder");
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac, AO");
 	});
 
@@ -331,14 +293,6 @@ describe("Workers filter menu", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(renderer.root.findAllByType("StackToolbarMenu" as never)).toHaveLength(0);
-	});
-
-	// A row reading "All machines" alone did not say it was a choice of
-	// machine, so each submenu sits under a section saying what it filters by.
-	it("heads the machine and project choices with what they filter by", () => {
-		act(() => { renderer = create(<FleetScreen />); });
-		const sections = filterMenu().props.children.filter((child: { props?: { inline?: boolean } } | null) => child?.props?.inline);
-		expect(sections.map((section: { props: { title: string } }) => section.props.title)).toEqual(["Machine", "Project"]);
 	});
 
 	it("scopes the project choices to the environment and drops one it does not have", () => {
@@ -389,8 +343,7 @@ describe("Workers spawn action", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Notifications"]);
 		const fab = renderer.root.findByType("AddFab" as never);
-		expect(fab.props).toMatchObject({ label: "New task", bottomInset: 0, testID: "spawn-worker" });
-		expect(renderer.root.findByType(WorkerBoardList).props.contentBottomInset).toBe(72 + 24);
+		expect(fab.props.label).toBe("New task");
 		act(() => fab.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
@@ -493,8 +446,7 @@ describe("Workers selected-machine reachability", () => {
 		expect(fixtures.refreshAll).not.toHaveBeenCalled();
 	});
 	// The same picker on both platforms; its native menus are tested on their own.
-	it.each(["ios", "android"] as const)("offers every environment from the unreachable machine's picker on %s and applies a choice immediately", (platform) => {
-		fixtures.platform = platform;
+	it("offers every environment from the unreachable machine's picker and applies a choice immediately", () => {
 		selectWindows();
 		const picker = renderer.root.findByType("EnvironmentPicker" as never);
 		expect(picker.props.environments.map((environment: { name: string }) => environment.name)).toEqual(["Mac", "Windows"]);

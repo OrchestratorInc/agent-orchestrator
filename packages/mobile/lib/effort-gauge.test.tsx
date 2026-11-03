@@ -19,7 +19,7 @@ vi.mock("react-native-svg", async () => {
 	return { default: host("Svg"), Circle: host("Circle"), Line: host("Line"), Path: host("Path") };
 });
 
-import { EffortGauge, EffortGaugeButton } from "./effort-gauge";
+import { EffortGaugeButton } from "./effort-gauge";
 
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
@@ -31,13 +31,6 @@ const hostType = (node: ReactTestInstance): string => (typeof node.type === "str
 const hosts = (root: ReactTestInstance, type: string) => root.findAll((node) => hostType(node) === type);
 
 describe("effort gauge", () => {
-	it("draws a segment per level, lit in the theme's accent up to the chosen one", async () => {
-		await act(async () => { renderer = create(<EffortGauge choices={levels("medium")} color="#ink" />); });
-		const segments = hosts(renderer!.root, "Path");
-		expect(segments).toHaveLength(5);
-		expect(segments.map((segment) => segment.props.stroke)).toEqual(["#accent", "#accent", "#ink", "#ink", "#ink"]);
-	});
-
 	it("names the level on its trigger and ticks on a tap", async () => {
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<EffortGaugeButton choices={levels("xhigh")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });

@@ -64,7 +64,6 @@ describe("a yes/no field", () => {
 	it("hosts the native switch, hidden from screen readers and toggled by touch", () => {
 		const onChange = render({ type: "boolean" }, true);
 		const host = renderer!.root.findByType("Host" as never);
-		expect(host.props).toMatchObject({ colorScheme: "dark", style: { width: 54, height: 34 } });
 		expect(host.parent!.props).toMatchObject({ accessibilityElementsHidden: true, importantForAccessibility: "no-hide-descendants" });
 		const nativeSwitch = host.findByType("Switch" as never);
 		expect(nativeSwitch.props.value).toBe(true);

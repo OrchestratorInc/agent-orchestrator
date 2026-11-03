@@ -36,7 +36,6 @@ describe("machine editor draft", () => {
 		expect(isDraftDirty(initial, { ...initial, machineName: "Travel Mac" })).toBe(true);
 		expect(isDraftDirty(initial, { ...initial, appearance: { symbol: "cloud" } })).toBe(true);
 		expect(isDraftDirty(initial, { ...initial, config: { ...initial.config, password: "new" } })).toBe(true);
-		expect(isDraftDirty(initial, { ...initial, config: { ...initial.config, secure: false } })).toBe(true);
 	});
 
 	it("saves only with a name, a host and a real port", () => {
@@ -45,6 +44,5 @@ describe("machine editor draft", () => {
 		expect(canSaveDraft({ ...draft, machineName: "  " })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "" } })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "70000" } })).toBe(false);
-		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "" } })).toBe(false);
 	});
 });

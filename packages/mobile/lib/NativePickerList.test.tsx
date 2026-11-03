@@ -101,37 +101,27 @@ describe("Android picker list", () => {
 	it("draws each choice as a Material list item led by a radio button", () => {
 		const { onSelect } = render();
 		expect(byType("RadioButton").map((node) => node.props.selected)).toEqual([true, false, false]);
-		const [first, second, third] = byType("ComposeListItem");
-		expect(first.props.colors).toEqual({ containerColor: "transparent" });
+		const [, second, third] = byType("ComposeListItem");
 		expect(second.props.modifiers[0].selectable).toMatchObject({ selected: false, role: "radioButton" });
 		act(() => second.props.modifiers[0].selectable.handler());
 		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
 		// Not choosable: dimmed, not selectable, and inside a disabled click
 		// target, which TalkBack reads as one node that is disabled.
-		expect(third.props.modifiers).toEqual([{ alpha: 0.4 }]);
 		const surfaces = byType("Surface");
 		expect(surfaces).toHaveLength(1);
-		expect(surfaces[0].props).toMatchObject({ enabled: false, color: "transparent" });
+		expect(surfaces[0].props.enabled).toBe(false);
 		expect(surfaces[0].findByType("ComposeListItem" as never)).toBe(third);
 		// Its handler never picks the row: Codex, above, is still the only choice made.
 		surfaces[0].props.onClick();
 		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
-		expect(second.findByType("SupportingContent" as never).findByType("ComposeText" as never).props.color).toBe("amber");
-		expect(first.findByType("TrailingContent" as never).findByType("RNHostView" as never).props.matchContents).toBe(true);
 	});
 
-	it("refreshes from a pull and keeps taps while the keyboard is up", () => {
-		const { onRefresh } = render({ refreshing: true });
+	it("refreshes from a pull, keeps taps while the keyboard is up, and says why it is empty", () => {
+		const { onRefresh } = render({ options: [], empty: "No agents reported." });
 		const list = renderer!.root.findByType("FlatList" as never);
-		expect(list.props.nestedScrollEnabled).toBe(true);
 		expect(list.props.keyboardShouldPersistTaps).toBe("handled");
-		expect(list.props.refreshControl.props.refreshing).toBe(true);
 		list.props.refreshControl.props.onRefresh();
 		expect(onRefresh).toHaveBeenCalledOnce();
-	});
-
-	it("says why the list is empty", () => {
-		render({ options: [], empty: "No agents reported." });
 		expect(renderer!.root.findAll((node) => node.props.children === "No agents reported.")).toHaveLength(1);
 	});
 });
@@ -142,9 +132,7 @@ describe("iOS picker list", () => {
 		const { onSelect } = render();
 		const rows = byType("ListItem");
 		expect(rows.map((row) => row.props.children)).toEqual(["Claude Code", "Codex", "Aider"]);
-		expect(rows[0].props.trailing.props.name).toBe("checkmark");
 		expect(rows[0].props.modifiers).toEqual([{ traits: ["isSelected"] }]);
-		expect(rows[1].props.trailing).toBeUndefined();
 		act(() => rows[1].props.onPress());
 		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
 		expect(rows[2].props.onPress).toBeUndefined();

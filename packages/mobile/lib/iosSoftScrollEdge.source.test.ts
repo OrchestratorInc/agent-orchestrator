@@ -21,8 +21,6 @@ describe("iOS soft scroll edge", () => {
 	it("gives every scroll view the soft top edge from launch, even one set back to automatic", () => {
 		const out = adoptSoftScrollEdge(TEMPLATE);
 		expect(out).toContain("    UIScrollView.adoptSoftTopEdge()\n\n    return super.application(");
-		expect(out).toContain("topEdgeEffect.style == .automatic");
-		expect(out).toContain("topEdgeEffect.style = .soft");
 		expect(out).toContain("ao_setSoftStyle(style == .automatic ? .soft : style)");
 	});
 

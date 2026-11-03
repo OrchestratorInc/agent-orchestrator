@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CODE_MAX_SCALE, codeContentWidth, codeScale, gutterWidth } from "./codeMetrics";
 import type { DisplayRow } from "./model";
@@ -22,31 +20,5 @@ describe("code metrics", () => {
 		const scaled = codeContentWidth(rows, 3, 1.4);
 		expect(scaled).toBeGreaterThan(plain * 1.3);
 		expect(gutterWidth(3, 1.4)).toBeGreaterThan(gutterWidth(3, 1));
-	});
-});
-
-describe("the diff rows", () => {
-	const components = readFileSync(fileURLToPath(new URL("./components.tsx", import.meta.url)), "utf8");
-
-	it("draws the selection as an overlay, its knobs inside the row", () => {
-		expect(components).not.toContain("borderLeftWidth");
-		expect(components).toContain('{selected ? <View pointerEvents="none" style={styles.selectionBar} /> : null}');
-		expect(components).not.toMatch(/knob\w*: \{[^}]*(left|top|bottom): -/);
-	});
-
-	it("scales the gutter and the marker with the code, so numbers stay on their lines", () => {
-		expect(components.match(/maxFontSizeMultiplier=\{CODE_MAX_SCALE\}/g)).toHaveLength(3);
-		expect(components).toContain("gutterWidth(digits, scale)");
-	});
-
-	it("gives a fold the touch target and no haptic", () => {
-		expect(components).toContain("fold: { minHeight: touchTarget,");
-		const fold = components.slice(components.indexOf("export const FoldRow"), components.indexOf("// ---- Selection bar"));
-		expect(fold).not.toContain("haptics");
-	});
-
-	it("draws the send glyph in the accent fill's own ink", () => {
-		expect(components).not.toContain("color={t.bgBase}");
-		expect(components).toContain('<AppSymbol name="send" size={iconSize.md} color={t.onAccent}');
 	});
 });

@@ -44,32 +44,16 @@ function frozen(): boolean {
 	return renderer!.root.findByType("FrozenAppScope" as never).props.frozen;
 }
 
-it("follows the store while its tab is on screen", () => {
-	expect(frozen()).toBe(false);
-});
-
 // Every tab stays mounted; the ones not showing stop re-rendering on each poll.
-it("freezes a tab that is not selected", () => {
-	fixtures.focused = false;
-	fixtures.selectedKey = "projects";
-	expect(frozen()).toBe(true);
-});
-
-// A session pushed over the board leaves the selected tab live, so its board is
-// current as a back swipe reveals it.
-it("keeps the selected tab live under a page pushed over the board", () => {
-	fixtures.focused = false;
-	expect(frozen()).toBe(false);
-});
-
-// Focus turns over with the tab itself, a commit before the selection does.
-it("thaws a tab as soon as it is focused", () => {
-	fixtures.selectedKey = "projects";
-	expect(frozen()).toBe(false);
-});
-
-it("wraps the tab's whole stack", () => {
-	act(() => { renderer = create(<TabStack screen="index" title="Workers" />); });
-	const scope = renderer!.root.findByType("FrozenAppScope" as never);
-	expect(scope.findByType("Stack" as never).findByType("StackScreen" as never).props).toMatchObject({ name: "index", options: { title: "Workers" } });
+// A page pushed over the board leaves the selected tab live, so its board is
+// current as a back swipe reveals it; focus turns over a commit before selection.
+it.each([
+	["follows the store while its tab is on screen", true, "workers", false],
+	["freezes a tab that is not selected", false, "projects", true],
+	["keeps the selected tab live under a page pushed over the board", false, "workers", false],
+	["thaws a tab as soon as it is focused", true, "projects", false],
+])("%s", (_name, focused, selectedKey, expected) => {
+	fixtures.focused = focused;
+	fixtures.selectedKey = selectedKey;
+	expect(frozen()).toBe(expected);
 });

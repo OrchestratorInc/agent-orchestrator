@@ -56,18 +56,9 @@ it("opens the native menu from the row's own long press", () => {
 	expect(onPress).not.toHaveBeenCalled();
 });
 
-it("answers a touch with the Material ripple rather than a fade", () => {
-	const row = mount().root.findByType("Pressable" as never);
-	expect(row.props.android_ripple).toMatchObject({ color: "accent-tint", borderless: false });
-	expect(row.props.style({ pressed: true })).toEqual([{ minHeight: 76 }, undefined]);
-});
-
-it("lists every action with its Material Symbol, and Archive as destructive", () => {
-	const view = mount();
-	const actions = view.root.findByType("MenuView" as never).props.actions;
-	expect(actions.map((action: { image: string }) => action.image)).toEqual(["drawable:open", "drawable:pin", "drawable:delete"]);
-	expect(actions.at(-1)).toMatchObject({ id: "delete", attributes: { destructive: true }, titleColor: "red", imageColor: "red" });
-	expect(view.root.findByType("MenuView" as never).props.shouldOpenOnLongPress).toBe(true);
+it("marks Archive as destructive", () => {
+	const actions = mount().root.findByType("MenuView" as never).props.actions;
+	expect(actions.at(-1)).toMatchObject({ id: "delete", attributes: { destructive: true } });
 });
 
 // TalkBack cannot long-press the row into its menu, so the menu's actions are

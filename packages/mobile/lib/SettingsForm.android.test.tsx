@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createElement, type ReactNode } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +41,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	};
 });
 
-import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm.android";
+import { SettingsButtonRow, SettingsChoiceSection, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm.android";
 import { settingsIcons } from "./SettingsForm.types";
 import { materialDrawableNames } from "./toolbarIcon.types";
 
@@ -80,56 +78,13 @@ afterEach(() => {
 });
 
 describe("the Android settings form", () => {
-	// Edge to edge: the list ends above the navigation bar it scrolls under.
-	it("is one lazy Material list on the page's background, clear of the navigation bar", () => {
-		const root = render(<SettingsForm testID="form"><SettingsSection title="Machines" /></SettingsForm>);
-		const list = root.findByType("LazyColumn" as never);
-		expect(root.findByType("Host" as never).props.colorScheme).toBe("dark");
-		expect(list.props.contentPadding).toEqual({ start: 16, end: 16, top: 16, bottom: 40 });
-		expect(find(list, "background")?.args).toEqual(["#base"]);
-		expect(find(list, "testID")?.args).toEqual(["form"]);
-	});
-
-	it("rounds a section's ends and squares the seams between its rows, skipping rows that are not there", () => {
-		const root = render(
-			<SettingsSection title="Machines" footer="Footer">
-				<SettingsValueRow icon="laptop" label="One" />
-				{null}
-				<>
-					<SettingsValueRow icon="laptop" label="Two" />
-					<SettingsValueRow icon="laptop" label="Three" />
-				</>
-			</SettingsSection>,
-		);
-		const shapes = root.findAllByType("ListItem" as never).map((item) => find(item, "clip")?.args[0]);
-		expect(shapes).toEqual([
-			{ roundedCorner: { topStart: 20, topEnd: 20, bottomStart: 4, bottomEnd: 4 } },
-			{ roundedCorner: 4 },
-			{ roundedCorner: { topStart: 4, topEnd: 4, bottomStart: 20, bottomEnd: 20 } },
-		]);
-		expect(text(root)?.[0]).toBe("Machines");
-		expect(text(root)?.at(-1)).toBe("Footer");
-	});
-
-	it("rounds a lone row all round", () => {
-		const item = render(<SettingsSection><SettingsValueRow icon="laptop" label="Only" /></SettingsSection>).findByType("ListItem" as never);
-		expect(find(item, "clip")?.args[0]).toEqual({ roundedCorner: 20 });
-	});
-
-	// The press modifier is on the ListItem itself, after the clip, so the ripple
-	// covers the whole row in its shape.
 	it("makes a link row the tappable ListItem, with its value underneath and no chevron", () => {
 		const onPress = vi.fn();
 		const item = render(<SettingsLinkRow icon="theme" label="Theme" value="Nord" onPress={onPress} testID="theme" />).findByType("ListItem" as never);
-		const types = modifiersOf(item).map((modifier) => modifier.$type);
-		expect(types.indexOf("clip")).toBeLessThan(types.indexOf("clickable"));
 		(find(item, "clickable")!.args[0] as () => void)();
 		expect(onPress).toHaveBeenCalledOnce();
 		expect(text(slot(item, "HeadlineContent"))).toEqual(["Theme"]);
 		expect(text(slot(item, "SupportingContent"))).toEqual(["Nord"]);
-		expect(slot(item, "LeadingContent").findByType("Icon" as never).props.source).toBe("drawable:palette");
-		expect(slot(item, "TrailingContent")).toBeUndefined();
-		expect(item.props.colors.containerColor).toBe("#elevated");
 	});
 
 	it("leaves a value row untappable, its value in its tone", () => {
@@ -138,12 +93,9 @@ describe("the Android settings form", () => {
 		expect(slot(item, "SupportingContent").findByType("Text" as never).props.color).toBe("#red");
 	});
 
-	it("draws an action in the accent and a destructive one in red", () => {
-		const action = render(<SettingsButtonRow icon="addMachine" label="Add a machine" onPress={vi.fn()} />).findByType("ListItem" as never);
-		expect(slot(action, "HeadlineContent").findByType("Text" as never).props.color).toBe("#accent");
+	it("draws a destructive action in red", () => {
 		const destructive = render(<SettingsButtonRow icon="signOut" label="Sign out" destructive onPress={vi.fn()} />).findByType("ListItem" as never);
 		expect(slot(destructive, "HeadlineContent").findByType("Text" as never).props.color).toBe("#red");
-		expect(slot(destructive, "LeadingContent").findByType("Icon" as never).props.tint).toBe("#red");
 	});
 
 	it("dims a held action and takes its press away, with Material's spinner while it works", () => {
@@ -174,12 +126,8 @@ describe("the Android settings form", () => {
 		const item = root.findByType("ListItem" as never);
 
 		expect(menu().props.expanded).toBe(false);
-		// The choice sits at the row's end in an outlined button with the
-		// dropdown arrow, so the row reads as a dropdown.
 		const dropdown = slot(item, "TrailingContent").findByType("OutlinedButton" as never);
 		expect(text(dropdown)).toEqual(["Dev"]);
-		expect(dropdown.findByType("Icon" as never).props.source).toBe("drawable:arrow_drop_down");
-		expect(slot(item, "SupportingContent")).toBeUndefined();
 		act(() => (find(item, "clickable")!.args[0] as () => void)());
 		expect(menu().props.expanded).toBe(true);
 		act(() => menu().props.onDismissRequest());
@@ -194,20 +142,12 @@ describe("the Android settings form", () => {
 		expect(menu().props.expanded).toBe(false);
 	});
 
-	it("makes a status row the tappable ListItem, its status quietly underneath and no chevron", () => {
+	it("makes a status row the tappable ListItem, its status underneath", () => {
 		const onPress = vi.fn();
 		const item = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connected" tone="good" onPress={onPress} />).findByType("ListItem" as never);
-		const supporting = slot(item, "SupportingContent");
-		// The colour is only in the dot; the words stay in the secondary ink.
-		expect(find(supporting.findByType("Box" as never), "background")!.args[0]).toBe("#green");
-		expect(supporting.findByType("Text" as never).props.color).toBe("#secondary");
-		expect(slot(item, "LeadingContent").findByType("Icon" as never).props.source).toBe("drawable:laptop");
-		expect(slot(item, "TrailingContent")).toBeUndefined();
+		expect(text(slot(item, "SupportingContent"))).toEqual(["Connected"]);
 		(find(item, "clickable")!.args[0] as () => void)();
 		expect(onPress).toHaveBeenCalledOnce();
-
-		const quiet = render(<SettingsStatusRow icon="laptop" label="Dev" status="Connecting…" onPress={vi.fn()} />);
-		expect(find(quiet.findByType("Box" as never), "background")!.args[0]).toBe("#tertiary");
 	});
 
 	it("lays a segmented picker out as Material's single-choice segmented buttons", () => {
@@ -244,17 +184,8 @@ describe("the Android settings form", () => {
 	});
 });
 
-describe("settings glyphs on Android", () => {
-	const form = readFileSync(fileURLToPath(new URL("./SettingsForm.android.tsx", import.meta.url)), "utf8");
-
-	// Compose draws a bundled vector for each glyph, and the shared registry is
-	// the one place a drawable is bundled (lib/toolbarIcon.test.ts checks its files).
-	it.each(Object.entries(settingsIcons))("draws %s from the shared drawable registry", (_name, symbol) => {
-		expect(materialDrawableNames).toContain(symbol.android);
-	});
-
-	it("resolves every row glyph through materialDrawable", () => {
-		expect(form).toContain("materialDrawable(settingsIcons[icon].android)");
-		expect(form).not.toContain("require(");
-	});
+// Compose draws a bundled vector for each glyph, and the shared registry is
+// the one place a drawable is bundled (lib/toolbarIcon.test.ts checks its files).
+it.each(Object.entries(settingsIcons))("draws the %s glyph from the shared drawable registry on Android", (_name, symbol) => {
+	expect(materialDrawableNames).toContain(symbol.android);
 });

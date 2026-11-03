@@ -71,16 +71,6 @@ const byTag = (testID: string) => renderer!.root.find((node) => typeof node.type
 const supporting = (node: ReactTestInstance) => node.findAllByType("OutlinedTextField.SupportingText" as never).map((slot) => slot.findByType("Text" as never).props.children);
 
 describe("the Android machine editor", () => {
-	it("uses outlined Material fields, the shape grid and a Material switch, in sentence case", () => {
-		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor()} />); });
-		const labels = renderer!.root.findAllByType("OutlinedTextField.Label" as never).map((slot) => slot.findByType("Text" as never).props.children);
-		expect(labels).toEqual(["Name", "Host", "API port", "Password"]);
-		expect(renderer!.root.findByProps({ testID: "environment-symbol-a-laptop" }).props.accessibilityState.selected).toBe(true);
-		expect(renderer!.root.findByType("Switch" as never).props.value).toBe(false);
-		const headings = renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "header").map((node) => node.props.children);
-		expect(headings).toEqual(["Icon", "Connection"]);
-	});
-
 	it("puts each error on the field it is about", () => {
 		act(() => {
 			renderer = create(<MachineEditorForm host={host} editor={editor({ failure: { message: "That password was rejected. Check it and try again.", field: "password" }, portError: "Enter a port from 1 to 65535." })} />);

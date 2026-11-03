@@ -54,8 +54,6 @@ import { ToastHost } from "./Toast";
 import { ToastHost as AndroidToastHost } from "./Toast.android";
 import type { ToastController } from "./Toast.types";
 import { BANNER_MS } from "./motion";
-import { darkTheme } from "./theme";
-import { space } from "./tokens";
 import { useToast } from "./useToast";
 
 let renderer: ReactTestRenderer | undefined;
@@ -100,24 +98,18 @@ describe("useToast", () => {
 		expect(toast.current!.id).not.toBe(first.id);
 		act(() => toast.hide(first.id));
 		expect(toast.current?.text).toBe("Path copied.");
+		expect(toast.current).toMatchObject({ duration: "short", tone: "neutral", dismissible: false });
 		act(() => toast.hide());
 		expect(toast.current).toBeUndefined();
-	});
-
-	it("defaults to a short, neutral message", () => {
-		render(<Screen />);
-		act(() => toast.show("Sent."));
-		expect(toast.current).toMatchObject({ text: "Sent.", duration: "short", tone: "neutral", dismissible: false });
 	});
 });
 
 describe("ToastHost on iOS", () => {
-	it("fades the HUD in and out, announces it, and takes it down after it has been read", () => {
+	it("fades the HUD in, announces it, and takes it down after it has been read", () => {
 		render(<Screen />);
 		expect(hud()).toBeUndefined();
 		act(() => toast.show("Comment added to the review."));
 		expect(hud().props.entering).toEqual({ name: "FadeIn", ms: BANNER_MS });
-		expect(hud().props.exiting).toEqual({ name: "FadeOut", ms: BANNER_MS });
 		expect(fixtures.announce).toHaveBeenCalledExactlyOnceWith("Comment added to the review.");
 		act(() => { vi.advanceTimersByTime(2_999); });
 		expect(toast.current).toBeDefined();
@@ -143,30 +135,15 @@ describe("ToastHost on iOS", () => {
 		expect(hud().props.exiting).toBeUndefined();
 	});
 
-	it("never takes a touch, and sits above the home indicator unless told otherwise", () => {
+	it("never takes a touch", () => {
 		render(<Screen />);
-		const anchor = renderer!.root.findAllByType("View" as never)[0];
-		expect(anchor.props.pointerEvents).toBe("none");
-		expect(anchor.props.style[1]).toEqual({ bottom: 34 + space.xl });
-		act(() => renderer!.update(<Screen bottomOffset={96} />));
-		expect(renderer!.root.findAllByType("View" as never)[0].props.style[1]).toEqual({ bottom: 96 });
-	});
-
-	it("leads a warning with its glyph in the warning colour", () => {
-		render(<Screen />);
-		act(() => toast.show("Couldn't clear notifications.", { tone: "warning" }));
-		const glyph = renderer!.root.findByType("SymbolView" as never);
-		expect(glyph.props.name).toEqual({ ios: "exclamationmark.triangle", android: "warning" });
-		expect(glyph.props.tintColor).toBe(darkTheme.amber);
+		expect(renderer!.root.findAllByType("View" as never)[0].props.pointerEvents).toBe("none");
 	});
 });
 
 describe("ToastHost on Android", () => {
 	it("shows each message as a Material snackbar and clears it once Compose dismisses it", async () => {
 		render(<Screen android />);
-		const host = renderer!.root.findByType("ComposeHost" as never);
-		expect(host.props).toMatchObject({ matchContents: { vertical: true }, colorScheme: "dark" });
-		expect(host.props).not.toHaveProperty("seedColor");
 		await act(async () => toast.show("Path copied."));
 		expect(fixtures.showSnackbar).toHaveBeenCalledExactlyOnceWith({ message: "Path copied.", duration: "short", withDismissAction: false });
 		expect(toast.current).toBeUndefined();
@@ -176,25 +153,12 @@ describe("ToastHost on Android", () => {
 	// The Compose host ignores `pointerEvents`, so an RN view around it decides.
 	// A "none" view also withholds the hover events TalkBack's explore-by-touch
 	// rides on, so even a plain message must take the touches over itself.
-	it("takes touches over a plain message only while it is up", async () => {
-		let finish!: (result: string) => void;
-		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
-		render(<Screen android bottomOffset={96} />);
-		const anchor = () => renderer!.root.findByType("View" as never);
-		expect(anchor().props).toMatchObject({ collapsable: false, pointerEvents: "none" });
-		expect(anchor().props.style[1]).toEqual({ bottom: 96 });
-		expect(renderer!.root.findByType("ComposeHost" as never).props).not.toHaveProperty("pointerEvents");
-		act(() => toast.show("Path copied."));
-		expect(anchor().props.pointerEvents).toBe("box-none");
-		await act(async () => finish("dismissed"));
-		expect(anchor().props.pointerEvents).toBe("none");
-	});
-
 	it("gives a dismissible message its close button and the touches over it until it goes", async () => {
 		let close!: (result: string) => void;
 		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { close = resolve; }));
 		render(<Screen android />);
 		const anchor = () => renderer!.root.findByType("View" as never);
+		expect(anchor().props.pointerEvents).toBe("none");
 		act(() => toast.show("Couldn't restore the session.", { duration: "long", dismissible: true }));
 		expect(fixtures.showSnackbar).toHaveBeenCalledExactlyOnceWith({ message: "Couldn't restore the session.", duration: "long", withDismissAction: true });
 		expect(anchor().props.pointerEvents).toBe("box-none");

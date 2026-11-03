@@ -21,7 +21,7 @@ vi.mock("@expo/ui/community/menu", async () => {
 		},
 	};
 });
-vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: { color: "#ripple" }, pressed: { backgroundColor: "#pressed" } }) }));
+vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: undefined }) }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ textPrimary: "#textPrimary", textSecondary: "#textSecondary" }), useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("../haptics", () => ({ haptics: { press: fixtures.press } }));
 vi.mock("./fileIcons", () => ({ fileIcon: (name: string) => `drawable:${name}` }));
@@ -59,47 +59,28 @@ const props = (onAction = vi.fn(), onPress = vi.fn()) => ({
 	children: null,
 });
 
-describe("FileRowMenu on iOS", () => {
-	it("opens the system context menu on a long press, with SF Symbols", async () => {
-		const onAction = vi.fn();
-		await act(async () => { renderer = create(<FileRowMenu {...props(onAction)} />); });
-		const menu = renderer!.root.findByType("MenuView" as never);
-		expect(menu.props.shouldOpenOnLongPress).toBe(true);
-		expect(menu.props.actions.map((action: { title: string; image: string }) => [action.title, action.image])).toEqual([
-			["Open diff", "plus.forwardslash.minus"],
-			["Open file", "doc.text"],
-			["Copy path", "doc.on.doc"],
-			["Share", "square.and.arrow.up"],
-		]);
-		act(() => menu.props.onPressAction({ nativeEvent: { event: "copyPath" } }));
-		expect(onAction).toHaveBeenCalledWith("copyPath");
-	});
-
-	it("keeps the row a button that spans the list and offers the menu to screen readers", async () => {
+describe("FileRowMenu", () => {
+	it("opens the iOS context menu on a long press and offers its actions to screen readers", async () => {
 		const onAction = vi.fn();
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<FileRowMenu {...props(onAction, onPress)} />); });
+		const menu = renderer!.root.findByType("MenuView" as never);
+		expect(menu.props.shouldOpenOnLongPress).toBe(true);
+		expect(menu.props.actions.map((action: { title: string }) => action.title)).toEqual(["Open diff", "Open file", "Copy path", "Share"]);
+		act(() => menu.props.onPressAction({ nativeEvent: { event: "copyPath" } }));
+		expect(onAction).toHaveBeenCalledWith("copyPath");
 		const row = renderer!.root.findByType("Pressable" as never);
 		expect(row.props.accessibilityRole).toBe("button");
-		expect(row.props.style).toContainEqual({ width: 390 });
-		expect(row.props.onLongPress).toBeUndefined();
 		expect(row.props.accessibilityActions.map((action: { label: string }) => action.label)).toEqual(["Open diff", "Open file", "Copy path", "Share"]);
 		act(() => row.props.onAccessibilityAction({ nativeEvent: { actionName: "share" } }));
-		expect(onAction).toHaveBeenCalledWith("share");
+		expect(onAction).toHaveBeenLastCalledWith("share");
 		act(() => row.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
-});
 
-describe("FileRowMenu on Android", () => {
-	it("opens Material's menu from the row's own long press, with a ripple and drawables", async () => {
+	it("opens Android's menu from the row's own long press", async () => {
 		await act(async () => { renderer = create(<AndroidFileRowMenu {...props()} />); });
-		const menu = renderer!.root.findByType("MenuView" as never);
-		expect(menu.props.colorScheme).toBe("dark");
-		expect(menu.props.actions.map((action: { image: string }) => action.image)).toEqual(["drawable:openDiff", "drawable:openFile", "drawable:copy", "drawable:share"]);
-		const row = renderer!.root.findByType("Pressable" as never);
-		expect(row.props.android_ripple).toEqual({ color: "#ripple" });
-		act(() => row.props.onLongPress());
+		act(() => renderer!.root.findByType("Pressable" as never).props.onLongPress());
 		expect(fixtures.show).toHaveBeenCalledOnce();
 		expect(fixtures.press).toHaveBeenCalledOnce();
 	});

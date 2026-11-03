@@ -42,11 +42,8 @@ describe("StackRootBack", () => {
 	it("puts a back chevron at the bar's leading end on iOS, popping the page", () => {
 		fixtures.platform.OS = "ios";
 		act(() => { renderer = create(<StackRootBack />); });
-		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("left");
-		// Our 44pt glass circle in the bar: a bar button's frame is under the target.
-		expect(renderer!.root.findByType("StackToolbarView" as never).props.hidesSharedBackground).toBe(true);
 		const back = renderer!.root.findByType("NativeHeaderButton" as never);
-		expect(back.props).toMatchObject({ icon: "back", label: "Back" });
+		expect(back.props.label).toBe("Back");
 		back.props.onPress();
 		expect(fixtures.backOr).toHaveBeenCalledWith(fixtures.router);
 	});

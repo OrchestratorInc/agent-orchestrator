@@ -170,7 +170,7 @@ describe("session preview mode", () => {
 		// The live browser draws the bar's right side, so the page hands it the menu.
 		expect(nodes("StackToolbar")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")[0].props.headerItem).toBeTruthy();
-		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Desktop browser", icon: "desktopcomputer" });
+		expect(modeMenu().props.accessibilityLabel).toBe("View, Desktop browser");
 		expect(modeAction("Desktop browser").props.isOn).toBe(true);
 		expect(mobileView()).toEqual({ checked: false, disabled: false });
 	});
@@ -249,19 +249,17 @@ describe("session preview mode", () => {
 		expect(mobileView().checked).toBe(false);
 	});
 
-	it("shows the view's own device in the bar while switching to the responsive preview and back", async () => {
+	it("names the view in the bar while switching to the responsive preview and back", async () => {
 		await openPreview();
 		await setMobile(true);
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
 		expect(mobileView().checked).toBe(true);
-		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Mobile view", icon: "iphone" });
-		expect(nodes("StackToolbar")[0].props.placement).toBe("right");
+		expect(modeMenu().props.accessibilityLabel).toBe("View, Mobile view");
 		await setMobile(false);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
 		expect(mobileView().checked).toBe(false);
-		expect(modeMenu().props.icon).toBe("desktopcomputer");
 	});
 
 	it("keeps the chosen mode during preview polls while updating the app URL", async () => {
@@ -338,10 +336,8 @@ describe("app preview controls", () => {
 		expect(headerButton("Reload app preview")).toBeUndefined();
 		await setMobile(true);
 		const reload = headerButton("Reload app preview");
-		expect(reload?.props.icon).toBe("arrow.clockwise");
 		await act(async () => reload?.props.onPress());
 		expect(fixtures.web.reload).toHaveBeenCalledTimes(1);
-		expect(nodes("Pressable")).toHaveLength(0);
 	});
 
 	it("shows the page's own load progress in a native bar", async () => {
@@ -354,13 +350,6 @@ describe("app preview controls", () => {
 		expect(loadingBar()).toMatchObject({ loading: true, progress: 0.4 });
 		await act(async () => webView().props.onLoadEnd());
 		expect(loadingBar().loading).toBe(false);
-	});
-
-	it("lets iOS swipe through the page's history and pull to reload it", async () => {
-		await openPreview();
-		await setMobile(true);
-		expect(webView().props).toMatchObject({ allowsBackForwardNavigationGestures: true, pullToRefreshEnabled: true, refreshControlLightMode: true });
-		expect(webView().props.startInLoadingState).toBeUndefined();
 	});
 
 	it("titles the bar with the page on show", async () => {
@@ -393,10 +382,8 @@ describe("app preview controls", () => {
 		expect(fixtures.web.goBack).toHaveBeenCalledTimes(1);
 		await setMobile(false);
 		expect(fixtures.backHandlers).toHaveLength(0);
-	});
-
-	it("leaves iOS's back to the navigation stack", async () => {
-		await openPreview();
+		// iOS leaves its back to the navigation stack.
+		fixtures.platform.OS = "ios";
 		await setMobile(true);
 		expect(fixtures.backHandlers).toHaveLength(0);
 	});

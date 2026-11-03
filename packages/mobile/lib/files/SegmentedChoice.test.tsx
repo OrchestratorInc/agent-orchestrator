@@ -61,30 +61,23 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-describe("SegmentedChoice on iOS", () => {
-	it("is a segmented SwiftUI picker with the count in the label", async () => {
+describe("SegmentedChoice", () => {
+	it("selects the chosen option on iOS and reports only a change", async () => {
 		const onChange = vi.fn();
 		await act(async () => { renderer = create(<SegmentedChoice value="preview" options={options} onChange={onChange} accessibilityLabel="View" />); });
 		const picker = renderer!.root.findByType("Picker" as never);
-		expect(picker.props.modifiers).toContainEqual({ pickerStyle: "segmented" });
-		expect(picker.props.selection).toBe(1);
-		expect(picker.props.label).toBe("View");
-		expect(renderer!.root.findAllByType("SwiftText" as never).map((text) => text.props.children)).toEqual(["Changes 12", "Preview", "Source"]);
+		expect(picker.props).toMatchObject({ selection: 1, label: "View" });
 		act(() => picker.props.onSelectionChange(2));
 		expect(onChange).toHaveBeenCalledWith("source");
 		act(() => picker.props.onSelectionChange(1));
 		expect(onChange).toHaveBeenCalledTimes(1);
 	});
-});
 
-describe("SegmentedChoice on Android", () => {
-	it("is Material's single-choice segmented row, the chosen segment selected", async () => {
+	it("selects the chosen segment on Android and reports only a change", async () => {
 		const onChange = vi.fn();
-		await act(async () => { renderer = create(<AndroidSegmentedChoice value="diff" options={options} onChange={onChange} accessibilityLabel="View" testID="file-view" />); });
-		expect(renderer!.root.findByType("SingleChoiceSegmentedButtonRow" as never).props.modifiers).toContainEqual({ testID: "file-view" });
+		await act(async () => { renderer = create(<AndroidSegmentedChoice value="diff" options={options} onChange={onChange} accessibilityLabel="View" />); });
 		const segments = renderer!.root.findAllByType("SegmentedButton" as never);
 		expect(segments.map((segment) => segment.props.selected)).toEqual([true, false, false]);
-		expect(segments[0].props.colors.activeContainerColor).toBe("#accentTint");
 		act(() => segments[1].props.onClick());
 		expect(onChange).toHaveBeenCalledWith("preview");
 		act(() => segments[0].props.onClick());

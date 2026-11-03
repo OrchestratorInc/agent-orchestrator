@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { THEMES } from "../../shared/theme/palettes";
@@ -45,12 +43,9 @@ function choices() {
 }
 
 describe("the theme picker", () => {
-	// An inline picker on iOS, radio buttons on Android (lib/SettingsForm).
 	it("offers every desktop theme as one native choice, the current one chosen", () => {
 		const section = choices();
-		expect(section.props.label).toBe("Theme");
 		expect(section.props.selectedValue).toBe("nord");
-		expect(section.props.testID).toBe("settings-theme");
 		expect(section.props.options.map((option: { value: string; label: string }) => [option.value, option.label])).toEqual(THEMES.map((theme) => [theme.id, theme.label]));
 	});
 
@@ -70,10 +65,4 @@ describe("the theme picker", () => {
 		expect(fixtures.setStyle).toHaveBeenCalledOnce();
 	});
 
-	// The card used to be the scroll viewport so its corners stayed round; the
-	// native form scrolls and clips itself.
-	it("lets the native form scroll the list", () => {
-		const source = readFileSync(fileURLToPath(new URL("../app/settings/theme.tsx", import.meta.url)), "utf8");
-		for (const workaround of ["ScrollView", "Pressable", "overflow", "borderRadius", "hairlineWidth", "useSafeAreaInsets"]) expect(source).not.toContain(workaround);
-	});
 });

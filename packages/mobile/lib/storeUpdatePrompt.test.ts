@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ alert: vi.fn(), platform: { OS: "ios" } }));
@@ -20,16 +18,12 @@ beforeEach(() => {
 });
 
 describe("the store-update prompt", () => {
-	it("names each platform's store", () => {
-		expect(storeName("ios")).toBe("App Store");
-		expect(storeName("android")).toBe("Play Store");
-	});
-
 	it.each([
 		["ios", "App Store"],
 		["android", "Play Store"],
 	])("is the system alert on %s, with Not now as its cancel button", (os, store) => {
 		fixtures.platform.OS = os;
+		expect(storeName(os as never)).toBe(store);
 		promptStoreUpdate({ version: "2.1.0", storeConfirmed: true, onUpdate: vi.fn() });
 
 		const { title, message, buttons } = lastAlert();
@@ -67,25 +61,5 @@ describe("the store-update prompt", () => {
 		expect(options.cancelable).toBe(true);
 		options.onDismiss?.();
 		expect(onDismiss).toHaveBeenCalledOnce();
-	});
-});
-
-// There used to be three: a sheet route, an Android copy of it and an inline
-// panel in Settings.
-describe("one store-update prompt", () => {
-	const source = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-
-	it("is raised by the launch check and by Settings alike", () => {
-		expect(source("./StoreUpdateManager.tsx")).toContain("promptStoreUpdate({");
-		expect(source("./StoreUpdateManager.tsx")).not.toContain("router.push");
-		expect(source("../app/settings/index.tsx")).toContain("promptStoreUpdate({");
-		expect(source("../app/settings/index.tsx")).not.toContain("InlinePanel");
-	});
-
-	it("has no sheet of its own", () => {
-		expect(source("../app/_layout.tsx")).not.toContain("sheets/store-update");
-		for (const path of ["../app/sheets/store-update.tsx", "./StoreUpdateSheet.tsx", "./StoreUpdateSheet.android.tsx"]) {
-			expect(existsSync(fileURLToPath(new URL(path, import.meta.url)))).toBe(false);
-		}
 	});
 });

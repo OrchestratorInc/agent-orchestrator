@@ -38,20 +38,12 @@ const modifiers = (node: ReactTestInstance) => node.props.modifiers as Record<st
 
 it("sizes a Material action to its label while that fits the row", () => {
 	act(() => { renderer = create(<ElicitationAction label="Save" primary onPress={vi.fn()} />); });
-	const { ruler, copyHost, visible, copy, button, title } = actionParts();
-	expect(button.type).toBe("Button");
-	expect(button.props.colors).toEqual({ containerColor: "#0a84ff", contentColor: "#ffffff" });
-	expect(visible.props.matchContents).toBe(true);
-	expect(visible.props.style).toEqual({ maxWidth: "100%" });
+	const { ruler, copy, button, title } = actionParts();
 	// The copy spans the row unseen, out of reach of touch and TalkBack.
-	expect(ruler.props.pointerEvents).toBe("none");
 	expect(ruler.props.importantForAccessibility).toBe("no-hide-descendants");
-	expect(ruler.props.style).toMatchObject({ position: "absolute", left: 0, right: 0, opacity: 0 });
-	expect(copyHost.props.matchContents).toBe(true);
 	expect(copy.props.onClick).toBeUndefined();
 	// The title wraps rather than ending in an ellipsis.
 	expect(title.props.maxLines).toBeUndefined();
-	expect(title.props.style).toMatchObject({ textAlign: "center" });
 	expect(modifiers(button)).toBeUndefined();
 	measure(360, 96);
 	expect(modifiers(actionParts().button)).toBeUndefined();

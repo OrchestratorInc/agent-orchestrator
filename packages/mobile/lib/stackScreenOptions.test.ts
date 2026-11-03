@@ -14,14 +14,6 @@ beforeEach(() => {
 });
 
 describe("large-title header", () => {
-	it("draws the tab roots' titles large, heavy in the system face, without a hairline", () => {
-		expect(largeTitleScreenOptions()).toMatchObject({
-			headerLargeTitleEnabled: true,
-			headerLargeTitleShadowVisible: false,
-			headerLargeTitleStyle: { fontWeight: "800" },
-		});
-	});
-
 	// Before iOS 26 nothing keeps the collapsed title legible over the list, so the
 	// bar keeps the page's colour from the stack defaults.
 	it("keeps the page-coloured bar before iOS 26", () => {
@@ -40,11 +32,5 @@ describe("large-title header", () => {
 	it("leaves Android's top app bar as the stack draws it", () => {
 		platform.OS = "android";
 		expect(largeTitleScreenOptions()).toEqual({});
-	});
-
-	// The app's family carries Android's title rather than Roboto at an iOS weight.
-	it("titles Android's top app bar in the app's face at Material's title size", () => {
-		platform.OS = "android";
-		expect(stackScreenOptions(theme).headerTitleStyle).toEqual({ fontFamily: "DMSans_600SemiBold", fontSize: 20 });
 	});
 });

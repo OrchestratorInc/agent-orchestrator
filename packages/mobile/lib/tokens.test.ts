@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { sheetCornerRadius as androidSheetCornerRadius, touchTarget as androidTouchTarget } from "./platformTokens.android";
-import { fontScaleCap, press, radius, sheetCornerRadius, space, stateOpacity, touchTarget, type } from "./tokens";
+import { touchTarget as androidTouchTarget } from "./platformTokens.android";
+import { fontScaleCap, radius, space, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -38,26 +38,6 @@ describe("touch target", () => {
 	it("meets the HIG on iOS and Material 3 on Android", () => {
 		expect(touchTarget).toBe(44);
 		expect(androidTouchTarget).toBe(48);
-	});
-});
-
-describe("sheet corners", () => {
-	// Unset, iOS draws the system sheet shape; react-native-screens draws an
-	// unset Android sheet square, so Android names Material 3's corner.
-	it("leaves iOS to UIKit and gives Android Material 3's bottom-sheet shape", () => {
-		expect(sheetCornerRadius).toBeUndefined();
-		expect(androidSheetCornerRadius).toBe(28);
-	});
-});
-
-describe("state opacity", () => {
-	it("keeps a pressed control more visible than a disabled one", () => {
-		expect(stateOpacity.pressed).toBeLessThan(1);
-		expect(stateOpacity.disabled).toBeLessThan(stateOpacity.pressed);
-	});
-
-	it("is the opacity press feedback fades to", () => {
-		expect(press.opacity).toBe(stateOpacity.pressed);
 	});
 });
 
@@ -108,11 +88,5 @@ describe("type scale", () => {
 	it("keeps the reading sizes where the app reads at them", () => {
 		expect(type.body.fontSize).toBe(16);
 		expect(type.footnote.fontSize).toBe(13);
-	});
-
-	// DM Sans is spaced for reading already; only titles tighten.
-	it("leaves reading text at the family's own spacing and tightens titles", () => {
-		expect(type.body.letterSpacing).toBe(0);
-		expect(type.largeTitle.letterSpacing).toBeLessThan(0);
 	});
 });

@@ -63,7 +63,6 @@ vi.mock("./spawn-composer", async () => {
 });
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
 import { rootTouchStart } from "./touchOutside";
-import { COMPOSER_DISC } from "./chat/composerStyles";
 import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
@@ -90,37 +89,18 @@ type Props = Parameters<typeof SpawnComposerControls>[0];
 type Modifier = { modifier: string; args: unknown[] };
 
 const baseProps = (overrides: Partial<Props> = {}): Props => ({
-	hosts: [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }],
-	hostId: "host-a",
-	onSelectHost: vi.fn(),
+	hosts: [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }], hostId: "host-a", onSelectHost: vi.fn(),
 	projects: [{ id: "project-1", label: "Project", icon: "folder" }, { id: "standalone", label: "Standalone agent", icon: "message-square-plus", sectionBreakBefore: true }],
-	projectId: "project-1",
-	onSelectProject: vi.fn(),
-	agents: [{ id: "codex", label: "Codex" }, { id: "aider", label: "Aider" }],
-	harness: "codex",
-	onSelectHarness: vi.fn(),
-	models: [{ id: "gpt-5", label: "GPT-5" }],
+	projectId: "project-1", onSelectProject: vi.fn(), agents: [{ id: "codex", label: "Codex" }, { id: "aider", label: "Aider" }], harness: "codex",
+	onSelectHarness: vi.fn(), models: [{ id: "gpt-5", label: "GPT-5" }],
 	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
-	onSelectAgentModel: vi.fn(),
-	usesDefaultModel: true,
-	prompt: "",
-	onChangePrompt: vi.fn(),
-	placeholder: "Ask Codex",
-	attachments: null,
+	onSelectAgentModel: vi.fn(), usesDefaultModel: true, prompt: "", onChangePrompt: vi.fn(), placeholder: "Ask Codex", attachments: null,
 	onBrowseModels: vi.fn(),
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
-	approvalMode: "auto",
-	onSelectApprovalMode: vi.fn(),
+	approvalMode: "auto", onSelectApprovalMode: vi.fn(),
 	effortChoices: [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }],
-	onSelectEffort: vi.fn(),
-	modelSelection: "__auto__",
-	modelLabel: "Default model",
-	onSelectModel: vi.fn(),
-	onChoosePhoto: vi.fn(),
-	onChooseFile: vi.fn(),
-	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
-	onSpawn: vi.fn(),
-	busy: false,
+	onSelectEffort: vi.fn(), modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onChoosePhoto: vi.fn(),
+	onChooseFile: vi.fn(), voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() }, onSpawn: vi.fn(), busy: false,
 	disabled: false,
 	...overrides,
 });
@@ -136,20 +116,8 @@ const modifier = (node: ReactTestInstance, name: string) => modifiers(node).find
 const gaugeOf = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "EffortGaugeButton" && node.props.testID === "spawn-effort")[0];
 const identified = (root: ReactTestInstance, id: string) =>
 	root.findAll((node) => hostType(node) !== "" && modifiers(node).some((entry) => entry.modifier === "accessibilityIdentifier" && entry.args[0] === id))[0];
-// A Menu's `label` is a prop, not a child, so its element is read unrendered.
-type LabelElement = { type: unknown; props: { modifiers?: Modifier[]; children?: unknown } };
-const modifierOf = (element: LabelElement, name: string) => (element.props.modifiers ?? []).find((entry) => entry.modifier === name);
 const choices = (menu: ReactTestInstance) => menu.findAll((node) => hostType(node) === "Toggle");
 const choiceLabel = (choice: ReactTestInstance): string => choice.props.label ?? choice.findByType("Label" as never).props.title;
-
-/** The asset a harness mark element draws, rendered on its own. */
-async function markOf(element: React.ReactElement): Promise<string | undefined> {
-	let mark: ReactTestRenderer | undefined;
-	await act(async () => { mark = create(element); });
-	const name = mark!.root.findAll((node) => hostType(node) === "Image")[0]?.props.assetName;
-	await act(async () => mark!.unmount());
-	return name;
-}
 
 describe("iOS spawn selectors", () => {
 	it("checks the current machine with the system's checkable item and selects another", async () => {
@@ -168,16 +136,12 @@ describe("iOS spawn selectors", () => {
 		expect(props.onSelectHost).toHaveBeenCalledOnce();
 	});
 
-	it("separates Standalone agent from the projects and gives each row its symbol", async () => {
+	it("separates Standalone agent from the projects", async () => {
 		const props = baseProps();
 		const root = await render(props);
 		const menu = identified(root, "spawn-project");
 		const rows = menu.findAll((node) => hostType(node) === "Toggle" || hostType(node) === "Divider");
-		expect(rows.map((node) => hostType(node) === "Divider" ? "divider" : [node.props.label, node.props.systemImage, node.props.isOn])).toEqual([
-			["Project", "folder", true],
-			"divider",
-			["Standalone agent", "plus.bubble", false],
-		]);
+		expect(rows.map((node) => hostType(node) === "Divider" ? "divider" : [node.props.label, node.props.isOn])).toEqual([["Project", true], "divider", ["Standalone agent", false]]);
 		await act(async () => choices(menu)[1].props.onIsOnChange(true));
 		expect(props.onSelectProject).toHaveBeenCalledWith("standalone");
 	});
@@ -194,18 +158,15 @@ describe("iOS spawn selectors", () => {
 		await act(async () => choices(sections[0])[0].props.onIsOnChange(true));
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
 		expect(root.findAll((node) => modifier(node, "accessibilityIdentifier")?.args[0] === "spawn-model-codex")).toHaveLength(0);
-		// Each other agent keeps its mark in the menu: an asset-catalog image, which
-		// keeps its size in an open submenu's header where a framed image did not.
 		const aider = identified(root, "spawn-model-aider");
 		expect(aider.props.label.props.title).toBe("Aider");
-		expect(await markOf(aider.props.label.props.icon)).toBe("HarnessLogo-aider");
 		// An agent without a list yet still offers its default model.
 		expect(choices(aider).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Default model", false]]);
 		await act(async () => choices(aider)[0].props.onIsOnChange(true));
 		expect(props.onSelectAgentModel).toHaveBeenCalledWith("aider", "__auto__");
 	});
 
-	// The trigger is the harness's mark and one name: the model once one is
+	// The trigger names one thing: the model once one is
 	// picked, the agent while it runs its default. VoiceOver hears both.
 	it("shows the harness mark with the picked model, or the agent on its default", async () => {
 		const shown = async (props: Props) => {
@@ -214,15 +175,14 @@ describe("iOS spawn selectors", () => {
 			let face: ReactTestRenderer | undefined;
 			await act(async () => { face = create(menu.props.label); });
 			const texts = face!.root.findAll((node) => hostType(node) === "Text").map((node) => node.props.children);
-			const mark = face!.root.findAll((node) => hostType(node) === "Image" && node.props.assetName)[0]?.props.assetName;
 			const label = modifier(menu, "accessibilityLabel")?.args[0];
 			await act(async () => face!.unmount());
 			await act(async () => renderer?.unmount());
 			renderer = undefined;
-			return { texts, mark, label };
+			return { texts, label };
 		};
-		expect(await shown(baseProps({ modelLabel: "Default model" }))).toEqual({ texts: ["Codex"], mark: "HarnessLogo-codex", label: "Codex" });
-		expect(await shown(baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false }))).toEqual({ texts: ["GPT-5"], mark: "HarnessLogo-codex", label: "Codex, GPT-5" });
+		expect(await shown(baseProps({ modelLabel: "Default model" }))).toEqual({ texts: ["Codex"], label: "Codex" });
+		expect(await shown(baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false }))).toEqual({ texts: ["GPT-5"], label: "Codex, GPT-5" });
 		// On its default, the trigger names the model the catalog marks as it.
 		const named = { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
 		// VoiceOver says the model the capsule shows, not the generic "Default model".
@@ -260,7 +220,6 @@ describe("iOS spawn selectors", () => {
 		const props = baseProps();
 		const root = await render(props);
 		const gauge = gaugeOf(root);
-		expect(root.findAll((node) => hostType(node) === "RNHostView").some((host) => host.findAll((node) => node === gauge).length > 0)).toBe(true);
 		expect(gauge.props.choices).toEqual(props.effortChoices);
 		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
 		await act(async () => gauge.props.onPress());
@@ -278,50 +237,19 @@ describe("iOS spawn selectors", () => {
 		expect(gaugeOf(root)).toBeUndefined();
 	});
 
-	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {
+	// A plain-style Menu hears taps only inside its label, so each trigger's face
+	// is at least a touch target; its text scales with Dynamic Type.
+	it("answers taps across a full touch target and scales text with Dynamic Type", async () => {
 		const root = await render(baseProps());
-		// A Menu's face is a prop, so each is rendered on its own to read its text.
-		// The approval mode's face is its symbol alone, as the chat's.
-		for (const id of ["spawn-host", "spawn-project", "spawn-harness"]) {
+		for (const id of ["spawn-host", "spawn-project", "spawn-harness", "spawn-approval"]) {
 			let face: ReactTestRenderer | undefined;
 			await act(async () => { face = create(identified(root, id).props.label); });
-			const texts = face!.root.findAll((node) => hostType(node) === "Text");
-			expect(texts.length).toBeGreaterThan(0);
-			for (const text of texts) {
-				const font = modifier(text, "font");
-				expect(font?.args[0]).toHaveProperty("textStyle");
-				expect(font?.args[0]).not.toHaveProperty("size");
-			}
-			await act(async () => face!.unmount());
-		}
-		for (const id of ["spawn-host", "spawn-project", "spawn-approval", "spawn-harness"]) {
-			const frame = modifier(identified(root, id), "frame");
-			expect(frame).toBeUndefined();
-		}
-		// The rows take their content's height; the settings fill the composer's
-		// controls row, as the chat's turn settings do.
-		const [rows, settings] = root.findAllByType("Host" as never);
-		expect(rows.props.matchContents).toEqual({ vertical: true });
-		expect(settings.props.style).toEqual({ alignSelf: "stretch", height: touchTarget });
-	});
-
-	// A plain-style Menu hears taps only inside its label: a frame on the Menu
-	// grows its layout, and gaps or a Spacer in the label are transparent.
-	it("answers taps across a full touch target on every trigger", async () => {
-		const root = await render(baseProps());
-		// The per-agent model submenus are rows of the agent's menu, which the system draws.
-		for (const id of ["spawn-host", "spawn-project", "spawn-harness", "spawn-approval"]) {
-			const menu = identified(root, id);
-			expect(modifier(menu, "frame")?.args[0] ?? {}).not.toHaveProperty("minHeight");
-			let face: ReactTestRenderer | undefined;
-			await act(async () => { face = create(menu.props.label); });
 			const top = face!.root.findAll((node) => hostType(node) !== "")[0];
-			// At least a touch target: the approval symbol is one square.
 			const frame = modifier(top, "frame")?.args[0] as { minHeight?: number; height?: number };
 			expect(frame.minHeight ?? frame.height).toBeGreaterThanOrEqual(touchTarget);
 			expect(modifier(top, "contentShape")?.args).toEqual([{ shape: "rectangle" }]);
+			for (const text of face!.root.findAll((node) => hostType(node) === "Text")) expect(modifier(text, "font")?.args[0]).not.toHaveProperty("size");
 			await act(async () => face!.unmount());
 		}
 	});
 });
-

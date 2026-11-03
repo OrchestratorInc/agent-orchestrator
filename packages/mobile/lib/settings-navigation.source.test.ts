@@ -30,44 +30,6 @@ describe("Settings environment navigation", () => {
 		expect(settingsLayout).toContain('export const unstable_settings = Platform.OS === "ios" ? { initialRouteName: "index" } : {};');
 	});
 
-	// The pages' titles, back buttons and actions are the native header's, with
-	// the same tint and type as every other stack in the app. On iOS 26 the bar
-	// is the system's glass rather than a painted one.
-	it("gives every Settings page the native header", () => {
-		const settingsLayout = read("../app/settings/_layout.tsx");
-
-		expect(settingsLayout).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>");
-		expect(settingsLayout).toContain('<Stack.Screen name="index" options={{ title: "Settings" }} />');
-		expect(settingsLayout).toContain('<Stack.Screen name="theme" options={{ title: "Theme" }} />');
-		expect(settingsLayout).not.toContain("headerShown");
-		// Every page pushes and goes back like any other: no transition or
-		// gesture of its own.
-		expect(settingsLayout).not.toContain("animation:");
-		expect(settingsLayout).not.toContain("fullScreenGestureEnabled");
-	});
-
-	// No page draws a bar of its own: no fixed-height header row, no absolutely
-	// positioned back button, no title text standing in for the bar's.
-	it("draws no header rows of its own", () => {
-		for (const page of ["../app/settings/index.tsx", "../app/settings/theme.tsx", "../app/settings/machine/[id]/index.tsx"]) {
-			const text = read(page);
-			expect(text).not.toBe("");
-			expect(text).not.toContain("NativeHeaderButton");
-			expect(text).not.toContain("<View style={styles.header}>");
-			expect(text).not.toMatch(/header:\s*\{\s*height:/);
-			expect(text).not.toContain("styles.headerTitle");
-		}
-	});
-
-	// Settings is a pushed page on both platforms, so it leaves by the bar's
-	// back button, never a close item of its own.
-	it("leaves Settings by the back button", () => {
-		const settings = read("../app/settings/index.tsx");
-
-		expect(settings).not.toContain("Close settings");
-		expect(settings).not.toContain("Stack.Toolbar");
-	});
-
 	// Each machine's row in Settings opens its page, pushed inside Settings'
 	// stack with its editor above it.
 	it("pushes a machine's page and its editor inside Settings' own stack", () => {

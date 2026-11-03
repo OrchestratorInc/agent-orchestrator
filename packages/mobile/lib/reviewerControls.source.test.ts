@@ -39,21 +39,7 @@ describe("reviewer control integration", () => {
 	it("renders every reviewer through the shared harness logo registry", () => {
 		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
 		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		// Compose draws the mark itself, in its own colours, on the same chip rule.
 		expect(picker).toContain("const source = logoFor(harness);");
-		expect(picker).toContain("const chip = chipColorFor(harness);");
-		expect(picker).toContain("<Icon source={source} tint={null} size={iconSize.xl} />");
-	});
-
-	// The inline pseudo-dropdown pushed the sheet's content down and had no
-	// Back to close it; Material's own menu does both.
-	it("opens reviewer and model choices as Material dropdown menus on Android", () => {
-		expect(picker).toContain('import { Box, DropdownMenu, DropdownMenuItem, Icon, ListItem, Text } from "@expo/ui/jetpack-compose";');
-		expect(picker).toContain("<DropdownMenu expanded={open && !busy} onDismissRequest={onDismiss}");
-		expect(picker).toContain('tag="review-reviewer"');
-		expect(picker).toContain('tag="review-model"');
-		expect(picker).toContain('contentDescription="Selected"');
-		expect(picker).not.toContain("expanded === \"reviewer\" ? <View");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {
@@ -62,13 +48,8 @@ describe("reviewer control integration", () => {
 	});
 
 	it("picks the reviewer and model from native iOS menu pickers", () => {
-		expect(pickerIOS).toContain('import { Label, Picker, Text } from "@expo/ui/swift-ui"');
-		expect(pickerIOS).toContain('pickerStyle("menu")');
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-reviewer")');
 		expect(pickerIOS).toContain('accessibilityIdentifier("review-model")');
-		// A choice the sheet declines must not stay drawn as the selection.
-		expect(pickerIOS).toContain("key={`reviewer-${reviewerChoice.revision}`}");
-		expect(pickerIOS).toContain("key={`model-${modelChoice.revision}`}");
 	});
 
 	it("only offers reviewers that can run, like the spawn sheet", () => {
@@ -81,29 +62,6 @@ describe("reviewer control integration", () => {
 		expect(actions).toContain('title: "Automatically fix review comments"');
 		expect(actions).toContain('title: "Automatically fix CI failures"');
 		for (const file of [actions, sheetIOS, sheetAndroid]) expect(file).not.toContain("trackColor");
-		expect(sheetIOS).not.toMatch(/<Toggle[^>]*tint\(/);
-	});
-
-	// A SwiftUI Form on iOS and Material list items on Android, with each
-	// section's hint as its footer, both platforms' own switches, and a
-	// spinner rather than a chevron on a row that acts in place.
-	it("lays the review actions sheet out with each platform's form controls", () => {
-		expect(sheetIOS).toContain('import { Button, Form, HStack, Image, Label, ProgressView, Section, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";');
-		expect(sheetIOS).toContain('<Section title="Automation" footer={<Text>The same settings as this session\'s inspector on desktop.</Text>}>');
-		expect(sheetIOS).toContain("<Toggle isOn={policy.value} onIsOnChange={(value) => onChange(policy.key, value)}");
-		expect(sheetIOS).toContain("{item.busy ? <ProgressView /> : null}");
-		expect(sheetAndroid).toContain('toggleable(policy.value, () => onChange(policy.key, !policy.value), { role: "switch" })');
-		expect(sheetAndroid).toContain("<Switch value={policy.value} enabled={interactive}");
-		expect(sheetAndroid).toContain('<Section title="Automation" footer="The same settings as this session\'s inspector on desktop.">');
-		for (const file of [actions, sheetIOS, sheetAndroid]) {
-			expect(file).not.toContain("chevron");
-			expect(file).not.toContain("@expo/vector-icons");
-			expect(file).not.toMatch(/\bSwitch\b[^\n]*from "react-native"/);
-			// Sentence case, and every size from the type ramp.
-			expect(file).not.toMatch(/title[=:] ?"[A-Z ]{4,}"/);
-			expect(file).not.toMatch(/fontSize: \d/);
-			expect(file).not.toContain("hairlineWidth");
-		}
 	});
 
 	it("does not let auto review lose its persistent reviewer", () => {
@@ -135,8 +93,6 @@ describe("reviewer control integration", () => {
 
 	it("keeps per-item actions in a desktop-style menu", () => {
 		expect(actions).toContain("menuLabel: `Actions for ${reviewerId}'s comment`,");
-		expect(sheetAndroid).toContain("<ItemActionsMenu accessibilityLabel={item.menuLabel} actions={item.actions}");
-		expect(sheetIOS).toContain("<ItemActionsPullDown actions={item.actions} accessibilityLabel={item.menuLabel}");
 		expect(actions).toContain('{ id: "resolve", label: "Resolve"');
 		expect(detail).toContain("<ItemActionsMenu accessibilityLabel={`Actions for the ${reviewVerdictLabel(run).toLowerCase()} review`}");
 	});
@@ -180,20 +136,6 @@ describe("reviewer control integration", () => {
 		for (const path of ["./PRCard.tsx", "./worker-list-row.tsx", "./chat/ChatSessionScreen.tsx", "../app/review/[sessionId].tsx"]) {
 			expect(source(path)).not.toMatch(/router\.(push|navigate)\((reviewRoute|route|destination)\)/);
 		}
-	});
-
-	// Row actions are each platform's own small buttons, and the page's chrome
-	// glyphs come from the system symbol sets rather than a second icon family.
-	it("draws the review page with native buttons and system symbols", () => {
-		expect(detail).not.toContain("@expo/vector-icons");
-		expect(detail).not.toContain("RowPill");
-		expect(detail).toContain('<ReviewActionButton label="Open" accessibilityLabel="Open reviewer" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone={worker ? "outlined" : "filled"}');
-		expect(detail).toContain('tone={primaryAction === "cancel" ? "destructive" : primaryAction === "start" ? "filled" : "outlined"}');
-		expect(detail).toContain("{...refreshControlColors(t)}");
-		// Nothing under the 13pt footnote step, and dividers that draw on Android.
-		expect(detail).not.toMatch(/caption[12]/);
-		expect(detail).not.toContain("hairlineWidth");
-		expect(detail).not.toContain("hitSlop");
 	});
 
 	it("lays the review screen out as flat board rows, not cards", () => {

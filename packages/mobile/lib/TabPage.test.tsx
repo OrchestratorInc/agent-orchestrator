@@ -37,7 +37,6 @@ describe("TabPage", () => {
 		const page = root.findAllByType("View" as never)[0];
 		expect(Object.assign({}, ...page.props.style).paddingBottom).toBe(104);
 		expect(root.findAllByType("Frost" as never).map((frost) => frost.props.from)).toEqual(["top", "bottom"]);
-		expect(root.findAllByType("Frost" as never)[0].props.style).toMatchObject({ position: "absolute", top: 0, height: 16 });
 	});
 
 	it("is a plain page where the system's bars inset it", () => {

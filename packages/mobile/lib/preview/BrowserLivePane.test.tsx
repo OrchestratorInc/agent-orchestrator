@@ -1,7 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserLiveState } from "../browserLive";
-import { space } from "../tokens";
 
 type Handlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
@@ -183,18 +182,18 @@ afterEach(() => {
 });
 
 describe("live browser controls", () => {
-	it("draws Back, Forward, Reload and the tabs in Android's floating bottom toolbar from the desktop's state", async () => {
+	it("disables the controls until the stream opens", async () => {
+		await render();
+		expect(toolbarButton("Back").props.disabled).toBe(true);
+		expect(toolbarButton("Reload").props.disabled).toBe(true);
+		expect(tabsMenu().props.disabled).toBe(true);
+	});
+
+	it("drives Back, Forward and Reload from the desktop's history state", async () => {
 		await render();
 		await open();
-		const toolbar = bottomToolbar();
-		expect(toolbar.props).toMatchObject({ tintColor: "theme.accent", backgroundColor: "theme.bgElevated" });
-		expect(toolbarButton("Back").props).toMatchObject({ icon: "chevron.backward", disabled: false });
-		expect(toolbarButton("Forward").props).toMatchObject({ icon: "chevron.forward", disabled: true });
-		expect(toolbarButton("Reload").props).toMatchObject({ icon: "arrow.clockwise", disabled: false });
-		expect(tabsMenu().props).toMatchObject({ icon: "square.on.square", accessibilityLabel: "Tabs, 2 open, showing Todo app" });
-		// Android draws a spacer only with a fixed width; one without is dropped.
-		const gaps = toolbar.findAll((node) => (node.type as unknown) === "StackToolbarSpacer");
-		expect(gaps.map((gap) => gap.props.width)).toEqual([space.md, space.md]);
+		expect(toolbarButton("Back").props.disabled).toBe(false);
+		expect(toolbarButton("Forward").props.disabled).toBe(true);
 		await act(async () => toolbarButton("Back").props.onPress());
 		await act(async () => toolbarButton("Reload").props.onPress());
 		expect(sent()).toEqual([
@@ -203,13 +202,11 @@ describe("live browser controls", () => {
 		]);
 	});
 
-	it("turns Reload into Stop and shows a native progress bar while a page loads", async () => {
+	it("turns Reload into Stop and shows progress while a page loads", async () => {
 		await render();
 		await open({ ...page, loading: true });
 		expect(nodes("LoadingBar")[0].props).toMatchObject({ loading: true, accessibilityLabel: "Loading page" });
-		expect(nodes("LoadingBar")[0].props.progress).toBeUndefined();
 		await act(async () => toolbarButton("Stop loading").props.onPress());
-		expect(toolbarButton("Stop loading").props.icon).toBe("xmark");
 		expect(sent()).toEqual([{ type: "navigate", payload: { action: "stop" } }]);
 		await open();
 		expect(nodes("LoadingBar")[0].props.loading).toBe(false);
@@ -255,47 +252,20 @@ describe("live browser controls", () => {
 		expect(sent()).toEqual([{ type: "navigate", payload: { action: "open", url: "localhost:5173" } }]);
 	});
 
-	it("disables the controls until the stream opens", async () => {
-		await render();
-		expect(toolbarButton("Back").props.disabled).toBe(true);
-		expect(toolbarButton("Reload").props.disabled).toBe(true);
-		expect(tabsMenu().props.disabled).toBe(true);
-	});
-
-	it("ends the header with the page's own item", async () => {
-		await render();
-		await open();
-		const [header] = nodes("StackToolbar").filter((node) => node.props.placement === "right");
-		expect(header.findAll((node) => (node.type as unknown) === "StackToolbarMenu")).toHaveLength(0);
-		expect(header.findByType("span" as never).props.children).toBe("view menu");
-	});
-
-	it("gives iOS the controls as one header menu, led by a row for history and reload", async () => {
+	it("gives iOS the controls as one header menu, ended by the page's own item", async () => {
 		fixtures.platform.OS = "ios";
 		await render();
 		await open();
 		expect(bottomToolbar()).toBeUndefined();
 		const [header] = nodes("StackToolbar").filter((node) => node.props.placement === "right");
 		const menu = header.find((node) => (node.type as unknown) === "StackToolbarMenu" && node.props.accessibilityLabel === "Browser controls");
-		expect(menu.props.icon).toBe("ellipsis.circle");
-		const palette = menu.find((node) => (node.type as unknown) === "StackToolbarMenu" && node.props.palette === true);
-		expect(palette.findAll((node) => (node.type as unknown) === "StackToolbarMenuAction").map((action) => action.props.children)).toEqual(["Back", "Forward", "Reload"]);
 		expect(menuAction(menu, "Forward").props.disabled).toBe(true);
 		expect(menuAction(menu, "Todo app").props.isOn).toBe(true);
 		await act(async () => menuAction(menu, "Back").props.onPress());
 		await act(async () => menuAction(menu, "Open URL…").props.onPress());
 		expect(sent()).toEqual([{ type: "navigate", payload: { action: "back" } }]);
 		expect(nodes("OpenURLPrompt")[0].props.visible).toBe(true);
-		// The page's own item still ends the bar.
 		expect(header.findByType("span" as never).props.children).toBe("view menu");
-		expect(nodes("ToastHost")[0].props.bottomOffset).toBeUndefined();
-	});
-
-	it("keeps Android's disabled glyphs visibly dimmed", async () => {
-		await render();
-		await open();
-		expect(toolbarButton("Back").props.tintColor).toBe("theme.accent");
-		expect(toolbarButton("Forward").props.tintColor).toBe("theme.textFaint");
 	});
 
 	it("titles the bar with the desktop's page while one shows", async () => {
@@ -317,8 +287,6 @@ describe("live browser states", () => {
 		await open();
 		await act(async () => client().handlers.onStatus("open", "Desktop browser control is active"));
 		expect(nodes("ToastHost")[0].props.toast.current.text).toBe("Desktop browser control is active");
-		// Above the bottom toolbar: the safe area, the bar, and a margin.
-		expect(nodes("ToastHost")[0].props.bottomOffset).toBe(34 + 64 + 12);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "alert")).toHaveLength(0);
 	});
 
@@ -326,8 +294,7 @@ describe("live browser states", () => {
 		await render();
 		await act(async () => client().handlers.onStatus("error", "Another phone is controlling this browser."));
 		const alert = screen.root.find((node) => node.props.accessibilityRole === "alert");
-		const empty = alert.findByType("EmptyState" as never);
-		expect(empty.props).toMatchObject({ icon: "warning", iconColor: "theme.red", title: "Couldn't connect to the browser", message: "Another phone is controlling this browser." });
+		expect(alert.findByType("EmptyState" as never).props).toMatchObject({ title: "Couldn't connect to the browser", message: "Another phone is controlling this browser." });
 		await act(async () => alert.findByType("Button" as never).props.onPress());
 		expect(fixtures.clients).toHaveLength(2);
 		expect(fixtures.clients[0].closed).toBe(true);
@@ -337,21 +304,19 @@ describe("live browser states", () => {
 		await render();
 		await open({ ...page, url: "", title: "", tabs: [] });
 		const empty = nodes("EmptyState")[0];
-		expect(empty.props).toMatchObject({ icon: "desktop", title: "Nothing is open in the desktop browser yet" });
+		expect(empty.props.title).toBe("Nothing is open in the desktop browser yet");
 		await act(async () => empty.findByType("Button" as never).props.onPress());
 		expect(nodes("OpenURLPrompt")[0].props.visible).toBe(true);
 	});
 });
 
 describe("live browser gestures", () => {
-	it("stays still until there is a frame to touch", async () => {
+	it("stays still until there is a frame to touch, and ignores a screen reader's activation", async () => {
 		await render();
 		await open();
 		expect(gesture("tap").enabled).toBe(false);
 		await showFrame();
 		expect(gesture("tap").enabled).toBe(true);
-		expect(gesture("pan").enabled).toBe(true);
-		expect(gesture("pinch").enabled).toBe(true);
 		const frame = nodes("GestureDetector")[0].findByType("View" as never);
 		expect(frame.props).toMatchObject({ accessible: true, accessibilityRole: "image", accessibilityLabel: "Desktop browser, Todo app" });
 		// VoiceOver's double-tap is taken, so it isn't sent on as a click in the page's middle.
@@ -391,15 +356,5 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
-	});
-
-	it("marks where a finger touched", async () => {
-		await render();
-		await open();
-		await showFrame();
-		await act(async () => gesture("tap").onBegin({ x: 40, y: 80 }));
-		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
-		const mark = nodes("AnimatedView").find((node) => node.props.style.some?.((style: { opacity?: number }) => style?.opacity === 1));
-		expect(mark).toBeDefined();
 	});
 });

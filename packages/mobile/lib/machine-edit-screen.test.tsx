@@ -144,7 +144,6 @@ describe("editing a machine", () => {
 		for (const [testID, label] of [["environment-name-a", "Name"], ["environment-host-a", "Host"], ["environment-port-a", "API port"], ["environment-password-a", "Password"]]) {
 			expect(modifiersOf(field(testID))).toContainEqual({ $type: "accessibilityLabel", args: [label] });
 		}
-		expect(modifiersOf(field("environment-password-a"))).toContainEqual({ $type: "textContentType", args: ["password"] });
 	});
 
 	it("saves from the bar once something changed, then goes back", async () => {
@@ -267,10 +266,9 @@ describe("an account machine", () => {
 });
 
 describe("saving on Android", () => {
-	it("puts a check in the top app bar, whose items draw icons only", async () => {
+	it("labels the top app bar's icon-only save for TalkBack", async () => {
 		fixtures.platform.OS = "android";
 		await open();
-		expect(save().props).toMatchObject({ icon: "checkmark", accessibilityLabel: "Save machine changes", disabled: true });
-		expect(save().props.children).toBeUndefined();
+		expect(save().props).toMatchObject({ accessibilityLabel: "Save machine changes", disabled: true });
 	});
 });

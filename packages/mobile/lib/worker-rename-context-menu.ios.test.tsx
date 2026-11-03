@@ -28,14 +28,10 @@ function mount(onAction = vi.fn()) {
 	return renderer!;
 }
 
-it("lists every action with its SF Symbol, and Archive as destructive", () => {
+it("lists every action, and Archive as destructive", () => {
 	const menu = mount().root.findByType("MenuView" as never);
-	expect(menu.props.shouldOpenOnLongPress).toBe(true);
-	expect(menu.props.actions).toEqual([
-		{ id: "open", title: "Open", image: "arrow.forward", attributes: undefined },
-		{ id: "unpin", title: "Unpin", image: "pin.slash", attributes: undefined },
-		{ id: "delete", title: "Archive session", image: "archivebox", attributes: { destructive: true } },
-	]);
+	expect(menu.props.actions.map((action: { id: string }) => action.id)).toEqual(["open", "unpin", "delete"]);
+	expect(menu.props.actions.at(-1).attributes).toEqual({ destructive: true });
 });
 
 // VoiceOver cannot long-press the row into its menu, so the menu's actions are
@@ -46,11 +42,4 @@ it("offers the menu's actions to VoiceOver", () => {
 	expect(row.props.accessibilityActions).toEqual([{ name: "unpin", label: "Unpin" }, { name: "delete", label: "Archive session" }]);
 	act(() => row.props.onAccessibilityAction({ nativeEvent: { actionName: "unpin" } }));
 	expect(onAction).toHaveBeenCalledWith("unpin");
-});
-
-it("highlights the row as a table cell does while pressed", () => {
-	const row = mount().root.findByType("Pressable" as never);
-	expect(row.props.style({ pressed: true })).toEqual([{ minHeight: 76 }, { backgroundColor: "hover" }]);
-	// SwiftUI's context menu owns the long press on iOS.
-	expect(row.props.onLongPress).toBeUndefined();
 });

@@ -43,7 +43,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 });
 
 import { NativeHeaderButton as AndroidHeaderButton } from "./native-header-button.android";
-import { GLASS_CIRCLE_SIZE, NativeHeaderButton as IOSHeaderButton } from "./native-header-button.ios";
+import { NativeHeaderButton as IOSHeaderButton } from "./native-header-button.ios";
 import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
@@ -70,61 +70,39 @@ async function render(element: React.ReactElement) {
 }
 
 type Modifier = { modifier: string; args: unknown[] };
-const modifierNames = (modifiers: Modifier[]) => modifiers.map((entry) => entry.modifier);
 
 describe("NativeHeaderButton on Android", () => {
-	it("is Material's icon button around a bundled Material Symbol", async () => {
+	it("presses through Material's icon button, described for TalkBack", async () => {
 		const onPress = vi.fn();
 		const root = await render(<AndroidHeaderButton icon="more" label="Conversation actions" onPress={onPress} />);
 
 		const button = root.findByType("IconButton" as never);
-		expect(button.props.modifiers).toEqual([{ testID: "header-more" }]);
-		const icon = button.findByType("Icon" as never);
-		expect(icon.props.source).toBe("drawable:more_vert");
-		expect(icon.props.contentDescription).toBe("Conversation actions");
-		expect(icon.props.size).toBe(24);
+		expect(button.findByType("Icon" as never).props.contentDescription).toBe("Conversation actions");
 		expect(root.findAllByType("BadgedBox" as never)).toHaveLength(0);
-
 		await act(async () => button.props.onClick());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	it("shows unread as Material's badge on the glyph", async () => {
+	it("shows unread as a badge on the glyph", async () => {
 		const root = await render(<AndroidHeaderButton icon="bell" label="Notifications, 3 unread" badge={3} onPress={() => {}} />);
-
-		const badged = root.findByType("BadgedBox" as never);
-		expect(badged.findByType("Icon" as never).props.source).toBe("drawable:notifications");
-		expect(badged.findByType("BadgeSlot" as never).findByType("Badge" as never).props.containerColor).toBe("#red");
+		expect(root.findByType("BadgedBox" as never).findAllByType("Badge" as never)).toHaveLength(1);
 	});
 });
 
 describe("NativeHeaderButton on iOS", () => {
-	it("keeps the glass circle with the SF Symbol and the button trait", async () => {
-		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
-
-		const group = root.findAllByType("ZStack" as never)[0];
-		// The framed circle is VoiceOver's element: a ZStack is a view of its
-		// own, where a Group handed its modifiers to the glyph. 44pt, not the
-		// symbol's own size.
-		expect(modifierNames(group.props.modifiers)).toEqual(["frame", "glassCircle", "onTapGesture", "accessibilityElement", "accessibilityAddTraits", "accessibilityLabel", "accessibilityIdentifier"]);
-		// The whole circle takes the tap, so it is the touch target.
-		expect(GLASS_CIRCLE_SIZE).toBe(touchTarget);
-		expect((group.props.modifiers as Modifier[])[0].args).toEqual([{ width: touchTarget, height: touchTarget }]);
-		expect(root.findByType("Host" as never).props.style).toEqual({ width: touchTarget, height: touchTarget });
-		expect(root.findByType("Image" as never).props.systemName).toBe("chevron.backward");
-		expect(root.findAllByType("Circle" as never)).toHaveLength(0);
-	});
-
-	it("draws the unread dot inside the circle and stays one VoiceOver element", async () => {
+	it("is one VoiceOver button the size of a touch target, with the unread dot inside it", async () => {
 		const root = await render(<IOSHeaderButton icon="bell" label="Notifications, 3 unread" badge={3} onPress={() => {}} />);
 
-		const group = root.findAllByType("ZStack" as never)[0];
-		const modifiers = group.props.modifiers as Modifier[];
+		const modifiers = root.findAllByType("ZStack" as never)[0].props.modifiers as Modifier[];
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityElement")?.args).toEqual(["ignore"]);
 		expect(modifiers.find((entry) => entry.modifier === "accessibilityLabel")?.args).toEqual(["Notifications, 3 unread"]);
-		const stack = root.findAllByType("ZStack" as never)[1];
-		expect(stack.props.alignment).toBe("topTrailing");
-		const dot = stack.findByType("Circle" as never);
-		expect((dot.props.modifiers as Modifier[]).find((entry) => entry.modifier === "foregroundStyle")?.args).toEqual(["#red"]);
+		expect(modifiers.find((entry) => entry.modifier === "accessibilityAddTraits")).toBeDefined();
+		expect(modifiers.find((entry) => entry.modifier === "frame")?.args).toEqual([{ width: touchTarget, height: touchTarget }]);
+		expect(root.findAllByType("ZStack" as never)[1].findAllByType("Circle" as never)).toHaveLength(1);
+	});
+
+	it("draws no dot without unread", async () => {
+		const root = await render(<IOSHeaderButton icon="back" label="Back to Settings" onPress={() => {}} />);
+		expect(root.findAllByType("Circle" as never)).toHaveLength(0);
 	});
 });

@@ -21,13 +21,8 @@ function read(): number {
 }
 
 // Inside a tab, iOS's bottom inset is the tab bar's: the page runs under it.
-it("clears the tab bar the page runs under on iOS", () => {
-	platform.OS = "ios";
-	expect(read()).toBe(83);
-});
-
-// Android's page stops at the navigation bar, so the window's inset is not the tab's.
-it("has nothing left to clear on Android", () => {
-	platform.OS = "android";
-	expect(read()).toBe(0);
+// Android's page stops at the navigation bar, so there is nothing left to clear.
+it.each([["ios", 83], ["android", 0]])("clears what the page runs under on %s", (os, inset) => {
+	platform.OS = os;
+	expect(read()).toBe(inset);
 });

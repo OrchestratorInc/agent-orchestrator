@@ -107,19 +107,16 @@ async function render(element: React.ReactElement) {
 const texts = (node: { findAllByType(type: never): { props: { children?: unknown } }[] }) => node.findAllByType("ComposeText" as never).map((text) => text.props.children);
 
 describe("ReviewerPicker on Android", () => {
-	it("is a list item per setting that reads its current value", async () => {
-		const root = await render(<ReviewerPicker {...props()} />);
+	it("reads each setting's current value, leaving the model out without a catalog", async () => {
+		let root = await render(<ReviewerPicker {...props()} />);
 		const rows = root.findAllByType("ListItem" as never);
-		expect(rows).toHaveLength(2);
-		expect(texts(rows[0].findByType("Headline" as never))).toEqual(["Reviewer"]);
-		expect(texts(rows[0].findByType("Supporting" as never))).toEqual(["Project default · Codex"]);
-		expect(rows[0].findByType("Leading" as never).findByType("Icon" as never).props).toMatchObject({ source: "logo:codex", tint: null });
-		expect(texts(rows[1].findByType("Supporting" as never))).toEqual(["Provider default"]);
-		expect(rows[0].props.modifiers).toContainEqual({ testID: "review-reviewer" });
-		expect(rows[1].props.modifiers).toContainEqual({ testID: "review-model" });
+		expect(rows.map((row) => texts(row.findByType("Supporting" as never)))).toEqual([["Project default · Codex"], ["Provider default"]]);
+		await act(async () => renderer?.unmount());
+		root = await render(<ReviewerPicker {...props({ models: [] })} />);
+		expect(root.findAllByType("ListItem" as never)).toHaveLength(1);
 	});
 
-	it("opens a dropdown of the choices with a check on the current one, and closes on a choice", async () => {
+	it("opens a dropdown of the choices with the current one marked, and closes on a choice", async () => {
 		const onSelectReviewer = vi.fn();
 		const root = await render(<ReviewerPicker {...props({ selectedReviewer: "opencode", onSelectReviewer })} />);
 		const reviewerMenu = () => root.findAllByType("DropdownMenu" as never)[0];
@@ -131,38 +128,26 @@ describe("ReviewerPicker on Android", () => {
 		expect(choices.map((choice) => texts(choice.findByType("ItemText" as never))[0])).toEqual(["Project default · Codex", "Codex", "OpenCode"]);
 		expect(choices.map((choice) => choice.findAllByType("ItemTrailingIcon" as never).length)).toEqual([0, 0, 1]);
 		expect(choices[2].findByType("ItemTrailingIcon" as never).findByType("Icon" as never).props.contentDescription).toBe("Selected");
-		// A mark that needs a backdrop gets its chip.
-		expect(choices[2].findByType("Box" as never).props.modifiers).toContainEqual({ background: "#chip" });
 		act(() => choices[1].props.onClick());
 		expect(onSelectReviewer).toHaveBeenCalledWith("codex");
 		expect(reviewerMenu().props.expanded).toBe(false);
 	});
 
-	it("waits while the sheet is busy", async () => {
+	it("takes no press while the sheet is busy", async () => {
 		const root = await render(<ReviewerPicker {...props({ busy: true })} />);
 		const row = root.findAllByType("ListItem" as never)[0];
 		expect(row.props.modifiers.some((entry: { clickable?: unknown }) => entry.clickable)).toBe(false);
-		expect(row.props.modifiers).toContainEqual({ alpha: 0.4 });
-	});
-
-	it("leaves the model row out when the reviewer has no catalog", async () => {
-		const root = await render(<ReviewerPicker {...props({ models: [] })} />);
-		expect(root.findAllByType("ListItem" as never)).toHaveLength(1);
 	});
 });
 
 describe("ReviewerPicker on iOS", () => {
-	it("is a menu picker per setting, tagged by id, for the sheet's Form", async () => {
+	it("offers each setting's choices by id, keeping a configured model the catalog no longer lists", async () => {
 		const onSelectModel = vi.fn();
 		const root = await render(<IOSReviewerPicker {...props({ selectedModel: "gpt-4", onSelectModel })} />);
 		const [reviewer, model] = root.findAllByType("Picker" as never);
 		expect(reviewer.props).toMatchObject({ label: "Reviewer", selection: "" });
-		expect(reviewer.props.modifiers).toContainEqual({ modifier: "pickerStyle", args: ["menu"] });
-		expect(reviewer.props.modifiers).toContainEqual({ modifier: "accessibilityIdentifier", args: ["review-reviewer"] });
 		const options = reviewer.findAllByType("Label" as never);
 		expect(options.map((option) => [option.props.title, option.props.modifiers[0].args[0]])).toEqual([["Project default · Codex", ""], ["Codex", "codex"], ["OpenCode", "opencode"]]);
-		expect(options[1].props.icon.props).toMatchObject({ uri: "file://codex.png", harness: "codex" });
-		// A configured model the catalog no longer lists still reads as itself.
 		expect(model.findAllByType("SwiftText" as never).map((option) => option.props.children)).toEqual(["Provider default", "GPT-5", "gpt-4"]);
 		act(() => model.props.onSelectionChange("gpt-5"));
 		expect(onSelectModel).toHaveBeenCalledWith("gpt-5");

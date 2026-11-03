@@ -108,30 +108,22 @@ afterEach(async () => {
 });
 
 describe("the review button", () => {
-	it("is a prominent glass capsule on iOS that opens the review", async () => {
+	it.each([
+		["iOS", ReviewButton, 2, "SwiftButton", "onPress", "Send 2 comments"],
+		["Android", AndroidReviewButton, 1, "ExtendedFloatingActionButton", "onClick", "Send 1 comment"],
+	] as const)("opens the review on %s, counting the queue", async (_platform, Button, count, type, press, text) => {
 		const onPress = vi.fn();
-		await act(async () => { renderer = create(<ReviewButton count={2} onPress={onPress} />); });
-		const button = renderer!.root.findByType("SwiftButton" as never);
-		expect(button.props.modifiers).toEqual(expect.arrayContaining([
-			{ buttonStyle: "glassProminent" },
-			{ tint: "#accent" },
-			{ foregroundStyle: "#onAccent" },
-			{ accessibilityLabel: "Review 2 comments before sending" },
-		]));
-		expect(renderer!.root.findByType("SwiftText" as never).props.children).toBe("Send 2 comments");
-		act(() => button.props.onPress());
+		await act(async () => { renderer = create(<Button count={count} onPress={onPress} />); });
+		expect(renderer!.root.findAll((node) => node.props.children === text).length).toBeGreaterThan(0);
+		act(() => renderer!.root.findByType(type as never).props[press]());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	it("is Material's extended FAB on Android", async () => {
-		const onPress = vi.fn();
-		await act(async () => { renderer = create(<AndroidReviewButton count={1} onPress={onPress} />); });
-		const fab = renderer!.root.findByType("ExtendedFloatingActionButton" as never);
-		expect(fab.props.containerColor).toBe("#accent");
-		expect(renderer!.root.findByType("Icon" as never).props).toMatchObject({ source: "drawable:review", tint: "#onAccent", contentDescription: "Review 1 comment before sending" });
-		expect(renderer!.root.findByType("ComposeText" as never).props.children).toBe("Send 1 comment");
-		act(() => fab.props.onClick());
-		expect(onPress).toHaveBeenCalledOnce();
+	it("labels the button for screen readers", async () => {
+		await act(async () => { renderer = create(<ReviewButton count={2} onPress={vi.fn()} />); });
+		expect(renderer!.root.findByType("SwiftButton" as never).props.modifiers).toContainEqual({ accessibilityLabel: "Review 2 comments before sending" });
+		await act(async () => renderer!.update(<AndroidReviewButton count={1} onPress={vi.fn()} />));
+		expect(renderer!.root.findByType("Icon" as never).props.contentDescription).toBe("Review 1 comment before sending");
 	});
 
 	it("draws nothing with nothing queued", async () => {

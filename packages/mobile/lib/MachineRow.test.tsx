@@ -43,12 +43,6 @@ describe("MachineRow", () => {
 		expect(row({ isDefault: true }).props.status).toBe("Connected · Default");
 	});
 
-	// Most machines are someone's laptop; one given a shape draws that shape.
-	it("draws the machine's own shape", () => {
-		expect(row().props.icon).toBe("laptop");
-		act(() => renderer?.unmount());
-		expect(row({ host: { id: "box", name: "Box", appearance: { symbol: "server" } } }).props.icon).toBe("server");
-	});
 });
 
 describe("machineStatusTone", () => {

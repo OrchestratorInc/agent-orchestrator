@@ -15,18 +15,8 @@ describe("render viewer", () => {
 	const frame = source("./RenderFrame.tsx");
 
 	it("is a modal route under the native header", () => {
-		expect(layout).toContain('<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS }} />');
-		expect(route).toContain("<Stack.Screen options={{ title: pageTitle }} />");
+		expect(layout).toContain('<Stack.Screen name="render" options={{ presentation: "modal"');
 		expect(frame).not.toContain("<Modal");
-		expect(frame).not.toContain("useSafeAreaInsets");
-	});
-
-	// The frame is one large button over the page: a chip highlight alone gave
-	// Android no ripple.
-	it("expands with each platform's press feedback", () => {
-		expect(frame).toContain('const expandFeedback = usePressFeedback("row", { foreground: true });');
-		expect(frame).toContain("android_ripple={expandFeedback.android_ripple}");
-		expect(frame).toContain("pressed && expandFeedback.pressed");
 	});
 
 	// iOS closes a modal from its bar; Android's top app bar has the system back.

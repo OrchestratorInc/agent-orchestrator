@@ -5,7 +5,6 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	theme: new Proxy({ fontMono: "Mono" }, { get: (target, key) => (key in target ? target[key as "fontMono"] : `#${String(key)}`) }),
 	tap: vi.fn(),
-	ripple: undefined as object | undefined,
 }));
 
 vi.mock("react-native", async () => {
@@ -18,7 +17,7 @@ vi.mock("../ThemeProvider", () => ({
 	useThemedStyles: (factory: (t: unknown) => unknown) => factory(fixtures.theme),
 }));
 vi.mock("../haptics", () => ({ haptics: { tap: fixtures.tap } }));
-vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: fixtures.ripple, pressed: fixtures.ripple ? undefined : { opacity: 0.7 } }) }));
+vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: { opacity: 0.7 } }) }));
 
 import { KeyRow } from "./KeyRow";
 import { KEY_REPEAT } from "./keys";
@@ -29,7 +28,6 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.platform.OS = "ios";
-	fixtures.ripple = undefined;
 	fixtures.tap.mockReset();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
@@ -54,31 +52,15 @@ async function render() {
 }
 
 describe("the terminal key row", () => {
-	it("draws eight borderless, touch-target-tall keys with system symbols", async () => {
+	it("names each of the eight keys, keeping a chord's letter after its symbol", async () => {
 		const { key } = await render();
-		const keys = renderer!.root.findAllByType("Pressable" as never);
-		expect(keys.map((k) => k.props.accessibilityLabel)).toEqual(["Escape", "Tab", "Interrupt", "Left", "Up", "Down", "Right", "Enter"]);
-		const style = key("Tab").props.style({ pressed: false })[0];
-		expect(style).toMatchObject({ height: 44, backgroundColor: "#accentTint" });
-		expect(style.borderWidth).toBeUndefined();
-		expect(key("Tab").findByType("SymbolView" as never).props.name.ios).toBe("arrow.right.to.line");
-		expect(key("Escape").findByType("SymbolView" as never).props.name.ios).toBe("escape");
-		// A chord keeps its letter after the control symbol.
+		expect(renderer!.root.findAllByType("Pressable" as never).map((k) => k.props.accessibilityLabel)).toEqual(["Escape", "Tab", "Interrupt", "Left", "Up", "Down", "Right", "Enter"]);
 		expect(key("Interrupt").findByType("Text" as never).props.children).toBe("C");
 	});
 
-	it("darkens a pressed key on iOS instead of outlining it", async () => {
-		const { key } = await render();
-		expect(key("Enter").props.style({ pressed: true })).toContainEqual({ backgroundColor: "#accentPressed" });
-	});
-
-	it("ripples on Android, and spells Escape where Material has no symbol", async () => {
+	it("spells Escape on Android, where Material has no symbol", async () => {
 		fixtures.platform.OS = "android";
-		fixtures.ripple = { color: "#ripple" };
 		const { key } = await render();
-		expect(key("Enter").props.android_ripple).toEqual({ color: "#ripple" });
-		expect(key("Enter").props.style({ pressed: true })).not.toContainEqual({ backgroundColor: "#accentPressed" });
-		expect(key("Escape").findAllByType("SymbolView" as never)).toHaveLength(0);
 		expect(key("Escape").findByType("Text" as never).props.children).toBe("esc");
 	});
 

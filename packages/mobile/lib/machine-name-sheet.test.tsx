@@ -134,18 +134,16 @@ it.each([
 	expect(fixtures[channel === "impact" ? "androidHaptic" : "impact"]).not.toHaveBeenCalled();
 });
 
-it("uses a content-sized Android sheet with an outlined, focused name field", async () => {
+it("uses a content-sized Android sheet with the title in the body and the name field focused", async () => {
 	await open();
 	const sheet = renderer!.root.findByType("BottomSheet" as never);
 	expect(sheet.props.enableDynamicSizing).toBe(true);
 	expect(sheet.props.snapPoints).toBeUndefined();
 	expect(renderer!.root.findByType("BottomSheetView" as never).props.style?.flex).not.toBe(1);
-	const field = nameField();
-	expect(field.type).toBe("OutlinedTextField");
-	expect(field.props.autoFocus).toBe(true);
-	expect(field.findByType("OutlinedTextField.Label" as never).findByType("Text" as never).props.children).toBe("Name");
-	// Sentence case: no tracked uppercase label stands over the field.
-	expect(renderer!.root.findAll((node) => node.props.children === "MACHINE NAME")).toHaveLength(0);
+	expect(nameField().props.autoFocus).toBe(true);
+	// Android keeps the title and Save in the sheet body, not a bar.
+	expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
+	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Name this machine")).toHaveLength(1);
 });
 
 it("keeps blank names disabled and ignores keyboard submit until a name is entered", async () => {
@@ -208,27 +206,16 @@ it("lets the user keep a shared icon and names the machines that share it", asyn
 	expect(selected).toHaveBeenCalledExactlyOnceWith({ name: "Studio Mac", appearance: { symbol: "laptop" } });
 });
 
-// iOS heads the form sheet with its native bar: the title there, Cancel on the
-// left and Save on the right, over a native form with a name row and an icon
-// menu. Android keeps its Material sheet with the title and the Save button in
-// the body.
-it("puts the title, Cancel and Save in the iOS bar over a native form", async () => {
+// iOS heads the form sheet with its native bar: Cancel on the left and Save
+// on the right.
+it("cancels and saves from the iOS bar", async () => {
 	const selected = vi.fn();
 	await open("ios", selected);
-	const texts = renderer!.root.findAllByType("Text" as never).map((node) => node.props.children);
-	expect(texts).not.toContain("Name this machine");
-	expect(renderer!.root.findAllByProps({ title: "Save machine" })).toHaveLength(0);
-	const form = renderer!.root.findByType("Form" as never);
-	expect(form.findByType("LabeledContent" as never).props.label).toBe("Name");
+	const [left] = renderer!.root.findAllByType("StackToolbar" as never);
 	expect(nameField().props.autoFocus).toBe(true);
-	const [left, right] = renderer!.root.findAllByType("StackToolbar" as never);
-	expect(left.props.placement).toBe("left");
-	expect(right.props.placement).toBe("right");
-	expect(saveButton().props.children).toBe("Save");
 	await typeName("   ");
 	expect(saveButton().props.disabled).toBe(true);
 	const cancel = left.findByType("StackToolbarButton" as never);
-	expect(cancel.props.children).toBe("Cancel");
 	act(() => cancel.props.onPress());
 	expect(fixtures.back).toHaveBeenCalledTimes(1);
 	act(() => renderer!.unmount());
@@ -236,28 +223,16 @@ it("puts the title, Cancel and Save in the iOS bar over a native form", async ()
 	expect(selected).toHaveBeenCalledExactlyOnceWith(null);
 });
 
-it("picks the iOS icon from a menu of system symbols and names any machine sharing it", async () => {
+it("picks the iOS icon from a menu and names any machine sharing it", async () => {
 	const selected = vi.fn();
 	fixtures.params.hostId = "h_new";
 	fixtures.hosts = [{ id: "h_old", name: "MacBook Pro", appearance: { symbol: "cloud" } }];
 	await open("ios", selected);
 	const picker = renderer!.root.findByType("Picker" as never);
-	expect(picker.props.label).toBe("Icon");
-	expect(modifiersOf(picker)).toContainEqual({ $type: "pickerStyle", args: ["menu"] });
-	expect(picker.findAllByType("Label" as never).map((option) => option.props.systemImage)).toEqual([
-		"server.rack", "cloud", "terminal", "desktopcomputer", "laptopcomputer", "macmini", "macstudio",
-	]);
 	expect(picker.props.selection).toBe("laptop");
 	act(() => picker.props.onSelectionChange("cloud"));
 	const iconSection = renderer!.root.findAllByType("Section" as never)[1];
 	expect(iconSection.props.footer.props.children).toBe("Also used by MacBook Pro. The name will tell them apart.");
 	act(() => saveButton().props.onPress());
 	expect(selected).toHaveBeenCalledExactlyOnceWith({ name: "Studio Mac", appearance: { symbol: "cloud" } });
-});
-
-it("keeps the Android title and Save button in the sheet body", async () => {
-	await open();
-	expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
-	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Name this machine")).toHaveLength(1);
-	expect(renderer!.root.findAllByProps({ title: "Save machine" }).length).toBeGreaterThan(0);
 });

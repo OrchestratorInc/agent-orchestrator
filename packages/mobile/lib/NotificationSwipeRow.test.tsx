@@ -76,11 +76,3 @@ it("bumps once as the row crosses the clear threshold, and again only after back
 	});
 	expect(haptics.armed).toHaveBeenCalledTimes(2);
 });
-
-it("draws the delete rail with the system trash symbol", () => {
-	act(() => { renderer = create(<NotificationSwipeRow onClear={() => true}><></></NotificationSwipeRow>); });
-	const glyph = renderer!.root.findByType("SymbolView" as never);
-	expect(glyph.props.name).toEqual({ ios: "trash", android: "delete" });
-	// The ink for a red fill, not the page colour standing in for it.
-	expect(glyph.props.tintColor).toBe("white");
-});

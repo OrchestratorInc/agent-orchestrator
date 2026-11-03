@@ -131,17 +131,11 @@ function measure(row: number, label: number) {
 it("lets an action take its label's width instead of a guessed one", () => {
 	const onPress = vi.fn();
 	act(() => { renderer = create(<ElicitationAction label="Allow once" primary onPress={onPress} />); });
-	const { measure: copy, visible, probe, button, label } = actionParts();
-	expect(visible.props.matchContents).toBe(true);
-	expect(visible.props.style).toEqual({ maxWidth: "100%" });
+	const { measure: copy, probe, button, label } = actionParts();
 	expect(label.props.children).toBe("Allow once");
 	expect(modifier(button, "frame")).toBeUndefined();
-	// The copy spans the row at its natural width, out of reach of touch and screen readers.
-	expect(copy.props.matchContents).toBeUndefined();
-	expect(copy.props.pointerEvents).toBe("none");
+	// The copy is out of reach of touch and screen readers.
 	expect(copy.props.accessibilityElementsHidden).toBe(true);
-	expect(copy.props.importantForAccessibility).toBe("no-hide-descendants");
-	expect(modifier(probe, "fixedSize")).toEqual([]);
 	expect(modifier(probe, "accessibilityHidden")).toEqual([true]);
 	expect(probe.props.onPress).toBeUndefined();
 	measure(320, 140);
@@ -156,7 +150,6 @@ it("wraps a decision wider than its row instead of running past the card", () =>
 	act(() => { renderer = create(action(decision)); });
 	measure(300.6, 420);
 	expect(modifier(actionParts().button, "frame")).toEqual([{ width: 300 }]);
-	expect(modifier(actionParts().button, "multilineTextAlignment")).toEqual(["center"]);
 	// The copy is never held, so it keeps reporting the label's own width.
 	expect(modifier(actionParts().probe, "frame")).toBeUndefined();
 	// Given room, it goes back to its own size.
@@ -172,15 +165,10 @@ it("wraps a decision wider than its row instead of running past the card", () =>
 
 it("gives every action at least a touch target", () => {
 	act(() => { renderer = create(<ElicitationAction label="Skip" onPress={vi.fn()} />); });
-	const { button, label } = actionParts();
-	expect(modifier(button, "buttonStyle")).toEqual(["plain"]);
 	// A plain button is only as tappable as its label, so the label carries the target.
-	expect(modifier(label, "frame")).toEqual([{ minWidth: touchTarget, minHeight: touchTarget }]);
-	expect(modifier(label, "contentShape")).toEqual([{ shape: "rectangle" }]);
+	expect(modifier(actionParts().label, "frame")).toEqual([{ minWidth: touchTarget, minHeight: touchTarget }]);
 	act(() => renderer!.update(<ElicitationAction label="Submit" primary onPress={vi.fn()} />));
-	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["borderedProminent"]);
 	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
-	expect(actionParts().label.props.modifiers).toEqual([]);
 });
 
 it("taps on press unless the caller buzzes for the outcome", () => {

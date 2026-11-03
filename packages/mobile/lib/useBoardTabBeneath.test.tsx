@@ -35,27 +35,17 @@ afterEach(() => {
 
 const page = { key: "project-1", name: "project/[id]" };
 
+const board = (index?: number): Route => ({ key: "board", name: "(tabs)", ...(index === undefined ? {} : { state: { index, routes: [{ name: "(workers)" }, { name: "(projects)" }] } }) });
+
 // A cold link: the board has never changed tab, so it has no state yet.
-it("selects Projects under a page opened over a board that has not picked a tab", () => {
-	fixtures.routes = [{ key: "board", name: "(tabs)" }, page];
+it.each([
+	["a board that has not picked a tab", [board(), page], 1],
+	["the Workers tab", [board(0), page], 1],
+	["a board already on Projects", [board(1), page], 0],
+	["no board at all", [page], 0],
+])("selects Projects beneath a page opened over %s only when needed", (_name, routes, dispatches) => {
+	fixtures.routes = routes as Route[];
 	act(() => { renderer = create(<Page />); });
-	expect(fixtures.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "SET_PARAMS", payload: { params: { screen: "(projects)" } }, source: "board" });
-});
-
-it("selects Projects under a page opened over the Workers tab", () => {
-	fixtures.routes = [{ key: "board", name: "(tabs)", state: { index: 0, routes: [{ name: "(workers)" }, { name: "(projects)" }] } }, page];
-	act(() => { renderer = create(<Page />); });
-	expect(fixtures.dispatch).toHaveBeenCalledTimes(1);
-});
-
-it("leaves a board already on Projects alone", () => {
-	fixtures.routes = [{ key: "board", name: "(tabs)", state: { index: 1, routes: [{ name: "(workers)" }, { name: "(projects)" }] } }, page];
-	act(() => { renderer = create(<Page />); });
-	expect(fixtures.dispatch).not.toHaveBeenCalled();
-});
-
-it("does nothing without a board beneath", () => {
-	fixtures.routes = [page];
-	act(() => { renderer = create(<Page />); });
-	expect(fixtures.dispatch).not.toHaveBeenCalled();
+	expect(fixtures.dispatch).toHaveBeenCalledTimes(dispatches as number);
+	if (dispatches) expect(fixtures.dispatch).toHaveBeenCalledWith({ type: "SET_PARAMS", payload: { params: { screen: "(projects)" } }, source: "board" });
 });

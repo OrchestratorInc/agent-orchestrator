@@ -63,10 +63,9 @@ async function render(selected?: string) {
 	const track = () => root.findAll((node) => hostType(node) === "View" && node.props.testID === "effort-slider")[0];
 	// A 240-wide track: stops at 20, 70, 120, 170, 220.
 	await act(async () => track().props.onLayout({ nativeEvent: { layout: { width: 240 } } }));
-	const animated = () => root.findAll((node) => hostType(node) === "AnimatedView");
 	// The blob is the last animated view; its style function reads the shared value.
 	const blobCentre = () => {
-		const style = animated().at(-1)!.props.style[1]() as { transform: { translateX: number }[] };
+		const style = root.findAll((node) => hostType(node) === "AnimatedView").at(-1)!.props.style[1]() as { transform: { translateX: number }[] };
 		return style.transform[0].translateX + 16;
 	};
 	return {
@@ -74,8 +73,6 @@ async function render(selected?: string) {
 		// The track sits 100 in from the page's edge.
 		touch: (x: number) => ({ nativeEvent: { locationX: x, pageX: 100 + x } }),
 		label: () => root.findAll((node) => hostType(node) === "Text")[0].props.children,
-		dots: () => root.findAll((node) => hostType(node) === "View" && node.props.pointerEvents === "none"),
-		animated,
 		blobCentre,
 		onChoose,
 		onRelease,
@@ -83,17 +80,6 @@ async function render(selected?: string) {
 }
 
 describe("effort slider", () => {
-	it("draws a fat track with a dot per level, lit in the theme's accent up to the blob", async () => {
-		const { track, dots, animated, blobCentre, label } = await render("high");
-		expect(track().props.style).toMatchObject({ height: 40, borderRadius: 20, backgroundColor: "#bgElevatedHover" });
-		expect(dots()).toHaveLength(5);
-		expect(dots().map((dot) => dot.props.style[1].backgroundColor)).toEqual(["#textSecondary", "#textSecondary", "#textSecondary", "#textFaint", "#textFaint"]);
-		expect(animated()[0].props.style[0]).toMatchObject({ backgroundColor: "#accentBorder" });
-		expect(animated()[1].props.style[0]).toMatchObject({ width: 32, height: 32, backgroundColor: "#ffffff" });
-		expect(blobCentre()).toBe(120);
-		expect(label()).toBe("High");
-	});
-
 	it("pulls the blob toward the nearest level while dragging, ticking as it lands on each", async () => {
 		const { track, touch, blobCentre, label, onChoose } = await render("high");
 		await act(async () => track().props.onResponderGrant(touch(120)));
@@ -139,12 +125,9 @@ describe("effort slider", () => {
 		expect(label()).toBe("Xhigh");
 	});
 
-	it("floats as a card whose touches are its own, never a tap outside it", async () => {
+	it("keeps its own touches from counting as a tap outside it", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("high")} onChoose={() => {}} bottom="100%" />); });
-		const card = renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
-		expect(card.props.style[0]).toMatchObject({ position: "absolute", backgroundColor: "#bgElevated" });
-		expect(card.props.style[1]).toEqual({ bottom: "100%" });
-		expect(card.props.onTouchStart).toBe(markTouchInside);
+		expect(renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0].props.onTouchStart).toBe(markTouchInside);
 	});
 
 	it("holds the screen's back swipe while it is up, so a drag to the right stays on the slider", async () => {

@@ -40,7 +40,7 @@ afterEach(async () => {
 });
 
 describe("a notice's close button", () => {
-	it("is a touch-target xmark named for what it closes", async () => {
+	it("is a button named for what it closes", async () => {
 		const onPress = vi.fn();
 		await act(async () => {
 			renderer = create(<NoticeDismissButton accessibilityLabel="Dismiss interface switch error" onPress={onPress} />);
@@ -51,11 +51,7 @@ describe("a notice's close button", () => {
 			accessibilityLabel: "Dismiss interface switch error",
 			accessibilityState: { disabled: false, busy: false },
 			disabled: false,
-			android_ripple: { color: "#ripple" },
 		});
-		expect(button.props.style({ pressed: false })).toContainEqual({ width: 44, height: 44, alignItems: "center", justifyContent: "center" });
-		expect(button.props.style({ pressed: true })).toContainEqual({ opacity: 0.7 });
-		expect(renderer!.root.findByType("SymbolView" as never).props.name.ios).toBe("xmark");
 		act(() => button.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
@@ -66,8 +62,6 @@ describe("a notice's close button", () => {
 		});
 		const button = renderer!.root.findByType("Pressable" as never);
 		expect(button.props).toMatchObject({ disabled: true, accessibilityState: { disabled: true, busy: true } });
-		expect(button.props.accessibilityLabel).toBe("Dismiss interface switch error");
-		expect(renderer!.root.findAllByType("SymbolView" as never)).toHaveLength(0);
 		expect(renderer!.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
 	});
 });

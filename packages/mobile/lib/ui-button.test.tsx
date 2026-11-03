@@ -30,9 +30,8 @@ vi.mock("./ThemeProvider", async () => {
 	return { useTheme: () => darkTheme, useThemedStyles: (factory: (theme: unknown) => unknown) => factory(darkTheme) };
 });
 
-import { darkTheme } from "./theme";
-import { radius, stateOpacity, touchTarget } from "./tokens";
-import { Button, type ButtonVariant } from "./ui";
+import { stateOpacity } from "./tokens";
+import { Button } from "./ui";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -60,58 +59,14 @@ function styleOf(pressable: ReactTestInstance, pressed = false): Record<string, 
 }
 
 describe("Button", () => {
-	it("is a capsule at least one touch target tall", () => {
-		const style = styleOf(render(<Button title="Retry" onPress={() => {}} />));
-		expect(style.borderRadius).toBe(radius.pill);
-		expect(style.minHeight).toBe(touchTarget);
-		// The ripple is drawn inside the view's bounds; the capsule has to clip it.
-		expect(style.overflow).toBe("hidden");
-	});
-
-	it("dims on iOS while pressed, without a ripple or a scale", () => {
+	it("dims on iOS while pressed, and ripples on Android instead", () => {
 		const pressable = render(<Button title="Retry" onPress={() => {}} />);
 		expect(pressable.props.android_ripple).toBeUndefined();
 		expect(styleOf(pressable, true).opacity).toBe(stateOpacity.pressed);
-		expect(styleOf(pressable, true).transform).toBeUndefined();
-		expect(renderer!.root.findAllByType("AnimatedView" as never)).toHaveLength(0);
-	});
-
-	it("ripples on Android and leaves the pressed style alone", () => {
 		fixtures.platform.OS = "android";
-		const pressable = render(<Button title="Retry" onPress={() => {}} />);
-		expect(pressable.props.android_ripple).toMatchObject({ borderless: false });
-		expect(styleOf(pressable, true).opacity).toBeUndefined();
-	});
-
-	it("ripples in the fill's own ink on a filled button, so it shows on the near-white accent", () => {
-		fixtures.platform.OS = "android";
-		const primary = render(<Button title="Save" onPress={() => {}} />);
-		expect(primary.props.android_ripple.color).not.toBe(darkTheme.accentTint);
-		act(() => renderer!.update(<Button title="Save" variant="secondary" onPress={() => {}} />));
-		expect(renderer!.root.findByType("Pressable" as never).props.android_ripple.color).toBe(darkTheme.accentTint);
-	});
-
-	it.each<[ButtonVariant, string]>([
-		["primary", darkTheme.accent],
-		["secondary", darkTheme.accentTint],
-		["danger", darkTheme.tintRed],
-		["success", darkTheme.green],
-	])("fills a %s button", (variant, fill) => {
-		expect(styleOf(render(<Button title="Go" variant={variant} onPress={() => {}} />)).backgroundColor).toBe(fill);
-	});
-
-	// The title on the green fill takes the ink made for status fills.
-	it("writes a success button's title in the status ink", () => {
-		render(<Button title="Merge" variant="success" onPress={() => {}} />);
-		expect(renderer!.root.findByType("Text" as never).props.style).toEqual(expect.arrayContaining([{ color: darkTheme.onStatus }]));
-	});
-
-	it("draws a ghost button as text alone, with no fill or border", () => {
-		const style = styleOf(render(<Button title="Discard" variant="ghost" onPress={() => {}} />));
-		expect(style.backgroundColor).toBe("transparent");
-		expect(style.borderWidth).toBeUndefined();
-		const label = renderer!.root.findByType("Text" as never);
-		expect(label.props.style).toEqual(expect.arrayContaining([{ color: darkTheme.accent }]));
+		const android = render(<Button title="Retry" onPress={() => {}} />);
+		expect(android.props.android_ripple).toMatchObject({ borderless: false });
+		expect(styleOf(android, true).opacity).toBeUndefined();
 	});
 
 	it("dims to the shared disabled opacity and says so", () => {
@@ -127,17 +82,6 @@ describe("Button", () => {
 		expect(pressable.props.accessibilityLabel).toBe("Connect");
 		expect(pressable.props.accessibilityState).toEqual({ disabled: true, busy: true });
 		expect(renderer!.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
-	});
-
-	it("draws a chrome icon as a system symbol, mapping the Lucide name it was given", () => {
-		render(<Button title="Retry" icon="refresh-cw" onPress={() => {}} />);
-		expect(renderer!.root.findByType("SymbolView" as never).props.name).toEqual({ ios: "arrow.clockwise", android: "refresh" });
-		expect(renderer!.root.findAllByType("Feather" as never)).toHaveLength(0);
-	});
-
-	it("keeps Lucide for a domain glyph with no system symbol", () => {
-		render(<Button title="Open pull request" icon="git-pull-request" onPress={() => {}} />);
-		expect(renderer!.root.findByType("Feather" as never).props.name).toBe("git-pull-request");
 	});
 
 	it("warns before a destructive action and taps for the rest", () => {

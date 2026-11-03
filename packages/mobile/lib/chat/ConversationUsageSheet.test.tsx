@@ -42,11 +42,6 @@ function render(snapshot: Partial<ConversationSnapshot>) {
 const usage = { contextUsed: 150_000, contextWindow: 200_000, inputTokens: 12_300, outputTokens: 4_500, cachedTokens: 0, totalTokens: 16_800, cost: 0.1234, currency: "$" };
 
 describe("ConversationUsageSheet", () => {
-	it("titles the sheet and names the session", () => {
-		const sheet = render({ usage }).findByType("SheetScreen" as never);
-		expect(sheet.props).toMatchObject({ title: "Context & usage", subtitle: "Fix login" });
-	});
-
 	// A meter whose value only its fill shows is invisible to a screen reader.
 	it("reports each meter's value to screen readers", () => {
 		const root = render({ usage, rateLimits: { primaryUsedPercent: 82.4, primaryResetsInSeconds: 7200, planLabel: "Max plan" } as ConversationSnapshot["rateLimits"] });

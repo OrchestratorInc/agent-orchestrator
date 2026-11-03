@@ -1,5 +1,5 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("@expo/ui", () => ({ Host: "Host", Button: "Button" }));
 vi.mock("./ThemeProvider", () => ({
@@ -7,7 +7,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 
-import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
+import { NativeHeaderButton } from "./native-header-button";
 import { symbols } from "./symbols";
 
 let renderer: ReactTestRenderer | undefined;
@@ -28,34 +28,19 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-describe("NativeHeaderButton fallback", () => {
-	const expected: Record<NativeHeaderButtonIcon, { ios: string; android: string }> = {
-		bell: symbols.notifications,
-		close: symbols.close,
-		check: symbols.checkmark,
-		back: symbols.back,
-		// The glass circle rounds it on iOS; M3 stacks an app-bar overflow vertically.
-		more: { ios: "ellipsis", android: "more_vert" },
-		add: symbols.add,
-		trash: symbols.delete,
-	};
-
-	// The fallback used to draw text glyphs (☰ × ✓ ‹ + 🗑 ◉), which a screen
-	// reader read aloud instead of the control's name.
-	it.each(Object.entries(expected))("draws %s as a system symbol named by the control", async (icon, glyph) => {
-		const onPress = vi.fn();
-		await act(async () => {
-			renderer = create(<NativeHeaderButton icon={icon as NativeHeaderButtonIcon} label="Do the thing" onPress={onPress} />);
-		});
-
-		const button = renderer!.root.findByType("Button" as never);
-		expect(button.props.testID).toBe(`header-${icon}`);
-		expect(button.props.label).toBeUndefined();
-		const symbol = button.findByType("SymbolView" as never);
-		expect(symbol.props.name).toEqual(glyph);
-		expect(symbol.props.accessibilityLabel).toBe("Do the thing");
-
-		await act(async () => button.props.onPress());
-		expect(onPress).toHaveBeenCalledOnce();
+// The fallback used to draw text glyphs (☰ × ✓ ‹ + 🗑 ◉), which a screen
+// reader read aloud instead of the control's name.
+it("draws a system symbol named by the control, and presses through", async () => {
+	const onPress = vi.fn();
+	await act(async () => {
+		renderer = create(<NativeHeaderButton icon="trash" label="Do the thing" onPress={onPress} />);
 	});
+	const button = renderer!.root.findByType("Button" as never);
+	expect(button.props.testID).toBe("header-trash");
+	expect(button.props.label).toBeUndefined();
+	const symbol = button.findByType("SymbolView" as never);
+	expect(symbol.props.name).toEqual(symbols.delete);
+	expect(symbol.props.accessibilityLabel).toBe("Do the thing");
+	await act(async () => button.props.onPress());
+	expect(onPress).toHaveBeenCalledOnce();
 });

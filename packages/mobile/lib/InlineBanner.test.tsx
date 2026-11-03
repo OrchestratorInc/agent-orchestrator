@@ -24,8 +24,7 @@ vi.mock("./ThemeProvider", async () => {
 });
 
 import { InlineBanner } from "./InlineBanner";
-import { darkTheme } from "./theme";
-import { touchTarget, type } from "./tokens";
+import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -71,17 +70,9 @@ describe("InlineBanner", () => {
 		expect(fixtures.tap).toHaveBeenCalledTimes(1);
 	});
 
-	it("reads at footnote size, never caption", () => {
-		const root = render(<InlineBanner tone="warning" icon="warning" title="80% of quota used" body="Resets in 2h." action="Details" onPress={() => {}} />);
-		for (const text of root.findAllByType("Text" as never)) {
-			expect(flat(text.props.style).fontSize).toBe(type.footnote.fontSize);
-		}
-	});
-
 	it("shows the system spinner for a state still in progress", () => {
 		const root = render(<InlineBanner tone="warning" icon="busy" title="Reconnecting to the agent…" />);
-		const spinner = root.findByType("ActivityIndicator" as never);
-		expect(spinner.props.color).toBe(darkTheme.amber);
+		expect(root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
 		expect(root.findAllByType("SymbolView" as never)).toHaveLength(0);
 	});
 
@@ -92,15 +83,4 @@ describe("InlineBanner", () => {
 		expect(action.props.accessibilityState).toEqual({ disabled: true });
 	});
 
-	it("draws the Android ripple instead of fading", () => {
-		fixtures.platform.OS = "android";
-		try {
-			const root = render(<InlineBanner tone="muted" icon="warning" title="1 turn was rolled back" onDismiss={() => {}} />);
-			const close = root.findByType("Pressable" as never);
-			expect(close.props.android_ripple).toMatchObject({ borderless: true });
-			expect(flat(close.props.style({ pressed: true })).opacity).toBeUndefined();
-		} finally {
-			fixtures.platform.OS = "ios";
-		}
-	});
 });

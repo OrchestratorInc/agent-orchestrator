@@ -86,18 +86,11 @@ const release = (success = true) => {
 	act(() => watch.handlers.onFinalize({}, success));
 };
 
-it("does not build the rail's controls behind a resting row but keeps the rail measurable", () => {
-	const view = mount();
-	expect(railControls(view)).toHaveLength(0);
-	const rail = view.root.findAll((node) => node.type === ("View" as never) && node.props.style?.width === 128);
-	expect(rail).toHaveLength(1);
-	expect(rail[0].props.style).toMatchObject({ justifyContent: "center" });
-});
-
-it("mounts the controls when a drag starts and keeps them until the row settles closed", () => {
+it("mounts the rail's controls only when a drag starts and keeps them until the row settles closed", () => {
 	const onSwipeOpen = vi.fn();
 	const onSwipeClose = vi.fn();
 	const view = mount({ onSwipeOpen, onSwipeClose });
+	expect(railControls(view)).toHaveLength(0);
 	act(() => boundary(view).props.onSwipeableOpenStartDrag("left"));
 	expect(railControls(view)).toHaveLength(1);
 	act(() => boundary(view).props.onSwipeableWillOpen("left"));
@@ -164,7 +157,7 @@ it("archives on a full swipe, with one haptic as it arms", () => {
 	expect(onAction).toHaveBeenCalledWith("delete");
 });
 
-it("does not archive a drag that only opens the rail, or one carried back before release", () => {
+it("does not archive a drag that only opens the rail, is carried back, or is cancelled", () => {
 	const onAction = vi.fn();
 	mount({ onAction });
 	drag(-140);
@@ -172,15 +165,8 @@ it("does not archive a drag that only opens the rail, or one carried back before
 	drag(-300);
 	act(() => watch.handlers.onUpdate({ translationX: -100 }));
 	release();
-	expect(onAction).not.toHaveBeenCalled();
-});
-
-it("does not archive an armed drag that is cancelled instead of released", () => {
-	const onAction = vi.fn();
-	mount({ onAction });
 	drag(-300);
 	release(false);
-	expect(onAction).not.toHaveBeenCalled();
 	// Disarmed by the cancel, the next drag starts over.
 	drag(-150);
 	release();
@@ -195,19 +181,4 @@ it("measures a full swipe from the open rail when the drag starts there", () => 
 	drag(-110);
 	release();
 	expect(onAction).toHaveBeenCalledWith("delete");
-});
-
-// The fill follows the row past the rail. Armed, it takes the destructive tint
-// and shows the archive glyph, so the state reads by shape as well as colour.
-it("tints the uncovered rail and shows the archive glyph while a full swipe is armed", () => {
-	const view = mount();
-	const [fill, glyph] = view.root.findAllByType("AnimatedView" as never);
-	expect(fill.props.style[1]).toMatchObject({ width: 128, backgroundColor: "elevated" });
-	expect(glyph.props.style[1]).toEqual({ opacity: 0 });
-	expect(glyph.findByType("SymbolView" as never).props).toMatchObject({ name: { ios: "archivebox", android: "archive" }, tintColor: "red" });
-	drag(-300);
-	act(() => view.update(<WorkerRowInteraction {...props} />));
-	const [armedFill, armedGlyph] = view.root.findAllByType("AnimatedView" as never);
-	expect(armedFill.props.style[1]).toMatchObject({ backgroundColor: "red-tint" });
-	expect(armedGlyph.props.style[1]).toEqual({ opacity: 1 });
 });

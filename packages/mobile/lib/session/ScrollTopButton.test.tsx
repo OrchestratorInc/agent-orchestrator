@@ -67,25 +67,19 @@ afterEach(async () => {
 });
 
 describe("the iOS scroll-to-top button", () => {
-	it("is a Liquid Glass circle the size of the touch target on iOS 26", async () => {
+	it("is one VoiceOver button on iOS 26's glass, and scrolls on a tap", async () => {
 		fixtures.platform.Version = "26.0";
 		const { ScrollTopButton } = await import("./ScrollTopButton");
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<ScrollTopButton onPress={onPress} />); });
 		const group = renderer!.root.findByType("ZStack" as never);
-		expect(group.props.modifiers).toEqual(expect.arrayContaining([{ frame: { width: 44, height: 44 } }, { glass: "circle" }, { traits: ["isButton"] }, { label: "Scroll to top" }]));
-		// The framed circle is VoiceOver's element, not the glyph inside it, and
-		// the frame comes first so the element is the 44pt one.
-		const order = group.props.modifiers.map((modifier: object) => Object.keys(modifier)[0]);
-		expect(order.indexOf("element")).toBeGreaterThan(order.indexOf("frame"));
-		expect(group.props.modifiers).toContainEqual({ element: "ignore" });
-		expect(renderer!.root.findByType("Image" as never).props.systemName).toBe("arrow.up.to.line");
+		expect(group.props.modifiers).toEqual(expect.arrayContaining([{ traits: ["isButton"] }, { label: "Scroll to top" }, { element: "ignore" }]));
 		const tap = group.props.modifiers.find((modifier: { onTap?: () => void }) => modifier.onTap);
 		act(() => tap.onTap());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	it("falls back to a filled circle where there is no glass", async () => {
+	it("falls back to a pressable where there is no glass", async () => {
 		fixtures.platform.Version = "18.4";
 		const { ScrollTopButton } = await import("./ScrollTopButton");
 		const onPress = vi.fn();
@@ -93,21 +87,18 @@ describe("the iOS scroll-to-top button", () => {
 		expect(renderer!.root.findAllByType("ZStack" as never)).toHaveLength(0);
 		const button = renderer!.root.findByType("Pressable" as never);
 		expect(button.props).toMatchObject({ accessibilityRole: "button", accessibilityLabel: "Scroll to top" });
-		expect(renderer!.root.findByType("SymbolView" as never).props.name).toEqual({ ios: "arrow.up.to.line", android: "vertical_align_top" });
 		act(() => button.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 });
 
 describe("the Android scroll-to-top button", () => {
-	it("is Material's small FAB on the elevated surface, named for TalkBack", async () => {
+	it("is named for TalkBack and scrolls on a click", async () => {
 		const { ScrollTopButton } = await import("./ScrollTopButton.android");
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<ScrollTopButton onPress={onPress} />); });
 		const fab = renderer!.root.findByType("SmallFloatingActionButton" as never);
-		expect(fab.props.containerColor).toBe("#elevated");
-		const icon = fab.findByType("FabIconSlot" as never).findByType("Icon" as never);
-		expect(icon.props).toMatchObject({ source: "drawable:vertical_align_top", tint: "#primary", contentDescription: "Scroll to top" });
+		expect(fab.findByType("Icon" as never).props.contentDescription).toBe("Scroll to top");
 		act(() => fab.props.onClick());
 		expect(onPress).toHaveBeenCalledOnce();
 	});

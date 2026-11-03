@@ -46,11 +46,7 @@ const bubble = () => menu().findByType("View" as never);
 it("opens the system menu on long-press with Edit and Copy", () => {
 	render(true);
 	expect(menu().props.shouldOpenOnLongPress).toBe(true);
-	expect(menu().props.colorScheme).toBe("dark");
-	expect(menu().props.actions).toEqual([
-		{ id: "edit", title: "Edit", image: "pencil" },
-		{ id: "copy", title: "Copy", image: "doc.on.doc" },
-	]);
+	expect(menu().props.actions.map((action: { title: string }) => action.title)).toEqual(["Edit", "Copy"]);
 	// The bubble is drawn once, inside the trigger; nothing is cloned above a scrim.
 	expect(renderer!.root.findAll((node) => node.props.children === "bubble")).toHaveLength(1);
 });

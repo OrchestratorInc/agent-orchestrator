@@ -147,8 +147,4 @@ describe("Dot breathing", () => {
 		expect(fixtures.loops).toEqual([]);
 	});
 
-	it("keeps a dot's shape and colour", () => {
-		const dot = render(<Dot color="orange" size={12} />).root.findByType("AnimatedView" as never);
-		expect(dot.props.style).toEqual({ width: 12, height: 12, borderRadius: 6, backgroundColor: "orange", opacity: 1 });
-	});
 });

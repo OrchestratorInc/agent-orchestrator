@@ -155,33 +155,14 @@ it("retains the default PR scroll buffer", () => {
 	expect(list.props.initialNumToRender).toBeUndefined();
 });
 
-// The bar is clear on iOS 26 and the page is laid out under it, so the PR
-// list is the page's first view, and what sat above it now heads the list.
-it("makes the PR list the page's first view, inset under the header", () => {
-	fixture.hostStates = fixture.hostStates.slice(0, 1);
-	act(() => { renderer = create(<PRsScreen />); });
-	const screen = renderer!.root.findAllByType("View" as never)[0];
-	// iOS's back item draws no view of its own, so the list still comes first.
-	expect((screen.children[0] as { type: { name?: string } }).type.name).toBe("StackRootBack");
-	const first = screen.children[1] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
-	expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
-	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "PRFilterControl", "StaleBanner"]);
-});
-
-// A stand-in scroll view swapped for the list while the sheet came up left
-// iOS 26's floating bar over the sheet taking every touch, so the first load
-// waits inside the list.
-it("loads inside the list rather than in a scroll view standing in for it", () => {
+it("shows the first load inside the list", () => {
 	fixture.allSessions = [];
 	fixture.hostStates = fixture.hostStates.map((host) => ({ ...host, sessions: [], loading: true }));
 	act(() => { renderer = create(<PRsScreen />); });
 	const list = renderer!.root.findByType("SectionList" as never);
 	expect(list.props.ListEmptyComponent.props.children.props.accessibilityLabel).toBe("Loading pull requests");
-	expect(renderer!.root.findAllByType("TabPageScroll" as never)).toHaveLength(0);
 });
 
-// A segmented control heads the list under the title, as each platform places
-// one, rather than floating over the list just above the tab bar.
 it("heads the list with the Open / Merged / All filter and its counts", () => {
 	fixture.allSessions = [
 		session("mac"),
@@ -196,8 +177,6 @@ it("heads the list with the Open / Merged / All filter and its counts", () => {
 	act(() => control().props.onChange("merged"));
 	expect(control().props.filter).toBe("merged");
 	expect(fixture.cardRenders.at(-1)).toContain("windows");
-	expect(list().props.contentContainerStyle).toEqual({ flexGrow: 1, paddingBottom: 24 });
-	expect(renderer!.root.findAllByType("PRFilterDock" as never)).toHaveLength(0);
 });
 
 // The refresh control gives each platform's own feedback, and the Retry

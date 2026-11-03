@@ -78,14 +78,11 @@ describe("forgetting a machine", () => {
 		expect(result).toMatchObject({ wasDefault: false, notice: "A forgotten." });
 	});
 
-	it("reports a machine whose saved connection is still there", async () => {
+	it("reports a connection it couldn't remove, or saved machines it couldn't read", async () => {
 		fixtures.activeHostMetadata.mockResolvedValue({ id: "a" });
 		fixtures.forgetServer.mockRejectedValue(new Error("storage failed"));
 		fixtures.loadHosts.mockResolvedValue([a]);
 		await expect(forgetEnvironmentMachine(a, "a")).rejects.toEqual(new ForgetMachineError("This machine's saved connection couldn't be removed. Try again."));
-	});
-
-	it("reports saved machines that can't be read", async () => {
 		fixtures.loadHosts.mockRejectedValue(new Error("keychain"));
 		await expect(forgetEnvironmentMachine(a, null)).rejects.toEqual(new ForgetMachineError("The saved machines couldn't be read. Try again."));
 	});

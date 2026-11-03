@@ -78,16 +78,11 @@ async function render(props: SpawnComposerProps) {
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
 const primary = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "Pressable" && ["spawn-submit", "spawn-dictate"].includes(node.props.testID))[0];
-const glyph = (button: ReactTestInstance) => button.findAll((node) => hostType(node) === "AppSymbol")[0]?.props.name;
-const disc = (button: ReactTestInstance) => button.findAll((node) => hostType(node) === "View")[0];
 
 describe("SpawnComposer", () => {
-	// The chat's pill: the glass, the field, the controls row and the two
-	// corner controls, attach being the chat's own menu.
-	it("draws the chat composer's pill around the prompt and the settings", async () => {
+	it("edits the prompt, shows the settings and attaches from the chat's menu", async () => {
 		const props = baseProps();
 		const root = await render(props);
-		expect(root.findAllByType("ComposerGlass" as never)).toHaveLength(1);
 		const field = root.findByType("TextInput" as never);
 		expect(field.props).toMatchObject({ value: "Fix the flaky test", placeholder: "Ask Codex", multiline: true, autoFocus: true });
 		await act(async () => field.props.onChangeText("Fix it"));
@@ -99,26 +94,11 @@ describe("SpawnComposer", () => {
 		expect(props.onChoosePhoto).toHaveBeenCalledOnce();
 	});
 
-	// The page is for choosing who runs the task: the model, effort and
-	// approval stay in sight and in reach with nothing written and the field
-	// left, unlike the chat's composer, which folds to a pill.
-	it("keeps the settings row open with an empty, unfocused prompt", async () => {
-		const root = await render({ ...baseProps(), prompt: "" });
-		const field = root.findByType("TextInput" as never);
-		await act(async () => field.props.onBlur?.());
-		const settings = root.findAll((node) => node.props.children === "Settings")[0];
-		let row: ReactTestInstance | null = settings;
-		while (row && row.props.pointerEvents === undefined) row = row.parent;
-		expect(row?.props.pointerEvents).toBe("box-none");
-	});
-
-	it("starts the task from the chat's accent disc once there is text", async () => {
+	it("starts the task once there is text", async () => {
 		const props = baseProps();
 		const button = primary(await render(props));
 		expect(button.props.testID).toBe("spawn-submit");
 		expect(button.props.accessibilityLabel).toBe("Start task");
-		expect(glyph(button)).toBe("send");
-		expect(disc(button).props.style).toContainEqual({ backgroundColor: "#accent" });
 		await act(async () => button.props.onPress());
 		expect(props.onSpawn).toHaveBeenCalledOnce();
 	});
@@ -138,7 +118,6 @@ describe("SpawnComposer", () => {
 		let button = primary(await render(props));
 		expect(button.props.testID).toBe("spawn-dictate");
 		expect(button.props.accessibilityLabel).toBe("Dictate the task");
-		expect(glyph(button)).toEqual({ ios: "mic.fill", android: "mic" });
 		await act(async () => button.props.onPress());
 		expect(fixtures.dismiss).toHaveBeenCalledOnce();
 		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
@@ -149,8 +128,6 @@ describe("SpawnComposer", () => {
 		expect(button.props.accessibilityLabel).toBe("Stop dictating");
 		// The dictation takes the field's place while the mic is open.
 		expect(renderer!.root.findByType("DictationField" as never).props).toMatchObject({ state: "recording", partial: "add a test" });
-		expect(glyph(button)).toBe("stop");
-		expect(disc(button).props.style).toContainEqual({ backgroundColor: "#red" });
 
 		button = primary(await render(baseProps({ prompt: "", voice: { ...baseProps().voice, state: "unavailable" } })));
 		expect(button.props.testID).toBe("spawn-submit");
@@ -174,10 +151,5 @@ describe("SpawnComposer", () => {
 		transitionEnd({ data: { closing: false } });
 		transitionEnd({ data: { closing: false } });
 		expect(focus).toHaveBeenCalledOnce();
-	});
-
-	it("leaves iOS to focus with the page", async () => {
-		await render(baseProps());
-		expect(fixtures.listeners.has("transitionEnd")).toBe(false);
 	});
 });

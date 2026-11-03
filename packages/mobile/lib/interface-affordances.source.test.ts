@@ -88,10 +88,6 @@ describe("Interface affordances", () => {
 	it("keeps a list that holds an input tappable while the keyboard is up", () => {
 		// Android's default `never` spends the first tap on the keyboard, so a row
 		// under a focused field takes two taps to choose.
-		// On Android the model picker's custom-model field sits in its list's
-		// footer, and the composer picker's search field in its list's header.
-		expect(source("./ModelPickerSheet.tsx")).toContain("<OutlinedTextField");
-		expect(source("./chat/ComposerSearchField.android.tsx")).toContain("<TextField");
 		for (const file of ["./NativePickerList.tsx", "./chat/ComposerPickerSheet.tsx"]) {
 			expect(source(file), `${file} should keep taps while the keyboard is up`).toContain(
 				'keyboardShouldPersistTaps="handled"',

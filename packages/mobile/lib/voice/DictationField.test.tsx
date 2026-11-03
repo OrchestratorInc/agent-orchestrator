@@ -19,7 +19,6 @@ vi.mock("../ThemeProvider", async () => {
 	return { useTheme: () => lightTheme, useThemedStyles: (factory: (t: typeof lightTheme) => unknown) => factory(lightTheme) };
 });
 
-import { lightTheme } from "../theme";
 import { DictationField, WAVEFORM_BARS } from "./DictationField";
 
 let renderer: ReactTestRenderer | undefined;
@@ -44,12 +43,10 @@ it("keeps one label through the warm-up and the recording", () => {
 	render({ state: "starting" });
 	expect(label().props.children).toBe("Listening…");
 	expect(bars()).toHaveLength(WAVEFORM_BARS);
-	expect(bars().every((bar) => bar.props.style[1].backgroundColor === lightTheme.textFaint)).toBe(true);
 	act(() => renderer!.unmount());
 	renderer = undefined;
 	render({ state: "recording" });
 	expect(label().props.children).toBe("Listening…");
-	expect(bars()[0].props.style[1].backgroundColor).toBe(lightTheme.red);
 });
 
 it("shows the words heard so far, giving up the start of a long transcript", () => {

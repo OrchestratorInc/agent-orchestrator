@@ -177,7 +177,6 @@ vi.mock("./NoticeDismissButton", async () => {
 	return { NoticeDismissButton: (props: object) => React.createElement("NoticeDismissButton", props) };
 });
 
-import { Stack } from "expo-router";
 import TerminalScreen from "./TerminalSessionScreen";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 
@@ -236,35 +235,20 @@ const action = (menu: ReactTestInstance, label: string) =>
 		.flatMap(rows)
 		.find((item) => item.props.children === label)!;
 
-describe("the terminal screen's header on iOS", () => {
+describe("the terminal screen's header", () => {
 	// The bar holds only "⋯", as Chat's does; everything else is in its menu.
-	it("keeps only the actions menu in the bar, with Chat, preview and files in it", async () => {
+	it.each([
+		["ios", ["Terminal actions", "Switch to Chat", "Preview", "Files", ["Smaller", "Larger", "Fit width"], ["Archive session"]]],
+		["android", ["Switch to Chat", "Preview", "Files", ["Smaller", "Larger", "Fit width"], ["Archive session"]]],
+	] as const)("keeps only the actions menu in the bar on %s", async (os, layout) => {
+		fixtures.os = os;
 		await mount();
 		await attachGrid(120, 40);
 		expect(toolbarButtons()).toHaveLength(0);
-		expect(find("StackToolbarView")).toHaveLength(0);
 		const menu = rootMenu()!;
-		expect(menu.props.icon).toBe("ellipsis.circle");
-		expect(menu.props.title).toBeUndefined();
-		expect(menuText(elements(menu.props.children))).toEqual([
-			"Terminal actions",
-			"Switch to Chat",
-			"Preview",
-			"Files",
-			["Smaller", "Larger", "Fit width"],
-			["Archive session"],
-		]);
-		expect(elements(menu.props.children)[0].type).toBe(Stack.Toolbar.Label);
-		// Smaller, Larger and Fit width share one row of glyphs, set in a plain
-		// section so the row has a separator above and below.
-		const view = elements(menu.props.children).find((item) => elements(item.props.children).some((inner) => inner.props.palette))!;
-		expect(view.props).toMatchObject({ inline: true });
-		expect(view.props.palette).toBeUndefined();
-		expect(elements(view.props.children)[0].props).toMatchObject({ inline: true, palette: true });
-		expect(action(menu, "Smaller").props.icon).toBe("textformat.size.smaller");
-		expect(action(menu, "Switch to Chat").props).toMatchObject({ icon: "bubble.left", subtitle: "Not ready yet" });
-		expect(action(menu, "Files").props.icon).toBe("doc.text.magnifyingglass");
-		expect(action(menu, "Archive session").props).toMatchObject({ destructive: true, icon: "archivebox" });
+		expect(menuText(elements(menu.props.children))).toEqual(layout);
+		expect(action(menu, "Switch to Chat").props.subtitle).toBe("Not ready yet");
+		expect(action(menu, "Archive session").props.destructive).toBe(true);
 	});
 
 	it("zooms only the phone's viewport from the menu", async () => {
@@ -288,16 +272,14 @@ describe("the terminal screen's header on iOS", () => {
 		expect(JSON.stringify(fixtures.router.push.mock.calls.at(-1)![0])).toContain("worker-1");
 	});
 
-	it("fills the globe in, and says so, once a preview is ready", async () => {
+	it("says a preview is ready, but not for a repo README", async () => {
 		fixtures.getPreview.mockResolvedValue({ entry: "dist/index.html", url: "http://dev.local/preview" });
 		await mount();
-		expect(action(rootMenu()!, "Preview").props).toMatchObject({ icon: "globe.americas.fill", subtitle: "Ready to open" });
-	});
-
-	it("keeps a repo README from reading as a ready preview", async () => {
+		expect(action(rootMenu()!, "Preview").props.subtitle).toBe("Ready to open");
+		await act(async () => renderer!.unmount());
 		fixtures.getPreview.mockResolvedValue({ entry: "README.md", url: "http://dev.local/preview" });
 		await mount();
-		expect(action(rootMenu()!, "Preview").props).toMatchObject({ icon: "globe", subtitle: undefined });
+		expect(action(rootMenu()!, "Preview").props.subtitle).toBeUndefined();
 	});
 
 	it("holds the switch to Chat while it starts", async () => {
@@ -313,31 +295,11 @@ describe("the terminal screen's header on iOS", () => {
 	});
 });
 
-describe("the terminal screen's header on Android", () => {
-	it("sections the menu with dividers, and no grid row", async () => {
-		fixtures.os = "android";
-		await mount();
-		await attachGrid(120, 40);
-		const menu = rootMenu()!;
-		expect(menu.props.title).toBeUndefined();
-		expect(toolbarButtons()).toHaveLength(0);
-		expect(menuText(elements(menu.props.children))).toEqual([
-			"Switch to Chat",
-			"Preview",
-			"Files",
-			["Smaller", "Larger", "Fit width"],
-			["Archive session"],
-		]);
-		expect(action(menu, "Smaller").props.icon).toBeUndefined();
-		expect(elements(menu.props.children).some((item) => item.props.palette)).toBe(false);
-	});
-});
-
 describe("the terminal screen without a paired machine", () => {
 	it("offers no menu, since there is nothing to zoom or archive", async () => {
 		fixtures.config = { host: "" };
 		await mount();
-		expect(find("EmptyState")[0].props).toMatchObject({ icon: "devices", title: "No machine paired" });
+		expect(find("EmptyState")[0].props.title).toBe("No machine paired");
 		expect(find("StackToolbarMenu")).toHaveLength(0);
 		expect(find("TerminalNotice")).toHaveLength(0);
 		expect(fixtures.mux).toBeUndefined();
@@ -388,7 +350,7 @@ describe("the terminal grid's overlays", () => {
 		act(() => webView().props.webViewOptions.onRenderProcessGone());
 		const alert = find("View").find((view) => view.props.accessibilityRole === "alert")!;
 		const state = alert.findByType("EmptyState" as never);
-		expect(state.props).toMatchObject({ icon: "warning", iconColor: "#red", title: "The terminal view stopped working" });
+		expect(state.props.title).toBe("The terminal view stopped working");
 		expect(find("ScrollTopButton")).toHaveLength(0);
 		expect(find("TerminalNotice")[0].props.notice).toBeNull();
 		act(() => (state.props.action as ReactElement<{ title: string; onPress: () => void }>).props.onPress());

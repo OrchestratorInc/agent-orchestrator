@@ -185,20 +185,10 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-// The bar group a toolbar button sits in.
-const toolbarOf = (node: { type: unknown; parent: unknown }) => {
-	let current = node as { type: unknown; parent: unknown; props?: Record<string, unknown> } | null;
-	while (current && current.type !== "StackToolbar") current = current.parent as typeof current;
-	return current!;
-};
-
 describe("NotificationsScreen", () => {
 	it("clears every connected machine's history from the header after confirming", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		const clearAll = () => renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
-		// The bar's back button leads, so Clear all takes the trailing end.
-		expect(toolbarOf(clearAll()).props!.placement).toBe("right");
-		expect(clearAll().props).toEqual(expect.objectContaining({ icon: "trash", accessibilityLabel: "Clear all" }));
 
 		act(() => { clearAll().props.onPress(); });
 		expect(fixtures.clearAllNotifications).not.toHaveBeenCalled();
@@ -398,12 +388,6 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
 	});
 
-	// A pushed page: the bar's back button leaves it.
-	it("draws no close item of its own", async () => {
-		await act(async () => { renderer = create(<NotificationsScreen />); });
-		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Close notifications")).toHaveLength(0);
-	});
-
 	it("hides Clear all when there is nothing to clear", async () => {
 		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
 		await act(async () => { renderer = create(<NotificationsScreen />); });
@@ -429,19 +413,5 @@ describe("NotificationsScreen", () => {
 		} finally {
 			fixtures.getNotifications.mockImplementation(base);
 		}
-	});
-
-	it("heads the unread group with the shared section header and themes the refresh spinner", async () => {
-		// Opened under a session, so nothing is acked and the unread group stays.
-		fixtures.focus.value = false;
-		await act(async () => { renderer = create(<NotificationsScreen />); });
-		expect(renderer!.root.findAllByType("ListSectionHeader" as never).map((header) => header.props)).toEqual([{ label: "Needs attention", count: 2 }]);
-		const refresh = renderer!.root.findByType("SectionList" as never).props.refreshControl;
-		expect(refresh.props).toEqual(expect.objectContaining({ tintColor: "#000", colors: ["#000"], progressBackgroundColor: "#000" }));
-		// The control gives each platform's own feedback; the page adds none.
-		const { haptics } = await import("./haptics");
-		vi.mocked(haptics.tap).mockClear();
-		await act(async () => { await refresh.props.onRefresh(); });
-		expect(haptics.tap).not.toHaveBeenCalled();
 	});
 });

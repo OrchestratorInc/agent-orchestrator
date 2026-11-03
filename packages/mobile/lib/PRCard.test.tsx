@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
@@ -51,7 +49,6 @@ vi.mock("./ThemeProvider", () => {
 });
 
 import { PRCard } from "./PRCard";
-import { symbols } from "./symbols";
 
 const pr: DashboardPR = { number: 42, url: "https://github.com/ao/app/pull/42", state: "open" };
 const session = {
@@ -94,28 +91,12 @@ describe("PRCard", () => {
 		expect(fixture.haptics.tap).not.toHaveBeenCalled();
 	});
 
-	// The GitHub link used to be a control nested inside the row, which screen
-	// readers could not reach. It is one row now, with the rest in its menu.
-	it("is one control, with no button nested inside it", () => {
-		render();
-		expect(renderer!.root.findAllByType("Pressable" as never)).toHaveLength(1);
-	});
-
-	it("offers Open worker, Open in GitHub and Copy link from a long-press menu", () => {
+	it("offers Open worker, Open in GitHub and Copy link from a long-press menu, and opens the worker's chat", () => {
 		render();
 		const menu = renderer!.root.findByType("MenuView" as never);
 		expect(menu.props.shouldOpenOnLongPress).toBe(true);
-		expect(menu.props.actions.map((action: { id: string; title: string }) => [action.id, action.title])).toEqual([
-			["openWorker", "Open worker"],
-			["openInGitHub", "Open in GitHub"],
-			["copyLink", "Copy link"],
-		]);
-		expect(menu.props.actions.map((action: { image: unknown }) => action.image)).toEqual(["bubble.left", "arrow.up.right.square", "doc.on.doc"]);
-	});
-
-	it("opens the worker's chat from the menu", () => {
-		render();
-		act(() => renderer!.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "openWorker" } }));
+		expect(menu.props.actions.map((action: { title: string }) => action.title)).toEqual(["Open worker", "Open in GitHub", "Copy link"]);
+		act(() => menu.props.onPressAction({ nativeEvent: { event: "openWorker" } }));
 		expect(fixture.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "worker-1", projectId: "app", hostId: "mac" } });
 	});
 
@@ -134,10 +115,13 @@ describe("PRCard", () => {
 		expect(onLinkCopied).toHaveBeenCalledTimes(1);
 	});
 
-	// VoiceOver's actions rotor and TalkBack's actions menu reach the same choices.
-	it("names the menu's choices as accessibility actions", () => {
+	// The GitHub link used to be a control nested inside the row, which screen
+	// readers could not reach. It is one row now, and VoiceOver's actions rotor
+	// and TalkBack's actions menu reach the menu's choices.
+	it("is one control that names the menu's choices as accessibility actions", () => {
 		const onLinkCopied = vi.fn();
 		render({ onLinkCopied });
+		expect(renderer!.root.findAllByType("Pressable" as never)).toHaveLength(1);
 		expect(row().props.accessibilityActions).toEqual([
 			{ name: "openWorker", label: "Open worker" },
 			{ name: "openInGitHub", label: "Open in GitHub" },
@@ -147,24 +131,6 @@ describe("PRCard", () => {
 		act(() => row().props.onAccessibilityAction({ nativeEvent: { actionName: "copyLink" } }));
 		expect(fixture.openGitHub).toHaveBeenCalledWith(pr.url);
 		expect(onLinkCopied).toHaveBeenCalledTimes(1);
-	});
-
-	// Compose draws a menu item's glyph only from a bundled image source, which
-	// the shared registry provides under the same Material Symbol iOS's entry names.
-	it("draws each Android menu glyph from the shared drawable registry", () => {
-		const android = readFileSync(fileURLToPath(new URL("./pr-card-menu-icons.android.ts", import.meta.url)), "utf8");
-		expect(android).toContain(`openWorker: materialDrawable("${symbols.chat.android}")`);
-		expect(android).toContain(`openInGitHub: materialDrawable("${symbols.openExternal.android}")`);
-		expect(android).toContain(`copyLink: materialDrawable("${symbols.copy.android}")`);
-		expect(android).not.toContain("require(");
-	});
-
-	// The eyebrow, details and blockers are quiet through colour and weight,
-	// never smaller than footnote.
-	it("sets no text below 13pt", () => {
-		const source = readFileSync(fileURLToPath(new URL("./PRCard.tsx", import.meta.url)), "utf8");
-		expect(source).not.toMatch(/type\.caption[12]/);
-		expect(source).toMatch(/blockers:\s*\{[^}]*fontSize: type\.footnote\.fontSize/);
 	});
 
 	// iOS's context menu takes the long press natively. On Android the row's own

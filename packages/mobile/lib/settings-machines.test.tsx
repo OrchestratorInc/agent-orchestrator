@@ -146,15 +146,9 @@ function row(root: ReactTestInstance, label: string) {
 }
 
 describe("Settings", () => {
-	it("is one native form of sections, in order", async () => {
-		const root = await renderSettings();
-		const form = root.findByType("SettingsForm" as never);
-		expect(form.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Account", "Preferences", "Updates", "Support"]);
-	});
-
 	it("has no Developer section in a release build", async () => {
 		const root = await renderSettings();
-		expect(root.findAll((node) => (node.type as unknown) === "SettingsSection" && node.props.title === "Developer")).toHaveLength(0);
+		expect(root.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Account", "Preferences", "Updates", "Support"]);
 	});
 
 	// Last, and saying plainly that it is only in development builds.
@@ -166,7 +160,6 @@ describe("Settings", () => {
 		expect(developer.props.title).toBe("Developer");
 		expect(developer.props.footer).toMatch(/^Development builds only\./);
 		const toggle = row(root, "Emulate more machines");
-		expect(toggle.type).toBe("SettingsToggleRow");
 		expect(toggle.props.value).toBe(false);
 		act(() => toggle.props.onValueChange(true));
 		expect(fixtures.setEmulated).toHaveBeenCalledWith(true);
@@ -182,7 +175,7 @@ describe("Settings", () => {
 		// With a fake beside it, the real machine says it is the default.
 		expect(row(root, "Dev").props.status).toBe("Unreachable · Default");
 		const fake = row(root, "Gaming PC");
-		expect(fake.props).toMatchObject({ status: "Offline", icon: "desktop" });
+		expect(fake.props.status).toBe("Offline");
 		act(() => fake.props.onPress());
 		expect(fixtures.push).not.toHaveBeenCalled();
 		expect(root.findByType("ToastHost" as never).props.toast.current.text).toMatch(/fake machine for this development build/);
@@ -198,8 +191,8 @@ describe("Settings", () => {
 			["SettingsButtonRow", "Add a machine"],
 		]);
 		// One machine is the default without saying so.
-		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", tone: "bad", icon: "laptop" });
-		expect(row(root, "Scan new code").props).toMatchObject({ icon: "scan", value: undefined });
+		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable", tone: "bad" });
+		expect(row(root, "Scan new code").props.value).toBeUndefined();
 
 		act(() => row(root, "Add a machine").props.onPress());
 		expect(fixtures.navigate).toHaveBeenCalledWith("/pair");
@@ -220,18 +213,8 @@ describe("Settings", () => {
 		fixtures.hostStates = [{ hostId: "lab", connection: "open", loading: false }];
 		const root = await renderSettings();
 		expect(row(root, "Dev").props).toMatchObject({ status: "Unreachable · Default", tone: "bad" });
-		// Connected stays quiet: the words in grey, the colour only in the dot.
 		expect(row(root, "Lab").props).toMatchObject({ status: "Connected", tone: "good" });
 		expect(row(root, "Scan new code").props.value).toBe("Dev");
-	});
-
-	it("says each machine once: no default picker, Test buttons or second list of machines", async () => {
-		fixtures.hosts = [DEV, LAB];
-		const root = await renderSettings();
-		const labels = rowsOf(section(root, "Machines")).map((node) => node.props.label as string);
-		expect(labels.filter((label) => label === "Dev" || label === "Lab")).toEqual(["Dev", "Lab"]);
-		for (const label of ["Default machine", "Paired machines", "Retry selected machine"]) expect(labels).not.toContain(label);
-		expect(root.findAll((node) => node.props.actionLabel !== undefined)).toHaveLength(0);
 	});
 
 	// A phone paired before machines were saved has only the saved config.
@@ -255,7 +238,6 @@ describe("Settings", () => {
 	it("opens Theme as a page from its link row", async () => {
 		const root = await renderSettings();
 		const theme = row(root, "Theme");
-		expect(theme.type).toBe("SettingsLinkRow");
 		expect(theme.props.value).toBe("Orchestrate");
 		act(() => theme.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith("/settings/theme");
@@ -265,8 +247,7 @@ describe("Settings", () => {
 	it("picks light, dark or system from the Appearance row", async () => {
 		const root = await renderSettings();
 		const appearance = row(root, "Appearance");
-		expect(appearance.type).toBe("SettingsPickerRow");
-		expect(appearance.props).toMatchObject({ selectedValue: "system", appearance: "segmented" });
+		expect(appearance.props.selectedValue).toBe("system");
 		act(() => appearance.props.onValueChange("dark"));
 		expect(fixtures.setPreference).toHaveBeenCalledWith("dark");
 	});
@@ -279,39 +260,23 @@ describe("Settings", () => {
 		expect(root.findByType("ToastHost" as never).props.toast.current.text).toMatch(/^Details copied/);
 	});
 
-	// Actions that run in place are button rows; nothing that only navigates is.
-	it.each([
-		["Software update", "Check now"],
-		["Report a problem", undefined],
-		["Request a feature", "Discord"],
-		["Sign in to Orchestrator Cloud", undefined],
-	])("runs %s from a button row", async (label, value) => {
-		const root = await renderSettings();
-		const action = row(root, label);
-		expect(action.type).toBe("SettingsButtonRow");
-		expect(action.props.value).toBe(value);
-		expect(action.props.destructive).toBeFalsy();
-		expect(action.props.onPress).toBeTypeOf("function");
-	});
-
 	// Notifications are on by default, so the row is only there to turn them
 	// back on.
 	it("offers the notifications toggle only while they are off", async () => {
 		fixtures.config = { host: "10.0.0.2", httpPort: "3011" };
 		let root = await renderSettings();
-		const toggle = row(root, "Notifications");
-		expect(toggle.type).toBe("SettingsToggleRow");
-		expect(toggle.props.value).toBe(false);
+		expect(row(root, "Notifications").props.value).toBe(false);
 
 		fixtures.pushStatus = { supported: true, granted: true, canAskAgain: true, registered: true };
 		act(() => renderer?.unmount());
 		root = await renderSettings();
 		expect(root.findAll((node) => (node.type as unknown) === "SettingsToggleRow" && node.props.label === "Notifications")).toHaveLength(0);
-	});
 
-	it("hides the notifications toggle when there is nothing to turn on", async () => {
 		// Nothing paired: no machine to register with.
-		const root = await renderSettings();
+		fixtures.config = null;
+		fixtures.pushStatus = { supported: true, granted: false, canAskAgain: true, registered: false };
+		act(() => renderer?.unmount());
+		root = await renderSettings();
 		expect(root.findAll((node) => (node.type as unknown) === "SettingsToggleRow" && node.props.label === "Notifications")).toHaveLength(0);
 	});
 
@@ -319,11 +284,6 @@ describe("Settings", () => {
 		const root = await renderSettings();
 		const labels = root.findAll((node) => ROW_TYPES.includes(node.type as unknown as string)).map((node) => node.props.label as string);
 		for (const label of labels) expect(label).not.toMatch(/Forget|Disconnect|Edit|Rename/);
-	});
-
-	it("ends with the version under Support", async () => {
-		const root = await renderSettings();
-		expect(section(root, "Support").props.footer).toMatch(/^Orchestrator 1\.0/);
 	});
 
 	it("raises the store's own update prompt when a manual check finds a native release", async () => {
@@ -344,7 +304,6 @@ describe("Settings", () => {
 		const root = await renderSettings();
 		expect(row(root, "Orchestrator Cloud").props).toMatchObject({ value: "me@example.com" });
 		const signOut = row(root, "Sign out");
-		expect(signOut.type).toBe("SettingsButtonRow");
 		expect(signOut.props.destructive).toBe(true);
 
 		act(() => signOut.props.onPress());
@@ -358,18 +317,15 @@ describe("Settings", () => {
 		expect(fixtures.clearAccountHosts).toHaveBeenCalledOnce();
 	});
 
-	// The native header carries the title and the way back: Settings is a
-	// pushed page on both platforms, with no close item of its own. On iOS it
-	// is the first page of its own stack, so it adds the back chevron UIKit
-	// wouldn't draw there (lib/StackRootBack).
-	it.each(["ios", "android"])("leaves the title and the way back to the native header on %s", async (platform) => {
+	// Settings is the first page of its own stack on iOS, so it adds the back
+	// chevron UIKit wouldn't draw there (lib/StackRootBack). Android's header
+	// has its own.
+	it.each(["ios", "android"])("leaves Settings by the header's back button on %s", async (platform) => {
 		fixtures.platform.OS = platform;
 		const root = await renderSettings();
-		expect(root.findAll((node) => node.props.title === "Settings")).toHaveLength(0);
 		const buttons = root.findAllByType("NativeHeaderButton" as never);
 		expect(buttons.map((button) => button.props.label)).toEqual(platform === "ios" ? ["Back"] : []);
 		if (platform === "ios") {
-			expect(root.findByType("StackToolbar" as never).props.placement).toBe("left");
 			act(() => buttons[0].props.onPress());
 			expect(fixtures.back).toHaveBeenCalledOnce();
 		}

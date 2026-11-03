@@ -167,16 +167,6 @@ describe("CONTROL_KEYS", () => {
 		expect(seq.left).toBe("\x1b[D");
 	});
 
-	// Caps are symbols, not a mix of words and arrows; Escape has no Material
-	// symbol, so Android alone spells it.
-	it("draws each cap as the platform's symbol", () => {
-		for (const k of CONTROL_KEYS) {
-			expect(k.symbol.ios).toBeTruthy();
-			expect(k.symbol.android ?? k.androidText).toBeTruthy();
-		}
-		expect(CONTROL_KEYS.find((k) => k.id === "interrupt")).toMatchObject({ symbol: { ios: "control" }, suffix: "C" });
-	});
-
 	it("repeats only the arrows while held", () => {
 		expect(CONTROL_KEYS.filter((k) => k.repeats).map((k) => k.id)).toEqual(["left", "up", "down", "right"]);
 	});

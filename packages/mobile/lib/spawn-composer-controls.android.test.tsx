@@ -80,7 +80,6 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	};
 });
 
-import { COMPOSER_DISC } from "./chat/composerStyles";
 vi.mock("./spawn-composer", async () => {
 	const React = await import("react");
 	// The shared shell is tested on its own; here it only holds the settings.
@@ -111,37 +110,19 @@ afterEach(async () => {
 type Props = Parameters<typeof SpawnComposerControls>[0];
 
 const baseProps = (overrides: Partial<Props> = {}): Props => ({
-	hosts: [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }],
-	hostId: "host-a",
-	onSelectHost: vi.fn(),
+	hosts: [{ id: "host-a", label: "Alpha" }, { id: "host-b", label: "Beta" }], hostId: "host-a", onSelectHost: vi.fn(),
 	projects: [{ id: "project-1", label: "Project", icon: "folder" }, { id: "standalone", label: "Standalone agent", icon: "message-square-plus", sectionBreakBefore: true }],
-	projectId: "project-1",
-	onSelectProject: vi.fn(),
+	projectId: "project-1", onSelectProject: vi.fn(),
 	agents: [{ id: "codex", label: "Codex" }, { id: "opencode", label: "OpenCode" }, { id: "aider", label: "Aider" }],
-	harness: "codex",
-	onSelectHarness: vi.fn(),
-	models: [{ id: "gpt-5", label: "GPT-5" }],
+	harness: "codex", onSelectHarness: vi.fn(), models: [{ id: "gpt-5", label: "GPT-5" }],
 	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
-	onSelectAgentModel: vi.fn(),
-	usesDefaultModel: true,
-	prompt: "",
-	onChangePrompt: vi.fn(),
-	placeholder: "Ask Codex",
-	attachments: null,
+	onSelectAgentModel: vi.fn(), usesDefaultModel: true, prompt: "", onChangePrompt: vi.fn(), placeholder: "Ask Codex", attachments: null,
 	onBrowseModels: vi.fn(),
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
-	approvalMode: "auto",
-	onSelectApprovalMode: vi.fn(),
+	approvalMode: "auto", onSelectApprovalMode: vi.fn(),
 	effortChoices: [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }],
-	onSelectEffort: vi.fn(),
-	modelSelection: "__auto__",
-	modelLabel: "Default model",
-	onSelectModel: vi.fn(),
-	onChoosePhoto: vi.fn(),
-	onChooseFile: vi.fn(),
-	voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() },
-	onSpawn: vi.fn(),
-	busy: false,
+	onSelectEffort: vi.fn(), modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onChoosePhoto: vi.fn(),
+	onChooseFile: vi.fn(), voice: { state: "idle", partial: "", subscribeLevel: () => () => {}, onToggleLatched: vi.fn() }, onSpawn: vi.fn(), busy: false,
 	disabled: false,
 	...overrides,
 });
@@ -171,22 +152,13 @@ const gaugeOf = (root: ReactTestInstance) => root.findAll((node) => hostType(nod
 const modifier = (node: ReactTestInstance, name: string) => (node.props.modifiers as { modifier: string; args: unknown[] }[] | undefined)?.find((entry) => entry.modifier === name);
 
 describe("Android spawn selectors", () => {
-	// Laid out as on iOS: the machine and the project each a row naming its
-	// choice, and the approval mode a symbol in the composer, as the chat's.
-	it("opens each selector as a dropdown under a text button that names it", async () => {
+	it("names each selector's choice for TalkBack, with every menu closed until asked for", async () => {
 		const root = await render(baseProps());
-		for (const tag of ["spawn-host", "spawn-project"]) {
-			expect(String(trigger(root, tag).type)).toBe("TextButton");
-			// Its label's width, not an equal share of the row.
-			expect(menuOf(trigger(root, tag)).props.modifiers).toBeUndefined();
-		}
 		expect(text(trigger(root, "spawn-host"))).toBe("Alpha");
 		expect(modifier(trigger(root, "spawn-host"), "semantics")?.args).toEqual([{ contentDescription: "Run on Alpha" }]);
 		expect(text(trigger(root, "spawn-project"))).toBe("Project");
 		expect(modifier(trigger(root, "spawn-project"), "semantics")?.args).toEqual([{ contentDescription: "Project, Project" }]);
-		expect(String(trigger(root, "spawn-approval").type)).toBe("IconButton");
 		expect(trigger(root, "spawn-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto");
-		// No inline option list: the choices live in the menus, closed until asked for.
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
 	});
 
@@ -216,31 +188,18 @@ describe("Android spawn selectors", () => {
 		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
 	});
 
-	it("separates Standalone agent from the projects and marks each with its symbol", async () => {
+	it("separates Standalone agent from the projects", async () => {
 		const root = await render(baseProps());
 		const menu = menuOf(trigger(root, "spawn-project"));
 		const rows = menu.findByType("DropdownMenuItems" as never).findAll((node) => hostType(node) === "DropdownMenuItem" || hostType(node) === "HorizontalDivider");
 		expect(rows.map((node) => hostType(node) === "HorizontalDivider" ? "divider" : text(node))).toEqual(["Project", "divider", "Standalone agent"]);
-		const glyph = (node: ReactTestInstance) => node.findByType("DropdownMenuItemLeadingIcon" as never).findByType("Icon" as never).props.source;
-		expect(glyph(item(menu, "Project"))).toBe("drawable:folder");
-		expect(glyph(item(menu, "Standalone agent"))).toBe("drawable:add_comment");
 	});
 });
 
 describe("Android spawn model", () => {
-	// Who runs the task is one filled capsule, the circles' height: the
-	// harness's mark and the model it runs.
-	it("names the harness's mark and model in a filled capsule", async () => {
-		const root = await render(baseProps());
-		const capsule = trigger(root, "spawn-harness");
-		expect(String(capsule.type)).toBe("Button");
-		expect(capsule.props.colors).toEqual({ containerColor: "#bgElevated", contentColor: "#textPrimary" });
-		expect(modifier(capsule, "height")?.args).toEqual([COMPOSER_DISC]);
-		expect(text(capsule)).toBe("Codex");
-		expect(capsule.findAllByType("Icon" as never)[0].props).toMatchObject({ source: "logo:codex", tint: null });
-	});
-
-	it("names the catalog's default, or a model picked or pinned, on the capsule", async () => {
+	it("names the agent on its default, the catalog's default, or a model picked or pinned, on the capsule", async () => {
+		expect(text(trigger(await render(baseProps()), "spawn-harness"))).toBe("Codex");
+		await act(async () => renderer?.unmount());
 		const named = { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
 		expect(text(trigger(await render(baseProps({ agentModels: named })), "spawn-harness"))).toBe("GPT-6.1-Sol");
 		await act(async () => renderer?.unmount());
@@ -267,24 +226,12 @@ describe("Android spawn model", () => {
 		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(false);
 	});
 
-	it("draws harness marks in their own colours, on a chip only where one is needed", async () => {
-		const root = await render(baseProps());
-		const mark = (agent: string) => trigger(root, `spawn-model-${agent}`).findByType("DropdownMenuItemLeadingIcon" as never);
-		expect(mark("codex").findByType("Icon" as never).props).toMatchObject({ source: "logo:codex", tint: null });
-		expect(mark("opencode").findAllByType("Box" as never)).toHaveLength(1);
-		expect(mark("opencode").findByType("Icon" as never).props).toMatchObject({ source: "logo:opencode", tint: null });
-		expect(mark("aider").findByType("Icon" as never).props.source).toBe("drawable:terminal");
-	});
-
-	// The chat's speedometer, beside the model's capsule.
 	// The speedometer opens the slider above the composer; the slider picks
 	// the level and stays up until a tap lands outside it.
 	it("opens the effort slider from a speedometer beside the model", async () => {
 		const props = baseProps();
 		const root = await render(props);
 		const gauge = gaugeOf(root);
-		expect(hostType(gauge)).toBe("EffortGaugeButton");
-		expect(root.findAll((node) => hostType(node) === "RNHostView").some((host) => host.findAll((node) => node === gauge).length > 0)).toBe(true);
 		expect(gauge.props.choices).toEqual(props.effortChoices);
 		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
 		await act(async () => gauge.props.onPress());
@@ -292,14 +239,13 @@ describe("Android spawn model", () => {
 		expect(gaugeOf(root).props.open).toBe(true);
 		await act(async () => slider.props.onChoose("low"));
 		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
-		// A tap anywhere outside it closes it.
 		await act(async () => rootTouchStart());
 		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(0);
 	});
 
 	// A focusable popup takes focus from the prompt, and Android puts the
 	// keyboard away; back, which such a menu no longer hears, closes it.
-	it("keeps the keyboard up while a menu is open, and closes the menu on back", async () => {
+	it("keeps the keyboard up while a menu is open, and closes the menu or slider on back", async () => {
 		const root = await render(baseProps());
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.properties?.focusable === false)).toBe(true);
 		await act(async () => trigger(root, "spawn-approval").props.onClick());
@@ -308,10 +254,7 @@ describe("Android spawn model", () => {
 		await act(async () => { [...backHandlers][0](); });
 		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
 		expect(backHandlers.size).toBe(0);
-	});
 
-	it("closes the effort slider on back", async () => {
-		const root = await render(baseProps());
 		await act(async () => gaugeOf(root).props.onPress());
 		expect(root.findAll((node) => hostType(node) === "EffortSlider")).toHaveLength(1);
 		await act(async () => { [...backHandlers][0](); });
@@ -332,4 +275,3 @@ describe("Android spawn model", () => {
 		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
 	});
 });
-

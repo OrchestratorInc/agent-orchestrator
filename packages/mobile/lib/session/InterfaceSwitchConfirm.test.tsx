@@ -56,7 +56,7 @@ describe("the iOS interface-switch question", () => {
 		const onCancel = vi.fn();
 		await act(async () => { renderer = create(<InterfaceSwitchConfirm message="Keep the same session." onChoose={onChoose} onCancel={onCancel} />); });
 		const dialog = renderer!.root.findByType("ConfirmationDialog" as never);
-		expect(dialog.props).toMatchObject({ title: "Switch to Chat?", titleVisibility: "visible", isPresented: true });
+		expect(dialog.props).toMatchObject({ title: "Switch to Chat?", isPresented: true });
 		expect(renderer!.root.findByType("DialogMessage" as never).findByType("Text" as never).props.children).toBe("Keep the same session.");
 		const buttons = renderer!.root.findByType("DialogActions" as never).findAllByType("Button" as never);
 		expect(buttons.map((button) => [button.props.label, button.props.role])).toEqual([

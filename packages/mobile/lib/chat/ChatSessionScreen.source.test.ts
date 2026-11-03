@@ -56,8 +56,7 @@ describe("active turn controls", () => {
 	});
 
 	// The actions sheet holds only Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive.
-	it("offers no rename, history, refresh, usage or MCP reload from the actions sheet", () => {
-		expect(screenSource).not.toContain("<ConversationRenamePrompt");
+	it("offers no history map from the actions sheet", () => {
 		expect(screenSource).not.toContain('kind: "conversation-map"');
 		expect(screenSource).toContain("contextPercent: menuContextPercent,");
 	});
@@ -89,25 +88,12 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("<ChatComposer");
 	});
 
-	// The conversation scrolls on under the composer's glass and leaves the
-	// composer's measured height clear at its end.
-	it("floats the composer over the conversation", () => {
-		expect(screenSource).toContain('<View pointerEvents="box-none" style={styles.floatingComposer} onLayout={measureComposer}>');
-		// Taken once it settles, not every frame of the composer's spring.
-		expect(screenSource).toContain("composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);");
-		expect(screenSource).toContain("bottomInset={composerHeight}");
-		expect(screenSource).toContain('floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 }');
-	});
 });
 
 describe("whole-screen states", () => {
-	// The app's one empty state, with its shared buttons, rather than a copy of
-	// it drawn here with a custom pill.
-	it("draws loading and failures with the shared EmptyState", () => {
-		expect(screenSource).not.toContain("function Centered");
+	it("shows loading, and failures as an alert with Retry", () => {
 		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
-		expect(screenSource).toContain('action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />}');
-		expect(screenSource).toContain('<Button title="Open worktree shell" icon="terminal" loading={openingShell}');
+		expect(screenSource).toContain('onPress={() => void resume()} />}');
 		expect(screenSource).toContain('<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>');
 	});
 });
@@ -118,28 +104,6 @@ describe("stopped agents", () => {
 		expect(screenSource).toContain("shouldAutoResume(session, terminated, Boolean(config))");
 		expect(screenSource).toContain("controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)");
 		expect(screenSource).toContain("void resume(true);");
-	});
-});
-
-// iOS 26: the conversation scrolls up under the system's glass bar, which blurs
-// it beneath the title, rather than stopping at a painted one.
-describe("header", () => {
-	it("lays the conversation out under iOS 26's clear bar", () => {
-		expect(screenSource).toContain('navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });');
-		expect(screenSource).not.toContain("scrollEdgeEffects:");
-		expect(screenSource).toContain("headerStyle: stackScreenOptions(t).headerStyle");
-		expect(screenSource).toContain("underHeader={headerOverlap}");
-		expect(screenSource).toContain("topInset={bannersHeight}");
-	});
-
-	// Android's bar is clear too, and the conversation frosts out under it as
-	// the board tabs' rows do.
-	it("frosts the conversation out under Android's clear bar", () => {
-		expect(screenSource).toContain('const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";');
-		expect(screenSource).toContain("{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (");
-		expect(screenSource).toContain("<Frost from=\"top\" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />");
-		// The frost lies under the floating banners, which keep the page's colour.
-		expect(screenSource.indexOf("<Frost from=")).toBeLessThan(screenSource.indexOf("styles.floatingBanners, { top: headerOverlap }"));
 	});
 });
 

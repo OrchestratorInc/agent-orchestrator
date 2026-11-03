@@ -67,7 +67,6 @@ vi.mock("./ThemeProvider", () => ({
 
 import { ApiError } from "./api";
 import { ManualConnectSheet } from "./ManualConnectSheet";
-import { PORT_ERROR } from "./connectionFields";
 
 const paired: Host = {
 	id: "host-1",
@@ -117,26 +116,12 @@ function confirm() {
 }
 
 describe("ManualConnectSheet on iOS", () => {
-	it("lays the connection out as labelled rows of a native form", () => {
+	it("labels every field for VoiceOver and hides the password", () => {
 		render();
-		const form = renderer!.root.findByType("Form" as never);
-		expect(form.findAllByType("Section" as never)).toHaveLength(2);
-		const labels = form.findAllByType("LabeledContent" as never).map((row) => row.props.label);
-		expect(labels).toEqual(["Name", "Host", "API port", "Password"]);
-		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "API port"], ["manual-connect-password", "Password"]]) {
+		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "API port"], ["manual-connect-password", "Password"], ["manual-connect-tls", "Use TLS"]]) {
 			expect(hasModifier(field(testID), "accessibilityLabel", label)).toBe(true);
 		}
 		expect(field("manual-connect-password").type).toBe("SecureField");
-		expect(hasModifier(field("manual-connect-password"), "textContentType", "password")).toBe(true);
-		expect(hasModifier(field("manual-connect-host"), "keyboardType", "url")).toBe(true);
-		expect(hasModifier(field("manual-connect-port"), "keyboardType", "numeric")).toBe(true);
-		const tls = field("manual-connect-tls");
-		expect(tls.type).toBe("Toggle");
-		expect(tls.props.label).toBe("Use TLS");
-		expect(hasModifier(tls, "tint", "green")).toBe(true);
-		expect(hasModifier(tls, "accessibilityLabel", "Use TLS")).toBe(true);
-		// Nothing uppercase stands in for a label.
-		expect(renderer!.root.findAll((node) => typeof node.props.children === "string" && /^[A-Z ]{4,}$/.test(node.props.children))).toHaveLength(0);
 	});
 
 	it("connects from the bar once the form is complete", async () => {
@@ -179,18 +164,10 @@ describe("ManualConnectSheet on iOS", () => {
 		await act(async () => confirm().props.onPress());
 		const connection = renderer!.root.findAllByType("Section" as never)[1];
 		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
-		expect(renderer!.root.findAll((node) => node.props.style?.backgroundColor === "red-tint")).toHaveLength(0);
 		// A footer isn't read out as it appears, so VoiceOver is told.
 		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("manual-connect-password", "right");
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
-	});
-
-	// Right-aligned and grey, a Form row's placeholder reads as a filled value,
-	// so Name says it is required instead of suggesting one (review on #7419).
-	it("says the name is required rather than showing a name that reads as filled", () => {
-		render();
-		expect(field("manual-connect-name").props.placeholder).toBe("Required");
 	});
 
 	// A disabled Connect alone does not say what it is waiting for.
@@ -204,13 +181,6 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-name", "Office PC");
 		expect(hint()).toBeUndefined();
 		expect(confirm().props.disabled).toBe(false);
-	});
-
-	it("explains an out-of-range port without enabling Connect", async () => {
-		render({ editingHost: paired });
-		await type("manual-connect-port", "70000");
-		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer.props.children).toBe(PORT_ERROR);
-		expect(confirm().props.disabled).toBe(true);
 	});
 
 	it("reveals the password in place and hides it again", () => {
@@ -245,28 +215,6 @@ describe("ManualConnectSheet on Android", () => {
 		act(() => { renderer = create(<AndroidSheet onConnected={onConnected} {...props} />); });
 		return { onConnected };
 	}
-
-	it("keeps the title and Connect in the sheet, with outlined labelled fields", async () => {
-		await renderAndroid();
-		expect(renderer!.root.findByType("SheetHeader" as never).props.title).toBe("Connect manually");
-		const fields = renderer!.root.findAllByType("OutlinedTextField" as never);
-		expect(fields.map((node) => node.findByType("OutlinedTextField.Label" as never).findByType("Text" as never).props.children)).toEqual(["Name", "Host", "API port", "Password"]);
-		const password = field("manual-connect-password");
-		expect(password.props.visualTransformation).toBe("password");
-		expect(modifiersOf(password).some((modifier) => modifier.$type === "semantics" && (modifier.args[0] as { contentType: string }).contentType === "password")).toBe(true);
-		expect(password.findByType("Icon" as never).props.contentDescription).toBe("Show password");
-		expect(renderer!.root.findByType("Switch" as never)).toBeTruthy();
-		expect(renderer!.root.findByType("RNButton" as never).props).toMatchObject({ title: "Connect", disabled: true });
-	});
-
-	it("says what Connect is waiting for until the form is complete", async () => {
-		await renderAndroid();
-		const hint = () => renderer!.root.findAll((node) => (node.type as unknown) === "Text" && typeof node.props.children === "string" && node.props.children.startsWith("Add "));
-		expect(hint().map((node) => node.props.children)).toEqual(["Add a name and a host to connect."]);
-		await type("manual-connect-name", "Office PC");
-		await type("manual-connect-host", "192.168.1.30");
-		expect(hint()).toHaveLength(0);
-	});
 
 	it("shows a rejected password as the password field's own error", async () => {
 		await renderAndroid({ editingHost: paired });

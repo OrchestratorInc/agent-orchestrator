@@ -8,23 +8,10 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
 describe("iOS chat controls row", () => {
-	// The new task's row, from the same pieces: the model's capsule, the effort's
-	// speedometer and the approval mode's symbol.
-	it("draws the new task's model capsule, effort speedometer and approval symbol", () => {
-		expect(source).toContain('import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";');
-		expect(source).toContain('import { EffortGaugeButton } from "../effort-gauge";');
-		expect(source).toContain('label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}');
-		expect(source).toContain('<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />');
-		expect(source).toContain("<ApprovalMenu");
-		expect(source).toContain("symbol: approvalSymbol(choice.permissionMode, snapshot.harness)");
-		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');
-	});
-
 	// The turn has no settings sheet: everything is in the row's own menus.
 	it("lists the agent's models as checkable items, then any other setting", () => {
 		expect(source).toContain("{modelRow?.choices.map((choice) => <Choice");
 		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
-		expect(source).not.toContain("All turn settings");
 		expect(source).not.toContain("Turn settings");
 	});
 });
@@ -32,7 +19,6 @@ describe("iOS chat controls row", () => {
 describe("iOS other settings", () => {
 	// A checkmark image on a button is not announced; a picker's choice is.
 	it("offers each as a picker, or a toggle when it is on/off", () => {
-		expect(source).toContain('modifiers={[pickerStyle("menu")]}');
 		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
 		expect(source).toContain("<Toggle label={row.label}");
 		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');

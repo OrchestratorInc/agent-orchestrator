@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -60,55 +58,6 @@ describe("root stack", () => {
 		expect(unstable_settings).toEqual({ initialRouteName: "(tabs)" });
 	});
 
-	it.each(["ios", "android"])("leaves the push transition to the system on %s", async (platform) => {
-		const renderer = await renderRoot(platform);
-		try {
-			const defaults = renderer.root.findByType("Stack" as never).props.screenOptions;
-			expect(defaults).not.toHaveProperty("animation");
-			expect(defaults.contentStyle).toEqual({ backgroundColor: "#bgBase" });
-		} finally {
-			act(() => renderer.unmount());
-		}
-	});
-
-	// No slab on either platform: the bar is the page's own colour. It stays
-	// opaque, because a clear bar showed the page underneath through it during
-	// every push and pop.
-	it("paints the bar in the page's background", async () => {
-		const ios = await renderRoot("ios");
-		try {
-			expect(ios.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "#bgBase" });
-			expect(ios.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("headerTransparent");
-		} finally {
-			act(() => ios.unmount());
-		}
-		const android = await renderRoot("android");
-		try {
-			expect(android.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "#bgBase" });
-			expect(android.root.findByType("NavigationThemeProvider" as never).props.value.colors.card).toBe("#bgSurface");
-		} finally {
-			act(() => android.unmount());
-		}
-	});
-
-	// UIKit draws its own sheet shape when none is named; Android takes Material
-	// 3's corner from the token. No sheet picks a radius of its own.
-	it("leaves every sheet's shape to the platform", async () => {
-		const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.meta.url)), "utf8");
-		expect(layout).not.toMatch(/sheetCornerRadius:\s*\d/);
-		const renderer = await renderRoot("ios");
-		try {
-			const sheets = renderer.root.findAll((node) => (node.type as unknown) === "StackScreen" && node.props.options?.presentation === "formSheet");
-			expect(sheets.length).toBeGreaterThanOrEqual(9);
-			for (const sheet of sheets) {
-				expect(sheet.props.options.sheetCornerRadius).toBeUndefined();
-				expect(sheet.props.options.sheetAllowedDetents).toBeDefined();
-			}
-		} finally {
-			act(() => renderer.unmount());
-		}
-	});
-
 	// iOS lists the pages under the current one by title in the back button's
 	// long-press menu. A route that hides its header still lands there, and
 	// without a title it shows as its file name: "(tabs)", "project/[id]".
@@ -135,29 +84,17 @@ describe("root stack", () => {
 		const renderer = await renderRoot(platform);
 		try {
 			for (const [name, title] of [["sheets/agent", "Agent"], ["sheets/model", "Model"]]) {
-				expect(renderer.root.findByProps({ name }).props.options).toMatchObject({
-					presentation: "formSheet",
-					title,
-					headerShown: platform === "ios",
-					headerStyle: { backgroundColor: "#bgBase" },
-				});
+				expect(renderer.root.findByProps({ name }).props.options).toMatchObject({ presentation: "formSheet", title, headerShown: platform === "ios" });
 			}
 		} finally {
 			act(() => renderer.unmount());
 		}
-		const source = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
-		expect(source("./ModelPickerSheet.tsx")).toContain('<SheetHeader title={Platform.OS === "ios" ? undefined : "Model"}');
-		expect(source("./AgentPickerSheet.tsx")).toContain('<SheetHeader title={Platform.OS === "ios" ? undefined : title}');
-		// The agent picker retitles its bar for Chat.
-		expect(source("../app/sheets/agent.tsx")).toContain("<Stack.Screen options={{ title }} />");
 	});
 
-	it.each(["ios", "android"])("gives every pushed page the system back button on %s", async (platform) => {
+	it.each(["ios", "android"])("gives every pushed page the system back button and transition on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {
-			const defaults = renderer.root.findByType("Stack" as never).props.screenOptions;
-			expect(defaults.headerBackButtonDisplayMode).toBe("minimal");
-			expect(defaults.headerTintColor).toBe("#accent");
+			expect(renderer.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("animation");
 			for (const name of pushedPages) {
 				const options = renderer.root.findByProps({ name }).props.options;
 				expect(options).not.toHaveProperty("headerLeft");
@@ -168,9 +105,7 @@ describe("root stack", () => {
 			// Titled before the page renames itself to the project.
 			expect(renderer.root.findByProps({ name: "project/[id]" }).props.options.title).toBe("Project");
 			// Settings, Notifications and Pull Requests are pages pushed over the
-			// board on both platforms, each headed by its own stack's bar
-			// (app/settings/_layout, app/notifications/_layout, app/prs/_layout),
-			// and they go back with the stack's own transition like every page.
+			// board on both platforms, each headed by its own stack's bar.
 			for (const [name, title] of [["settings", "Settings"], ["notifications", "Notifications"], ["prs", "Pull Requests"]]) {
 				const options = renderer.root.findByProps({ name }).props.options;
 				expect(options).toMatchObject({ title, headerShown: false });

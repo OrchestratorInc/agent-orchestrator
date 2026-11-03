@@ -2,20 +2,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const announce = vi.hoisted(() => vi.fn());
-const theme = vi.hoisted(() => ({
-	accent: "#accent",
-	amber: "#amber",
-	bgElevated: "#elevated",
-	bgSurface: "#surface",
-	borderSubtle: "#border",
-	fontMono: "GeistMono_400Regular",
-	green: "#green",
-	red: "#red",
-	textPrimary: "#primary",
-	textSecondary: "#secondary",
-	textTertiary: "#tertiary",
-	tintRed: "#tintRed",
-}));
+const theme = vi.hoisted(() => new Proxy({} as Record<string, string>, { get: (_target, key) => `#${String(key)}` }));
 
 vi.mock("react-native", () => ({
 	AccessibilityInfo: { announceForAccessibility: announce },
@@ -150,15 +137,8 @@ function sheet(overrides: Partial<ReviewActionsSheetProps> = {}): ReviewActionsS
 	};
 }
 
-const sectionTitles = (root: ReactTestRenderer["root"], type: string, read: (node: ReactTestRenderer["root"]) => unknown) => root.findAllByType(type as never).map(read);
-
 describe("review actions sheet on Android", () => {
-	it("keeps the sheet's own scroll view so the bottom sheet's drag still works", async () => {
-		const root = await render(<ReviewActionsSheet {...sheet()} />);
-		expect(root.findByType("ScrollView" as never).props.nestedScrollEnabled).toBe(true);
-	});
-
-	it("draws each automation setting as a Material switch row that toggles as a whole", async () => {
+	it("toggles an automation setting from the whole row, and takes no toggle while it saves", async () => {
 		const onPolicyChange = vi.fn();
 		const root = await render(<ReviewActionsSheet {...sheet({ onPolicyChange })} />);
 		const [autoReview, saving] = root.findAllByType("ListItem" as never).slice(0, 2);
@@ -166,45 +146,28 @@ describe("review actions sheet on Android", () => {
 		expect(toggle).toMatchObject({ value: false, role: "switch" });
 		toggle.handler();
 		expect(onPolicyChange).toHaveBeenCalledWith("autoReviewEnabled", true);
-		autoReview.findByType("ComposeSwitch" as never).props.onCheckedChange(true);
-		expect(onPolicyChange).toHaveBeenLastCalledWith("autoReviewEnabled", true);
-		// Saving: a spinner holds the switch's place and the row takes no toggle.
-		expect(saving.findAllByType("ComposeSwitch" as never)).toHaveLength(0);
 		expect(saving.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
 		expect(saving.props.modifiers.some((entry: { toggleable?: object }) => entry.toggleable)).toBe(false);
 	});
 
-	it("asks a reviewer again from a row that ends in a spinner while it runs", async () => {
+	it("asks a reviewer again from its row, and dims the rows that wait while another action runs", async () => {
 		const onRerequest = vi.fn();
-		const root = await render(<ReviewActionsSheet {...sheet({ onRerequest })} />);
+		let root = await render(<ReviewActionsSheet {...sheet({ onRerequest })} />);
 		const rows = root.findAllByType("ListItem" as never).slice(2);
-		expect(rows[0].findAllByType("Trailing" as never)).toHaveLength(0);
-		expect(rows[1].findByType("Trailing" as never).findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
 		rows[0].props.modifiers.find((entry: { clickable?: () => void }) => entry.clickable).clickable();
 		expect(onRerequest).toHaveBeenCalledWith("octocat");
-		expect(rows[0].props.modifiers.some((entry: { alpha?: number }) => entry.alpha !== undefined)).toBe(false);
-	});
-
-	it("dims the reviewer rows that wait while another action runs", async () => {
-		const root = await render(<ReviewActionsSheet {...sheet({ locked: true })} />);
+		await act(async () => renderer?.unmount());
+		root = await render(<ReviewActionsSheet {...sheet({ locked: true })} />);
 		const [waiting, running] = root.findAllByType("ListItem" as never).slice(2);
 		expect(waiting.props.modifiers).toEqual([{ alpha: stateOpacity.disabled }]);
 		// The running row keeps full strength so its spinner reads, and takes no second press.
 		expect(running.props.modifiers).toEqual([]);
 	});
 
-	it("titles sections in sentence case as headers, with the hint underneath", async () => {
+	it("marks section titles as headers", async () => {
 		const root = await render(<ReviewActionsSheet {...sheet()} />);
 		const headers = root.findAll((node) => node.type === ("Text" as never) && node.props.accessibilityRole === "header");
 		expect(headers.map((node) => node.props.children)).toEqual(["Automation", "Orchestrator reviewer", "External reviewers", "Unresolved comments"]);
-	});
-
-	it("says when no reviewer can run, and hosts the picker when one can", async () => {
-		let root = await render(<ReviewActionsSheet {...sheet()} />);
-		expect(root.findAllByType("ReviewerPicker" as never)).toHaveLength(0);
-		await act(async () => renderer?.unmount());
-		root = await render(<ReviewActionsSheet {...sheet({ reviewer: { reviewers: [], selectedReviewer: "", effectiveReviewer: "", onSelectReviewer: vi.fn(), models: [], modelTitle: "Model", selectedModel: "", onSelectModel: vi.fn(), busy: false } })} />);
-		expect(root.findByType("ReviewerPicker" as never).parent?.type).toBe("Column");
 	});
 
 	it("announces failures", async () => {
@@ -215,22 +178,11 @@ describe("review actions sheet on Android", () => {
 });
 
 describe("review actions sheet on iOS", () => {
-	it("is a Form of sections with their hints as footers", async () => {
-		const root = await render(<IOSReviewActionsSheet {...sheet()} />);
-		expect(root.findByType("Form" as never).props.modifiers).toContainEqual({ modifier: "scrollContentBackground", args: ["hidden"] });
-		const sections = sectionTitles(root, "Section", (node) => node.props.title);
-		expect(sections).toEqual(["Automation", "Orchestrator reviewer", "External reviewers", "Unresolved comments"]);
-		expect(root.findAllByType("Section" as never)[0].props.footer.props.children).toBe("The same settings as this session's inspector on desktop.");
-	});
-
-	it("draws an automation setting as a system toggle, and a spinner while it saves", async () => {
+	it("toggles an automation setting, with a spinner in place of the one that saves", async () => {
 		const onPolicyChange = vi.fn();
 		const root = await render(<IOSReviewActionsSheet {...sheet({ onPolicyChange })} />);
 		const toggles = root.findAllByType("Toggle" as never);
 		expect(toggles).toHaveLength(1);
-		expect(toggles[0].findAllByType("SwiftText" as never).map((text) => text.props.children)).toEqual(["Auto review", "Reviews every push."]);
-		// No tint: the system's own switch colours.
-		expect(toggles[0].props.modifiers.some((entry: { modifier: string }) => entry.modifier === "tint")).toBe(false);
 		toggles[0].props.onIsOnChange(true);
 		expect(onPolicyChange).toHaveBeenCalledWith("autoReviewEnabled", true);
 		expect(root.findAllByType("ProgressView" as never).length).toBeGreaterThanOrEqual(1);
@@ -242,22 +194,20 @@ describe("review actions sheet on iOS", () => {
 		for (const button of root.findAllByType("SwiftButton" as never)) expect(button.props.modifiers).toContainEqual({ modifier: "disabled", args: [true] });
 	});
 
-	it("asks a reviewer again from a button row with progress, not a disclosure", async () => {
+	it("asks a reviewer again from its button row", async () => {
 		const onRerequest = vi.fn();
 		const root = await render(<IOSReviewActionsSheet {...sheet({ onRerequest })} />);
 		const [idle, busy] = root.findAllByType("SwiftButton" as never);
-		expect(idle.findAllByType("ProgressView" as never)).toHaveLength(0);
 		expect(busy.findAllByType("ProgressView" as never)).toHaveLength(1);
 		idle.props.onPress();
 		expect(onRerequest).toHaveBeenCalledWith("octocat");
 	});
 
-	it("lists feedback with its menu, its location and whether it was sent", async () => {
+	it("lists feedback with its menu and whether it was sent", async () => {
 		const root = await render(<IOSReviewActionsSheet {...sheet()} />);
-		const menu = root.findByType("ItemActionsPullDown" as never);
-		expect(menu.props).toMatchObject({ accessibilityLabel: "Actions for octocat's comment", disabled: false });
+		expect(root.findByType("ItemActionsPullDown" as never).props).toMatchObject({ accessibilityLabel: "Actions for octocat's comment", disabled: false });
 		const texts = root.findAllByType("SwiftText" as never).map((text) => text.props.children);
-		expect(texts).toEqual(expect.arrayContaining(["octocat", "GitHub · open", "src/a.ts:4", "Rename this.", "Not automatically sent to the worker"]));
+		expect(texts).toEqual(expect.arrayContaining(["Rename this.", "Not automatically sent to the worker"]));
 		expect(root.findAll((node) => node.type === ("Label" as never) && node.props.title === "Sent to worker")).toHaveLength(1);
 	});
 

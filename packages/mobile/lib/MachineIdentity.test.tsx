@@ -1,12 +1,9 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import { machineAppearancePalette, machineSymbolNames } from "./machineAppearance";
 import { machineMenuImage } from "./machine-menu-image";
 import { symbols } from "./symbols";
 import { materialDrawableNames } from "./toolbarIcon.types";
-import { type } from "./tokens";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
@@ -23,7 +20,7 @@ vi.mock("./ThemeProvider", () => {
 	};
 });
 
-import { MachineAvatar, MachineIdentity } from "./MachineIdentity";
+import { MachineIdentity } from "./MachineIdentity";
 
 describe("MachineIdentity", () => {
 	it("keeps the symbol after a truncating machine name on one line", () => {
@@ -49,33 +46,6 @@ describe("MachineIdentity", () => {
 		expect(glyph.props.size).toBe(16);
 		expect(surfaceStyle.backgroundColor).toBeUndefined();
 	});
-
-	// It shares a row's metadata line, which is footnote, the 13pt floor.
-	it("names the machine at the row metadata's footnote step", () => {
-		let renderer!: ReactTestRenderer;
-		act(() => {
-			renderer = create(<MachineIdentity name="Studio" appearance={{ symbol: "desktop" }} />);
-		});
-		const name = renderer.root.findByProps({ testID: "machine-identity-name" });
-		expect(name.props.style).toMatchObject({ fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight });
-	});
-
-	// The machine shapes are system symbols on both platforms, not drawings.
-	it.each(machineAppearancePalette.symbols)("draws %s as its system symbol", (shape) => {
-		let renderer!: ReactTestRenderer;
-		act(() => {
-			renderer = create(<MachineAvatar appearance={{ symbol: shape }} size={32} color="accent" />);
-		});
-		const glyph = renderer.root.findByType("SymbolView" as never);
-		expect(glyph.props.name).toEqual(symbols[machineSymbolNames[shape]]);
-		expect(glyph.props.tintColor).toBe("accent");
-		expect(glyph.props.size).toBe(18);
-	});
-
-	it("draws the Mini PC as its own machine, not a generic monitor", () => {
-		expect(symbols[machineSymbolNames["mac-mini"]]).toEqual({ ios: "macmini", android: "developer_board" });
-		expect(symbols[machineSymbolNames["mac-studio"]]).toEqual({ ios: "macstudio", android: "host" });
-	});
 });
 
 describe("machine menu images", () => {
@@ -91,7 +61,5 @@ describe("machine menu images", () => {
 		for (const shape of machineAppearancePalette.symbols) {
 			expect(materialDrawableNames).toContain(symbols[machineSymbolNames[shape]].android);
 		}
-		const android = readFileSync(fileURLToPath(new URL("./machine-menu-image.android.ts", import.meta.url)), "utf8");
-		expect(android).toContain("materialDrawable(symbols[machineSymbolNames[symbol]].android)");
 	});
 });

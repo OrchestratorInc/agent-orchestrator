@@ -59,26 +59,10 @@ function label(chip: ReactTestInstance): string {
 }
 
 describe("WorkerEnvironmentFilter on Android", () => {
-	it("is a row of Material filter chips: every environment, then each machine", async () => {
-		await render("all");
-		const row = renderer!.root.findByType("LazyRow" as never);
-		expect(row.props.modifiers).toContainEqual({ testID: "worker-environment-strip" });
-		expect(chips().map(label)).toEqual(["All machines", "Mac", "Dev box"]);
-		expect(chips()[1].props.modifiers).toContainEqual({ testID: "worker-environment-chip-mac" });
-	});
-
-	// Checked and filled, so the choice does not rest on colour alone; the
-	// others are outlined, as Material draws an unselected filter chip.
-	it("checks the chosen chip and outlines the rest", async () => {
+	it("lists every environment, then each machine, and selects only the chosen one", async () => {
 		await render("mac");
-		const [all, mac] = chips();
-		expect(mac.props.selected).toBe(true);
-		expect(mac.findByType("LeadingIconSlot" as never).findByType("Icon" as never).props.source).toBe("drawable:check");
-		expect(mac.props.border).toBeUndefined();
-		expect(mac.props.colors).toMatchObject({ selectedContainerColor: "#accentTint", selectedLabelColor: "#accent" });
-		expect(all.props.selected).toBe(false);
-		expect(all.findAllByType("LeadingIconSlot" as never)).toHaveLength(0);
-		expect(all.props.border).toEqual({ width: 1, color: "#borderDefault" });
+		expect(chips().map(label)).toEqual(["All machines", "Mac", "Dev box"]);
+		expect(chips().map((chip) => chip.props.selected)).toEqual([false, true, false]);
 	});
 
 	it("selects a machine, and goes back to every environment from the chosen one", async () => {

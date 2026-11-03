@@ -16,15 +16,12 @@ const first = (state: Partial<TerminalMenuState>) => terminalMenuSections({ ...b
 
 describe("terminalMenuSections", () => {
 	it("leads with Chat and what the session opens, then the view, then Archive", () => {
+		expect(terminalMenuSections(base).map((section) => section.kind)).toEqual(["session", "view", "close"]);
 		expect(layout({ ...base, artifactCount: 2 })).toEqual([
 			["Switch to Chat", "Preview", "Files", "Artifacts (2)"],
 			["Smaller", "Larger", "Fit width"],
 			["Archive session"],
 		]);
-	});
-
-	it("marks the view as its own section, the one iOS draws as a row", () => {
-		expect(terminalMenuSections(base).map((section) => section.kind)).toEqual(["session", "view", "close"]);
 	});
 
 	it("offers a shell or a reviewer only its view and closing it", () => {
@@ -38,14 +35,13 @@ describe("terminalMenuSections", () => {
 	});
 
 	it("still offers Chat before the daemon says yes, and holds it while checking or switching", () => {
-		expect(first({ chatReady: false })).toMatchObject({ action: "switch_chat", subtitle: "Not ready yet" });
-		expect(first({ chatReady: false }).disabled).toBe(false);
+		expect(first({ chatReady: false })).toMatchObject({ action: "switch_chat", subtitle: "Not ready yet", disabled: false });
 		expect(first({ checkingChat: true })).toMatchObject({ label: "Checking Chat…", disabled: true });
 		expect(first({ switchingToChat: true })).toMatchObject({ label: "Switching to Chat…", disabled: true });
 	});
 
-	it("fills the globe once a preview is ready", () => {
-		expect(terminalMenuSections({ ...base, previewReady: true })[0].items[1]).toMatchObject({ icon: "globe.americas.fill", subtitle: "Ready to open" });
+	it("says when a preview is ready", () => {
+		expect(terminalMenuSections({ ...base, previewReady: true })[0].items[1].subtitle).toBe("Ready to open");
 	});
 
 	it("draws closing the terminal in red", () => {

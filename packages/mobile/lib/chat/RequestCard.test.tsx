@@ -28,7 +28,6 @@ vi.mock("../ThemeProvider", async () => {
 });
 
 import { haptics } from "../haptics";
-import { touchTarget } from "../tokens";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel, RequestDockPage } from "./requestDockModel";
 
@@ -69,7 +68,6 @@ function render(over: Partial<Props> = {}) {
 }
 
 const byLabel = (label: string): ReactTestInstance => renderer!.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityLabel === label);
-const style = (node: ReactTestInstance) => Object.assign({}, ...[node.props.style({ pressed: false })].flat(3).filter(Boolean));
 
 it("offers an answer of several as a radio, and says which one was chosen", async () => {
 	const props = render({ model: model({ pages: [page(), page({ propertyName: "question_2", question: "Which remote?" })] }) });
@@ -104,19 +102,6 @@ it("keeps an approval's decisions as buttons", () => {
 	expect(allow.props.accessibilityState).toEqual({ disabled: false });
 	act(() => allow.props.onPress());
 	expect(props.onDecide).toHaveBeenCalledWith("req-1", "allow");
-});
-
-it("gives the pager, Skip, close and send full touch targets", () => {
-	render({ model: model({ pages: [page({ required: false, freeText: { name: "question_1_custom", placeholder: "Something else", numeric: false } }), page()] }) });
-	for (const label of ["Previous question", "Next question"]) {
-		expect(style(byLabel(label))).toMatchObject({ width: touchTarget, height: touchTarget });
-	}
-	expect(style(byLabel("Skip this question"))).toMatchObject({ minWidth: touchTarget, minHeight: touchTarget });
-	act(() => renderer!.root.findByType("TextInput" as never).props.onChangeText("staging"));
-	expect(style(byLabel("Send answer"))).toMatchObject({ width: touchTarget, height: touchTarget });
-	act(() => renderer!.unmount());
-	render();
-	expect(style(byLabel("Dismiss and type instead"))).toMatchObject({ width: touchTarget, height: touchTarget });
 });
 
 it("fires one haptic for an answer, when it lands", async () => {

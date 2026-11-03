@@ -93,12 +93,9 @@ describe("menuModels", () => {
 		expect(menu.total).toBe(20);
 	});
 
-	it("keeps the picked model in the list, so the menu can check it", () => {
+	it("keeps the picked model in the list, so the menu can check it, and names the catalog's default", () => {
 		expect(menuModels(catalog, "m17", 3).models.map((model) => model.id)).toEqual(["m0", "m1", "m2", "m17"]);
 		expect(menuModels(catalog, "m1", 3).models.map((model) => model.id)).toEqual(["m0", "m1", "m2"]);
-	});
-
-	it("names the catalog's own default, wherever it sits", () => {
 		expect(menuModels(catalog, "__auto__", 3).defaultLabel).toBe("Model 15");
 		expect(menuModels([{ id: "a", label: "A" }], "__auto__").defaultLabel).toBeUndefined();
 	});
@@ -111,15 +108,10 @@ describe("default effort model", () => {
 		{ id: "claude-opus-5", label: "Opus 5", efforts: ["low", "medium", "high", "xhigh", "max"] },
 	];
 
-	it("offers Claude Code's Opus levels, as desktop opens on Opus", () => {
+	// Claude Code offers Opus's levels, as desktop opens on Opus.
+	it("offers Claude Code's Opus, else the first model that takes effort, else none", () => {
 		expect(defaultEffortModel("claude-code", models)?.id).toBe("claude-opus-5");
-	});
-
-	it("otherwise offers the first model that takes effort", () => {
 		expect(defaultEffortModel("codex", models)?.id).toBe("claude-sonnet-5");
-	});
-
-	it("offers none when no model takes effort", () => {
 		expect(defaultEffortModel("claude-code", [models[0]])).toBeUndefined();
 	});
 });

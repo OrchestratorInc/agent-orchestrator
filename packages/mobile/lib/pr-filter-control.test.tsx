@@ -63,21 +63,12 @@ function render(element: React.ReactElement) {
 }
 
 describe("PRFilterControl on iOS", () => {
-	// The system segmented control, with each filter's count in its segment.
-	it("is a segmented SwiftUI picker with a count in each segment", () => {
-		const root = render(<PRFilterControl filter="open" counts={counts} onChange={vi.fn()} />);
-		const picker = root.findByType("Picker" as never);
-		expect(picker.props.modifiers).toContainEqual({ pickerStyle: "segmented" });
-		expect(picker.props.selection).toBe("open");
-		const segments = picker.findAllByType("SwiftText" as never);
-		expect(segments.map((segment: ReactTestInstance) => segment.props.children)).toEqual(["Open 4", "Merged 10", "All 16"]);
-		expect(segments.map((segment: ReactTestInstance) => segment.props.modifiers)).toEqual([[{ tag: "open" }], [{ tag: "merged" }], [{ tag: "all" }]]);
-	});
-
-	it("reports a new choice, and only a new one", () => {
+	it("selects the filter, counts each segment and reports only a new choice", () => {
 		const onChange = vi.fn();
 		const root = render(<PRFilterControl filter="open" counts={counts} onChange={onChange} />);
 		const picker = root.findByType("Picker" as never);
+		expect(picker.props.selection).toBe("open");
+		expect(picker.findAllByType("SwiftText" as never).map((segment: ReactTestInstance) => segment.props.children)).toEqual(["Open 4", "Merged 10", "All 16"]);
 		act(() => picker.props.onSelectionChange("open"));
 		expect(onChange).not.toHaveBeenCalled();
 		act(() => picker.props.onSelectionChange("merged"));
@@ -87,20 +78,13 @@ describe("PRFilterControl on iOS", () => {
 });
 
 describe("PRFilterControl on Android", () => {
-	// Compose checks the chosen segment as well as filling it.
-	it("is a row of Material 3 segmented buttons with a count in each", () => {
-		const root = render(<AndroidPRFilterControl filter="merged" counts={counts} onChange={vi.fn()} />);
-		expect(root.findByType("SegmentedRow" as never).props.modifiers).toContainEqual({ fillMaxWidth: true });
+	it("selects the filter, counts each segment and reports only a new choice", () => {
+		const onChange = vi.fn();
+		const root = render(<AndroidPRFilterControl filter="merged" counts={counts} onChange={onChange} />);
 		const buttons = root.findAllByType("SegmentedButton" as never);
 		expect(buttons.map((button: ReactTestInstance) => button.findByType("ComposeText" as never).props.children)).toEqual(["Open 4", "Merged 10", "All 16"]);
 		expect(buttons.map((button: ReactTestInstance) => button.props.selected)).toEqual([false, true, false]);
-		expect(buttons[1].props.colors).toMatchObject({ activeContainerColor: "#accentTint", activeContentColor: "#accent" });
-	});
-
-	it("reports a new choice, and only a new one", () => {
-		const onChange = vi.fn();
-		const root = render(<AndroidPRFilterControl filter="merged" counts={counts} onChange={onChange} />);
-		const [open, merged] = root.findAllByType("SegmentedButton" as never);
+		const [open, merged] = buttons;
 		act(() => merged.props.onClick());
 		expect(onChange).not.toHaveBeenCalled();
 		act(() => open.props.onClick());

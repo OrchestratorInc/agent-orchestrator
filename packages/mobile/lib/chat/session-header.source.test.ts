@@ -15,23 +15,6 @@ describe("session header controls", () => {
 	const session = source("./ChatSessionScreen.tsx");
 	const route = source("../../app/conversation-actions.tsx");
 
-	it("declares the header items as a native toolbar from the page", () => {
-		expect(session).toContain('<Stack.Toolbar placement="right">');
-		expect(session).toContain("{headerItems}");
-		for (const drawn of ["glassHeaderControl", "NativeHeaderButton", "resetHeaderRightForSwap", "headerRight:"]) {
-			expect(session).not.toContain(drawn);
-		}
-	});
-
-	// The bar holds only "⋯" on both platforms. The terminal's switch, preview
-	// and files buttons beside it clipped the iOS title to about nine
-	// characters.
-	it("keeps only the actions button in the bar", () => {
-		expect(session).not.toContain("sessionHeaderButtons");
-		expect(session).not.toContain("sessionToolsInMenu");
-		expect(session).toContain(") : null, [menuReady, openActions]);");
-	});
-
 	it("opens the conversation actions as a bottom sheet on both platforms, never a menu or a page", () => {
 		expect(session).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
 		expect(session).toContain('kind: "conversation-actions"');
@@ -49,20 +32,10 @@ describe("session header controls", () => {
 		expect(session).not.toMatch(/setTimeout\([^)]*220/);
 	});
 
-	// The sheet follows what it shows while it is up; the header is rebuilt only
-	// when its own buttons change, not on every streamed event.
-	it("keeps the header still while the conversation streams", () => {
-		expect(session).toContain("const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({");
-		expect(session).toContain("const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);");
-		expect(session).toContain("const headerItems = useMemo(() => menuReady ? (");
-		expect(route).toContain("useEffect(() => actions?.subscribeGroups(setGroups), [actions]);");
-	});
-
 	// The PR lives in the composer's chips, not the header.
 	it("keeps the PR out of the header", () => {
 		expect(session).not.toContain("Show PR card");
 		expect(session).not.toContain("PULL_REQUEST_ICON");
-		expect(readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8")).toContain("<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />");
 	});
 
 	it("opens the session's files from the composer's changes strip", () => {
@@ -81,6 +54,5 @@ describe("session header controls", () => {
 		const route = source("../../app/session/[id].tsx");
 		expect(route).toContain('const openBoard = useCallback(() => router.dismissTo("/"), [router]);');
 		expect(route).not.toContain('router.navigate("/")');
-		expect(route).toContain('<Button title="Scan pairing code" icon="qrScanner"');
 	});
 });

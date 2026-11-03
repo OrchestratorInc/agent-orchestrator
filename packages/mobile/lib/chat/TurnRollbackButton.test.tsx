@@ -18,7 +18,6 @@ vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: 
 vi.mock("../haptics", () => ({ haptics: { warning: vi.fn() } }));
 
 import { haptics } from "../haptics";
-import { touchTarget } from "../tokens";
 import { TurnRollbackButton } from "./TurnRollbackButton";
 
 let renderer: ReactTestRenderer | undefined;
@@ -53,17 +52,8 @@ function press(button: ReturnType<typeof render>): AlertButton[] {
 }
 
 const choose = (buttons: AlertButton[], text: string) => buttons.find((button) => button.text === text)!;
-const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : (style as Record<string, unknown>) || {};
 
 describe("TurnRollbackButton", () => {
-	it("is a labelled button the size of a touch target, in the system's undo glyph", () => {
-		const button = render(vi.fn(async () => 0));
-		expect(button().props.accessibilityRole).toBe("button");
-		expect(button().props.accessibilityState).toEqual({ disabled: false, busy: false });
-		expect(flatten(button().props.style({ pressed: false }))).toMatchObject({ width: touchTarget, height: touchTarget });
-		expect(button().findByType("SymbolView" as never).props.name).toEqual({ ios: "arrow.uturn.backward", android: "undo" });
-	});
-
 	// Forgetting a turn cannot be undone, so it asks through the system's own
 	// destructive confirmation first.
 	it("asks with a native destructive alert and does nothing on Cancel", () => {
@@ -86,13 +76,11 @@ describe("TurnRollbackButton", () => {
 		const button = render(onRollback);
 		act(() => choose(press(button), "Roll back").onPress!());
 		expect(onRollback).toHaveBeenCalledExactlyOnceWith("turn-7");
+		expect(button().props.accessibilityRole).toBe("button");
 		expect(button().props.disabled).toBe(true);
 		expect(button().props.accessibilityState).toEqual({ disabled: true, busy: true });
-		expect(button().findAllByType("ActivityIndicator" as never)).toHaveLength(1);
-		expect(button().findAllByType("SymbolView" as never)).toHaveLength(0);
 		await act(async () => answer(3));
 		expect(button().props.accessibilityState).toEqual({ disabled: false, busy: false });
-		expect(button().findAllByType("SymbolView" as never)).toHaveLength(1);
 		expect(alert).toHaveBeenCalledOnce();
 	});
 

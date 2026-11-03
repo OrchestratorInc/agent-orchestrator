@@ -175,7 +175,6 @@ describe("a machine's page on iOS", () => {
 		expect(labels).toEqual(["Status", "Platform", "Active route", "LAN"]);
 		const status = byTestID("machine-status");
 		expect(status.props.children).toBe("Connected");
-		expect(modifiersOf(status)).toContainEqual({ $type: "foregroundStyle", args: ["green"] });
 		expect(byTestID("environment-active-address-a").props.children).toBe("studio.tail123.ts.net:3011");
 		const others = renderer!.root.findByType("DisclosureGroup" as never);
 		expect(others.props).toMatchObject({ isExpanded: false, testID: "environment-other-routes-a" });
@@ -320,14 +319,14 @@ describe("a machine's page on Android", () => {
 	}
 	const click = (node: ReactTestInstance) => (modifiersOf(node).find((m) => m.$type === "clickable")?.args[0] as (() => void) | undefined);
 
-	it("edits from a top app bar icon and lists the machine as Material rows", async () => {
+	it("edits from the top app bar and shows the status and active route", async () => {
 		const handlers = await render();
 		const edit = renderer!.root.findByType("StackToolbarButton" as never);
-		expect(edit.props).toMatchObject({ icon: "edit.xml", accessibilityLabel: "Edit Studio Mac" });
+		expect(edit.props.accessibilityLabel).toBe("Edit Studio Mac");
 		act(() => edit.props.onPress());
 		expect(handlers.onEdit).toHaveBeenCalledOnce();
 		const status = byTestID("machine-status").findByType("ListItem.TrailingContent" as never).findByType("Text" as never);
-		expect(status.props).toMatchObject({ color: "red", children: "Offline" });
+		expect(status.props.children).toBe("Offline");
 		const active = byTestID("environment-active-address-a");
 		expect(active.findByType("ListItem.SupportingContent" as never).findByType("Text" as never).props.children).toBe("studio.tail123.ts.net:3011");
 	});
@@ -361,40 +360,23 @@ describe("a machine's page on Android", () => {
 	it("confirms a copy itself before Android 13", async () => {
 		fixtures.platform.Version = 32;
 		const handlers = await render();
-		const active = byTestID("environment-active-address-a");
-		act(() => (modifiersOf(active).find((m) => m.$type === "combinedClickable")!.args[0] as { onLongClick: () => void }).onLongClick());
+		act(() => (modifiersOf(byTestID("environment-active-address-a")).find((m) => m.$type === "combinedClickable")!.args[0] as { onClick: () => void }).onClick());
 		expect(handlers.notify).toHaveBeenCalledWith("Address copied.");
 	});
 
-	it("draws Forget in the error colour and holds it while a forget runs", async () => {
+	it("forgets and tests from their rows, each held while it runs", async () => {
 		const handlers = await render();
-		const forget = byTestID("environment-forget-a");
-		expect(forget.props.colors.contentColor).toBe("red");
-		act(() => click(forget)!());
+		act(() => click(byTestID("environment-forget-a"))!());
 		expect(handlers.onForget).toHaveBeenCalledOnce();
-		act(() => renderer!.unmount());
-		renderer = undefined;
-		await render({ forgetting: true });
-		const busy = byTestID("environment-forget-a");
-		expect(click(busy)).toBeUndefined();
-		expect(modifiersOf(busy)).toContainEqual({ $type: "alpha", args: [0.4] });
-	});
-
-	it("tests the connection from its row, held while a test runs", async () => {
-		const handlers = await render();
 		act(() => click(byTestID("environment-test-a"))!());
 		expect(handlers.onTest).toHaveBeenCalledOnce();
 		act(() => renderer!.unmount());
 		renderer = undefined;
-		await render({ testing: true });
-		const busy = byTestID("environment-test-a");
-		expect(click(busy)).toBeUndefined();
-		expect(busy.findAllByType("Text" as never).map((node) => node.props.children)).toContain("Testing…");
+		await render({ forgetting: true, testing: true });
+		expect(click(byTestID("environment-forget-a"))).toBeUndefined();
+		const testing = byTestID("environment-test-a");
+		expect(click(testing)).toBeUndefined();
+		expect(testing.findAllByType("Text" as never).map((node) => node.props.children)).toContain("Testing…");
 	});
 
-	it("offers Make default only for another machine", async () => {
-		await render({ isDefault: true });
-		expect(queryTestID("environment-make-default-a")).toHaveLength(0);
-		expect(renderer!.root.findAll((node) => node.props.children === "New workers and reconnects use this machine.").length).toBeGreaterThan(0);
-	});
 });

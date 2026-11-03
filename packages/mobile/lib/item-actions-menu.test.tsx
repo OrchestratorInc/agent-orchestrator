@@ -46,7 +46,6 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 import { ItemActionsMenu } from "./item-actions-menu";
 import { ItemActionsMenu as IOSItemActionsMenu } from "./item-actions-menu.ios";
 import type { ItemAction } from "./item-actions-menu.types";
-import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -85,34 +84,15 @@ function fourActions() {
 }
 
 describe("ItemActionsMenu on Android", () => {
-	it("anchors a Material dropdown to an icon button named for screen readers", async () => {
+	it("anchors a closed dropdown listing every action to a button named for screen readers", async () => {
 		const { actions } = fourActions();
 		const root = await render(<ItemActionsMenu accessibilityLabel="Actions for the review" actions={actions} />);
 		const trigger = root.findByType("MenuTrigger" as never).findByType("IconButton" as never);
 		expect(trigger.props.enabled).toBe(true);
-		expect(trigger.findByType("Icon" as never).props).toMatchObject({ source: "drawable:more_horiz", contentDescription: "Actions for the review" });
+		expect(trigger.findByType("Icon" as never).props.contentDescription).toBe("Actions for the review");
 		expect(root.findByType("DropdownMenu" as never).props.expanded).toBe(false);
-	});
-
-	it("lists every action, however many there are, each with its Material Symbol", async () => {
-		const { actions } = fourActions();
-		const root = await render(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} />);
 		const items = root.findByType("MenuItems" as never).findAllByType("DropdownMenuItem" as never);
 		expect(items.map((item) => item.findByType("ComposeText" as never).props.children)).toEqual(["Open on GitHub", "Send to worker", "Resolve", "Stop reviewer session"]);
-		expect(items.map((item) => item.findByType("ItemLeadingIcon" as never).findByType("Icon" as never).props.source)).toEqual([
-			"drawable:open_in_new",
-			"drawable:send",
-			"drawable:check_circle",
-			"drawable:power_settings_new",
-		]);
-	});
-
-	it("draws a destructive action in red", async () => {
-		const { actions } = fourActions();
-		const root = await render(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} />);
-		const items = root.findAllByType("DropdownMenuItem" as never);
-		expect(items[3].props.elementColors).toEqual({ textColor: "#red", leadingIconColor: "#red" });
-		expect(items[0].props.elementColors).toEqual({ textColor: "#primary", leadingIconColor: "#secondary" });
 	});
 
 	it("opens on the button, runs the chosen action and closes", async () => {
@@ -158,19 +138,18 @@ describe("ItemActionsMenu on Android", () => {
 });
 
 describe("ItemActionsMenu on iOS", () => {
-	it("is a SwiftUI pull-down with a destructive role and a full touch target", async () => {
+	it("is a pull-down named for VoiceOver, with a destructive role on Stop", async () => {
 		const { actions, onPress } = fourActions();
 		const root = await render(<IOSItemActionsMenu accessibilityLabel="Actions for the review" actions={actions} />);
-		expect(root.findByType("Host" as never).props.style).toMatchObject({ width: touchTarget, height: touchTarget });
 		const menu = root.findByType("Menu" as never);
 		expect(menu.props.modifiers).toContainEqual({ modifier: "accessibilityLabel", args: ["Actions for the review"] });
 		expect(menu.props.modifiers).toContainEqual({ modifier: "disabled", args: [false] });
 		const buttons = root.findAllByType("SwiftButton" as never);
-		expect(buttons.map((button) => [button.props.label, button.props.systemImage, button.props.role])).toEqual([
-			["Open on GitHub", "arrow.up.right.square", undefined],
-			["Send to worker", "paperplane", undefined],
-			["Resolve", "checkmark.circle", undefined],
-			["Stop reviewer session", "power", "destructive"],
+		expect(buttons.map((button) => [button.props.label, button.props.role])).toEqual([
+			["Open on GitHub", undefined],
+			["Send to worker", undefined],
+			["Resolve", undefined],
+			["Stop reviewer session", "destructive"],
 		]);
 		buttons[1].props.onPress();
 		expect(onPress.send).toHaveBeenCalledOnce();

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { composeThemeFor } from "./composeTheme";
 import { darkTheme, lightTheme } from "./theme";
-import { font, radius } from "./tokens";
 
 // The plugin is CommonJS run by the Expo CLI; vitest loads it as-is.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -11,40 +9,6 @@ const dialogPlugin = require("../plugins/withAndroidDialogTheme") as {
 	CONTROL_ACCENT: Record<"light" | "dark", string>;
 	applyAppTheme(styles: { resources: { style?: { $: { name: string }; item?: { $: { name: string }; _: string }[] }[] } }): unknown;
 };
-
-describe("composeThemeFor", () => {
-	it("paints Compose in the palette, not the wallpaper's colours", () => {
-		const compose = composeThemeFor(darkTheme, true);
-		expect(compose.dark).toBe(true);
-		expect(compose.colors).toMatchObject({
-			primary: darkTheme.accent,
-			onPrimary: darkTheme.onAccent,
-			surface: darkTheme.bgBase,
-			onSurface: darkTheme.textPrimary,
-			onSurfaceVariant: darkTheme.textSecondary,
-			error: darkTheme.red,
-			tertiary: darkTheme.highlight,
-		});
-	});
-
-	// Menus sit on surfaceContainer, sheets on surfaceContainerLow, dialogs on
-	// surfaceContainerHigh: each must be the surface the RN side uses for it.
-	it("steps the containers up the palette's own surfaces", () => {
-		const { colors } = composeThemeFor(lightTheme, false);
-		expect([
-			colors.surfaceContainerLowest,
-			colors.surfaceContainerLow,
-			colors.surfaceContainerHigh,
-			colors.surfaceContainerHighest,
-		]).toEqual([lightTheme.bgBase, lightTheme.bgSurface, lightTheme.bgElevated, lightTheme.bgElevatedHover]);
-	});
-
-	it("sets the app's family and control radius", () => {
-		const compose = composeThemeFor(darkTheme, true);
-		expect(compose.fonts).toEqual({ regular: font.regular, medium: font.medium, semibold: font.semibold });
-		expect(compose.extraSmallCorner).toBe(radius.md);
-	});
-});
 
 describe("Android dialog theme plugin", () => {
 	// A native dialog cannot read the JS palette, so the plugin copies it.

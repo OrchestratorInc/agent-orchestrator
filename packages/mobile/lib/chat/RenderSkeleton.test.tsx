@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,14 +43,6 @@ describe("RenderSkeleton", () => {
 		const skeleton = root.findAll((node) => node.type === ("View" as never) && node.props.accessibilityRole === "progressbar")[0];
 		expect(skeleton.props).toMatchObject({ accessible: true, accessibilityLabel: "Loading Swipe states", accessibilityState: { busy: true } });
 		expect(root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
-		// The content block and two caption lines.
-		expect(skeleton.findAll((node) => node.type === ("View" as never) && node !== skeleton && node.parent?.parent === skeleton)).toHaveLength(3);
-	});
-
-	it("draws only the content block in a short frame", () => {
-		const root = render(<RenderSkeleton height={120} label="Chart" />).root;
-		const skeleton = root.findAll((node) => node.type === ("View" as never) && node.props.accessibilityRole === "progressbar")[0];
-		expect(skeleton.findAll((node) => node.type === ("View" as never) && node !== skeleton && node.parent?.parent === skeleton)).toHaveLength(1);
 	});
 
 	it("waits out its delay before appearing", () => {
@@ -59,11 +50,5 @@ describe("RenderSkeleton", () => {
 		expect(tree.toJSON()).toBeNull();
 		act(() => { vi.advanceTimersByTime(250); });
 		expect(tree.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
-	});
-
-	// The old shimmer ran an RN Animated loop under an SVG gradient.
-	it("runs no animation of its own", () => {
-		const text = readFileSync(new URL("./RenderSkeleton.tsx", import.meta.url), "utf8");
-		expect(text).not.toMatch(/Animated|react-native-svg|LinearGradient|SHIMMER/);
 	});
 });

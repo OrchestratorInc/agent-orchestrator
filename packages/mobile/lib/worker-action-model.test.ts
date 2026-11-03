@@ -6,7 +6,6 @@ import {
 	ARCHIVE_SESSION_CONFIRM,
 	workerAccessibilityActions,
 	workerActionNamed,
-	workerActionSymbol,
 	workerActionSymbols,
 	workerContextActions,
 	type WorkerActionId,
@@ -116,22 +115,7 @@ describe("workerAccessibilityActions", () => {
 	});
 });
 
-describe("workerActionSymbol", () => {
-	it("gives every action a symbol on each platform", () => {
-		for (const id of ALL_ACTIONS) {
-			expect(workerActionSymbol(id).ios.length).toBeGreaterThan(0);
-			expect(workerActionSymbol(id).android.length).toBeGreaterThan(0);
-		}
-	});
-
-	it("distinguishes pin from unpin", () => {
-		expect(workerActionSymbol("pin")).not.toEqual(workerActionSymbol("unpin"));
-	});
-
-	it("uses the archive box for the restorable session action", () => {
-		expect(workerActionSymbol("delete")).toEqual({ ios: "archivebox", android: "archive" });
-	});
-
+describe("workerActionSymbols", () => {
 	// Android's menu takes a bundled drawable, and a missing file is a
 	// bundle-time failure rather than a blank icon, so every action's Material
 	// Symbol has to be one the shared registry bundles (lib/toolbarIcon.test.ts
