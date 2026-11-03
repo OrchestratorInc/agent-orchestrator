@@ -102,6 +102,7 @@ type parserStateEnvelope struct {
 	Claude     *claudeParserStateV1    `json:"claude,omitempty"`
 	Codex      *codexParserStateV1     `json:"codex,omitempty"`
 	Gemini     *geminiParserStateV1    `json:"gemini,omitempty"`
+	Snapshot   *snapshotParserStateV1  `json:"snapshot,omitempty"`
 }
 
 type parserIntegrityStateV1 struct {
@@ -195,6 +196,9 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 	if err := validateParserIntegrityState(source, state.Integrity); err != nil {
 		return nil, err
 	}
+	if state.Snapshot != nil && !snapshotSourceKind(source.Kind) {
+		return nil, errors.New("append-only state has a snapshot payload")
+	}
 	switch source.Kind {
 	case domain.UsageSourceClaudeMain, domain.UsageSourceClaudeSubagent:
 		if state.Claude == nil || state.Codex != nil || state.Gemini != nil {
@@ -229,6 +233,13 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateGeminiParserState(state.Gemini); err != nil {
 			return nil, err
 		}
+	case domain.UsageSourceClineSession:
+		if state.Claude != nil || state.Codex != nil || state.Gemini != nil {
+			return nil, errors.New("snapshot state has invalid parser payload")
+		}
+		if err := validateSnapshotParserState(state.Snapshot); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 	}
@@ -252,6 +263,8 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 		domain.UsageSourceGeminiSession:
 		// These formats carry replay-stable native IDs, so no provider-specific
 		// cumulative baseline is required.
+	case domain.UsageSourceClineSession:
+		// A snapshot source records the document it last applied on first read.
 	default:
 		return nil, fmt.Errorf("unsupported source kind %q", kind)
 	}

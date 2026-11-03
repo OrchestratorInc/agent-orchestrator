@@ -2013,6 +2013,37 @@ func TestGeminiUsageEventRoundTrip(t *testing.T) {
 	}
 }
 
+// TestClineUsageEventsAcceptBothVocabularies catches rejecting a Cline
+// session that switches between an Anthropic and an OpenAI-compatible route.
+func TestClineUsageEventsAcceptBothVocabularies(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	session := seedUsageSession(t, s, domain.HarnessCline)
+	binding := mustUpsertUsageBinding(t, s, session, now, domain.UsageBindingRecord{
+		NativeRootID: "1793093930983_gfzbo", State: domain.UsageBindingActive,
+	})
+	source := mustInsertUsageSource(t, s, now, domain.UsageSourceRecord{
+		BindingID: binding.ID, Kind: domain.UsageSourceClineSession,
+		NativeSessionID: "1793093930983_gfzbo", ArtifactPath: "/tmp/cline/1793093930983_gfzbo/1793093930983_gfzbo.messages.json",
+		FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+	})
+	openAI := usageEvent("cline-openai", canonicalUsageTokens(5444, 1000, 4444, 41))
+	openAI.ModelID = "gpt-5"
+	anthropic := usageEvent("cline-anthropic", canonicalUsageTokens(4700, 300, 4400, 20))
+	anthropic.ProviderID = domain.UsageProviderAnthropic
+	anthropic.ModelID = "claude-sonnet-4-6"
+	if err := s.ApplyUsageChunk(context.Background(), source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{openAI, anthropic}); err != nil {
+		t.Fatalf("apply Cline usage: %v", err)
+	}
+	models, err := s.ListUsageModelAggregates(context.Background(), session.ID)
+	mustNoError(t, err)
+	if len(models) != 2 {
+		t.Fatalf("Cline aggregates = %+v", models)
+	}
+}
+
 func seedUsageSource(t *testing.T, s *sqlite.Store, sess domain.SessionRecord, now time.Time) domain.UsageSourceRecord {
 	t.Helper()
 	initialModelID := "gpt-5"

@@ -19,6 +19,7 @@ const (
 	UsageSourcePiSession      UsageSourceKind = "pi_session"
 	UsageSourceQwenMonthly    UsageSourceKind = "qwen_monthly"
 	UsageSourceGeminiSession  UsageSourceKind = "gemini_session"
+	UsageSourceClineSession   UsageSourceKind = "cline_session"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape. The schema no
@@ -32,6 +33,7 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourcePiSession,
 	UsageSourceQwenMonthly,
 	UsageSourceGeminiSession,
+	UsageSourceClineSession,
 }
 
 // IsKnown reports whether k is a certified usage source kind.

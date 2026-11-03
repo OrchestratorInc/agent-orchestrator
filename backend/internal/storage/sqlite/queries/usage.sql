@@ -140,6 +140,15 @@ SELECT CAST(EXISTS (
                     AND source.kind = 'gemini_session'
               )
           )
+          OR (
+              ub.harness = 'cline'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM usage_sources source
+                  WHERE source.binding_id = ub.id
+                    AND source.kind = 'cline_session'
+              )
+          )
           OR EXISTS (
               SELECT 1
               FROM usage_codex_pending_children pending
@@ -231,6 +240,12 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
           WHERE us.binding_id = ub.id
             AND us.kind = 'gemini_session'
       ))
+      OR (ub.harness = 'cline' AND NOT EXISTS (
+          SELECT 1
+          FROM usage_sources us
+          WHERE us.binding_id = ub.id
+            AND us.kind = 'cline_session'
+      ))
       OR EXISTS (
           SELECT 1
           FROM usage_sources us
@@ -239,6 +254,7 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
                 ub.harness = 'codex' AND us.kind = 'codex_rollout'
                 OR ub.harness = 'pi' AND us.kind = 'pi_session'
                 OR ub.harness = 'gemini' AND us.kind = 'gemini_session'
+                OR ub.harness = 'cline' AND us.kind = 'cline_session'
             )
             AND us.state = 'error'
             AND us.last_error_code IN ('artifact_missing', 'source_read_failed')

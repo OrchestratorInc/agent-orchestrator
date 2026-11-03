@@ -32,6 +32,7 @@ func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 		PiSessions:     t.TempDir(),
 		QwenUsage:      t.TempDir(),
 		GeminiTmp:      t.TempDir(),
+		ClineSessions:  t.TempDir(),
 	}
 	watcher, err := usagepipeline.NewTranscriptWatcher(
 		context.Background(), usagePipelineWatchRoots(roots),

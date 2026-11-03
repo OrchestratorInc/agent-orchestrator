@@ -1593,6 +1593,7 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 		roots.PiSessions,
 		roots.QwenUsage,
 		roots.GeminiTmp,
+		roots.ClineSessions,
 	}
 }
 
