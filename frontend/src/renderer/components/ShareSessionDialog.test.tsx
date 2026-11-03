@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
-import type { CloudCpShareLink } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpShareLink } from "../lib/cloud-cp";
 import { createdShareLinkUrl, ShareSessionDialog, shareLinkLabel, shareLinkRequest } from "./ShareSessionDialog";
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 		createShareLink: vi.fn(),
 		revokeShareLink: vi.fn(),
 		// The people half of the dialog: nobody has access yet, no teams.
-		getShareAccess: vi.fn(async () => ({ entries: [] })),
+		getShareAccess: vi.fn(async (): Promise<unknown> => ({ entries: [] })),
 		listTeams: vi.fn(async () => ({ teams: [] })),
 		listShareCandidates: vi.fn(async () => ({ candidates: [] })),
 	},
@@ -69,6 +69,49 @@ describe("sharing a session", () => {
 		});
 		mocks.client.createShareLink.mockReset();
 		mocks.client.revokeShareLink.mockReset().mockResolvedValue(undefined);
+		mocks.client.getShareAccess.mockReset().mockImplementation(async () => ({ entries: [] }));
+	});
+
+	it("says a link opens the session too when nobody has been added", async () => {
+		renderDialog();
+		expect(await screen.findByText("Only people in this workspace and anyone with the link can open this session. Add people or teams above.")).toBeInTheDocument();
+		mocks.client.listShareLinks.mockResolvedValue({ links: [] });
+		cleanup();
+		renderDialog();
+		expect(await screen.findByText("Only people in this workspace can open this session. Add people or teams above.")).toBeInTheDocument();
+	});
+
+	it("keeps a link just made through picking people, and drops it for another scope", async () => {
+		mocks.client.createShareLink.mockResolvedValue({ link: shareLink({ id: "new", sessionId: "s1", code: CODE }) });
+		renderDialog();
+		await createLink();
+		expect(await screen.findByRole("textbox", { name: "Share link" })).toHaveValue(`https://cp.example.test/s/${CODE}`);
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.change(input, { target: { value: "lee@acme.co" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(await screen.findByRole("button", { name: "Share" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		// Shown only once, so it must survive the confirm step.
+		expect(await screen.findByRole("textbox", { name: "Share link" })).toHaveValue(`https://cp.example.test/s/${CODE}`);
+		fireEvent.click(screen.getByRole("radio", { name: "The whole project" }));
+		await screen.findByText("Share project");
+		expect(screen.queryByRole("textbox", { name: "Share link" })).toBeNull();
+	});
+
+	it("offers links only, with no error, against a control plane from before teams", async () => {
+		mocks.client.getShareAccess.mockReset().mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
+		mocks.client.createShareLink.mockResolvedValue({ link: shareLink({ id: "new", sessionId: "s1", code: CODE }) });
+		renderDialog();
+		expect(await screen.findByText("Anyone with the link can open this session in AO.")).toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByRole("combobox", { name: "Add people or teams" })).toBeNull());
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(screen.queryByText("People with access")).toBeNull();
+		// A 404 is the answer, not a failure to retry.
+		expect(mocks.client.getShareAccess).toHaveBeenCalledTimes(1);
+		const rows = within(await screen.findByRole("list")).getAllByRole("listitem");
+		expect(rows).toHaveLength(2);
+		await createLink();
+		expect(await screen.findByRole("textbox", { name: "Share link" })).toHaveValue(`https://cp.example.test/s/${CODE}`);
 	});
 
 	it.each([

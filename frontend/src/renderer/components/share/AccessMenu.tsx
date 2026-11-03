@@ -44,6 +44,11 @@ export function AccessMenu({
 	const { t } = useTranslation();
 	const level = roleLabel(t, role, scope);
 	const label = triggerLabel ?? level;
+	// Picking what is already set changes nothing, so it asks for nothing.
+	const choose = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => {
+		if (next.role === role && next.modeCap === modeCap) return;
+		onChange(next);
+	};
 	return (
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild disabled={disabled}>
@@ -68,21 +73,21 @@ export function AccessMenu({
 					label={roleLabel(t, "viewer", scope)}
 					description={t("share.accessViewerDescription")}
 					selected={role === "viewer"}
-					onSelect={() => onChange({ role: "viewer", modeCap: "read-only" })}
+					onSelect={() => choose({ role: "viewer", modeCap: "read-only" })}
 				/>
 				<AccessOption
 					icon={<PencilLine />}
 					label={roleLabel(t, "editor", scope)}
 					description={scope === "project" ? t("share.accessStartSessionsDescription") : t("share.accessEditorDescription")}
 					selected={role === "editor"}
-					onSelect={() => onChange({ role: "editor", modeCap: role === "editor" ? modeCap : "standard" })}
+					onSelect={() => choose({ role: "editor", modeCap: role === "editor" ? modeCap : "standard" })}
 				/>
 				{role === "editor" ? (
 					<>
 						<DropdownMenuSeparator />
 						<DropdownMenuLabel>{t("share.modeCap")}</DropdownMenuLabel>
 						{(["read-only", "standard", "trusted"] as const).map((cap) => (
-							<DropdownMenuItem key={cap} onSelect={() => onChange({ role: "editor", modeCap: cap })} data-access-cap={cap}>
+							<DropdownMenuItem key={cap} onSelect={() => choose({ role: "editor", modeCap: cap })} data-access-cap={cap}>
 								<span className={cn("flex-1", cap === modeCap ? "text-foreground" : "")}>{capLabel(t, cap)}</span>
 								{cap === modeCap ? <Check className="text-foreground!" aria-hidden="true" /> : null}
 							</DropdownMenuItem>

@@ -60,6 +60,26 @@ export function shareLinksQueryKey(baseUrl: string, orgId: string, projectId: st
 }
 
 /**
+ * The live links that open this session or its project: at project scope the
+ * whole-project links, at session scope this session's and the project's.
+ */
+export function useActiveShareLinks({ orgId, projectId, sessionId, scope, enabled }: {
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	scope: ShareScope;
+	enabled: boolean;
+}) {
+	const { client, baseUrl, ready } = useCloudCp();
+	return useQuery({
+		queryKey: shareLinksQueryKey(baseUrl, orgId, projectId),
+		enabled: enabled && ready,
+		queryFn: async () => (await client.listShareLinks(orgId, projectId)).links,
+		select: (all: CloudCpShareLink[]) => all.filter((link) => link.status === "active" && (scope === "project" ? !link.sessionId : link.sessionId === sessionId || !link.sessionId)),
+	});
+}
+
+/**
  * "Anyone with the link": the live links for this session or its project,
  * each revocable, and a way to make one. A new link is shown once: the
  * control plane keeps only a hash of its token.
@@ -81,12 +101,7 @@ export function ShareLinksSection({ orgId, projectId, sessionId, scope, open }: 
 	const [created, setCreated] = useState<string>();
 	const [copied, setCopied] = useState(false);
 	const linksKey = shareLinksQueryKey(baseUrl, orgId, projectId);
-	const links = useQuery({
-		queryKey: linksKey,
-		enabled: open && ready,
-		queryFn: async () => (await client.listShareLinks(orgId, projectId)).links,
-		select: (all: CloudCpShareLink[]) => all.filter((link) => link.status === "active" && (scope === "project" ? !link.sessionId : link.sessionId === sessionId || !link.sessionId)),
-	});
+	const links = useActiveShareLinks({ orgId, projectId, sessionId, scope, enabled: open });
 	const create = useMutation({
 		mutationFn: async () => {
 			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
