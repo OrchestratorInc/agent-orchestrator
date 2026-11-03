@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -149,7 +150,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 // finding the same copy, which then holds AO's turns. If the copy is still not
 // where the provider looks, the required first-open replay comes back without
 // messages and the import fails rather than continuing an empty chat.
-func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string) (domain.SessionRecord, error) {
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, launchEnv ...map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil || m.agents == nil {
 		return rec, nil
@@ -158,8 +159,13 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	if !ok {
 		return rec, nil
 	}
+	var env map[string]string
+	if len(launchEnv) > 0 {
+		env = launchEnv[0]
+	}
 	if preparer, ok := agent.(ports.AgentImportedSessionPreparer); ok {
-		return m.prepareImportedNativeSession(ctx, rec, launchPath, preparer)
+		prepared, err := m.prepareImportedNativeSession(ctx, rec, launchPath, preparer, env)
+		return prepared, agentlaunch.RedactError(err, env)
 	}
 	relocator, ok := agent.(ports.AgentImportedSessionRelocator)
 	if !ok {
@@ -172,9 +178,10 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 		SourceCWD:         source.CWD,
 		LaunchCWD:         launchPath,
 		SourceFingerprint: source.Fingerprint,
+		Env:               maps.Clone(env),
 	})
 	if err != nil {
-		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), err)
+		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), agentlaunch.RedactError(err, env))
 	}
 	if source.ResumeCwd == launchPath {
 		return rec, nil
