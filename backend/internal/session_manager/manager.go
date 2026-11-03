@@ -3550,8 +3550,10 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		if err != nil {
 			return RestoreResult{}, err
 		}
-		if err := m.refreshImportArchive(ctx, rec); err != nil {
-			return RestoreResult{}, err
+		if !m.hasFingerprintImportPreparer(rec) {
+			if err := m.refreshImportArchive(ctx, rec); err != nil {
+				return RestoreResult{}, err
+			}
 		}
 		requireNativeHistory = true
 	} else if adoptedOwnedElsewhere(ctx, rec) {
@@ -3654,6 +3656,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 				return RestoreResult{}, relaunchFailed("import relocation", relocateErr)
 			}
 			rec = relocated
+			if m.hasFingerprintImportPreparer(rec) {
+				if err := m.refreshImportArchive(ctx, rec); err != nil {
+					return RestoreResult{}, err
+				}
+			}
 		}
 	}
 
