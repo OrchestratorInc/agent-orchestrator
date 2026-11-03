@@ -3892,5 +3892,8 @@
 	"automations.template.daily_issue_triage_v1.description": "Convierte las incidencias nuevas y actualizadas en una lista priorizada con acciones claras.",
 	"automations.template.weekly_release_notes_v1.description": "Redacta notas de versión a partir de solicitudes fusionadas, agrupadas en funciones, correcciones y otros cambios.",
 	"automations.templates.setup": "Requiere acceso de lectura a GitHub para el proyecto seleccionado.",
-	"shortcut.find-in-chat": "Buscar en el chat"
+	"shortcut.find-in-chat": "Buscar en el chat",
+	"chat.find.loadingMatches": "Cargando coincidencias… ({{total}} en total)",
+	"chat.find.incomplete": "Búsqueda incompleta",
+	"chat.find.updatingCount": "{{active}} de {{total}} (actualizando)"
 }

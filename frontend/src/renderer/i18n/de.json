@@ -3823,5 +3823,8 @@
 	"automations.template.daily_issue_triage_v1.description": "Erstelle aus neuen und aktualisierten Issues eine übersichtliche Liste mit nächsten Schritten.",
 	"automations.template.weekly_release_notes_v1.description": "Entwirf Release Notes aus zusammengeführten Pull Requests, gruppiert nach Funktionen und Korrekturen.",
 	"automations.templates.setup": "Benötigt GitHub-Lesezugriff für das gewählte Projekt.",
-	"shortcut.find-in-chat": "Im Chat suchen"
+	"shortcut.find-in-chat": "Im Chat suchen",
+	"chat.find.loadingMatches": "Treffer werden geladen… ({{total}} insgesamt)",
+	"chat.find.incomplete": "Suche unvollständig",
+	"chat.find.updatingCount": "{{active}} von {{total}} (wird aktualisiert)"
 }

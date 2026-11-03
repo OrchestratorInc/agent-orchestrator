@@ -3823,5 +3823,8 @@
 	"automations.template.daily_issue_triage_v1.description": "新規・更新された課題を、次のアクションが明確なトリアージリストにまとめます。",
 	"automations.template.weekly_release_notes_v1.description": "マージされたプルリクエストから、機能・修正・その他の変更別にリリースノートを下書きします。",
 	"automations.templates.setup": "選択したプロジェクトへの GitHub 読み取りアクセスが必要です。",
-	"shortcut.find-in-chat": "チャット内を検索"
+	"shortcut.find-in-chat": "チャット内を検索",
+	"chat.find.loadingMatches": "一致を読み込み中… (合計 {{total}} 件)",
+	"chat.find.incomplete": "検索は未完了です",
+	"chat.find.updatingCount": "{{total}} 件中 {{active}} 件目 (更新中)"
 }

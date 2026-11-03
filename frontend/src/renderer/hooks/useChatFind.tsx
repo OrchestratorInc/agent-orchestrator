@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { useAppShortcut, isSettingsPageOpen } from "./useAppShortcut";
@@ -29,6 +30,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	onScrollWritten?: (top: number) => void;
 	reveal: (hit: FindOccurrence) => void;
 }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false), [query, setQuery] = useState("");
 	const [composing, setComposing] = useState(false), [retry, setRetry] = useState(0);
 	const [state, setState] = useState<SearchState>(initial);
@@ -309,21 +311,21 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		}) };
 	}
 	const activeIndex = active ? (state.page?.offset ?? 0) + state.hits.findIndex((hit) => occurrenceKey(hit) === occurrenceKey(active)) + 1 : 0;
-	const bar = open ? <div role="search" aria-label="Find in chat" aria-busy={state.updating || state.phase === "searching"} className="relative z-20 flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-2 text-xs">
+	const bar = open ? <div role="search" aria-label={t("shortcut.find-in-chat")} aria-busy={state.updating || state.phase === "searching"} className="relative z-20 flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-3 py-2 text-xs">
 		<Search aria-hidden="true" className="size-4" />
-		<input ref={input} type="search" aria-label="Find in chat" placeholder="Find in chat" value={query} className="min-w-20 flex-1 bg-transparent px-2 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring" onChange={(event) => {
+		<input ref={input} type="search" aria-label={t("shortcut.find-in-chat")} placeholder={t("shortcut.find-in-chat")} value={query} className="min-w-20 flex-1 bg-transparent px-2 py-1 outline-none focus-visible:ring-1 focus-visible:ring-ring" onChange={(event) => {
 			const value = event.target.value;
 			setQuery(value); setAnnouncement(""); setActive(undefined); setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
 		}} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={(event) => {
 			if (event.nativeEvent.isComposing || composing) return;
 			if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); move(event.shiftKey ? -1 : 1); }
 		}} />
-		<span role="status" aria-live="polite">{state.phase === "searching" ? state.total ? `Loading matches… (${state.total} total)` : "Searching…" : state.phase === "error" ? "Search incomplete" : isEmptyFindQuery(query) ? "" : state.total ? `${activeIndex} of ${state.total}${state.updating ? " (updating)" : ""}` : state.phase === "ready" ? "No results" : ""}</span>
-		<button type="button" aria-label="Previous match" disabled={state.phase !== "ready" || !state.total} onClick={() => move(-1)} className="rounded p-1 disabled:opacity-40"><ChevronUp className="size-4" /></button>
-		<button type="button" aria-label="Next match" disabled={state.phase !== "ready" || !state.total} onClick={() => move(1)} className="rounded p-1 disabled:opacity-40"><ChevronDown className="size-4" /></button>
-		<button type="button" aria-label="Close find in chat" onClick={() => close()} className="rounded p-1"><X className="size-4" /></button>
-		{state.error ? <span role="alert" className="basis-full">{state.error} <button type="button" className="underline" onClick={() => setRetry((value) => value + 1)}>Retry</button></span> : null}
+		<span role="status" aria-live="polite">{state.phase === "searching" ? state.total ? t("chat.find.loadingMatches", { total: state.total }) : t("command.searching") : state.phase === "error" ? t("chat.find.incomplete") : isEmptyFindQuery(query) ? "" : state.total ? t(state.updating ? "chat.find.updatingCount" : "browser.find.matchCount", { active: activeIndex, total: state.total }) : state.phase === "ready" ? t("browser.find.noResults") : ""}</span>
+		<button type="button" aria-label={t("browser.find.previous")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(-1)} className="rounded p-1 disabled:opacity-40"><ChevronUp className="size-4" /></button>
+		<button type="button" aria-label={t("browser.find.next")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(1)} className="rounded p-1 disabled:opacity-40"><ChevronDown className="size-4" /></button>
+		<button type="button" aria-label={t("browser.find.close")} onClick={() => close()} className="rounded p-1"><X className="size-4" /></button>
+		{state.error ? <span role="alert" className="basis-full">{state.error} <button type="button" className="underline" onClick={() => setRetry((value) => value + 1)}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
-	</div> : <button type="button" aria-label="Find in chat" title="Find in chat" className="absolute right-10 top-1 z-20 rounded bg-surface p-1 text-muted-foreground hover:text-foreground" onMouseDown={(event) => event.preventDefault()} onClick={show}><Search aria-hidden="true" className="size-4" /></button>;
+	</div> : <button type="button" aria-label={t("shortcut.find-in-chat")} title={t("shortcut.find-in-chat")} className="absolute right-10 top-1 z-20 rounded bg-surface p-1 text-muted-foreground hover:text-foreground" onMouseDown={(event) => event.preventDefault()} onClick={show}><Search aria-hidden="true" className="size-4" /></button>;
 	return { snapshot, bar, active, open };
 }

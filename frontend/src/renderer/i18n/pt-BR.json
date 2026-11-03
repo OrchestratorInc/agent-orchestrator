@@ -3892,5 +3892,8 @@
 	"automations.template.daily_issue_triage_v1.description": "Transforme issues novas e atualizadas em uma lista de triagem com próximas ações claras.",
 	"automations.template.weekly_release_notes_v1.description": "Esboce notas de versão a partir de pull requests mesclados, agrupados em recursos, correções e outras mudanças.",
 	"automations.templates.setup": "Requer acesso de leitura ao GitHub para o projeto selecionado.",
-	"shortcut.find-in-chat": "Buscar no chat"
+	"shortcut.find-in-chat": "Buscar no chat",
+	"chat.find.loadingMatches": "Carregando correspondências… ({{total}} no total)",
+	"chat.find.incomplete": "Pesquisa incompleta",
+	"chat.find.updatingCount": "{{active}} de {{total}} (atualizando)"
 }

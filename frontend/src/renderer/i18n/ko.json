@@ -3823,5 +3823,8 @@
 	"automations.template.daily_issue_triage_v1.description": "새로 등록되거나 업데이트된 이슈를 명확한 다음 조치가 포함된 분류 목록으로 정리합니다.",
 	"automations.template.weekly_release_notes_v1.description": "병합된 풀 리퀘스트에서 기능, 수정 및 기타 변경 사항별로 릴리스 노트 초안을 작성합니다.",
 	"automations.templates.setup": "선택한 프로젝트의 GitHub 읽기 권한이 필요합니다.",
-	"shortcut.find-in-chat": "채팅에서 찾기"
+	"shortcut.find-in-chat": "채팅에서 찾기",
+	"chat.find.loadingMatches": "일치 항목 로드 중… (총 {{total}}개)",
+	"chat.find.incomplete": "검색 미완료",
+	"chat.find.updatingCount": "{{total}}개 중 {{active}}번째 (업데이트 중)"
 }
