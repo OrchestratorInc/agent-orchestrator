@@ -109,6 +109,7 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -212,6 +213,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePathsTruncated,
 	onFileQuery,
 	onStageAttachments,
+	cloudAttachments,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -317,7 +319,14 @@ export const ChatComposer = memo(function ChatComposer({
 	 * can open. Absent means files cannot be delivered, and no attach control is
 	 * offered at all.
 	 */
-	onStageAttachments?: (attachments: FileAttachmentPayload[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
+	 * each. Each file uploads on its own and shows its own failure, removing one
+	 * while it uploads cancels it, and an upload in flight does not hold the
+	 * page: it runs in the main process and is dropped on a reload.
+	 */
+	cloudAttachments?: { maxBytes: number };
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
 	/**
@@ -564,12 +573,13 @@ export const ChatComposer = memo(function ChatComposer({
 		[draftScope, onQueuedAttachmentsChange],
 	);
 	const prepareAttachments = useCallback(
-		async (attachments: FileAttachment[]): Promise<FileAttachment[]> => {
+		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			const paths = await onStageAttachments(
-				attachments.flatMap(({ mimeType, data }) =>
-					data ? [{ mimeType, data }] : [],
+				attachments.flatMap(({ mimeType, data, name }) =>
+					data ? [{ mimeType, data, name }] : [],
 				),
+				signal,
 			);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
@@ -604,6 +614,8 @@ export const ChatComposer = memo(function ChatComposer({
 		initialKey: attachmentScopeKey,
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
+		maxAttachmentBytes: cloudAttachments?.maxBytes,
+		prepareEach: Boolean(cloudAttachments),
 	});
 	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
@@ -655,7 +667,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+		// A cloud file's reference is no daemon path: it previews from its bytes
+		// while they are in memory, else as a file.
+		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
 	});
@@ -791,10 +805,12 @@ export const ChatComposer = memo(function ChatComposer({
 					? (["persistence-failed"] as const)
 					: []),
 
-				...(fileAttachments.preparing ? (["pending-attachments"] as const) : []),
+				// A Cloud upload runs in the main process, which a leave
+				// confirmation would block, and is only repeated if lost.
+				...(fileAttachments.preparing && !cloudAttachments ? (["pending-attachments"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
+	}, [cloudAttachments, draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
 
 	useEffect(
 		() => () => {
@@ -1976,14 +1992,28 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
 											<span className="invisible">{file.name}</span>
 											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
 										</span>
-										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+										{/* Removing a file while it attaches cancels it. */}
+										<button
+											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
+											onClick={() => {
+												fileAttachments.cancelPending(file.id);
+												editor.current?.focus();
+											}}
+											aria-label={`Cancel attaching ${file.name}`}
+											className="text-muted-foreground hover:text-foreground"
+										>
+											<X aria-hidden="true" className="size-3" />
+										</button>
 									</li>
 								))}
 							</ul>
