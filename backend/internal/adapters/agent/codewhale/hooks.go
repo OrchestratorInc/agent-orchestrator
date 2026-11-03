@@ -140,7 +140,10 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create runtime config directory: %w", err)
 	}
-	runtimeDir := filepath.Join(dir, "launches", launchID, "runtime")
+	runtimeDir, err := p.nativeRestoreRuntimeDir(ctx, cfg, cfg.NativeSessionID, cfg.ImportConfigDir, cfg.RestoreMode == ports.WorkspaceRestoreImported, filepath.Join(dir, "launches", launchID, "runtime"))
+	if err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: select native runtime: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(runtimeDir), 0o750); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch metadata directory: %w", err)
 	}

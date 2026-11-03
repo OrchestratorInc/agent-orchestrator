@@ -102,6 +102,9 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		return "", err
 	}
 	if nativeID == "" {
+		if cfg.RestoreMode != ports.WorkspaceRestoreFresh {
+			return "", errors.New("codewhale native restore did not identify its conversation")
+		}
 		return freshDir, nil
 	}
 	if !nativeSessionIDPattern.MatchString(nativeID) {
