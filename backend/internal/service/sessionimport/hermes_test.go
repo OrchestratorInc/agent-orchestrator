@@ -5,7 +5,43 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestHermesImportStaysTerminalWithRegisteredChatDriver(t *testing.T) {
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, statement := range []string{
+		`CREATE TABLE sessions(id TEXT,source TEXT,cwd TEXT,title TEXT,started_at REAL,hidden INTEGER)`,
+		`CREATE TABLE messages(id INTEGER,session_id TEXT,role TEXT,content TEXT,timestamp REAL,_compressed_summary INTEGER)`,
+		`INSERT INTO sessions VALUES('20261103_000000_mode','cli','','',1790000000,0)`,
+		`INSERT INTO messages VALUES(1,'20261103_000000_mode','user','synthetic mode request',1790000001,0)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &importStore{}
+	service := New(store, "", chatSupported)
+	service.roots = map[domain.AgentHarness]string{domain.HarnessHermes: root}
+	preview, err := service.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan = %#v, %v", preview, err)
+	}
+	results, err := service.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" || len(store.sessions) != 1 {
+		t.Fatalf("import = %#v, sessions = %#v, error = %v", results, store.sessions, err)
+	}
+	record := store.sessions[0]
+	if record.Mode != domain.SessionModeTUI || record.Metadata.AgentSessionID != "20261103_000000_mode" || !record.NeedsImportResume() || len(store.messages) != 1 {
+		t.Fatalf("native Terminal import = %#v, messages = %#v", record, store.messages)
+	}
+}
 
 func TestHermesLocalTranscript(t *testing.T) {
 	root := t.TempDir()

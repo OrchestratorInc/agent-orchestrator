@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.agent-orchestrator.desktop.dictation</string>
+	<key>CFBundleName</key>
+	<string>Orchestrator</string>
+	<key>CFBundleDisplayName</key>
+	<string>Orchestrator</string>
+	<key>CFBundleExecutable</key>
+	<string>Orchestrator</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!-- A background helper: no Dock icon or menu bar. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Orchestrator uses the microphone to dictate messages.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Orchestrator turns your speech into message text.</string>
+</dict>
+</plist>

@@ -27,9 +27,7 @@ export interface Settings {
 	client: string;
 	/** Whether the local offering is available on this daemon. */
 	localEnabled: boolean;
-	/** The user's persisted cloud toggle (Settings, Developer Mode). */
-	cloudOffering: boolean;
-	/** Whether the cloud offering is available (flag + entitled client + control plane). */
+	/** Whether the cloud offering is available: on for everyone with a configured control plane. */
 	cloudEnabled: boolean;
 	/** Cloud control plane base URL; empty when cloud is not configured. */
 	cloudControlPlaneUrl: string;
@@ -43,6 +41,8 @@ export interface Settings {
 	sessionRetentionDays?: number;
 }
 
+const settingsReadTimeoutMs = 10_000;
+
 export function useSettings(hostId?: string, enabled = true) {
 	const query = useQuery({
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
@@ -54,8 +54,15 @@ export function useSettings(hostId?: string, enabled = true) {
 		// query so it self-heals once the daemon is ready.
 		refetchInterval: 15_000,
 		retry: 5,
-		queryFn: async (): Promise<Settings> => {
-			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings");
+		queryFn: async ({ signal }): Promise<Settings> => {
+			// The read is one SQLite row, but the renderer shares six connections
+			// to the daemon with its event streams and slow probes, so a read can
+			// sit queued behind them. Bound it: a read that never completes would
+			// otherwise hold the query in loading, with no retry or refetch, until
+			// the app restarts.
+			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings", {
+				signal: AbortSignal.any([signal, AbortSignal.timeout(settingsReadTimeoutMs)]),
+			});
 			if (error) throw error;
 			return {
 				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
@@ -65,7 +72,6 @@ export function useSettings(hostId?: string, enabled = true) {
 				// Offering gates fail closed for cloud and open for local, so a daemon
 				// that predates them behaves like a plain local install.
 				localEnabled: data?.localEnabled ?? true,
-				cloudOffering: data?.cloudOffering ?? false,
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
 				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
@@ -103,28 +109,6 @@ export function useUpdateSessionInterface() {
 
 	return {
 		update: (mode: SessionMode) => mutation.mutate(mode),
-		saving: mutation.isPending,
-		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
-	};
-}
-
-export function useUpdateCloudOffering() {
-	const queryClient = useQueryClient();
-	const mutation = useMutation({
-		mutationFn: async (enabled: boolean) => {
-			const { data, error } = await apiClient.PATCH("/api/v1/settings/cloud-offering", {
-				body: { enabled },
-			});
-			if (error) throw error;
-			return data;
-		},
-		// Refetch rather than writing the value in locally: the daemon is the source
-		// of truth, and the control must not claim a change it did not persist.
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
-	});
-
-	return {
-		update: (enabled: boolean) => mutation.mutate(enabled),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};
