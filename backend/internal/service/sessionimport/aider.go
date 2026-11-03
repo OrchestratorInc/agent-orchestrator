@@ -55,7 +55,12 @@ func discoverAiderProject(ctx context.Context, project string) ([]sourceFiles, e
 		return nil, nil
 	}
 	project = canonical(project)
-	return []sourceFiles{{harness: domain.HarnessAider, root: project, paths: []string{filepath.Join(project, aiderImportHistory)}, key: aider.NativeHistoryID(project), modTime: info.ModTime(), size: info.Size()}}, nil
+	path := filepath.Join(project, aiderImportHistory)
+	snapshot, err := readAiderTranscript(ctx, project, path)
+	if err != nil {
+		return nil, err
+	}
+	return []sourceFiles{{harness: domain.HarnessAider, root: project, paths: []string{path}, key: aider.NativeHistoryID(project), modTime: info.ModTime(), size: info.Size(), fingerprint: snapshot.fingerprint}}, nil
 }
 
 func readAiderTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
@@ -87,6 +92,7 @@ func readAiderTranscript(ctx context.Context, root string, paths ...string) (tra
 	if len(data) > maxVisibleBytes {
 		return t, errors.New("aider native history exceeds read budget")
 	}
+	t.fingerprint = aider.NativeHistoryFingerprint(data)
 	t.path, t.paths, t.cwd = paths[0], append([]string(nil), paths...), t.root
 	t.nativeID, t.last = aider.NativeHistoryID(t.root), info.ModTime()
 	var user, assistant strings.Builder

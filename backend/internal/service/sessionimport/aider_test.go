@@ -2,8 +2,10 @@ package sessionimport
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/aider"
@@ -23,6 +25,9 @@ func TestAiderProjectHistoryDiscoveryAndNativeMessages(t *testing.T) {
 	got, err := readAiderTranscript(context.Background(), groups[0].root, groups[0].paths...)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if groups[0].fingerprint == "" || groups[0].fingerprint != got.fingerprint {
+		t.Fatalf("native snapshot was not fingerprinted: %+v", groups[0])
 	}
 	wantTexts(t, got.messages, "user: make a greeting\nwith two lines", "assistant: Hello", "user: next turn", "assistant: Done")
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.title != "make a greeting with two lines" {
@@ -50,10 +55,43 @@ func TestAiderRegisteredProjectScanImportsNativeTerminalHistory(t *testing.T) {
 		t.Fatalf("native Terminal record = %+v", rec)
 	}
 	writeFile(t, path, "#### make a greeting\n\nHello\n#### a later turn\n\nDone\n")
+	if rec.Metadata.ImportSource.Fingerprint == "" {
+		t.Fatal("import did not persist its selected snapshot")
+	}
+	if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) {
+		t.Fatalf("changed pinned source was accepted: %v", err)
+	}
+	// Legacy imports without selection evidence retain archive refresh behavior.
+	rec.Metadata.ImportSource.Fingerprint = ""
 	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
 	wantTexts(t, st.messages, "user: make a greeting", "assistant: Hello", "user: a later turn", "assistant: Done")
+}
+
+func TestAiderImportRejectsSameSizeSourceChangeAfterSelection(t *testing.T) {
+	project := t.TempDir()
+	body := "#### make a greeting\n\nHello\n"
+	path := writeFile(t, filepath.Join(project, aiderImportHistory), body)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(st, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan = %+v, %v", preview, err)
+	}
+	writeFile(t, path, strings.Replace(body, "Hello", "World", 1))
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "failed" || len(st.sessions) != 0 {
+		t.Fatalf("changed source was registered: %+v, %v", results, err)
+	}
 }
 
 func TestAiderDiscoveryDoesNotSearchNestedOrEscapingFiles(t *testing.T) {

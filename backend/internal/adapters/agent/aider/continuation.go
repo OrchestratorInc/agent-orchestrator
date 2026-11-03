@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -42,6 +43,12 @@ func NativeHistoryID(root string) string {
 	return "aider_" + hex.EncodeToString(sum[:])
 }
 
+// NativeHistoryFingerprint pins the exact native Markdown bytes by size and SHA256.
+func NativeHistoryFingerprint(data []byte) string {
+	sum := sha256.Sum256(data)
+	return strconv.Itoa(len(data)) + ":" + hex.EncodeToString(sum[:])
+}
+
 func readAiderFile(ctx context.Context, root *os.Root, name string, limit int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -58,12 +65,26 @@ func readAiderFile(ctx context.Context, root *os.Root, name string, limit int64)
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("aider native file changed while opening")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
 		return nil, errors.New("aider history exceeds read budget")
+	}
+	after, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(opened, after) {
+		return nil, errors.New("aider native file changed while reading")
 	}
 	return data, ctx.Err()
 }
@@ -125,21 +146,11 @@ func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) erro
 }
 
 // RelocateImportedSession copies the selected native Markdown into the AO
-// worktree. A marker preserves its file-based identity. Any existing native
-// history is refused; shared preparation checkpoints prevent a second copy.
+// worktree. Existing history is accepted only against the pinned import-time
+// snapshot. A marker preserves its file-based identity; no file is overwritten.
 func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
-	if !aiderHistoryID.MatchString(r.NativeSessionID) || NativeHistoryID(r.ConfigDir) != r.NativeSessionID || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
+	if !aiderHistoryID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.LaunchCWD) || NativeHistoryID(r.ConfigDir) != r.NativeSessionID || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
 		return errors.New("aider import identity or source path changed")
-	}
-	dst, err := os.OpenRoot(r.LaunchCWD)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dst.Close() }()
-	if _, err := dst.Lstat(aiderHistoryFile); err == nil {
-		return errors.New("aider worktree already contains native history")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	src, err := os.OpenRoot(r.ConfigDir)
 	if err != nil {
@@ -150,17 +161,44 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if err != nil {
 		return err
 	}
+	if r.SourceFingerprint != "" && NativeHistoryFingerprint(data) != r.SourceFingerprint {
+		return errors.New("aider source changed since import")
+	}
+	dst, err := os.OpenRoot(r.LaunchCWD)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
+	if _, err := dst.Lstat(aiderHistoryFile); err == nil {
+		if r.SourceFingerprint == "" {
+			return errors.New("aider worktree history has no pinned import snapshot")
+		}
+		existing, err := aiderHistory(ctx, dst)
+		if err != nil {
+			return err
+		}
+		if NativeHistoryFingerprint(existing) != r.SourceFingerprint {
+			return errors.New("aider worktree history differs from the imported snapshot")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else if err := writeAiderFile(ctx, dst, aiderHistoryFile, data); err != nil {
+		return err
+	}
 	if err := writeAiderFile(ctx, dst, aiderHistoryMarker, []byte(r.NativeSessionID+"\n")); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	if err := checkAiderIdentity(ctx, dst, r.LaunchCWD, r.NativeSessionID); err != nil {
 		return err
 	}
-	if err := writeAiderFile(ctx, dst, aiderHistoryFile, data); err != nil {
+	installed, err := aiderHistory(ctx, dst)
+	if err != nil {
 		return err
 	}
-	_, err = aiderHistory(ctx, dst)
-	return err
+	if r.SourceFingerprint != "" && NativeHistoryFingerprint(installed) != r.SourceFingerprint {
+		return errors.New("aider worktree history changed during preparation")
+	}
+	return nil
 }
 
 // PrepareImportedSession returns the native copy for AO's separate resume

@@ -135,3 +135,74 @@ func TestAiderProbeWithoutKnownLocationIsUnknown(t *testing.T) {
 		t.Fatalf("unknown location = %v, %v", availability, err)
 	}
 }
+
+func TestAiderTransferredHistoryRequiresPinnedSnapshot(t *testing.T) {
+	for _, mode := range []string{"match", "digest mismatch", "size mismatch", "missing fingerprint", "changed source", "symlink", "escaping symlink", "wrong marker"} {
+		t.Run(mode, func(t *testing.T) {
+			r := aiderImportFixture(t)
+			original, err := os.ReadFile(r.TranscriptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.SourceFingerprint = NativeHistoryFingerprint(original)
+			copied := append([]byte(nil), original...)
+			switch mode {
+			case "digest mismatch", "changed source":
+				copied = []byte(strings.Replace(string(original), "Hello", "World", 1))
+			case "size mismatch":
+				copied = append(copied, '\n')
+			case "missing fingerprint":
+				r.SourceFingerprint = ""
+			}
+			target := filepath.Join(r.LaunchCWD, aiderHistoryFile)
+			if err := os.WriteFile(target, copied, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "changed source" {
+				if err := os.WriteFile(r.TranscriptPath, copied, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "symlink" || mode == "escaping symlink" {
+				if err := os.Remove(target); err != nil {
+					t.Fatal(err)
+				}
+				backing := filepath.Join(r.LaunchCWD, "other-history.md")
+				if mode == "escaping symlink" {
+					backing = filepath.Join(t.TempDir(), "other-history.md")
+				}
+				if err := os.WriteFile(backing, copied, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(backing, target); err != nil {
+					t.Skip(err)
+				}
+			}
+			if mode == "wrong marker" {
+				if err := os.WriteFile(filepath.Join(r.LaunchCWD, aiderHistoryMarker), []byte("another import\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+			if mode == "match" {
+				if err != nil || prepared.NativeSessionID != r.NativeSessionID || prepared.ConfigDir != r.LaunchCWD {
+					t.Fatalf("pinned transferred history = %+v, %v", prepared, err)
+				}
+			} else if err == nil {
+				t.Fatal("accepted unproven transferred history")
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || string(got) != string(copied) {
+				t.Fatalf("destination overwritten = %q, %v", got, err)
+			}
+			source, err := os.ReadFile(r.TranscriptPath)
+			wantSource := original
+			if mode == "changed source" {
+				wantSource = copied
+			}
+			if err != nil || string(source) != string(wantSource) {
+				t.Fatalf("source overwritten = %q, %v", source, err)
+			}
+		})
+	}
+}
