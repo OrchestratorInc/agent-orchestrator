@@ -10,8 +10,8 @@ func TestPrimeNativeConfigPinsImportedRootAndEmptyOverrideSemantics(t *testing.T
 	home := t.TempDir()
 	t.Setenv("PRIME_AGENT_SESSION_DIR", "inherited-source")
 	env := map[string]string{
-		"HOME":                                home,
-		"PRIME_AGENT_SESSION_DIR":             "~/selected",
+		"HOME":                                 home,
+		"PRIME_AGENT_SESSION_DIR":              "~/selected",
 		"PRIME_AGENT_CODING_AGENT_SESSION_DIR": "~/legacy",
 		"PRIME_AGENT_CODING_AGENT_DIR":         filepath.Join(home, "managed"),
 	}
