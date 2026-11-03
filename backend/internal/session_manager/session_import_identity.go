@@ -25,8 +25,12 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	source := rec.Metadata.ImportSource
 	if source.ResumeNativeID == "" {
 		ref, err := preparer.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{
-			NativeSessionID: source.NativeID, ConfigDir: source.ConfigDir,
-			TranscriptPath: rec.Metadata.NativeTranscriptPath, SourceCWD: source.CWD, LaunchCWD: launchPath,
+			NativeSessionID:   source.NativeID,
+			ConfigDir:         source.ConfigDir,
+			TranscriptPath:    rec.Metadata.NativeTranscriptPath,
+			SourceCWD:         source.CWD,
+			LaunchCWD:         launchPath,
+			SourceFingerprint: source.Fingerprint,
 		})
 		if err != nil {
 			return rec, err
@@ -50,12 +54,23 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 		rec.Metadata.ImportSource = &next
 	}
 	ref := importedNativeRef(rec.Metadata.ImportSource)
+	if rec.Metadata.AgentSessionID != ref.NativeSessionID {
+		rec.Metadata.AgentSessionIDLaunchID = ""
+	}
 	rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = ref.NativeSessionID, ref.NativeSessionID
-	rec.Metadata.AgentSessionIDLaunchID = ""
 	if ref.TranscriptPath != "" {
 		rec.Metadata.NativeTranscriptPath = ref.TranscriptPath
 	}
 	return rec, nil
+}
+
+// A failed interactive launch can have no published identity for its old
+// generation. A pinned pending import may retry its exact prepared target,
+// but must still complete native initialization for the new generation.
+func pendingPreparedNativeImport(rec domain.SessionRecord) bool {
+	source := rec.Metadata.ImportSource
+	return rec.NeedsImportResume() && source.Prepared && source.ResumeCwd != "" && source.ResumeNativeID != "" &&
+		rec.Metadata.AgentSessionID == source.ResumeNativeID && rec.Metadata.ProviderConversationID == source.ResumeNativeID
 }
 
 func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
