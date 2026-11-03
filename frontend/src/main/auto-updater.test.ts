@@ -3688,6 +3688,85 @@ describe("quitAndInstallUpdate", () => {
     }
   });
 
+  it("releases a pending install when native staging disappears before the helper responds", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      const handshake = deferred<typeof progress>();
+      startMacUpdateProgress.mockReturnValueOnce(handshake.promise);
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const abandoned = expect(install).rejects.toThrow(/staged update files are missing/);
+      await vi.waitFor(() => expect(startMacUpdateProgress).toHaveBeenCalledOnce());
+
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(10_001);
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      await abandoned;
+      await flushMicrotasks();
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(module.getUpdateStatus().staged).toBeUndefined();
+
+      handshake.resolve(progress);
+      await flushMicrotasks();
+      expect(progress.assertAlive).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a retained restart request when its native staging disappears", async () => {
+    const bundle = makeBundle();
+    const restore = stubProcess("darwin", bundle.execPath);
+    vi.spyOn(os, "homedir").mockReturnValue(bundle.root);
+    const shipIt = nodePath.join(bundle.root, "Library", "Caches", "dev.agent-orchestrator.desktop.ShipIt");
+    const extracted = nodePath.join(shipIt, "update.fixture", "Agent Orchestrator.app", "Contents");
+    mkdirSync(extracted, { recursive: true });
+    writeFileSync(nodePath.join(shipIt, "ShipItState.plist"), "fixture");
+    writeFileSync(nodePath.join(extracted, "Info.plist"), "fixture");
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      const progress = { assertAlive: vi.fn(), fail: vi.fn(async () => undefined) };
+      startMacUpdateProgress.mockResolvedValueOnce(progress);
+      const restoreWindow = vi.fn();
+      module.setUpdateRestartFailureHandler(restoreWindow);
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(module.isUpdateRestartRequested()).toBe(true);
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(10_001);
+      rmSync(shipIt, { recursive: true });
+      await expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/staged update files are missing/);
+      expect(module.isUpdateRestartRequested()).toBe(false);
+      expect(progress.fail).toHaveBeenCalledWith(expect.stringContaining("staged update files are missing"));
+      expect(restoreWindow).toHaveBeenCalledOnce();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      restore();
+      rmSync(bundle.root, { recursive: true, force: true });
+    }
+  });
+
   it("requires new confirmation before downloading a changed remembered target", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {

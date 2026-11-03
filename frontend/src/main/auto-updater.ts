@@ -532,7 +532,15 @@ function nativeStagingWasLost(): boolean {
 function discardLostNativeStaging(): boolean {
   if (!nativeStagingWasLost()) return false;
   recordUpdateDiagnostic("native-staging-lost", { version: stagedVersion });
+  const failure = new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  const restartWasRequested = updateRestartRequested;
   discardStagedBuild();
+  updateRestartRequested = false;
+  macRestartPreparation = undefined;
+  if (activeUpdaterOperation === "manual-install") rejectNativeOperation?.(failure);
+  void macRestartProgress?.fail(failure.message).catch(() => undefined);
+  macRestartProgress = undefined;
+  if (restartWasRequested) restartFailureHandler?.();
   applyInstallOnQuitPolicy();
   broadcastUpdaterStatus({ state: "checking" });
   return true;
@@ -3056,23 +3064,26 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
     }
     return;
   }
-  if (macRestartPreparation) return macRestartPreparation;
   // The native ready event can precede ShipIt's final plist write. Wait at
   // most one watchdog interval before treating missing files as loss.
   if (isNativeInstallReady() && !nativeStagingFilesPresent()) {
     const remaining = STAGE_POLL_INTERVAL_MS - (Date.now() - (nativeReadyAtMs ?? 0));
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
   }
+  if (awaitingStagedReplacement) {
+    throw new Error("Check for updates and download an update before restarting to install.");
+  }
   if (discardLostNativeStaging()) {
     if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
     throw new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
   }
+  if (macRestartPreparation) return macRestartPreparation;
   let confirmation: UpdateInstallResult;
   // Promise.race releases the queue on a native timeout, but the underlying
   // cache transfer has no cancellation guarantee. Never let its late resolution
   // continue an install request whose caller already received a failure.
   let installAbandoned = false;
-  macRestartPreparation = runSerializedUpdaterOperation("manual-install", async () => {
+  const preparation = runSerializedUpdaterOperation("manual-install", async () => {
     const previousPreparationError = nativePreparationError;
     const assertInstallActive = () => {
       if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
@@ -3150,7 +3161,8 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       broadcast({ state: "error", ...failureFields(failure) });
     }
     throw userFacingInstallError(err);
-  }).finally(() => { if (!updateRestartRequested) macRestartPreparation = undefined; });
+  }).finally(() => { if (!updateRestartRequested && macRestartPreparation === preparation) macRestartPreparation = undefined; });
+  macRestartPreparation = preparation;
   return macRestartPreparation;
 }
 
