@@ -3061,8 +3061,6 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       });
       assertInstallActive();
       progress.assertAlive();
-      macRestartProgress = progress;
-      macRestartRequested = true;
       // Same cross-platform post-update signal the renderer reads at boot. This
       // is separate from the helper's active.json handshake above and only drives
       // the startup loader copy; failing to write it must not abort the install.
@@ -3075,6 +3073,11 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
       assertInstallActive();
+      // Only now is AO committed to restarting. Set earlier, a deadline that
+      // fired during the marker write would leave "restart requested" stuck,
+      // with every later click handed the same rejected request.
+      macRestartProgress = progress;
+      macRestartRequested = true;
       recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
       if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
@@ -3127,12 +3130,16 @@ const INSTALL_STEP_STUCK_MESSAGE = "The install got stuck before AO could close.
 function installDeadline(): { promise: Promise<never>; started(): void; clear(): void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let installStarted = false;
+  // An install abandoned in the queue can still get its turn later; it must
+  // not restart a deadline nobody is waiting on.
+  let cleared = false;
   let reject!: (error: Error) => void;
   const promise = new Promise<never>((_resolve, rejectPromise) => { reject = rejectPromise; });
   // Nothing may be left to catch this if the install settles first.
   promise.catch(() => undefined);
   const arm = () => {
     clearTimeout(timer);
+    if (cleared) return;
     timer = setTimeout(() => {
       if (nativePreparation) return arm();
       if (lastDownloadProgressAtMs !== undefined && Date.now() - lastDownloadProgressAtMs < INSTALL_QUEUE_WAIT_MS) return arm();
@@ -3146,7 +3153,7 @@ function installDeadline(): { promise: Promise<never>; started(): void; clear():
     promise,
     // Getting a turn restarts the clock for the install's own steps.
     started: () => { installStarted = true; arm(); },
-    clear: () => clearTimeout(timer),
+    clear: () => { cleared = true; clearTimeout(timer); },
   };
 }
 

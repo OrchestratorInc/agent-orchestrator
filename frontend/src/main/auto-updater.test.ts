@@ -3906,6 +3906,11 @@ describe("quitAndInstallUpdate", () => {
       await flushMicrotasks();
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
       expect(fail).toHaveBeenCalledTimes(1);
+      // Nothing is left marked as restarting, so a fresh click installs.
+      expect(module.isUpdateRestartRequested()).toBe(false);
+      await module.quitAndInstallUpdate("2.1.0");
+      expect(startMacUpdateProgress).toHaveBeenCalledTimes(2);
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); restore(); }
   });
 
