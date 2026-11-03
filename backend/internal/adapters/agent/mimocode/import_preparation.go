@@ -128,7 +128,7 @@ func (p *Plugin) prepareMiMoImport(ctx context.Context, r ports.ImportedSessionR
 			}
 		}
 	}
-	return ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: r.ConfigDir}, nil
+	return ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: r.ConfigDir, TranscriptPath: filepath.Join(r.ConfigDir, "mimocode.db", nativeID)}, nil
 }
 
 // mimoImportOutput bounds both provider streams and cancels the process tree
@@ -150,6 +150,9 @@ func (b *mimoImportOutput) Write(data []byte) (int, error) {
 }
 
 func (p *Plugin) runMiMoImportCommand(ctx context.Context, cwd, root string, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "export" {
+		return nil, errors.New("mimo import is deferred: native export mutates its source store")
+	}
 	binary, err := p.mimoBinary(ctx)
 	if err != nil {
 		return nil, err

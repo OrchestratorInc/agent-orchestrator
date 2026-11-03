@@ -151,3 +151,9 @@ func TestMiMoNativeOutputLimitCancelsCopy(t *testing.T) {
 	}
 }
 
+func TestMiMoSourceMutatingExportRemainsDeferred(t *testing.T) {
+	if _, err := New().runMiMoImportCommand(t.Context(), "", "", "export", "ses_source"); err == nil || !strings.Contains(err.Error(), "source store") {
+		t.Fatalf("source-mutating export was not refused before binary resolution: %v", err)
+	}
+}
+

@@ -138,55 +138,89 @@ func remapMiMoExport(data []byte, sourceID, cwd string, next func(string) (strin
 		}
 		ids[identity.old], generated[id] = id, true
 	}
-	var reference func(any) (any, error)
-	reference = func(value any) (any, error) {
-		switch value := value.(type) {
-		case string:
-			if replacement, ok := ids[value]; ok {
-				return replacement, nil
+	// Only schema-defined references are rewritten. Arbitrary tool state,
+	// metadata and structured/provider payloads are never traversed.
+	rewriteFields := func(object map[string]any, keys ...string) error {
+		replace := func(old string) (string, error) {
+			if old == "" {
+				return "", nil
 			}
-			if strings.HasPrefix(value, "ses_") || strings.HasPrefix(value, "msg_") || strings.HasPrefix(value, "prt_") {
-				return nil, errors.New("mimo export references history outside the imported session")
+			replacement, ok := ids[old]
+			if !ok {
+				return "", errors.New("mimo export references history outside the imported session")
 			}
-		case []any:
-			for i, child := range value {
-				replaced, err := reference(child)
-				if err != nil {
-					return nil, err
-				}
-				value[i] = replaced
-			}
+			return replacement, nil
 		}
-		return value, nil
-	}
-	var rewrite func(any) error
-	rewrite = func(value any) error {
-		switch value := value.(type) {
-		case map[string]any:
-			for key, child := range value {
-				switch key {
-				case "id", "sessionID", "parentID", "messageID", "partID", "contextFrom", "contextWatermark", "tail_start_id", "tail_end_id", "summary_message_id", "coveredUpTo", "digestUpTo", "deferredInputs", "senderSessionID", "sessionId", "parentId", "messageId", "partId", "session_id", "parent_id", "message_id", "part_id", "sessionIDs", "messageIDs", "partIDs", "session_ids", "message_ids", "part_ids":
-					replaced, err := reference(child)
+		for _, key := range keys {
+			value, present := object[key]
+			if !present || value == nil {
+				continue
+			}
+			switch value := value.(type) {
+			case string:
+				replacement, err := replace(value)
+				if err != nil {
+					return err
+				}
+				object[key] = replacement
+			case []any:
+				for i, item := range value {
+					old, ok := item.(string)
+					if !ok {
+						return errors.New("invalid mimo native reference array")
+					}
+					replacement, err := replace(old)
 					if err != nil {
 						return err
 					}
-					value[key] = replaced
+					value[i] = replacement
 				}
-				if err := rewrite(child); err != nil {
-					return err
-				}
-			}
-		case []any:
-			for _, child := range value {
-				if err := rewrite(child); err != nil {
-					return err
-				}
+			default:
+				return errors.New("invalid mimo native graph reference")
 			}
 		}
 		return nil
 	}
-	if err := rewrite(export); err != nil {
+	if err := rewriteFields(info, "id", "parentID", "contextFrom", "contextWatermark"); err != nil {
 		return nil, "", err
+	}
+	if revert, ok := info["revert"].(map[string]any); ok {
+		if err := rewriteFields(revert, "messageID", "partID"); err != nil {
+			return nil, "", err
+		}
+	}
+	for _, value := range messages {
+		message := value.(map[string]any)
+		messageInfo := message["info"].(map[string]any)
+		if err := rewriteFields(messageInfo, "id", "sessionID", "parentID"); err != nil {
+			return nil, "", err
+		}
+		if provenance, ok := messageInfo["provenance"].(map[string]any); ok && provenance["source"] == "agent" {
+			if err := rewriteFields(provenance, "senderSessionID"); err != nil {
+				return nil, "", err
+			}
+		}
+		for _, value := range message["parts"].([]any) {
+			part := value.(map[string]any)
+			if err := rewriteFields(part, "id", "sessionID", "messageID"); err != nil {
+				return nil, "", err
+			}
+			switch part["type"] {
+			case "checkpoint":
+				if err := rewriteFields(part, "coveredUpTo", "digestUpTo", "deferredInputs"); err != nil {
+					return nil, "", err
+				}
+			case "compaction":
+				if err := rewriteFields(part, "tail_start_id"); err != nil {
+					return nil, "", err
+				}
+				if projection, ok := part["projection"].(map[string]any); ok {
+					if err := rewriteFields(projection, "summary_message_id", "tail_start_id", "tail_end_id"); err != nil {
+						return nil, "", err
+					}
+				}
+			}
+		}
 	}
 	info["directory"] = filepath.Clean(cwd)
 	delete(info, "workspaceID") // implicit-local execution uses no workspace identity

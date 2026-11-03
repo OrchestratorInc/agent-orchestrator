@@ -1,7 +1,9 @@
 package mimocode
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -40,5 +42,16 @@ func TestMiMoPreparedDatabaseBinding(t *testing.T) {
 	}
 	if _, err := New().NativeSessionConfigDir(t.Context(), map[string]string{"MIMOCODE_DB": filepath.Join(root, "unrelated.db")}); err == nil {
 		t.Fatal("unsupported database filename accepted")
+	}
+}
+
+func TestMiMoImportedHookRejectsProjectWorkspaceBeforeWrites(t *testing.T) {
+	workspace := t.TempDir()
+	err := New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{WorkspacePath: workspace, ImportConfigDir: t.TempDir(), NativeSessionID: "ses_new", Env: map[string]string{"MIMOCODE_WORKSPACE_ID": "project-workspace", "MIMOCODE_DB": ""}})
+	if err == nil || !strings.Contains(err.Error(), "implicit local workspace") {
+		t.Fatalf("project workspace override = %v", err)
+	}
+	if _, err := os.Stat(mimoHookPath(workspace)); !os.IsNotExist(err) {
+		t.Fatal("workspace hooks were written before import validation")
 	}
 }
