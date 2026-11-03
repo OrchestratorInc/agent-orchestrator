@@ -8,15 +8,20 @@ import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import type { Theme } from "../theme";
+import { haptics } from "../haptics";
 import type { SendTarget } from "./sendRoute";
+import { RouteToggle } from "./RouteToggle";
 import { iconSize, radius, space, stateOpacity, touchTarget } from "../tokens";
 
 /** Dictate, filled as on the chat composer's round button. */
 const dictateGlyph = { ios: "mic.fill", android: "mic" } as const;
 
 // One field, one round button. The normal route sends a message to the agent; the
-// terminal route types into the terminal instead, and the session screen engages
-// it when the daemon reports a blocked permission prompt (see sendRoute.ts).
+// terminal route types into the terminal instead, for prompts the agent cannot
+// take (a trust prompt, a password, a picker that wants text). The session screen
+// also engages it when the daemon reports a blocked permission prompt (see
+// sendRoute.ts). Its toggle sits beside the round button, where the chat
+// composer keeps its approval control.
 //
 // Drawn as the chat composer is when collapsed — one capsule with the glass
 // behind it on iOS 26, the elevated fill elsewhere — so the two screens of one
@@ -29,6 +34,8 @@ export function Composer({
 	onSend,
 	sending,
 	target,
+	onTargetChange,
+	targetLocked,
 	voice,
 	keyboardVisible,
 	onDismissKeyboard,
@@ -38,6 +45,9 @@ export function Composer({
 	onSend: () => void;
 	sending: boolean;
 	target: SendTarget;
+	onTargetChange: (target: SendTarget) => void;
+	/** A plain shell has no agent to message, so there is no route to choose. */
+	targetLocked?: boolean;
 	voice: { state: VoiceState; partial: string; toggleLatched(): void; subscribeLevel(listener: (level: number) => void): () => void };
 	keyboardVisible: boolean;
 	onDismissKeyboard: () => void;
@@ -121,6 +131,15 @@ export function Composer({
 						>
 							<AppSymbol name="keyboardDismiss" size={iconSize.lg} color={t.textSecondary} />
 						</Pressable>
+					) : null}
+					{!targetLocked && !dictating ? (
+						<RouteToggle
+							on={toTerminal}
+							onChange={(on) => {
+								haptics.select();
+								onTargetChange(on ? "terminal" : "agent");
+							}}
+						/>
 					) : null}
 					{roundButton}
 				</View>

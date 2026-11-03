@@ -18,7 +18,6 @@ import {
 	REROUTED_NOTICE,
 	routeForSend,
 	terminalPayload,
-	TERMINAL_MODE_NOTICE,
 	TERMINAL_UNAVAILABLE_NOTICE,
 	type SendTarget,
 } from "./sendRoute";
@@ -630,8 +629,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const [msg, setMsg] = useState("");
 	const [sending, setSending] = useState(false);
 	// A plain shell has no agent to message. Otherwise each send goes to the agent
-	// and falls back to the terminal while it waits on a prompt (routeForSend).
-	const sendTarget: SendTarget = shellOnly ? "terminal" : "agent";
+	// unless the composer's toggle routes it to the terminal, and falls back to the
+	// terminal while the agent waits on a prompt (routeForSend).
+	const [sendTarget, setSendTarget] = useState<SendTarget>(shellOnly ? "terminal" : "agent");
 	// A terminated session has no live PTY (the mux answers "Session not found").
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
@@ -958,8 +958,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			if (muxRef.current && status === "open") {
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
+				// No notice: the composer's toggle already shows the route.
 				setMsg("");
-				showNotice(TERMINAL_MODE_NOTICE, "info");
 			} else {
 				haptics.error();
 				showNotice(TERMINAL_UNAVAILABLE_NOTICE);
@@ -980,6 +980,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
 				setMsg("");
+				// The toggle shows the route the prompt is now answered on.
+				setSendTarget("terminal");
 				showNotice(REROUTED_NOTICE, "info");
 			} else {
 				haptics.error();
@@ -1494,6 +1496,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					onSend={sendPrompt}
 					sending={sending || interfaceTransitionActive}
 					target={sendTarget}
+					onTargetChange={setSendTarget}
+					targetLocked={shellOnly}
 					voice={voice}
 					keyboardVisible={kbVisible}
 					onDismissKeyboard={Keyboard.dismiss}

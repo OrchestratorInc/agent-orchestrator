@@ -31,6 +31,10 @@ vi.mock("../chat/composerStyles", () => ({
 	composerStyleRules: (t: Record<string, string>) => ({ composer: { borderRadius: 28, borderCurve: "continuous", backgroundColor: t.bgElevated }, composerRow: {}, input: {} }),
 	useComposerFieldSize: () => ({ fontScale: 1, field: {}, row: {} }),
 }));
+vi.mock("./RouteToggle", async () => {
+	const React = await import("react");
+	return { RouteToggle: (props: object) => React.createElement("RouteToggle", props) };
+});
 vi.mock("../voice/DictationField", async () => {
 	const React = await import("react");
 	return { DictationField: (props: object) => React.createElement("DictationField", props) };
@@ -69,6 +73,7 @@ async function render(props: Partial<Parameters<typeof Composer>[0]> = {}) {
 		onSend: vi.fn(),
 		sending: false,
 		target: "agent" as const,
+		onTargetChange: vi.fn(),
 		voice,
 		keyboardVisible: false,
 		onDismissKeyboard: vi.fn(),
@@ -98,6 +103,29 @@ describe("the terminal composer", () => {
 		expect(renderer!.root.findByProps({ accessibilityLabel: "Send" }).props.disabled).toBe(true);
 		await render({ value: "x", sending: true });
 		expect(renderer!.root.findByProps({ accessibilityLabel: "Send" }).props.accessibilityState).toEqual({ disabled: true });
+	});
+
+	it("switches the route through the toggle, which always means 'to the terminal'", async () => {
+		const props = await render({ target: "terminal" });
+		const toggle = renderer!.root.findByType("RouteToggle" as never);
+		expect(toggle.props.on).toBe(true);
+		act(() => toggle.props.onChange(false));
+		expect(props.onTargetChange).toHaveBeenCalledWith("agent");
+		expect(fixtures.haptics.select).toHaveBeenCalledOnce();
+	});
+
+	// Where the chat composer keeps its approval control.
+	it("keeps the toggle right beside the round button", async () => {
+		await render({ keyboardVisible: true });
+		// The mock's host element, then the mock, then the row holding both.
+		const toggle = renderer!.root.findByType("RouteToggle" as never).parent!;
+		const children = toggle.parent!.children as typeof toggle[];
+		expect(children[children.indexOf(toggle) + 1].props.accessibilityLabel).toBe("Dictate a message");
+	});
+
+	it("hides the toggle for a plain shell", async () => {
+		await render({ targetLocked: true, target: "terminal" });
+		expect(renderer!.root.findAllByType("RouteToggle" as never)).toHaveLength(0);
 	});
 
 	it("offers to hide the keyboard only while there is one", async () => {
