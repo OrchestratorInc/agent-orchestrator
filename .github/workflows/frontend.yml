@@ -12,6 +12,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
     paths:
       - "frontend/**"
+      - "scripts/ci-sharding.test.mjs"
       # Keep workflow edits covered by the frontend validation suite.
       - ".github/workflows/**"
       - "contracts/cloud/**"
@@ -160,6 +161,9 @@ jobs:
         with:
           # Match the source-build runtime in bootstrap-self-hosted.sh.
           node-version: 22.23.2
+      - name: Verify CI shard coverage
+        run: node --test ../scripts/ci-sharding.test.mjs
+
       - name: Check self-hosted npm lockfile compatibility
         run: npm ci --ignore-scripts --dry-run --no-audit --no-fund
 
@@ -303,11 +307,11 @@ jobs:
   vitest:
     if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     defaults:
       run:
         working-directory: frontend
@@ -344,7 +348,7 @@ jobs:
       - name: Run vitest shard
         env:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
-        run: npx vitest run --shard=${{ matrix.shard }}/4
+        run: npx vitest run --shard=${{ matrix.shard }}/2
 
   # Keep the existing check name as the gate for the split frontend jobs.
   test:
