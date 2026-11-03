@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // maxShimSize bounds how much of a batch file is read while looking for its
@@ -34,10 +35,9 @@ const maxShimSize = 64 << 10
 // The shim path must already be resolved by the caller (exec.LookPath or
 // exec.Command have both). The rewrite is deliberately conservative: false is
 // returned unless the shim matches a shape this package understands and every
-// path it names exists. Callers keep their previous launch for a shim that is
-// not a batch file, does not match, or cannot be followed — that previous
-// launch (a ComSpec `/d /s /c` line or Go's default batch handling) still
-// reports the shim's own failures instead of this rewrite inventing new ones.
+// path it names exists. Command and CommandContext run a shim this function
+// declines through cmd.exe /d /s /c instead; a caller that wants to decide for
+// itself branches on the result.
 func ResolveBatchShim(shim string, args []string) ([]string, bool) {
 	if !isBatchFile(shim) {
 		return nil, false
@@ -45,17 +45,39 @@ func ResolveBatchShim(shim string, args []string) ([]string, bool) {
 	return shimTargetArgv(shim, args)
 }
 
-// rewriteBatchShim starts a command whose program resolved to a Windows batch
-// shim as the shim's own target instead, rewriting cmd in place. exec.Command
-// has already resolved cmd.Path, so no extra PATH scan is spent on launches
-// that are not shims.
+// rewriteBatchShim launches a command whose program resolved to a Windows batch
+// shim: as the shim's own target when the shim can be followed (see
+// ResolveBatchShim), or through cmd.exe /d /s /c with quoted tokens otherwise.
+// Go's default batch launch, which a plain exec.Command would use, cannot carry
+// a quoted shim path together with a quoted argument (`C:\Program
+// Files\nodejs\npm.cmd` would fail as `'C:\Program' is not recognized`), and it
+// drops /d, so cmd AutoRun scripts would run again.
+//
+// exec.Command has already resolved cmd.Path, so no extra PATH scan is spent on
+// launches that are not shims. The cmd.exe launch carries the whole command
+// line in SysProcAttr.CmdLine: callers that edit cmd.Args after construction
+// get the rewritten argv for an unwrapped shim, but not for this fallback.
 func rewriteBatchShim(cmd *exec.Cmd) {
-	argv, ok := ResolveBatchShim(cmd.Path, cmd.Args[1:])
-	if !ok {
+	if !isBatchFile(cmd.Path) {
 		return
 	}
-	cmd.Path = argv[0]
-	cmd.Args = argv
+	shim := cmd.Path
+	if argv, ok := shimTargetArgv(shim, cmd.Args[1:]); ok {
+		cmd.Path = argv[0]
+		cmd.Args = argv
+		return
+	}
+	args := cmd.Args[1:]
+	shell := strings.TrimSpace(os.Getenv("ComSpec"))
+	if shell == "" {
+		shell = "cmd.exe"
+	}
+	cmd.Path = shell
+	cmd.Args = nil
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(shim, args) + `"`
 }
 
 func isBatchFile(path string) bool {
@@ -65,6 +87,23 @@ func isBatchFile(path string) bool {
 	default:
 		return false
 	}
+}
+
+// cmd.exe uses different quoting rules from native Windows executables. The
+// outer quotes are consumed by /s /c; each token remains quoted for paths and
+// arguments containing spaces. Doubling embedded quotes preserves them for the
+// batch shim instead of allowing them to terminate the command early.
+func windowsBatchCommandLine(executable string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, quoteWindowsBatchArg(executable))
+	for _, arg := range args {
+		parts = append(parts, quoteWindowsBatchArg(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func quoteWindowsBatchArg(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 // shimTargetArgv returns the argv that runs shim's own target, or false when the

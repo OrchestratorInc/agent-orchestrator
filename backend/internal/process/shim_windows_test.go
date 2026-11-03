@@ -88,7 +88,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_
 // nodeCmdShim is Node's own bundled npm.cmd, trimmed to the load-bearing lines:
 // it assigns NODE_EXE/NPM_CLI_JS and forwards through them. This package can
 // neither follow the unexpanded variables nor carry the assignments into a
-// direct launch, so the shim keeps its caller's ComSpec /d /s /c launch.
+// direct launch, so the shim keeps the ComSpec /d /s /c launch instead.
 const nodeCmdShim = `@ECHO off
 SETLOCAL
 
@@ -323,20 +323,26 @@ func TestCommandContextStartsShimTargetWithExactArgv(t *testing.T) {
 	}
 }
 
-// TestCommandContextKeepsUnfamiliarShim verifies the fallback: a shim this
-// package cannot parse is left untouched, so the launch is the one this package
-// had before the unwrap attempt — Go's default, which hands the batch file to
-// cmd.exe itself (hence cmd.Path still being the shim). Plain arguments (no
-// quotes) survive that launch. A quoted shim path together with a quoted
-// argument does not, which is why systemexec and previewserver keep their
-// explicit ComSpec /d /s /c launch for shims this package declines.
-func TestCommandContextKeepsUnfamiliarShim(t *testing.T) {
-	dir := t.TempDir()
-	shim := writeShimFixture(t, dir, "tool.cmd", "@echo off\r\necho %~1\r\n")
+// TestCommandContextRunsDeclinedShimThroughCmdExe verifies the fallback: a shim
+// this package cannot parse still runs, through cmd.exe /d /s /c, and a quoted
+// argument survives it. Go's default batch launch would fail this exact case —
+// a quoted shim path together with a quoted argument — with
+// `'...\ao' is not recognized`, so both the shim directory and the shim name
+// contain spaces.
+func TestCommandContextRunsDeclinedShimThroughCmdExe(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ao tools")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shim := writeShimFixture(t, dir, "echo tool.cmd", "@echo off\r\necho %~1\r\n")
 
 	cmd := CommandContext(context.Background(), shim, "argument with spaces")
-	if cmd.Path != shim {
-		t.Fatalf("cmd.Path = %q, want the shim kept for an unfamiliar launch line", cmd.Path)
+	if cmd.SysProcAttr == nil || !strings.HasPrefix(cmd.SysProcAttr.CmdLine, `/d /s /c "`) {
+		got := ""
+		if cmd.SysProcAttr != nil {
+			got = cmd.SysProcAttr.CmdLine
+		}
+		t.Fatalf("SysProcAttr.CmdLine = %q, want the /d /s /c launch", got)
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -65,10 +65,10 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\previ
 	}
 }
 
-// A shim this package cannot follow keeps its previous ComSpec /d /s /c launch,
-// which carries a quoted shim path together with a quoted argument. The spaced
-// shim name is load-bearing: Go's default batch launch would fail this exact
-// case with `'...\preview' is not recognized`.
+// A shim process cannot unwrap keeps its ComSpec /d /s /c launch, which carries
+// a quoted shim path together with a quoted argument. The spaced shim name is
+// load-bearing: Go's default batch launch would fail this exact case with
+// `'...\preview' is not recognized`.
 func TestPreviewCommandRunsWindowsBatchShim(t *testing.T) {
 	dir := t.TempDir()
 	shim := filepath.Join(dir, "preview helper.cmd")

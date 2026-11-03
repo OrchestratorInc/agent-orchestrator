@@ -12,10 +12,10 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// A shim this package cannot follow keeps its previous ComSpec /d /s /c launch,
-// which carries a quoted shim path together with a quoted argument. The spaced
-// shim name is load-bearing: Go's default batch launch would fail this exact
-// case with `'...\agent' is not recognized`.
+// A shim process cannot unwrap keeps its ComSpec /d /s /c launch, which carries
+// a quoted shim path together with a quoted argument. The spaced shim name is
+// load-bearing: Go's default batch launch would fail this exact case with
+// `'...\agent' is not recognized`.
 func TestCommandContextRunsBatchShim(t *testing.T) {
 	dir := t.TempDir()
 	shim := filepath.Join(dir, "agent tool.cmd")
