@@ -102,6 +102,81 @@ func TestWorkspaceManifestIndexRejectsSnapshotInvalidatedDuringRefresh(t *testin
 	}
 }
 
+// invalidatingStore runs onListPRs inside a manifest computation, which reads
+// the session's PRs once per run, and counts those runs.
+type invalidatingStore struct {
+	*fakeStore
+	prReads   int
+	onListPRs func()
+}
+
+func (s *invalidatingStore) ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+	s.prReads++
+	if hook := s.onListPRs; hook != nil {
+		s.onListPRs = nil
+		hook()
+	}
+	return s.fakeStore.ListPRsBySession(ctx, id)
+}
+
+// The workspace stream reconciles as it connects, the moment Files first reads.
+func TestWorkspaceManifestReaderServesSnapshotInvalidatedDuringItsRead(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	writeWorkspaceFile(t, repo, "README.md", "hello\nchanged\n")
+	st := &invalidatingStore{fakeStore: newFakeStore()}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	svc := NewWithDeps(Deps{Store: st})
+	var pending []func()
+	svc.runBackground = func(work func()) { pending = append(pending, work) }
+	st.onListPRs = func() { svc.InvalidateWorkspaceCache("ao-1") }
+
+	read, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.prReads != 1 {
+		t.Fatalf("reader computed the manifest %d times, want once", st.prReads)
+	}
+	if !read.Stale || !read.Refreshing || len(read.Files) == 0 {
+		t.Fatalf("interrupted read = %+v, want a complete snapshot marked stale and refreshing", read)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("background refreshes = %d, want 1", len(pending))
+	}
+	pending[0]()
+	if st.prReads != 2 {
+		t.Fatalf("background refresh computed the manifest %d times, want once more", st.prReads-1)
+	}
+	fresh, err := svc.GetWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Stale || fresh.Refreshing || fresh.WorkspaceVersion != read.WorkspaceVersion {
+		t.Fatalf("refreshed manifest = %+v, want fresh at version %q", fresh, read.WorkspaceVersion)
+	}
+}
+
+// The stream may only report ready with a snapshot no invalidation interrupted.
+func TestWorkspaceManifestRefreshRecomputesSnapshotInvalidatedDuringItsRead(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	st := &invalidatingStore{fakeStore: newFakeStore()}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{WorkspacePath: repo}}
+	svc := NewWithDeps(Deps{Store: st})
+	svc.runBackground = func(func()) {}
+	st.onListPRs = func() {
+		writeWorkspaceFile(t, repo, "README.md", "hello\nedited during the read\n")
+		svc.InvalidateWorkspaceCache("ao-1")
+	}
+
+	refreshed, err := svc.RefreshWorkspaceManifest(t.Context(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.prReads != 2 || refreshed.Stale || refreshed.Refreshing || len(refreshed.Files) == 0 {
+		t.Fatalf("refresh after %d reads = %+v, want a second, fresh read that includes the edit", st.prReads, refreshed)
+	}
+}
+
 func TestWorkspaceManifestRefreshesAfterUnwatchedEdits(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	st := newFakeStore()

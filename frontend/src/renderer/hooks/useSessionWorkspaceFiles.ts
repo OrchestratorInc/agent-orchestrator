@@ -980,22 +980,28 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 			return state?.data !== undefined && !state.isInvalidated;
 		})) return;
 		lastPrefetchedReview.set(cacheKey, token);
-		const responses = await Promise.all(batches.map((batch) => queryClient.fetchQuery({
-			...sessionWorkspaceDiffsQueryOptions({
-				contextLines: REVIEW_CONTEXT_LINES,
-				paths: batch.map((file) => file.path),
-				scope: target.scope,
-				sessionId,
-				workspaceVersion: target.workspaceVersion,
-				commitShas: target.commitShas,
-				view: target.view,
-				hostId,
-			}),
-			// A prefetch never retries, as fetchQuery's own default.
-			retry: false,
-			staleTime: Infinity,
-			gcTime: 30 * 60 * 1000,
-		})));
+		// A speculative read takes one connection at a time. The renderer has
+		// few to the daemon (its event streams hold most), and the view the user
+		// opens next must not queue behind a guess.
+		const responses: WorkspaceDiffsResponse[] = [];
+		for (const batch of batches) {
+			responses.push(await queryClient.fetchQuery({
+				...sessionWorkspaceDiffsQueryOptions({
+					contextLines: REVIEW_CONTEXT_LINES,
+					paths: batch.map((file) => file.path),
+					scope: target.scope,
+					sessionId,
+					workspaceVersion: target.workspaceVersion,
+					commitShas: target.commitShas,
+					view: target.view,
+					hostId,
+				}),
+				// A prefetch never retries, as fetchQuery's own default.
+				retry: false,
+				staleTime: Infinity,
+				gcTime: 30 * 60 * 1000,
+			}));
+		}
 
 		const filesByPath = new Map(files.map((file) => [file.path, file]));
 		const endOfFile: { file: WorkspaceFileSummary; identity: string }[] = [];
@@ -1015,25 +1021,29 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 			}
 		}
 
-		await Promise.all(endOfFile.map(async ({ file, identity }) => {
-			const queryKey = filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, file.path, file.fileFingerprint ?? "", identity, hostId);
-			const cached = queryClient.getQueryState(queryKey);
-			if (cached?.data !== undefined && !cached.isInvalidated) return;
-			try {
-				const [before, after] = await Promise.all([
-					fetchWorkspaceFileRevision({ commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, side: "before", workspaceVersion: target.workspaceVersion, hostId }),
-					fetchWorkspaceFileRevision({ commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, side: "after", workspaceVersion: target.workspaceVersion, hostId }),
-				]);
-				if (before.binary || after.binary || before.truncated || after.truncated) return;
-				const loaded = {
-					oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision },
-					newFile: { name: file.path, contents: after.content, cacheKey: after.revision },
-				};
-				await queryClient.prefetchQuery({ queryKey, queryFn: () => loaded, retry: false, staleTime: Infinity, gcTime: 30 * 60 * 1000 });
-			} catch {
-				// Leave the cache empty so the review pane can fetch this file itself.
-			}
-		}));
+		// The read is the review pane's own query, so a pane that opens meanwhile
+		// joins it instead of sending the same pair again. A failed read leaves
+		// no data, and the pane reads that file itself when it mounts.
+		for (const { file, identity } of endOfFile) {
+			await queryClient.prefetchQuery({
+				queryKey: filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, file.path, file.fileFingerprint ?? "", identity, hostId),
+				queryFn: async ({ signal }) => {
+					const read = { commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope: target.scope, workspaceVersion: target.workspaceVersion, hostId, signal };
+					const [before, after] = await Promise.all([
+						fetchWorkspaceFileRevision({ ...read, side: "before" }),
+						fetchWorkspaceFileRevision({ ...read, side: "after" }),
+					]);
+					if (before.binary || after.binary || before.truncated || after.truncated) throw new Error(appI18n.t("files.error.loadFile"));
+					return {
+						oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision },
+						newFile: { name: file.path, contents: after.content, cacheKey: after.revision },
+					};
+				},
+				retry: false,
+				staleTime: Infinity,
+				gcTime: 30 * 60 * 1000,
+			});
+		}
 	} catch {
 		const cacheKey = sessionUiKey(sessionId, hostId);
 		if (lastPrefetchedReview.get(cacheKey) === token) lastPrefetchedReview.delete(cacheKey);

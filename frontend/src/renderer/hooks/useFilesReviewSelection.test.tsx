@@ -284,11 +284,56 @@ describe("useFilesReviewSelection", () => {
 		await waitFor(() => expect(result.current.target).toMatchObject({ state: "ready", commitShas: [SHA("a"), SHA("b")] }));
 
 		rerender({ sessionId: other, manifest: manifest() });
-		// Never reuse the old session's ticks while resolving the new snapshot tip.
-  expect(result.current.target).toMatchObject({state:"pending",commitShas:undefined});
-  await waitFor(()=>expect(result.current.target).toMatchObject({state:"ready",commitShas:undefined,files:[file("c.ts",5,2)]}));
+		// Never reuse the old session's ticks. Its whole range lists its files in the manifest at once.
+		expect(result.current.target).toMatchObject({ state: "ready", commitShas: undefined, files: [file("c.ts", 5, 2)] });
 		await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
 		expect(selectionRequests().map((call) => call[1]?.params.path.sessionId)).toEqual([SESSION]);
+	});
+
+	it("reviews the checked-out branch's whole range from the manifest without waiting for its history", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/branches")) return { data: branches };
+			if (path.endsWith("/workspace/history")) return new Promise(() => {});
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "commits", shas: [] } });
+		const { result } = renderSelection(manifest());
+
+		expect(result.current.target).toMatchObject({ state: "ready", scope: "committed", commitShas: undefined, files: [file("c.ts", 5, 2)] });
+		// Its snapshot source still waits for the tip the history lists.
+		expect(result.current.sourcePending).toBe(true);
+		await waitFor(() => expect(requests("/workspace/history")).toHaveLength(1));
+	});
+
+	it("browses the whole range's snapshot unfenced when its history fails", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/branches")) return { data: branches };
+			if (path.endsWith("/workspace/history")) return errorResponse("WORKSPACE_HISTORY_UNAVAILABLE", 400);
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "commits", shas: [] } });
+		const { result } = renderSelection(manifest());
+
+		await waitFor(() => expect(result.current.sourcePending).toBe(false));
+		expect(result.current.target).toMatchObject({ state: "ready", files: [file("c.ts", 5, 2)] });
+	});
+
+	it("waits for the history before reviewing a ticked commit", async () => {
+		let resolveHistory: (value: { data: WorkspaceHistoryResponse }) => void = () => {};
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/branches")) return { data: branches };
+			if (path.endsWith("/workspace/history")) return new Promise((resolve) => { resolveHistory = resolve; });
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		useUiStore.getState().setFilesSelection(SESSION, { branch: CHECKED_OUT, changes: { kind: "commits", shas: [SHA("b")] } });
+		const { result } = renderSelection(manifest());
+
+		// The commit's files come from the history, which also drops SHAs it no longer lists.
+		expect(result.current.target).toMatchObject({ state: "pending", files: undefined });
+		await waitFor(() => expect(requests("/workspace/history")).toHaveLength(1));
+		act(() => resolveHistory({ data: checkedOutHistory }));
+		await waitFor(() => expect(result.current.target).toMatchObject({ state: "ready", sha: SHA("b"), files: [file("b.ts", 2, 1)] }));
+		expect(result.current.sourcePending).toBe(false);
 	});
 
 	it("offers a workspace project only Uncommitted, the one scope its manifest fills", async () => {
