@@ -245,9 +245,10 @@ func TestQwenScanGroupsNativeIDAcrossProjects(t *testing.T) {
 func qwenLinkedRecord(id, parent, kind, text string) map[string]any {
 	provenance := kind
 	role := kind
-	if kind == "user" {
+	switch kind {
+	case "user":
 		provenance = "real_user"
-	} else if kind == "assistant" {
+	case "assistant":
 		provenance, role = "assistant_output", "model"
 	}
 	r := map[string]any{"uuid": id, "parentUuid": parent, "type": kind, "provenance": provenance, "timestamp": time.Now()}
