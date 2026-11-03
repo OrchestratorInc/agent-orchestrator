@@ -432,8 +432,13 @@ export function sessionNeedsAttention(session: WorkspaceSession): boolean {
 export { attentionZone, attentionZoneLabel, attentionZoneOrder } from "../lib/session-presentation";
 export type { AttentionZone } from "../lib/session-presentation";
 
-/** How one thing reached the person: who shared it and, for a team share, which team. */
-export type WorkspaceShareSource = { byName?: string; viaTeamName?: string; grantId?: string };
+/**
+ * How one thing reached the person: who shared it and, for a team share,
+ * which team. `source` is how: a link they opened themselves, a direct
+ * share, or a team (absent from a control plane from before teams, which
+ * had only links).
+ */
+export type WorkspaceShareSource = { byName?: string; viaTeamName?: string; grantId?: string; source?: "link" | "direct" | "team" };
 
 /**
  * A cloud project someone in another organization shared with this person:

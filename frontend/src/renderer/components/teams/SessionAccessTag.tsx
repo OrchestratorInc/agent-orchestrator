@@ -3,15 +3,16 @@ import { useTranslation } from "react-i18next";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import type { WorkspaceSession } from "../../types/workspace";
 
-type TaggedSession = Pick<WorkspaceSession, "id" | "cloud">;
+type TaggedSession = Pick<WorkspaceSession, "id" | "cloud" | "isTerminated">;
 
 /**
  * On a session someone shared with this person: what they can do in it and,
  * when it came through a team, which one. "Watch · via Platform". Nothing on
- * the person's own sessions.
+ * the person's own sessions, nor on one that has ended (it has no live state
+ * to read the role from, like the other live subscribers).
  */
 export function SessionAccessTag({ session }: { session: TaggedSession }) {
-	if (session.cloud?.shared !== true) return null;
+	if (session.cloud?.shared !== true || session.isTerminated === true) return null;
 	return <SharedSessionAccessTag session={session} />;
 }
 
@@ -27,7 +28,7 @@ function SharedSessionAccessTag({ session }: { session: TaggedSession }) {
 	const label = via ? t("teams.accessVia", { access: level, team: via }) : level;
 	return (
 		<span
-			className="mx-1 inline-flex min-w-0 max-w-56 shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
+			className="mx-1 inline-flex min-w-0 max-w-56 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
 			title={label}
 			data-session-access-tag={role}
 		>

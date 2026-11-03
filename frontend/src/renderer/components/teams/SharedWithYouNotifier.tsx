@@ -47,7 +47,8 @@ function writeSeen(storageKey: string, keys: Iterable<string>) {
 /**
  * Says once when someone shares a session or project with this person while
  * AO is open, with a way to open it. The first list after signing in is
- * remembered silently, so nothing old is announced.
+ * remembered silently, so nothing old is announced, and a link the person
+ * redeemed themselves is never announced.
  */
 export function SharedWithYouNotifier() {
 	const { t } = useTranslation();
@@ -70,7 +71,10 @@ export function SharedWithYouNotifier() {
 			}
 			const fresh = arrivals.filter((arrival) => !seen.has(arrival.key));
 			if (fresh.length === 0) return;
-			for (const arrival of fresh.slice(0, MAX_TOASTS)) {
+			// A link the person opened themselves isn't news to them; only a
+			// share someone else made (directly or through a team) is announced.
+			const announced = fresh.filter((arrival) => arrival.source.source === "direct" || arrival.source.source === "team");
+			for (const arrival of announced.slice(0, MAX_TOASTS)) {
 				const session = arrival.sessionId ? arrival.workspace.sessions.find((candidate) => candidate.id === arrival.sessionId) : undefined;
 				const target = session ?? arrival.workspace.sessions.find((candidate) => candidate.kind === "orchestrator") ?? arrival.workspace.sessions[0];
 				const name = arrival.source.byName || t("teams.someone");

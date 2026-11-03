@@ -33,6 +33,7 @@ import {
 	workerSessions,
 	type WorkspaceSession,
 	type WorkspaceShare,
+	type WorkspaceShareSource,
 	type WorkspaceSummary,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -705,20 +706,16 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	return { ...list, data };
 }
 
-/**
- * Cloud projects and sessions people in other organizations shared with this
- * person, as workspaces beside their own. A project shared both whole and
- * one session at a time shows once.
- */
-/** Who shared a project and its sessions, and through which team. */
+/** Who shared a project and its sessions, how, and through which team. */
 export function workspaceShareOf(items: CloudCpSharedProject[]): WorkspaceShare {
-	const source = (item: CloudCpSharedProject) => ({
+	const source = (item: CloudCpSharedProject): WorkspaceShareSource => ({
 		byName: item.sharedByName || undefined,
 		viaTeamName: item.viaTeamName || undefined,
 		grantId: item.grant.id,
+		...(item.source ? { source: item.source } : {}),
 	});
 	const whole = items.find((item) => !item.sessionId);
-	const sessions: Record<string, ReturnType<typeof source>> = {};
+	const sessions: Record<string, WorkspaceShareSource> = {};
 	for (const item of items) {
 		if (item.sessionId) sessions[item.sessionId] = source(item);
 	}
@@ -731,6 +728,21 @@ export function workspaceShareOf(items: CloudCpSharedProject[]): WorkspaceShare 
 	};
 }
 
+/**
+ * The team a shared session reaches the person through: its own share's
+ * team when it was shared on its own (none when shared directly), else the
+ * whole project's.
+ */
+export function sharedSessionVia(share: WorkspaceShare, sessionId: string): string | undefined {
+	const own = share.sessions?.[sessionId];
+	return own ? own.viaTeamName : share.wholeProject?.viaTeamName;
+}
+
+/**
+ * Cloud projects and sessions people in other organizations shared with this
+ * person, as workspaces beside their own. A project shared both whole and
+ * one session at a time shows once.
+ */
 export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	return useQuery({
@@ -755,7 +767,7 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 					...workspace,
 					sessions: workspace.sessions.map((session) => {
 						if (!session.cloud) return session;
-						const via = share.sessions?.[session.id]?.viaTeamName ?? share.wholeProject?.viaTeamName;
+						const via = sharedSessionVia(share, session.id);
 						return { ...session, cloud: { ...session.cloud, shared: true, ...(via ? { sharedVia: via } : {}) } };
 					}),
 					shared: share,
