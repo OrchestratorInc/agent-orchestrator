@@ -1118,6 +1118,7 @@ export function PreviewChat({
 	/** A new id replays the exchange: the message rises in, then the reply streams. */
 	runId?: number;
 }) {
+	const { t } = useTranslation();
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<SessionTopbar title={title} provider={provider} actions={<OrchestratorTopbarActions />} />
@@ -1145,7 +1146,7 @@ export function PreviewChat({
 											<div className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 pt-3 pb-3">
 												<div className="relative max-h-40">
 													<div className="py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground min-h-[4.5rem] whitespace-pre-wrap break-words">
-														<span>Message the agent</span>
+														<span>{t("sideChat.messageTheAgent")}</span>
 													</div>
 												</div>
 												<ComposerToolbar agent={provider ? composerAgent(provider) : undefined} contextMeter={Boolean(reply)} permission="Auto" />
