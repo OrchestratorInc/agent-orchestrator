@@ -30,16 +30,16 @@ var mimoCodeNativeID = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
 func mimoCodeRoot(home string) string {
 	// Custom database names need a durable filename binding before import can
 	// safely resume them. Never offer candidates from another database.
-	if path := strings.TrimSpace(os.Getenv("MIMOCODE_DB")); len(path) > 0 && path != "mimocode.db" {
+	if path := strings.TrimSpace(os.Getenv("MIMOCODE_DB")); path != "" && path != "mimocode.db" {
 		return ""
 	}
-	if dir := strings.TrimSpace(os.Getenv("MIMOCODE_HOME")); len(dir) > 0 {
+	if dir := strings.TrimSpace(os.Getenv("MIMOCODE_HOME")); dir != "" {
 		return filepath.Join(dir, "data")
 	}
-	if dir := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); len(dir) > 0 {
+	if dir := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dir != "" {
 		return filepath.Join(dir, "mimocode")
 	}
-	if len(home) == 0 {
+	if home == "" {
 		return ""
 	}
 	return filepath.Join(home, ".local", "share", "mimocode")
@@ -160,7 +160,7 @@ func mimoCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 		if dropped[messageID] {
 			continue
 		}
-		if existing := textByMessage[messageID]; len(existing) > 0 {
+		if existing := textByMessage[messageID]; existing != "" {
 			textByMessage[messageID] = existing + "\n\n" + chunk
 			held += len("\n\n" + chunk)
 		} else {
@@ -284,7 +284,7 @@ func readMiMoCodeTranscript(ctx context.Context, root string, paths ...string) (
 	if !hasUser {
 		return t, errors.New("no readable native conversation")
 	}
-	if len(t.cwd) > 0 && !filepath.IsAbs(t.cwd) {
+	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
 		return t, errors.New("transcript working directory must be absolute")
 	}
 	if t.last.IsZero() && timeUpdated.Valid {
@@ -298,7 +298,7 @@ func readMiMoCodeTranscript(ctx context.Context, root string, paths ...string) (
 	// MiMoCode titles an untitled chat "New session - <ISO>"; treat that
 	// placeholder as no title and fall back to the opening prompt.
 	t.title = strings.TrimSpace(title)
-	if len(t.title) == 0 || strings.HasPrefix(t.title, "New session - ") {
+	if t.title == "" || strings.HasPrefix(t.title, "New session - ") {
 		t.title = ""
 		for _, m := range t.messages {
 			if m.Role == domain.MessageRoleUser {

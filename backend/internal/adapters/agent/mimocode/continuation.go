@@ -45,17 +45,17 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return strings.TrimSpace(os.Getenv(key))
 	}
-	if path := lookup("MIMOCODE_DB"); len(path) > 0 && path != "mimocode.db" {
+	if path := lookup("MIMOCODE_DB"); path != "" && path != "mimocode.db" {
 		return "", errors.New("mimo-code custom database binding requires explicit import override")
 	}
-	if dir := lookup("MIMOCODE_HOME"); len(dir) > 0 {
+	if dir := lookup("MIMOCODE_HOME"); dir != "" {
 		return filepath.Join(dir, "data"), nil
 	}
-	if dataHome := lookup("XDG_DATA_HOME"); len(dataHome) > 0 {
+	if dataHome := lookup("XDG_DATA_HOME"); dataHome != "" {
 		return filepath.Join(dataHome, "mimocode"), nil
 	}
 	home := lookup("HOME")
-	if len(home) == 0 {
+	if home == "" {
 		var err error
 		if home, err = os.UserHomeDir(); err != nil {
 			return "", fmt.Errorf("mimocode: resolve data dir: %w", err)
@@ -71,7 +71,7 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	configDir := strings.TrimSpace(ref.ConfigDir)
 	sessionID := strings.TrimSpace(ref.NativeSessionID)
-	if len(configDir) == 0 || len(sessionID) == 0 {
+	if configDir == "" || sessionID == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
 	}
 	if !mimoCodeSessionID.MatchString(sessionID) {
