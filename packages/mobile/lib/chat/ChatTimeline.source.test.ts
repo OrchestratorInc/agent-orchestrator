@@ -34,6 +34,14 @@ describe("chat turn summary styling", () => {
 	});
 });
 
+describe("chat under the clear header", () => {
+	it("pads Android's list below the header, which iOS insets for itself", () => {
+		expect(source).toContain('const headerPad = Platform.OS === "ios" ? 0 : underHeader;');
+		expect(source).toContain("paddingTop: space.md + headerPad + topInset");
+		expect(source).toContain('contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}');
+	});
+});
+
 describe("streaming response layout", () => {
 	it("keeps the live cursor inside the response instead of adding a new block", () => {
 		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');

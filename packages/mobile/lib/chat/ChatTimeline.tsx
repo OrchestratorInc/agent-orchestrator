@@ -201,9 +201,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
 	const groups = plan.groups;
-	const contentStyle = useMemo(() => topInset || bottomInset
-		? [styles.content, { paddingTop: space.md + topInset, paddingBottom: space.xxxl + bottomInset }]
-		: styles.content, [bottomInset, styles.content, topInset]);
+	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
+	// Android has no such inset, so its first message sat behind the header's frost.
+	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
+	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: space.xxxl + bottomInset }]
+		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
 	const nextEdits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
