@@ -16,7 +16,7 @@ func writeCodewhaleImport(t *testing.T, root, cwd string) string {
 	const id = "55555555-5555-4555-8555-555555555555"
 	body, err := json.Marshal(map[string]any{
 		"schema_version": 1,
-		"metadata": map[string]any{"id": id, "workspace": cwd, "title": "Synthetic Codewhale chat", "model": "synthetic-model", "created_at": "2026-11-03T00:00:00Z", "updated_at": "2026-11-03T00:00:00Z", "message_count": 2, "total_tokens": 0},
+		"metadata":       map[string]any{"id": id, "workspace": cwd, "title": "Synthetic Codewhale chat", "model": "synthetic-model", "created_at": "2026-11-03T00:00:00Z", "updated_at": "2026-11-03T00:00:00Z", "message_count": 2, "total_tokens": 0},
 		"messages": []any{
 			map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "explain the synthetic whale"}}},
 			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "synthetic answer"}, map[string]any{"type": "thinking", "text": "private thought"}}},
