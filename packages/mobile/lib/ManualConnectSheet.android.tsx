@@ -84,6 +84,16 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 					onPress={() => void form.connect()}
 					style={styles.connect}
 				/>
+				{props.onScanInstead ? (
+					<Button
+						title="Connect with QR code"
+						variant="ghost"
+						icon="qrScanner"
+						disabled={form.busy}
+						onPress={props.onScanInstead}
+						style={styles.scanInstead}
+					/>
+				) : null}
 				{failure?.showLocalNetworkHint ? (
 					<View style={styles.hint}>
 						<Text style={styles.hintText}>{LOCAL_NETWORK_HINT}</Text>
@@ -102,4 +112,5 @@ const makeStyles = (t: Theme) =>
 		hint: { gap: space.sm, marginTop: space.md },
 		hintText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		connect: { marginTop: space.lg },
+		scanInstead: { alignSelf: "center", marginTop: space.xs },
 	});

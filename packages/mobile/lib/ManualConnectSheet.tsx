@@ -1,5 +1,6 @@
 import { Host } from "@expo/ui";
 import { Button, Form, Section } from "@expo/ui/swift-ui";
+import { disabled } from "@expo/ui/swift-ui/modifiers";
 import { Stack } from "expo-router";
 import { useMemo, useRef } from "react";
 import { Linking } from "react-native";
@@ -98,6 +99,11 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 						/>
 						<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />
 					</Section>
+					{props.onScanInstead ? (
+						<Section modifiers={sectionModifiers(t)}>
+							<Button label="Connect with QR code" systemImage="qrcode.viewfinder" onPress={props.onScanInstead} modifiers={busy ? [disabled(true)] : undefined} />
+						</Section>
+					) : null}
 					{failure?.showLocalNetworkHint ? (
 						<Section footer={<FormFooter>{LOCAL_NETWORK_HINT}</FormFooter>} modifiers={sectionModifiers(t)}>
 							<Button label="Open settings" systemImage="gearshape" onPress={() => void Linking.openSettings()} />

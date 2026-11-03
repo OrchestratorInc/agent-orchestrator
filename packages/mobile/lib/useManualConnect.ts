@@ -21,6 +21,8 @@ export type ManualConnectProps = {
 	onBusyChange?: (busy: boolean) => void;
 	editingHost?: Host;
 	editingEndpointIndex?: number;
+	/** Back to the scanner this form was opened from, in place of the bar's back button. */
+	onScanInstead?: () => void;
 };
 
 /**

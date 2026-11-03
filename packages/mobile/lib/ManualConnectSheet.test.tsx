@@ -244,6 +244,15 @@ describe("ManualConnectSheet on Android", () => {
 		expect(Object.assign({}, ...[scroll.props.contentContainerStyle].flat()).paddingBottom).toBeGreaterThanOrEqual(24);
 	});
 
+	// No back button on this page: the way back names where it goes.
+	it("goes back to the scanner from Connect with QR code", async () => {
+		const onScanInstead = vi.fn();
+		await renderAndroid({ onScanInstead });
+		const scan = renderer!.root.findAllByType("RNButton" as never).find((button) => button.props.title === "Connect with QR code")!;
+		act(() => scan.props.onPress());
+		expect(onScanInstead).toHaveBeenCalledOnce();
+	});
+
 	it("connects from the password's Go key once the form is complete", async () => {
 		await renderAndroid();
 		const go = () => field("manual-connect-password").props.keyboardActions.onGo();

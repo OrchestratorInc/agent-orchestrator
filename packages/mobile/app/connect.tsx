@@ -21,16 +21,17 @@ export default function ConnectRoute() {
 	const [editingHost, setEditingHost] = useState<Host | null | undefined>(hostId === undefined ? null : undefined);
 	const [busy, setBusy] = useState(false);
 	// The page's bar carries the title, known from the link before the machine
-	// loads, and the stack's back. iOS's form adds its confirm on the right. A
-	// connect that has started can't be called back, so while one runs the back
-	// button and the edge swipe are held.
+	// loads, and no back button: the way back is the form's own "Connect with
+	// QR code", which says where it goes. iOS's form adds its confirm on the
+	// right. A connect that has started can't be called back, so while one runs
+	// the edge swipe is held, and the form disables its way back.
 	const header = useMemo(() => (
-		<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection" }} />
+		<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection", headerBackVisible: false }} />
 	), [hostId]);
 	useEffect(() => {
 		if (!busy) return;
-		navigation.setOptions({ gestureEnabled: false, headerBackVisible: false });
-		return () => navigation.setOptions({ gestureEnabled: true, headerBackVisible: true });
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
 	}, [busy, navigation]);
 
 	useEffect(() => () => releaseSheetResult(resultKey), [resultKey]);
@@ -54,6 +55,7 @@ export default function ConnectRoute() {
 				editingHost={editingHost ?? undefined}
 				editingEndpointIndex={activeEndpointIndex < 0 ? 0 : activeEndpointIndex}
 				onBusyChange={setBusy}
+				onScanInstead={() => backOr(router)}
 				onConnected={() => {
 					void loadAccount().then(async (account) => {
 						if (account) {

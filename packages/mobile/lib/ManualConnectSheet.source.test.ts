@@ -21,6 +21,6 @@ it("holds the page while connecting and closes it only while it is still on top"
 	const route = read("../app/connect.tsx");
 	expect(form).toContain("useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);");
 	expect(route).toContain("onBusyChange={setBusy}");
-	expect(route).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false, headerBackVisible: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true, headerBackVisible: true });\n\t}, [busy, navigation]);");
+	expect(route).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
 	expect(route).toContain("if (!navigation.isFocused()) return;\n\t\t\t\t\tbackOr(router);\n\t\t\t\t\tdone?.();");
 });
