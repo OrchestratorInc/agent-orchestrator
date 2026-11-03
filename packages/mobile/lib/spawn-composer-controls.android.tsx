@@ -162,7 +162,8 @@ export function SpawnComposerControls({
 											colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary }}
 											contentPadding={{ start: space.md, end: space.xs }}
 											enabled={!busy}
-											modifiers={[height(COMPOSER_DISC), testID("spawn-harness")]}
+											// The capsule shows the model alone; TalkBack hears the agent too, as VoiceOver does.
+											modifiers={[height(COMPOSER_DISC), testID("spawn-harness"), semantics({ contentDescription: agentTitle === harnessLabel ? harnessLabel : `${harnessLabel}, ${agentTitle}` })]}
 										>
 											<HarnessMark harness={harness} />
 											<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.sm, 0, space.xxs, 0)]}>

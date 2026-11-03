@@ -206,6 +206,14 @@ describe("Android spawn model", () => {
 		expect(text(trigger(await render(baseProps({ usesDefaultModel: false, modelSelection: "gpt-5", modelLabel: "GPT-5" })), "spawn-harness"))).toBe("GPT-5");
 	});
 
+	// The capsule shows the model alone; TalkBack hears the agent with it, as VoiceOver does.
+	it("names the capsule for TalkBack by its agent and the model it runs", async () => {
+		expect(modifier(trigger(await render(baseProps()), "spawn-harness"), "semantics")?.args).toEqual([{ contentDescription: "Codex" }]);
+		await act(async () => renderer?.unmount());
+		const named = { codex: { models: [], total: 0, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
+		expect(modifier(trigger(await render(baseProps({ agentModels: named })), "spawn-harness"), "semantics")?.args).toEqual([{ contentDescription: "Codex, GPT-6.1-Sol" }]);
+	});
+
 	// Each agent opens one level down onto its models, so an agent and its model
 	// are picked in one step.
 	it("nests each agent's models under it and picks both at once", async () => {

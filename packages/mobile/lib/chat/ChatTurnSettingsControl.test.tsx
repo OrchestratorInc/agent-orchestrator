@@ -25,7 +25,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
-	return { fillMaxWidth: record("fillMaxWidth"), height: record("height"), padding: record("padding"), testID: record("testID"), weight: record("weight") };
+	return { fillMaxWidth: record("fillMaxWidth"), height: record("height"), padding: record("padding"), semantics: record("semantics"), testID: record("testID"), weight: record("weight") };
 });
 vi.mock("../composeMenu.android", async () => {
 	const React = await import("react");
@@ -123,11 +123,12 @@ const pick = (id: string, index: number) => act(() => rows(id)[index].props.onCl
 describe("Android chat controls row", () => {
 	// The new task's row: the model's capsule, the effort's speedometer and the
 	// approval mode's shield, each opening the new task's Material 3 dropdown.
-	it("names the model on its capsule and lists the agent's models, and nothing else", () => {
+	it("names the model on its capsule, for TalkBack too, and lists the agent's models, then its other settings", () => {
 		render();
 		expect(trigger("chat-model").findByType("ComposeText" as never).props.children).toBe("Opus");
+		expect(trigger("chat-model").props.modifiers).toContainEqual({ modifier: "semantics", args: [{ contentDescription: "Model, Opus" }] });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"]]);
+		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
 		open("chat-model");
 		expect(menu("chat-model").props.expanded).toBe(true);
 	});
@@ -153,6 +154,31 @@ describe("Android chat controls row", () => {
 		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
 	});
 
+	// The M3 menu once listed models only, and with the settings sheet gone
+	// Android had no way to reach Fast mode or a provider's other settings.
+	it("toggles Fast mode from the model menu, ticked while it is on", () => {
+		const { onOption } = render({ options: [{ ...fast, currentBoolean: true }] });
+		const fastRow = () => rows("chat-model").find((row) => row.props.label === "Fast mode")!;
+		expect(fastRow().props.selected).toBe(true);
+		open("chat-model");
+		act(() => fastRow().props.onClick());
+		expect(onOption).toHaveBeenLastCalledWith("fast", { enabled: false });
+		expect(menu("chat-model").props.expanded).toBe(false);
+	});
+
+	it("opens a provider's choice setting onto its choices, titled with the current one", () => {
+		const verbosity: ChatConfigOption = { id: "verbosity", name: "Verbosity", type: "select", currentValue: "low", choices: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] };
+		const { onOption } = render({ options: [fast, verbosity] });
+		open("chat-model");
+		const setting = rows("chat-model").find((row) => row.props.label === "Verbosity: Low")!;
+		act(() => setting.props.onClick());
+		const submenu = renderer!.root.findAll((node) => node.type === ("DropdownMenu" as never)).find((node) => node.props.expanded && node.findAll((row) => row.type === ("MenuRow" as never) && row.props.label === "High").length && !node.findAll((row) => row.props.label === "Opus").length)!;
+		const choices = submenu.findAll((node) => node.type === ("MenuRow" as never)).filter((row) => row !== setting);
+		expect(choices.map((row) => [row.props.label, row.props.selected ? "on" : "off"])).toEqual([["Low", "on"], ["High", "off"]]);
+		act(() => choices[1].props.onClick());
+		expect(onOption).toHaveBeenLastCalledWith("verbosity", { value: "high" });
+	});
+
 	it("saves each choice to the setting it belongs to and closes its menu", () => {
 		const { onSettings, onOption } = render();
 		open("chat-model");
@@ -175,7 +201,7 @@ describe("Android chat controls row", () => {
 		const olderRows = () => older().findByType("DropdownMenuItems" as never).findAll((node) => node.type === ("MenuRow" as never));
 		const olderTrigger = () => older().findByType("DropdownMenuTrigger" as never).findByType("MenuRow" as never);
 		const top = rows("chat-model").filter((row) => !older().findAll((node) => node === row).length);
-		expect(top.map((row) => row.props.label)).toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
+		expect(top.map((row) => row.props.label)).toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Fast mode"]);
 		expect(olderTrigger().props.label).toBe("Older models");
 		expect(olderRows().map((row) => row.props.label)).toEqual(["Haiku 4.5", "Sonnet 5", "Opus 4.8"]);
 		open("chat-model");
