@@ -3707,6 +3707,47 @@ func (c *Controller) reportInteractionResolved(ctx context.Context, event string
 	c.reportActivity(ctx, domain.ActivityActive, event, now)
 }
 
+// LoginConfirmed settles a Chat session that a refused login left waiting on
+// the user, once a later reading of its account found the login working and
+// cleared the conversation's sign-in demand. The refusal reported
+// waiting_input (chat.account.reauth). Clearing the demand updates only the
+// conversation's account, so without this an idle chat keeps reading as
+// needing input until another turn starts.
+func (s *Service) LoginConfirmed(ctx context.Context, id domain.SessionID) {
+	controller, err := s.Controller(id)
+	if err != nil {
+		return
+	}
+	controller.settleConfirmedLogin(ctx, s.sessions)
+}
+
+func (c *Controller) settleConfirmedLogin(ctx context.Context, sessions SessionReader) {
+	// The dispatch lock orders this against Send: a turn dispatched first is
+	// visible below, and one dispatched after reports its own activity.
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.mu.Lock()
+	busy := c.pendingTurnID != "" || c.dispatchingTurnID != "" || c.state == ports.ChatControllerStopped
+	c.mu.Unlock()
+	if busy || sessions == nil {
+		return
+	}
+	rec, found, err := sessions.GetSession(ctx, c.sessionID)
+	if err != nil || !found || rec.Activity.State != domain.ActivityWaitingInput {
+		return
+	}
+	account, err := c.store.ConversationAccount(ctx, c.conversation.ID)
+	if err != nil || account == nil || account.ReauthRequiredAt != nil {
+		return
+	}
+	// An approval or question the provider is still waiting on keeps the
+	// session waiting on the user.
+	if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+		return
+	}
+	c.reportActivity(ctx, domain.ActivityIdle, "chat.account.reauth_cleared", c.now())
+}
+
 // applyThreadTitle records a title the provider reports for the thread and, when
 // it may, adopts it as the session's label.
 //

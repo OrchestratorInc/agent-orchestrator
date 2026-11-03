@@ -656,8 +656,13 @@ func Run(buildVersion string) error {
 				if err != nil || id != account.ID {
 					continue
 				}
-				if _, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC()); err != nil {
+				cleared, err := store.ConfirmConversationLogin(ctx, conversation.ConversationID, at, time.Now().UTC())
+				if err != nil {
 					log.Warn("clear chat sign-in demand", "conversation", conversation.ConversationID, "error", err)
+					continue
+				}
+				if cleared {
+					chatSvc.LoginConfirmed(ctx, conversation.SessionID)
 				}
 			}
 		}()
