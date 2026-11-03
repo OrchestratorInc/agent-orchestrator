@@ -549,7 +549,7 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
-const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
+const artifactNudgeReason = "Orchestrator does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
 	"in a chat session, use html_render."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
@@ -605,7 +605,7 @@ var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewer
 	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
 	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
 
-const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
+const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
 	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
 

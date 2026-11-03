@@ -106,11 +106,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (

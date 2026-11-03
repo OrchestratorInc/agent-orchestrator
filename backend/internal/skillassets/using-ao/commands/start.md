@@ -17,7 +17,7 @@ ao start [flags]
 ## Examples
 
 ```bash
-# Open the AO desktop app
+# Open the Orchestrator desktop app
 ao start
 ```
 

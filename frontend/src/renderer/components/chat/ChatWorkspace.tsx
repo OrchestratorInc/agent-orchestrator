@@ -2574,7 +2574,7 @@ function ControllerBanner({
 				{controller.state === "stopped" && waking ? (
 					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
 				) : restarting ? (
-					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
+					<span className="text-xs leading-snug text-muted-foreground">Orchestrator restarted. History is kept.</span>
 				) : controller.error ? (
 					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
 				) : null}

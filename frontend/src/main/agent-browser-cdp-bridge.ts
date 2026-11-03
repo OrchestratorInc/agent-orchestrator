@@ -97,7 +97,7 @@ export class AgentBrowserCDPBridge {
 
 	async close(): Promise<void> {
 		for (const sessionId of [...this.attached.keys()]) this.detachTarget(sessionId);
-		for (const socket of this.server.clients) socket.close(1001, "AO browser session closed");
+		for (const socket of this.server.clients) socket.close(1001, "Orchestrator browser session closed");
 		await new Promise<void>((resolve) => this.server.close(() => resolve()));
 		this.physical.clear();
 		this.connections.clear();
@@ -189,7 +189,7 @@ export class AgentBrowserCDPBridge {
 					protocolVersion: "1.3",
 					product: `Chrome/${process.versions.chrome ?? "0"}`,
 					revision: "",
-					userAgent: "AO agent-browser bridge",
+					userAgent: "Orchestrator agent-browser bridge",
 					jsVersion: process.versions.v8 ?? "",
 				};
 			case "Target.setDiscoverTargets": {
@@ -272,7 +272,7 @@ export class AgentBrowserCDPBridge {
 			case "Schema.getDomains":
 				return { domains: [] };
 			case "Browser.close":
-				throw new Error("Browser.close is not permitted for AO-owned previews");
+				throw new Error("Browser.close is not permitted for Orchestrator-owned previews");
 			default:
 				throw new Error(`Unsupported browser-level CDP method: ${request.method}`);
 		}
@@ -356,11 +356,11 @@ export class AgentBrowserCDPBridge {
 			for (const client of physical.clients.values()) {
 				this.send(client.connection.socket, {
 					method: "Inspector.detached",
-					params: { reason: "AO page debugger was released" },
+					params: { reason: "Orchestrator page debugger was released" },
 					...(client.protocolSessionId ? { sessionId: client.protocolSessionId } : {}),
 				});
 				if (client.protocolSessionId) this.attached.delete(client.protocolSessionId);
-				client.connection.socket.close(1012, "AO page debugger was released");
+				client.connection.socket.close(1012, "Orchestrator page debugger was released");
 			}
 			physical.clients.clear();
 			this.physical.delete(target.id);
@@ -378,7 +378,7 @@ export class AgentBrowserCDPBridge {
 	private requireTarget(targetId: string | undefined): AgentBrowserTarget {
 		if (!targetId) throw new Error("targetId is required");
 		const target = this.listTargets().find((candidate) => candidate.id === targetId);
-		if (!target) throw new Error("Target is outside this AO worker");
+		if (!target) throw new Error("Target is outside this Orchestrator worker");
 		return target;
 	}
 
@@ -438,7 +438,7 @@ function assertSafeTargetMethod(method: string, params: Record<string, unknown> 
 		method === "Network.setCookies" ||
 		method === "Network.clearBrowserCookies"
 	) {
-		throw new Error(`CDP method is not permitted by AO: ${method}`);
+		throw new Error(`CDP method is not permitted by Orchestrator: ${method}`);
 	}
 }
 

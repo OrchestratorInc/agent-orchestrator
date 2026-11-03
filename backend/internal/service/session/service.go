@@ -1765,7 +1765,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1816,13 +1816,13 @@ func mapSessionError(err error) error {
 			"The session's workspace was never set up; retry its start before switching interfaces", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNotCancellable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOT_CANCELLABLE",
-			"The source controller has already stopped; AO must finish or recover the switch", nil)
+			"The source controller has already stopped; Orchestrator must finish or recover the switch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable):
 		return apierr.Conflict("INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE",
 			"This interface switch has no failure or recovery notice to acknowledge", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return apierr.Conflict("PROVIDER_HISTORY_RECOVERY_UNAVAILABLE",
-			"Provider history can be used only after AO identifies a legacy text-only mismatch", nil)
+			"Provider history can be used only after Orchestrator identifies a legacy text-only mismatch", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceAlreadySelected):
 		return apierr.Conflict("INTERFACE_ALREADY_SELECTED",
 			"The session is already using the requested interface", nil)
@@ -1904,7 +1904,7 @@ func mapSessionError(err error) error {
 		// retry, often with a deadline in the chain, so it is not "momentarily
 		// unavailable".
 		return apierr.Conflict("CHAT_RECOVERY_INCONCLUSIVE",
-			"AO could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
+			"Orchestrator could not safely reconnect to the session's still-running chat process: "+err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverUnavailable):
 		return apierr.Conflict("CHAT_DRIVER_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatDriverIncompatible):
@@ -1913,7 +1913,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
-			"The agent could not resume its saved conversation. Your AO history is still available.", nil)
+			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
 	case errors.Is(err, ports.ErrAgentAuthRequired):
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
@@ -1932,7 +1932,7 @@ func mapSessionError(err error) error {
 		return err
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
-			"AO could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
+			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
 			map[string]any{"step": relaunchErr.Step})
 	default:
 		return err

@@ -1010,7 +1010,7 @@ func applyCustomModelEntryPolicy(catalog, policy ports.AgentModelCatalog) ports.
 }
 
 func appendCacheWarning(current string) string {
-	const next = "Models loaded, but AO could not update the model cache."
+	const next = "Models loaded, but Orchestrator could not update the model cache."
 	if current == "" {
 		return next
 	}

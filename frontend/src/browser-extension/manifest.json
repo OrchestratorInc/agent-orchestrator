@@ -1,6 +1,6 @@
 {
 	"manifest_version": 3,
-	"name": "AO Browser Bridge",
+	"name": "Orchestrator Browser Bridge",
 	"description": "Lets Orchestrator agents work in their own tab groups in this Chrome, with your consent.",
 	"version": "0.1.0",
 	"minimum_chrome_version": "120",
@@ -8,6 +8,6 @@
 	"permissions": ["nativeMessaging", "tabs", "tabGroups", "scripting", "storage", "webNavigation", "webRequest", "debugger"],
 	"host_permissions": ["<all_urls>"],
 	"background": { "service_worker": "background.js" },
-	"action": { "default_title": "AO Browser Bridge", "default_popup": "popup.html" },
+	"action": { "default_title": "Orchestrator Browser Bridge", "default_popup": "popup.html" },
 	"options_page": "options.html"
 }

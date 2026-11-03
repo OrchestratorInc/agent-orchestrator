@@ -33,7 +33,7 @@ export function MigrationPopup() {
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	if (!open) return null;
 
-	const legacyRoot = offer.data?.legacyRoot || "your earlier AO";
+	const legacyRoot = offer.data?.legacyRoot || "your earlier Orchestrator";
 	const nowIso = () => new Date().toISOString();
 
 	const proceed = async () => {

@@ -769,7 +769,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		const toggle = await screen.findByRole("switch", { name: "Workers request Orchestrator review" });
 		expect(toggle).not.toBeChecked();
 
 		await userEvent.click(toggle);

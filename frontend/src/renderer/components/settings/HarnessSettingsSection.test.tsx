@@ -667,7 +667,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("Source: keychain");
-		expect(report).toContain("Checks use AO's process environment on the selected host.");
+		expect(report).toContain("Checks use Orchestrator's process environment on the selected host.");
 		expect(within(page).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
 		expect(report).not.toContain("Next step:");
@@ -1386,7 +1386,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.org = undefined;
 		renderSection(undefined, undefined, "cloud");
 
-		expect(await screen.findByText(/Sign in to AO Cloud/)).toBeInTheDocument();
+		expect(await screen.findByText(/Sign in to Orchestrator Cloud/)).toBeInTheDocument();
 		expect(screen.queryByText("Claude Code")).toBeNull();
 	});
 
@@ -2596,7 +2596,7 @@ describe("HarnessSettingsSection", () => {
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		// The machine the install died on is part of the report.
 		expect(copied).toContain("permission denied");
-		expect(copied).toContain("Memory: AO 2.0 GB · available 4.0 GB of 32.0 GB");
+		expect(copied).toContain("Memory: Orchestrator 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
 		expect(copied).toContain("Live sessions: 1 · 612 MB");
 	});

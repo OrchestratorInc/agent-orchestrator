@@ -605,7 +605,7 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
 			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
-			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!enabled) throw new Error("Side chats are currently available only for local Orchestrator sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
 			const owned = () => creationScope.active && creationScopeRef.current === creationScope && sessionRef.current === sessionId;
 			const current = () => owned() && (options?.isCurrent?.() ?? true);

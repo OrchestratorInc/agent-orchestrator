@@ -305,7 +305,7 @@ describe("Cloud project settings", () => {
 
 	it("turns on workers requesting review through the settings patch", async () => {
 		mount("general");
-		await userEvent.click(await screen.findByRole("switch", { name: "Workers request AO review" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Workers request Orchestrator review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
 });

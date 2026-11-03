@@ -388,10 +388,10 @@ export const aoBridge: AoBridge =
 			},
 			localAuthAvailable: async () => false,
 			localRegister: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			localLogin: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
@@ -399,14 +399,14 @@ export const aoBridge: AoBridge =
 		},
 		cloudCp: {
 			request: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			requestBinary: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			cancelBinary: () => undefined,
 			openStream: async () => {
-				throw new Error("AO Cloud event streams require the desktop app.");
+				throw new Error("Orchestrator Cloud event streams require the desktop app.");
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

@@ -106,7 +106,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 			return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 		}
 		if !managed {
-			return fmt.Errorf("opencode.GetAgentHooks: refusing to overwrite non-AO file at %s — move it so AO can install its plugin", pluginPath)
+			return fmt.Errorf("opencode.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s — move it so Orchestrator can install its plugin", pluginPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("opencode.GetAgentHooks: stat plugin: %w", err)
@@ -275,14 +275,14 @@ func InstallUsingAOSkill(workspacePath string) error {
 	skillDir := opencodeSkillDir(workspacePath)
 	if info, err := os.Stat(skillDir); err == nil {
 		if !info.IsDir() {
-			return fmt.Errorf("refusing to overwrite non-directory at %s — move it so AO can install using-ao", skillDir)
+			return fmt.Errorf("refusing to overwrite non-directory at %s — move it so Orchestrator can install using-ao", skillDir)
 		}
 		managed, err := isAOManagedSkill(workspacePath)
 		if err != nil {
 			return err
 		}
 		if !managed {
-			return fmt.Errorf("refusing to overwrite non-AO skill at %s — move it so AO can install using-ao", skillDir)
+			return fmt.Errorf("refusing to overwrite non-Orchestrator skill at %s — move it so Orchestrator can install using-ao", skillDir)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat skill dir: %w", err)

@@ -594,7 +594,7 @@ function startLoopbackCallbackServer(dataDir: string): void {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(
           CALLBACK_HTML(
-            "Signed in to AO Cloud",
+            "Signed in to Orchestrator Cloud",
             "You can close this tab and return to Orchestrator.",
           ),
         );
@@ -651,8 +651,8 @@ function signInFailureDetail(error: unknown): string {
 export async function showCloudSignInFailure(error: unknown): Promise<void> {
   await dialog.showMessageBox({
     type: "error",
-    title: "AO Cloud sign-in failed",
-    message: "Unable to sign in to AO Cloud",
+    title: "Orchestrator Cloud sign-in failed",
+    message: "Unable to sign in to Orchestrator Cloud",
     detail: signInFailureDetail(error),
   });
 }
@@ -751,7 +751,7 @@ export function installCloudIPC(
     if (base.username !== "" || base.password !== "" || base.search !== "" || base.hash !== "") throw new Error("Cloud control plane URL must not include credentials, a query string, or a fragment.");
     const dataDir = getDataDir();
     const token = await getCloudAccessToken(dataDir);
-    if (!token) throw new Error("Sign in to AO Cloud before connecting a provider.");
+    if (!token) throw new Error("Sign in to Orchestrator Cloud before connecting a provider.");
     
     if (activeProviderAuthAbort) activeProviderAuthAbort.abort();
     activeProviderAuthAbort = new AbortController();
@@ -787,7 +787,7 @@ export function installCloudIPC(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ credentialType: credential.credentialType, secret: credential.secret }),
     });
-    if (!response.ok) throw new Error("AO Cloud could not save the provider credential.");
+    if (!response.ok) throw new Error("Orchestrator Cloud could not save the provider credential.");
 
     // Persist the captured Claude setup-token locally as a fallback for local
     // sessions, only once the cloud copy is saved: a failed cloud save must not

@@ -832,14 +832,14 @@ export function diagnosticsReport(
 	const { app, system } = machine;
 	const lines = [t("shell.memorySectionMachine")];
 	if (app && system) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
 	} else if (app) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
 		// A negative load average is Windows' "not applicable" sentinel, never a real reading.
 		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
-		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · AO ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
+		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · Orchestrator ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	lines.push(`Sessions ${rows.length}`);

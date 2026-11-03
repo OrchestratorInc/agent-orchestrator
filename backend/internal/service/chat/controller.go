@@ -1770,7 +1770,7 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 		switch item.Type {
 		case "text":
 			if !item.Internal || strings.TrimSpace(item.Text) == "" {
-				return nil, fmt.Errorf("%w: text context must be AO-owned and nonempty", ErrRetryContentInvalid)
+				return nil, fmt.Errorf("%w: text context must be Orchestrator-owned and nonempty", ErrRetryContentInvalid)
 			}
 		case "image":
 			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {

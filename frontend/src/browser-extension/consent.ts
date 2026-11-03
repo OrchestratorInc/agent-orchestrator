@@ -45,7 +45,7 @@ export class ConsentManager {
 			for (const [sessionId, pending] of this.pending) {
 				if (pending.windowId === windowId) {
 					this.pending.delete(sessionId);
-					pending.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user closed the AO consent window"));
+					pending.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user closed the Orchestrator consent window"));
 				}
 			}
 		});
@@ -63,7 +63,7 @@ export class ConsentManager {
 		const denials = await this.denials();
 		const deniedUntil = denials[sessionId];
 		if (deniedUntil && deniedUntil > this.now()) {
-			throw new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this AO session access to Chrome; ask them to allow it from the AO Browser Bridge menu");
+			throw new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator session access to Chrome; ask them to allow it from the Orchestrator Browser Bridge menu");
 		}
 		const existing = this.pending.get(sessionId);
 		if (existing) return existing.promise;
@@ -79,7 +79,7 @@ export class ConsentManager {
 			if (this.pending.get(sessionId) !== pending) return;
 			this.pending.delete(sessionId);
 			if (pending.windowId !== undefined) void this.chrome.windows.remove(pending.windowId).catch(() => undefined);
-			reject(new BridgeError("BROWSER_CHROME_CONSENT_TIMEOUT", "Nobody answered the AO consent prompt in Chrome"));
+			reject(new BridgeError("BROWSER_CHROME_CONSENT_TIMEOUT", "Nobody answered the Orchestrator consent prompt in Chrome"));
 		}, CONSENT_TIMEOUT_MS);
 		promise.then(
 			() => clearTimeout(timer),
@@ -119,7 +119,7 @@ export class ConsentManager {
 			const denials = await this.denials();
 			denials[decision.sessionId] = this.now() + DENIAL_COOLDOWN_MS;
 			await this.chrome.storage.local.set({ [DENIALS_KEY]: denials });
-			pending?.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this AO session access to Chrome"));
+			pending?.reject(new BridgeError("BROWSER_CHROME_CONSENT_DENIED", "The user denied this Orchestrator session access to Chrome"));
 		}
 		if (pending?.windowId !== undefined) await this.chrome.windows.remove(pending.windowId).catch(() => undefined);
 	}
@@ -132,7 +132,7 @@ export class ConsentManager {
 		for (const [id, pending] of this.pending) {
 			if (sessionId && id !== sessionId) continue;
 			this.pending.delete(id);
-			pending.reject(new BridgeError("BROWSER_CHROME_STOPPED", "The user stopped AO agents in Chrome"));
+			pending.reject(new BridgeError("BROWSER_CHROME_STOPPED", "The user stopped Orchestrator agents in Chrome"));
 		}
 	}
 

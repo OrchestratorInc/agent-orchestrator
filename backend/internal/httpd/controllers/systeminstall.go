@@ -190,7 +190,7 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallOwner):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the harness it runs; update it with the tool that installed it", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "Orchestrator could not confirm this method installed the harness it runs; update it with the tool that installed it", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrHarnessActive):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active sessions for this harness before changing its installation", nil)

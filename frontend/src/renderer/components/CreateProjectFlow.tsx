@@ -554,7 +554,7 @@ export function CreateProjectFlow({
 			const message = cloneSelection
 				? t("createProject.cloneRegistrationFailed", {
 					path: selectedPath,
-					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." })),
+					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "Orchestrator could not create this project. Try again." })),
 				})
 				: apiErrorMessage(err, t("createProject.couldNotAdd"));
 			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {
@@ -566,7 +566,7 @@ export function CreateProjectFlow({
 			}
 			else if (selectedKind === "single_repo") reportProjectError(safeProjectCreationError(
 				message,
-				t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." }),
+				t("createProject.createFailedBody", { defaultValue: "Orchestrator could not create this project. Try again." }),
 				code,
 			));
 			else reportProjectError(message);
@@ -1088,7 +1088,7 @@ function importValidationMessage(result: ImportValidationResult): string {
 function importBlockingErrorLabel(code: string): string {
 	switch (code) {
 		case "INVALID_PATH":
-			return "Choose a folder AO can read.";
+			return "Choose a folder Orchestrator can read.";
 		case "PATH_NOT_DIRECTORY":
 			return "Choose a folder, not a file.";
 		case "BARE_REPOSITORY":
@@ -1096,9 +1096,9 @@ function importBlockingErrorLabel(code: string): string {
 		case "UNSUPPORTED_GIT_METADATA":
 			return "Repair the Git metadata or choose a different folder.";
 		case "CHILD_REPO_SCAN_FAILED":
-			return "AO could not inspect the repositories under this folder.";
+			return "Orchestrator could not inspect the repositories under this folder.";
 		case "IMPORT_PATH_UNSAFE":
-			return "Choose a specific project folder outside AO's own state directories.";
+			return "Choose a specific project folder outside Orchestrator's own state directories.";
 		case "DETACHED_HEAD":
 			return "This repository is checked out in detached HEAD state. Check out a named branch before importing it.";
 		case "WORKSPACE_CHILD_REPO_REQUIRED":
@@ -1884,7 +1884,7 @@ function CloudProjectCard({
 								<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
 									{githubOAuthBusy
 										? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
-										: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories AO can work on" })}
+										: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories Orchestrator can work on" })}
 								</span>
 							</span>
 							{githubOAuthBusy && (

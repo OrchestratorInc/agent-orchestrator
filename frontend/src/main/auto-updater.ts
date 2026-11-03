@@ -248,7 +248,7 @@ function requiredFreeBytesToStage(archiveBytes: number | undefined): number {
   return Math.min(STAGE_FREE_BYTES_CAP, Math.max(STAGE_FREE_BYTES_FLOOR, derived));
 }
 // Short user-facing lines; the raw ditto/pkzip/codesign detail is logged, not shown.
-const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open. Relaunch AO to try again.";
+const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. Orchestrator stayed open. Relaunch Orchestrator to try again.";
 const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then try again.";
 let nativePreparationBlocked: Error | undefined;
 // A stage refused by the disk preflight. Unlike a stall nothing reached
@@ -1207,7 +1207,7 @@ function unavailableChannelStatus(version?: string): UpdateStatus {
       semver.lt(version, app.getVersion())) {
     return {
       state: "unsupported",
-      message: "This channel's latest release is older than the installed build. AO will switch when a newer release is available.",
+      message: "This channel's latest release is older than the installed build. Orchestrator will switch when a newer release is available.",
     };
   }
   return { state: "not-available" };
@@ -2294,11 +2294,11 @@ function wireUpdaterEvents(): void {
           message:
             exhausted
               ? "Couldn't install the update — the copy failed verification twice. " +
-                "AO has discarded the download and stopped retrying on its own. Check " +
+                "Orchestrator has discarded the download and stopped retrying on its own. Check " +
                 "for updates again to start a fresh one, or download the latest build " +
                 "manually and install it over this one."
               : "Couldn't install the update — the downloaded copy failed verification. " +
-                "AO will prepare it again on the next check.",
+                "Orchestrator will prepare it again on the next check.",
         }),
       );
       return;
@@ -3066,7 +3066,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       assertInstallActive();
       recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
-      if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
+      if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart Orchestrator.");
     } catch (err) {
       if (installAbandoned) {
         await progress?.fail(userFacingUpdateError(err, "install")).catch(() => undefined);

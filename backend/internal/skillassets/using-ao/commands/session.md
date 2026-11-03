@@ -5,7 +5,7 @@ agent, switch harnesses, clean up, and claim PRs.
 
 ## In-app session links
 
-When referring a user or another agent to a session in AO Chat or the AO
+When referring a user or another agent to a session in Orchestrator Chat or the Orchestrator
 terminal, emit this canonical link:
 
 ```text
@@ -24,7 +24,7 @@ ao://sessions/{project-id}/{session-id}
   Opening it navigates to the session and opens the artifact.
 - Emit only these navigation routes. Do not append query strings, fragments,
   action names, credentials, authorities, or extra path segments.
-- The link is handled only inside a currently running AO desktop app. It is not
+- The link is handled only inside a currently running Orchestrator desktop app. It is not
   an operating-system protocol link and must not be described as supporting
   cold launch or navigation from external applications.
 - A session link navigates; it never sends a message, executes a command, or
@@ -38,7 +38,7 @@ ao://sessions/mercury/mer-3
 
 ## Taking over from another agent
 
-When a session is switched to you from another agent, AO starts you with an
+When a session is switched to you from another agent, Orchestrator starts you with an
 `<ao-handoff-request>` note. Treat the conversation in it as your own history
 with this user:
 
@@ -241,7 +241,7 @@ ao session restore mer-3
 
 ### ao session exit-agent
 
-Exit an agent without terminating its AO session. The session can later be
+Exit an agent without terminating its Orchestrator session. The session can later be
 resumed in place.
 
 **Syntax:**
@@ -260,7 +260,7 @@ ao session exit-agent <id> [flags]
 
 ### ao session resume-agent
 
-Resume an exited agent in its existing AO session.
+Resume an exited agent in its existing Orchestrator session.
 
 **Syntax:**
 ```
@@ -321,7 +321,7 @@ ao session cleanup --dry-run
 
 ### ao session claim-pr
 
-Attach an existing PR to the current AO session, or target another session explicitly.
+Attach an existing PR to the current Orchestrator session, or target another session explicitly.
 Use this for authorized implementation continuation. Reviewing someone else's PR
 does not require or permit a claim; use a normal review-only worker session.
 
@@ -339,7 +339,7 @@ registered worktree using the provider's verified full head commit SHA. Do not
 use `FETCH_HEAD` as a checkout target: a local branch with that name can make
 Git fail after replacing the index and working files. Verify `git status`, the
 branch, and `HEAD` after switching, even if Git reports failure. Stop on
-unexpected changes; continuing in a different worktree leaves AO displaying
+unexpected changes; continuing in a different worktree leaves Orchestrator displaying
 the original checkout. Review-only work should use the PR revision view or
 read-only revision diffs without claiming or switching the session's checkout.
 

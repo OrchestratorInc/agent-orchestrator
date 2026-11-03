@@ -551,7 +551,7 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 		runtimeDir = runtimeDirectoryBesideExecutable()
 	}
 	if runtimeDir == "" {
-		return runtimeLaunch{}, errors.New("AO ACP runtime is not installed")
+		return runtimeLaunch{}, errors.New("the Orchestrator ACP runtime is not installed")
 	}
 	node := filepath.Join(runtimeDir, "node", "bin", "node")
 	if runtime.GOOS == "windows" {

@@ -1057,7 +1057,7 @@ test.each([undefined, "isolated_data_dir", "helper_missing"])("never falls back 
 	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even with the lid closed");
 	if (lidReason === "isolated_data_dir") {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		expect(screen.queryByText("Requires AO’s default data folder.")).not.toBeInTheDocument();
+		expect(screen.queryByText("Requires Orchestrator’s default data folder.")).not.toBeInTheDocument();
 		await userEvent.hover(screen.getByRole("button", { name: "About keeping this Mac awake" }));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Closed-lid wakefulness is disabled for custom or isolated data directories.");
 	} else {
@@ -1097,7 +1097,7 @@ test.each([false, true])("shows helper upgrade recovery with lid preference %s",
 	const toggle = await screen.findByRole("switch", { name: "Keep this Mac awake" });
 	expect(toggle).toHaveAttribute("aria-checked", String(lidClosed));
 	expect(screen.getByText(/launchctl bootout gui\/\$\(id -u\)\/com\.aoagents\.mobile-wake/)).toHaveTextContent(
-		"turn closed-lid wake off in every AO instance and wait for recovery to finish",
+		"turn closed-lid wake off in every Orchestrator instance and wait for recovery to finish",
 	);
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
 });

@@ -1660,7 +1660,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(dock.getAllByText("Which direction should we take?").length).toBeGreaterThan(0);
 		expect(dock.getByText("Use the native protocol")).toBeVisible();
 		expect(dock.getByText("Keep the bridge")).toBeVisible();
-		expect(screen.queryByText("The agent offered no decisions AO can present")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent offered no decisions Orchestrator can present")).not.toBeInTheDocument();
 		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
 		await user.click(dock.getByRole("radio", { name: /Native/ }));
 		await user.click(dock.getByRole("button", { name: "Continue" }));
@@ -2189,7 +2189,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
+		expect(screen.getByText("Orchestrator restarted. History is kept.")).toBeInTheDocument();
 		// The banner title and the composer placeholder both say so.
 		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
@@ -3626,7 +3626,7 @@ Requested visual changes:
 Reference screenshots:
 - .ao/attachments/browser.png
 
-Task: Address the feedback below according to its wording. Visual adjustments are already previewed in AO's shared browser and describe the intended result.
+Task: Address the feedback below according to its wording. Visual adjustments are already previewed in Orchestrator's shared browser and describe the intended result.
 </browser_annotations>`,
 		};
 

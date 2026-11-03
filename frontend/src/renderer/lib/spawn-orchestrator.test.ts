@@ -225,7 +225,7 @@ describe("resumeOrchestrator", () => {
 		expect(notificationShowMock).toHaveBeenCalledWith({
 			id: expect.stringMatching(/^resume-agent-fallback:proj-1-orch:/),
 			title: "Started from saved prompt",
-			body: "AO could not resume the native agent session, so it started a new conversation from the saved prompt.",
+			body: "Orchestrator could not resume the native agent session, so it started a new conversation from the saved prompt.",
 		});
 	});
 

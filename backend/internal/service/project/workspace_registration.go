@@ -173,7 +173,7 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 				"Child repository name is reserved for internal use",
 				map[string]any{
 					"path":         child,
-					"suggestedFix": fmt.Sprintf("Rename the directory %q — the name %q is reserved by AO for the workspace root.", child, domain.RootWorkspaceRepoName),
+					"suggestedFix": fmt.Sprintf("Rename the directory %q — the name %q is reserved by Orchestrator for the workspace root.", child, domain.RootWorkspaceRepoName),
 				})
 		}
 		if !isGitRepo(child) {
