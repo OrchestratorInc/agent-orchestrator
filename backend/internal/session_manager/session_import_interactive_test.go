@@ -3,6 +3,8 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -41,6 +43,7 @@ func (f *fakeStore) CommitImportedNativeSessionID(_ context.Context, id domain.S
 	}
 	next := *rec.Metadata.ImportSource
 	next.ResumeNativeID = nativeID
+	next.ResumeTranscriptPath = ""
 	rec.Metadata.ImportSource = &next
 	rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID, rec.Metadata.AgentSessionIDLaunchID = nativeID, nativeID, launchID
 	f.sessions[id] = rec
@@ -101,6 +104,124 @@ func TestTerminalImportInteractiveRestoreIsStrictAndTaskless(t *testing.T) {
 			}
 			if len(msg.msgs) != 0 {
 				t.Fatalf("unproven prompt or saved task sent: %v", msg.msgs)
+			}
+		})
+	}
+}
+
+type preparedInteractiveImportAgent struct {
+	importInteractiveAgent
+	preparations int
+	initializers int
+}
+
+func (a *preparedInteractiveImportAgent) PrepareImportedSession(_ context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	a.preparations++
+	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir}, nil
+}
+
+func (a *preparedInteractiveImportAgent) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConfig) (ports.NativeRestoreInitialization, error) {
+	a.initializers++
+	return a.importInteractiveAgent.PrepareNativeRestore(ctx, cfg)
+}
+
+type failingNativePublicationLCM struct {
+	*nativeBindingLCM
+	fail bool
+}
+
+type locatedForkAgent struct {
+	importInteractiveAgent
+	found bool
+	path  string
+}
+
+func (a *locatedForkAgent) LocateTranscript(_ context.Context, ref ports.NativeSessionRef) (string, bool, error) {
+	if ref.NativeSessionID != "fork-native" {
+		return "", false, errors.New("lookup used the source id instead of the fork")
+	}
+	return a.path, a.found, nil
+}
+
+func TestInteractiveForkBindsObservedTranscriptAndRefusesMissingBinding(t *testing.T) {
+	for _, found := range []bool{false, true} {
+		t.Run(fmt.Sprintf("found-%v", found), func(t *testing.T) {
+			m, st, _, _ := interactiveManager(t, false, &interactiveTestAgent{plan: &interactiveTestPlan{}})
+			root := t.TempDir()
+			a := &locatedForkAgent{found: found, path: filepath.Join(root, "fork-native.jsonl"), importInteractiveAgent: importInteractiveAgent{plan: &forkInteractivePlan{source: "agent-x", importInteractivePlan: &importInteractivePlan{target: "fork-native"}}}}
+			m.agents = singleAgent{agent: a}
+			rec := st.sessions["mer-1"]
+			rec.Mode, rec.Activity.State = domain.SessionModeTUI, domain.ActivityIdle
+			rec.Metadata.WorkspacePath = t.TempDir()
+			rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID, rec.Metadata.AgentSessionIDLaunchID = "", "", ""
+			rec.Metadata.ProviderConversationID = "agent-x"
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agent-x", ConfigDir: root, Transferred: true, Prepared: true}
+			st.sessions[rec.ID] = rec
+			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+			if found {
+				if err != nil || result.Session.Metadata.NativeTranscriptPath != a.path || result.Session.NeedsImportResume() {
+					t.Fatalf("fork transcript binding = %#v, %v", result, err)
+				}
+			} else if err == nil || !st.sessions[rec.ID].NeedsImportResume() || st.sessions[rec.ID].Metadata.AgentSessionID != "agent-x" {
+				t.Fatalf("missing fork binding accepted: %#v, %v", result, err)
+			}
+		})
+	}
+}
+
+func (l *failingNativePublicationLCM) ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
+	if l.fail {
+		return errors.New("synthetic identity publication failure")
+	}
+	return l.nativeBindingLCM.ApplyActivitySignal(ctx, id, signal)
+}
+
+func TestPreparedInteractiveImportRetriesFailedNativeInitialization(t *testing.T) {
+	for _, observedFork := range []bool{false, true} {
+		t.Run(fmt.Sprintf("observed-fork-%v", observedFork), func(t *testing.T) {
+			m, st, rt, msg := interactiveManager(t, false, &interactiveTestAgent{plan: &interactiveTestPlan{}})
+			generation := 0
+			m.newLaunchID = func() string {
+				generation++
+				return fmt.Sprintf("retry-generation-%d", generation)
+			}
+			first := &importInteractivePlan{target: "agent-x"}
+			a := &preparedInteractiveImportAgent{importInteractiveAgent: importInteractiveAgent{plan: first}}
+			publication := &failingNativePublicationLCM{nativeBindingLCM: &nativeBindingLCM{fakeLCM: &fakeLCM{store: st}}}
+			m.agents, m.lcm = singleAgent{agent: a}, publication
+			if observedFork {
+				first.target = "observed-fork"
+				a.plan = &forkInteractivePlan{importInteractivePlan: first, source: "agent-x"}
+				publication.fail = true
+			} else {
+				first.ready = func(context.Context) (bool, error) { return false, errors.New("synthetic initialization failure") }
+			}
+			rec := st.sessions["mer-1"]
+			rec.Mode, rec.Activity.State = domain.SessionModeTUI, domain.ActivityIdle
+			rec.Metadata.WorkspacePath = t.TempDir()
+			rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID, rec.Metadata.AgentSessionIDLaunchID = "", "", ""
+			rec.Metadata.ProviderConversationID = "agent-x"
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "agent-x", ConfigDir: t.TempDir(), Transferred: true, Prepared: true}
+			st.sessions[rec.ID] = rec
+			if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil {
+				t.Fatal("first native initialization unexpectedly succeeded")
+			}
+			failed := st.sessions[rec.ID]
+			if !failed.NeedsImportResume() || failed.Activity.State != domain.ActivityExited || failed.Metadata.RuntimeLaunchID == "" {
+				t.Fatalf("failure lost resumable import state: %#v", failed)
+			}
+			if rt.exitedLaunches == nil {
+				rt.exitedLaunches = map[string]bool{}
+			}
+			rt.exitedLaunches[failed.Metadata.RuntimeLaunchID] = true
+			publication.fail = false
+			a.plan = &importInteractivePlan{target: failed.Metadata.ImportSource.ResumeNativeID}
+			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+			if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || result.Session.Metadata.AgentSessionID != failed.Metadata.ImportSource.ResumeNativeID {
+				t.Fatalf("prepared native retry = %#v, %v", result, err)
+			}
+			if a.preparations != 1 || a.initializers != 2 || len(msg.msgs) != 0 {
+				t.Fatalf("retry recopied, bypassed initialization or sent a task: prepares=%d initializers=%d messages=%v", a.preparations, a.initializers, msg.msgs)
 			}
 		})
 	}
