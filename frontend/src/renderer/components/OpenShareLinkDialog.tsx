@@ -29,11 +29,18 @@ const OPEN_SHARE_LINK_EVENT = "ao:open-share-link";
 /**
  * What went wrong opening a link, in terms the person can act on: a link that
  * no longer works, or one for someone else, rather than the control plane's
- * generic access error.
+ * generic access error. A short link the control plane refuses as a bad
+ * request (a code it can't read, or a control plane from before codes) says
+ * to ask for a new link instead of showing the server's text.
  */
-export function shareLinkErrorMessage(error: unknown, t: (key: "shareLink.expired" | "shareLink.notForYou") => string): string {
+export function shareLinkErrorMessage(
+	error: unknown,
+	t: (key: "shareLink.expired" | "shareLink.notForYou" | "shareLink.unavailable") => string,
+	target?: ShareLinkTarget,
+): string {
 	if (error instanceof CloudCpError && error.status === 404) return t("shareLink.expired");
 	if (error instanceof CloudCpError && error.status === 403) return t("shareLink.notForYou");
+	if (error instanceof CloudCpError && error.status === 400 && target && "code" in target) return t("shareLink.unavailable");
 	return error instanceof Error ? error.message : String(error);
 }
 
@@ -42,17 +49,17 @@ export function requestOpenShareLink(link?: string): void {
 	window.dispatchEvent(new CustomEvent<string | undefined>(OPEN_SHARE_LINK_EVENT, { detail: link }));
 }
 
+/** Redeems a share by its short code, or by the organization and token of a link from before codes. */
+export function redeemShareTarget(client: Pick<CloudCpClient, "redeemShareLink" | "redeemShareLinkCode">, target: ShareLinkTarget) {
+	return "code" in target ? client.redeemShareLinkCode(target.code) : client.redeemShareLink(target.orgId, target.token);
+}
+
 /**
  * Opens shared cloud sessions: a link opened from outside the app
  * (ao-app://share/...), one pasted here, or the command palette's request.
  * Redeeming a link gives this person their own access to the session, which
  * then appears beside their projects; the session opens at once.
  */
-/** Redeems a share by its short code, or by the organization and token of a link from before codes. */
-export function redeemShareTarget(client: Pick<CloudCpClient, "redeemShareLink" | "redeemShareLinkCode">, target: ShareLinkTarget) {
-	return "code" in target ? client.redeemShareLinkCode(target.code) : client.redeemShareLink(target.orgId, target.token);
-}
-
 export function ShareLinkHost() {
 	const { t } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -102,7 +109,7 @@ export function ShareLinkHost() {
 		};
 	}, [ready]);
 
-	const error = !ready ? t("shareLink.signInFirst") : redeem.error ? shareLinkErrorMessage(redeem.error, t) : undefined;
+	const error = !ready ? t("shareLink.signInFirst") : redeem.error ? shareLinkErrorMessage(redeem.error, t, parseShareLink(redeem.variables ?? "")) : undefined;
 	return (
 		<Dialog open={open} onOpenChange={(next) => { if (!redeem.isPending) setOpen(next); }}>
 			<DialogContent

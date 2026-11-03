@@ -3730,6 +3730,7 @@
 	"chat.shared.draftOf": "{{name}} の下書き",
 	"shareLink.expired": "このリンクは期限切れか取り消されています。新しいリンクを依頼してください。",
 	"shareLink.notForYou": "このリンクはほかの人向けです。送信者にあなたのアカウントと共有するよう依頼してください。",
+	"shareLink.unavailable": "このリンクは現在開けません。新しいリンクを依頼してください。",
 	"chat.shared.checkingAccess": "このセッションでできることを確認しています…",
 	"share.button": "共有",
 	"share.people.label": "このセッションの参加者: {{names}}",

@@ -3799,6 +3799,7 @@
 	"chat.shared.draftOf": "Brouillon de {{name}}",
 	"shareLink.expired": "Ce lien a expiré ou a été révoqué. Demandez-en un nouveau.",
 	"shareLink.notForYou": "Ce lien est destiné à d'autres personnes. Demandez à son expéditeur de le partager avec votre compte.",
+	"shareLink.unavailable": "Ce lien ne peut pas être ouvert pour le moment. Demandez un nouveau lien.",
 	"chat.shared.checkingAccess": "Vérification de ce que cette session vous permet de faire…",
 	"share.button": "Partager",
 	"share.people.label": "Personnes dans cette session : {{names}}",

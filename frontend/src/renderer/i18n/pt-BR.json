@@ -3799,6 +3799,7 @@
 	"chat.shared.draftOf": "Rascunho de {{name}}",
 	"shareLink.expired": "Este link expirou ou foi revogado. Peça um novo.",
 	"shareLink.notForYou": "Este link é para outras pessoas. Peça a quem enviou que o compartilhe com sua conta.",
+	"shareLink.unavailable": "Não é possível abrir este link agora. Peça um novo link.",
 	"chat.shared.checkingAccess": "Verificando o que você pode fazer nesta sessão…",
 	"share.button": "Compartilhar",
 	"share.people.label": "Pessoas nesta sessão: {{names}}",
