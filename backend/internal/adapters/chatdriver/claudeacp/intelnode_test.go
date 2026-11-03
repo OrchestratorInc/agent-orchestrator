@@ -1,0 +1,142 @@
+package claudeacp
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+const crashingNodeScript = "#!/bin/sh\necho '# Fatal error in , line 0' >&2\necho '# Check failed: 12 == (*__error()).' >&2\nexit 133\n"
+const healthyNodeScript = "#!/bin/sh\necho ok\n"
+
+// withIntelMac points the repair seams at a fake Intel Mac and returns the
+// repair root and a counter of codesign calls.
+func withIntelMac(t *testing.T, codesign func(context.Context, string, string) error) (string, *int) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Node is a shell script")
+	}
+	root := filepath.Join(t.TempDir(), "node-jit")
+	calls := 0
+	oldOS, oldArch, oldSign, oldRoot := jitRepairGOOS, jitRepairGOARCH, codesignNode, jitRepairRoot
+	jitRepairGOOS, jitRepairGOARCH = "darwin", "amd64"
+	codesignNode = func(ctx context.Context, node, entitlements string) error {
+		calls++
+		return codesign(ctx, node, entitlements)
+	}
+	jitRepairRoot = func() (string, error) { return root, nil }
+	jitNodesMu.Lock()
+	jitNodes = map[string]jitNodeResult{}
+	jitNodesMu.Unlock()
+	t.Cleanup(func() {
+		jitRepairGOOS, jitRepairGOARCH, codesignNode, jitRepairRoot = oldOS, oldArch, oldSign, oldRoot
+		jitNodesMu.Lock()
+		jitNodes = map[string]jitNodeResult{}
+		jitNodesMu.Unlock()
+	})
+	return root, &calls
+}
+
+func writeFakeNode(t *testing.T, script string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "node")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil { //nolint:gosec // Test executable.
+		t.Fatal(err)
+	}
+	return path
+}
+
+// fixingCodesign stands in for a codesign that adds the missing entitlement.
+func fixingCodesign(_ context.Context, node, entitlements string) error {
+	plist, err := os.ReadFile(entitlements) //nolint:gosec // Test path.
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(plist), "com.apple.security.cs.allow-unsigned-executable-memory") {
+		return errors.New("entitlements lack allow-unsigned-executable-memory")
+	}
+	return os.WriteFile(node, []byte(healthyNodeScript), 0o755) //nolint:gosec // Test executable.
+}
+
+func TestJITCapableNodeKeepsHealthyNode(t *testing.T) {
+	_, calls := withIntelMac(t, fixingCodesign)
+	node := writeFakeNode(t, healthyNodeScript)
+	got, err := jitCapableNode(context.Background(), node)
+	if err != nil || got != node {
+		t.Fatalf("jitCapableNode = %q, %v; want %q", got, err, node)
+	}
+	if *calls != 0 {
+		t.Fatalf("codesign ran %d times for a healthy Node", *calls)
+	}
+}
+
+func TestJITCapableNodeSkipsOtherPlatforms(t *testing.T) {
+	withIntelMac(t, fixingCodesign)
+	jitRepairGOARCH = "arm64"
+	node := filepath.Join(t.TempDir(), "missing-node")
+	got, err := jitCapableNode(context.Background(), node)
+	if err != nil || got != node {
+		t.Fatalf("jitCapableNode = %q, %v; want untouched %q", got, err, node)
+	}
+}
+
+func TestJITCapableNodeRepairsEntitlementCrash(t *testing.T) {
+	root, calls := withIntelMac(t, fixingCodesign)
+	node := writeFakeNode(t, crashingNodeScript)
+	got, err := jitCapableNode(context.Background(), node)
+	if err != nil {
+		t.Fatalf("jitCapableNode: %v", err)
+	}
+	if got == node || !strings.HasPrefix(got, root+string(filepath.Separator)) {
+		t.Fatalf("jitCapableNode = %q, want a copy under %q", got, root)
+	}
+	if source, _ := os.ReadFile(node); string(source) != crashingNodeScript { //nolint:gosec // Test path.
+		t.Fatal("repair modified the packaged Node")
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 1 {
+		t.Fatalf("repair root holds %d entries, want only the installed copy", len(entries))
+	}
+
+	// Cached for the daemon's lifetime.
+	again, err := jitCapableNode(context.Background(), node)
+	if err != nil || again != got || *calls != 1 {
+		t.Fatalf("second call = %q, %v with %d codesign calls; want cached %q", again, err, *calls, got)
+	}
+
+	// A new daemon reuses the installed copy without re-signing.
+	jitNodesMu.Lock()
+	jitNodes = map[string]jitNodeResult{}
+	jitNodesMu.Unlock()
+	reused, err := jitCapableNode(context.Background(), node)
+	if err != nil || reused != got || *calls != 1 {
+		t.Fatalf("restart = %q, %v with %d codesign calls; want reused %q", reused, err, *calls, got)
+	}
+}
+
+func TestJITCapableNodeReportsFailedRepair(t *testing.T) {
+	withIntelMac(t, func(context.Context, string, string) error { return nil })
+	node := writeFakeNode(t, crashingNodeScript)
+	_, err := jitCapableNode(context.Background(), node)
+	if err == nil {
+		t.Fatal("jitCapableNode succeeded although the re-signed copy still crashes")
+	}
+	for _, want := range []string{"allow-unsigned-executable-memory", "Terminal mode", "still crashes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+func TestJITCapableNodeLeavesUnrelatedFailures(t *testing.T) {
+	_, calls := withIntelMac(t, fixingCodesign)
+	node := writeFakeNode(t, "#!/bin/sh\necho boom >&2\nexit 1\n")
+	got, err := jitCapableNode(context.Background(), node)
+	if err != nil || got != node || *calls != 0 {
+		t.Fatalf("jitCapableNode = %q, %v with %d codesign calls; want bundled Node unchanged", got, err, *calls)
+	}
+}
