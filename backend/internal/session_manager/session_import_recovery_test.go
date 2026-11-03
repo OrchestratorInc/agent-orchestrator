@@ -62,12 +62,12 @@ func (a *recoveryImportAgent) ProbeNativeSession(_ context.Context, ref ports.Na
 	if ref.ConfigDir == a.sourceRoot {
 		a.sourceProbes++
 		if _, err := os.Stat(filepath.Join(a.sourceRoot, "source-native")); err != nil {
-			return ports.NativeSessionAvailabilityUnavailable, nil
+			return ports.NativeSessionAvailabilityUnavailable, nil //nolint:nilerr // The fake classifies unreadable history as unavailable.
 		}
 	} else {
 		data, err := os.ReadFile(ref.TranscriptPath)
 		if err != nil || recoveryFingerprint(data) != a.fingerprint {
-			return ports.NativeSessionAvailabilityUnavailable, nil
+			return ports.NativeSessionAvailabilityUnavailable, nil //nolint:nilerr // The fake classifies unreadable or changed history as unavailable.
 		}
 	}
 	return ports.NativeSessionAvailabilityAvailable, nil
