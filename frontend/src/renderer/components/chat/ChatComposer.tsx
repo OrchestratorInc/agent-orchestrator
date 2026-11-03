@@ -50,7 +50,10 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { isMacPlatform } from "../../lib/platform";
+import { useDictation } from "./useDictation";
+import { DictationMeter } from "./DictationMeter";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -109,6 +112,7 @@ import {
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
@@ -212,6 +216,7 @@ export const ChatComposer = memo(function ChatComposer({
 	filePathsTruncated,
 	onFileQuery,
 	onStageAttachments,
+	cloudAttachments,
 	nativeImages,
 	onSteer,
 	showSteerButton,
@@ -317,7 +322,14 @@ export const ChatComposer = memo(function ChatComposer({
 	 * can open. Absent means files cannot be delivered, and no attach control is
 	 * offered at all.
 	 */
-	onStageAttachments?: (attachments: FileAttachmentPayload[]) => Promise<string[]>;
+	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
+	/**
+	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
+	 * each. Each file uploads on its own and shows its own failure, removing one
+	 * while it uploads cancels it, and an upload in flight does not hold the
+	 * page: it runs in the main process and is dropped on a reload.
+	 */
+	cloudAttachments?: { maxBytes: number };
 	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
 	/**
@@ -459,6 +471,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const dictation = useDictation({
+		onText: (text) => editor.current?.dictate(text),
+		onEnd: (keep) => editor.current?.endDictation(keep),
+	});
+	const dictating = dictation.phase !== "idle";
+	// Dictation is in preview: macOS only, behind Developer mode.
+	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -564,12 +583,13 @@ export const ChatComposer = memo(function ChatComposer({
 		[draftScope, onQueuedAttachmentsChange],
 	);
 	const prepareAttachments = useCallback(
-		async (attachments: FileAttachment[]): Promise<FileAttachment[]> => {
+		async (attachments: FileAttachment[], signal: AbortSignal): Promise<FileAttachment[]> => {
 			if (!onStageAttachments) throw new Error("Attachment staging is unavailable");
 			const paths = await onStageAttachments(
-				attachments.flatMap(({ mimeType, data }) =>
-					data ? [{ mimeType, data }] : [],
+				attachments.flatMap(({ mimeType, data, name }) =>
+					data ? [{ mimeType, data, name }] : [],
 				),
+				signal,
 			);
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
@@ -604,6 +624,8 @@ export const ChatComposer = memo(function ChatComposer({
 		initialKey: attachmentScopeKey,
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
+		maxAttachmentBytes: cloudAttachments?.maxBytes,
+		prepareEach: Boolean(cloudAttachments),
 	});
 	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
@@ -655,7 +677,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		const preview = file.dataUrl ?? (path && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
+		// A cloud file's reference is no daemon path: it previews from its bytes
+		// while they are in memory, else as a file.
+		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
 	});
@@ -791,10 +815,12 @@ export const ChatComposer = memo(function ChatComposer({
 					? (["persistence-failed"] as const)
 					: []),
 
-				...(fileAttachments.preparing ? (["pending-attachments"] as const) : []),
+				// A Cloud upload runs in the main process, which a leave
+				// confirmation would block, and is only repeated if lost.
+				...(fileAttachments.preparing && !cloudAttachments ? (["pending-attachments"] as const) : []),
 			],
 		);
-	}, [draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
+	}, [cloudAttachments, draftPersistenceError, boundarySessionId, durableDelivery, fileAttachments.preparing]);
 
 	useEffect(
 		() => () => {
@@ -1279,6 +1305,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// second transport whose local admission rejection would look like a real
 		// provider failure.
 		if (submitInFlight.current) return submitInFlight.current;
+		// Sending keeps what was dictated so far and stops listening.
+		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
@@ -1682,6 +1710,10 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
+		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
+			dictation.detach();
+		}
 		// Enter is handled in Lexical before a newline is inserted; this handler is
 		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
@@ -1976,14 +2008,28 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
 											<span className="invisible">{file.name}</span>
 											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
 										</span>
-										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+										{/* Removing a file while it attaches cancels it. */}
+										<button
+											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
+											onClick={() => {
+												fileAttachments.cancelPending(file.id);
+												editor.current?.focus();
+											}}
+											aria-label={`Cancel attaching ${file.name}`}
+											className="text-muted-foreground hover:text-foreground"
+										>
+											<X aria-hidden="true" className="size-3" />
+										</button>
 									</li>
 								))}
 							</ul>
@@ -2022,6 +2068,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 				<ComposerEditor
 					ref={editor}
+					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
@@ -2067,6 +2114,11 @@ export const ChatComposer = memo(function ChatComposer({
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
+				{dictation.error ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+						{dictation.error}
+					</p>
+				) : null}
 				{steerRefusal ?? steerOutcomeNotice ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
@@ -2161,6 +2213,43 @@ export const ChatComposer = memo(function ChatComposer({
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
 								Steer
 							</Button>
+						) : null}
+						{canDictate ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="none"
+											disabled={!dictating && controlsDisabled}
+											// Keep focus in the editor, where the words appear.
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={() => {
+												editor.current?.focus();
+												dictation.toggle();
+											}}
+											data-shortcut-target="dictate"
+											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-pressed={dictating}
+											className={cn(
+												// Important: the chat surface's button rule (styles.css) would otherwise drop width from the transition.
+												"mr-1 h-7 overflow-hidden rounded-full p-0 transition-[width,background-color,color]! duration-200! ease-[cubic-bezier(0.23,1,0.32,1)]! active:translate-y-0! active:transform-none! active:scale-100! motion-reduce:transition-none!",
+												dictating
+													? "w-[76px] bg-foreground text-on-foreground hover:bg-foreground/90! hover:text-on-foreground dark:hover:bg-foreground/90!"
+													: "w-7 text-muted-foreground hover:bg-interactive-active! hover:text-foreground",
+											)}
+										>
+											{dictating ? (
+												<DictationMeter listening={dictation.phase === "listening"} />
+											) : (
+												<Mic aria-hidden="true" className="size-3.5" />
+											)}
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
+							</Tooltip>
 						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>

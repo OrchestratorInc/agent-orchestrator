@@ -55,6 +55,12 @@ jobs:
           "$HOME/.ao/build-cache/wake-helper/effects-tests"
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/WakeLowPower.swift native/wake-helper/LowPowerTests.swift -o "$HOME/.ao/build-cache/wake-helper/low-power-tests"
           "$HOME/.ao/build-cache/wake-helper/low-power-tests"
+      - name: Compile dictation helper for both macOS architectures
+        run: |
+          node scripts/build-dictation-helper.mjs --arch x64
+          lipo dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator -verify_arch x86_64
+          node scripts/build-dictation-helper.mjs --arch arm64
+          lipo dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator -verify_arch arm64
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures

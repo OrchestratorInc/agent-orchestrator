@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -85,6 +86,8 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	"ao.automation.created": {"use_case": {}, "template_id": {}},
+
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.
 	"ao.usage.messages_sent": {
@@ -765,6 +768,12 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		value, ok := payload[key]
 		if !ok {
 			continue
+		}
+		if name == "ao.automation.created" {
+			text, ok := value.(string)
+			if !ok || (key == "use_case" && !domain.ValidAutomationUseCase(text)) || (key == "template_id" && !domain.ValidAutomationTemplateID(text)) {
+				continue
+			}
 		}
 		if safe, ok := sanitizeRemoteValue(key, value); ok {
 			sanitized[key] = safe
