@@ -13,7 +13,28 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/aider"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
+
+type aiderNativeArchiveStore struct {
+	*fakeStore
+	messages []sessionimport.Message
+}
+
+func (s *aiderNativeArchiveStore) ListProjects(context.Context) ([]domain.ProjectRecord, error) {
+	return []domain.ProjectRecord{s.projects["mer"]}, nil
+}
+
+func (s *aiderNativeArchiveStore) CreateImportedSession(_ context.Context, rec domain.SessionRecord, messages []sessionimport.Message) (domain.SessionRecord, bool, error) {
+	rec.ID = "mer-1"
+	s.sessions[rec.ID], s.messages = rec, append([]sessionimport.Message(nil), messages...)
+	return rec, true, nil
+}
+
+func (s *aiderNativeArchiveStore) ReplaceImportedMessages(_ context.Context, _ domain.SessionID, messages []sessionimport.Message) error {
+	s.messages = append([]sessionimport.Message(nil), messages...)
+	return nil
+}
 
 type aiderSnapshotArchive struct{}
 
@@ -149,5 +170,69 @@ func TestAiderFreshImportReusesOnlyPinnedHistoryFromGitTransfer(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAiderPreparedRetryKeepsArchiveAlignedWithNativeSnapshot(t *testing.T) {
+	source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.WriteFile(filepath.Join(binDir, "aider"), []byte("#!/bin/sh\nexit 73\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := "#### original prompt\n\nOriginal answer\n"
+	path := filepath.Join(source, ".aider.chat.history.md")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{createErr: errors.New("synthetic launch failure after preparation")}
+	m, st, _ := newExitedResumeManager(t, rt, aider.New())
+	project := st.projects["mer"]
+	project.Path, project.Kind = source, domain.ProjectKindSingleRepo
+	st.projects["mer"] = project
+	archive := &aiderNativeArchiveStore{fakeStore: st}
+	svc := sessionimport.New(archive, m.dataDir, nil)
+	m.SetImportArchiveRefresher(svc)
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 {
+		t.Fatalf("scan = %+v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("import = %+v, %v", results, err)
+	}
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath, rec.Metadata.Branch = workspace, "ao/import"
+	rec.Metadata.ImportSource.Transferred, rec.Metadata.ImportSource.Prepared = true, true
+	st.sessions[rec.ID] = rec
+	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil {
+		t.Fatal("synthetic first launch did not fail")
+	}
+	prepared := st.sessions[rec.ID].Metadata.ImportSource
+	if prepared.ResumeNativeID == "" || prepared.ResumeTranscriptPath == "" || prepared.Adopted || prepared.Fingerprint != aider.NativeHistoryFingerprint([]byte(original)) {
+		t.Fatalf("failure did not retain the prepared native snapshot: %+v", prepared)
+	}
+	changed := original + "#### later source turn\n\nNot in the prepared context\n"
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt.createErr = nil
+	result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+	if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || rt.created != 1 {
+		t.Fatalf("prepared native retry = %#v, %v", result, err)
+	}
+	if len(archive.messages) != 2 || archive.messages[0].Text != "original prompt" || archive.messages[1].Text != "Original answer" {
+		t.Fatalf("archive diverged from restored native context: %+v", archive.messages)
+	}
+	if !strings.Contains(strings.Join(rt.lastCfg.Argv, " "), "--chat-history-file "+prepared.ResumeTranscriptPath) {
+		t.Fatalf("retry did not select the prepared native snapshot: %v", rt.lastCfg.Argv)
+	}
+	data, err := os.ReadFile(prepared.ResumeTranscriptPath)
+	if err != nil || string(data) != original || rt.lastCfg.WorkspacePath != workspace || result.Session.Metadata.AgentSessionID != prepared.ResumeNativeID {
+		t.Fatalf("prepared native context changed: %q, %v, %+v", data, err, rt.lastCfg)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != changed {
+		t.Fatalf("source changed during retry: %q, %v", data, err)
 	}
 }
