@@ -1,0 +1,13 @@
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > signs a signed-out saved account in again in its own folder 216ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > does not check a closed sign-in, and the remove dialog starts without an old error 114ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > checks a sign-in once when the CLI exits during a check 70ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > signs the CLI login in again and out from its own row 32ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > offers only a sign-in on a signed-out CLI login, held while a login terminal is open 18ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > lists a login the CLI and a saved account share once 34ms
+ ✓ src/renderer/components/settings/AgentAccountsSection.test.tsx > shows the shared login as the default when the CLI's login is 16ms
+ ✓ src/renderer/hooks/useAgentAccounts.test.ts > withoutSameLogins > lists the CLI's login once, as the saved account signed in as it 1ms
+ ✓ src/renderer/hooks/useAgentAccounts.test.ts > withoutSameLogins > keeps the CLI's login when it is no saved account's 0ms
+ ✓ src/renderer/hooks/useAgentAccounts.test.ts > withoutSameLogins > keeps the CLI's login when the account it names is not listed 0ms
+ ✓ src/renderer/hooks/useAgentAccounts.test.ts > withoutSameLogins > keeps the account a session runs on, and leaves out its twin instead 0ms
+ Test Files  2 passed (2)
+      Tests  11 passed (11)

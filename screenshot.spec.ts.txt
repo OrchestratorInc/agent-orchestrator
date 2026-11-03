@@ -1,0 +1,36 @@
+import { expect, test } from "@playwright/test";
+import { installFakeBridge } from "./support/fake-bridge";
+
+// THROWAWAY evidence spec (never committed). The renderer's API calls are
+// forwarded to the evidence harness, which serves the real accounts list from
+// this tree's backend code and proxies every other GET to the live daemon.
+const harness = process.env.EVIDENCE_HARNESS!;
+const label = process.env.EVIDENCE_LABEL!;
+
+test("accounts panel", async ({ page }) => {
+	test.setTimeout(180_000);
+	await page.setViewportSize({ width: 1280, height: 860 });
+	await page.emulateMedia({ colorScheme: "dark" });
+	await installFakeBridge(page);
+	const seen: string[] = [];
+	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
+		const url = new URL(route.request().url());
+		if (route.request().method() !== "GET") return route.fulfill({ status: 405, json: { error: "read-only" } });
+		const response = await route.fetch({ url: `${harness}${url.pathname}${url.search}` });
+		// Public PR: the real email is shown as one placeholder in every row.
+		const body = (await response.text()).replaceAll(process.env.REAL_EMAIL!, "user@example.com");
+		if (url.pathname === "/api/v1/agents/accounts") seen.push(body);
+		await route.fulfill({ response, body });
+	});
+	await page.goto("/#/settings");
+	await page.getByRole("button", { name: "Harness", exact: true }).first().click();
+	await page.getByRole("button", { name: "Open Claude Code details" }).first().click();
+	await expect(page.getByText("Subscriptions").or(page.getByText("Accounts", { exact: true })).first()).toBeVisible();
+	await expect(page.locator('[data-agent-account]').first()).toBeVisible({ timeout: 90_000 });
+	await page.waitForTimeout(1500);
+	await page.screenshot({ path: `/tmp/ao44-evidence/${label}-settings-masked.png` });
+	const rows = await page.locator('[data-agent-account]').evaluateAll((els) => els.map((el) => `${el.getAttribute("data-agent-account")} | ${(el as HTMLElement).innerText.replace(/\n+/g, " / ")}`));
+	console.log(`ROWS ${label}:\n${rows.join("\n")}`);
+	console.log(`API ${label}: ${seen.at(-1)}`);
+	await page.unrouteAll({ behavior: "ignoreErrors" });
+});

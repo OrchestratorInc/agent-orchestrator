@@ -1,0 +1,19 @@
+--- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates (0.01s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/terminal_signs_in_after_the_account_was_added (0.00s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/terminal_switches_from_another_login (0.00s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/email_differs_only_in_case (0.00s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/the_computer's_login_is_the_default (0.00s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/the_saved_account_is_the_default (0.00s)
+    --- FAIL: TestListNamesTheAccountTheComputersLoginDuplicates/a_failed_check_keeps_the_last_good_reading (0.00s)
+    --- PASS: TestListNamesTheAccountTheComputersLoginDuplicates/the_computer_is_on_another_login (0.00s)
+    --- PASS: TestListNamesTheAccountTheComputersLoginDuplicates/the_computer_is_signed_out (0.00s)
+    --- PASS: TestListNamesTheAccountTheComputersLoginDuplicates/the_saved_account_is_signed_out (0.00s)
+    --- PASS: TestListNamesTheAccountTheComputersLoginDuplicates/the_saved_folder_now_holds_another_login (0.00s)
+--- PASS: TestListDoesNotFoldAcrossProviders (0.00s)
+--- FAIL: TestAddRefusesALoginTheComputerSignedInToSinceTheLastReading (0.00s)
+--- FAIL: TestAddRefusesTheLoginOfASignedOutSavedAccount (0.00s)
+    --- FAIL: TestAddRefusesTheLoginOfASignedOutSavedAccount/signed_out (0.00s)
+    --- FAIL: TestAddRefusesTheLoginOfASignedOutSavedAccount/holds_another_login (0.00s)
+FAIL
+FAIL	github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts	0.699s
+FAIL

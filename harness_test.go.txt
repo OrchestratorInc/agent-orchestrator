@@ -1,0 +1,111 @@
+package zzevidence_test
+
+// THROWAWAY evidence harness (never committed). Serves GET /api/v1/agents/accounts
+// from THIS tree's real agentaccounts service + HTTP controller, using the real
+// Claude CLI adapter against this Mac's real logins. Every other GET is proxied
+// to the live daemon; non-GET requests are refused, so nothing is changed.
+
+import (
+	"context"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
+)
+
+type store struct {
+	accounts []domain.AgentAccount
+	def      map[domain.AgentAccountProvider]string
+}
+
+func (s *store) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) { return s.accounts, nil }
+func (s *store) CreateAgentAccount(context.Context, domain.AgentAccount) error   { return nil }
+func (s *store) DeleteAgentAccount(context.Context, string) error                { return nil }
+func (s *store) GetAgentAccountDefault(_ context.Context, p domain.AgentAccountProvider) (string, bool, error) {
+	id, ok := s.def[p]
+	return id, ok, nil
+}
+func (s *store) SetAgentAccountDefault(context.Context, domain.AgentAccountProvider, string) error {
+	return nil
+}
+func (s *store) BindSessionAgentAccount(context.Context, domain.SessionID, domain.AgentAccountProvider, string, time.Time) error {
+	return nil
+}
+func (s *store) GetSessionAgentAccount(context.Context, domain.SessionID, domain.AgentAccountProvider) (string, bool, error) {
+	return "", false, nil
+}
+func (s *store) AgentAccountUsageSince(context.Context, time.Time) ([]domain.AgentAccountUsage, error) {
+	return nil, nil
+}
+
+func TestServeEvidence(t *testing.T) {
+	addr := os.Getenv("EVIDENCE_ADDR")
+	if addr == "" {
+		t.Skip("EVIDENCE_ADDR unset")
+	}
+	created, _ := time.Parse(time.RFC3339, os.Getenv("REAL_CREATED"))
+	userHome, _ := os.UserHomeDir()
+	dataDir := filepath.Join(userHome, ".ao", "data")
+	plugin := claudecodeagent.New()
+	claude := &agentaccount.Claude{
+		Binary: plugin.ResolveBinary, DeviceHome: filepath.Join(userHome, ".claude"), DeviceConfig: filepath.Join(userHome, ".claude.json"),
+		DeviceEnv: func() map[string]string { return plugin.RuntimeCredentialEnv(dataDir) },
+	}
+	id := os.Getenv("REAL_ID")
+	st := &store{
+		accounts: []domain.AgentAccount{{ID: id, Provider: domain.AgentAccountProviderClaude, Home: os.Getenv("REAL_HOME"), Email: os.Getenv("REAL_EMAIL"), CreatedAt: created}},
+		def:      map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: id},
+	}
+	svc := agentaccounts.New(st, []ports.AgentAccountProviderCLI{claude}, filepath.Join(dataDir, "agent-accounts"), nil, nil)
+	ctrl := &controllers.AgentAccountsController{Svc: svc}
+
+	live, _ := url.Parse(os.Getenv("LIVE_DAEMON"))
+	proxy := httputil.NewSingleHostReverseProxy(live)
+	direct := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		direct(req)
+		req.Header.Del("Origin")
+		req.Header.Del("Referer")
+	}
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Headers", "*")
+			if req.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if req.Method != http.MethodGet {
+				http.Error(w, "evidence harness is read-only", http.StatusMethodNotAllowed)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+	r.Get("/api/v1/agents/accounts", func(w http.ResponseWriter, req *http.Request) {
+		sub := chi.NewRouter()
+		sub.Route("/api/v1", ctrl.Register)
+		sub.ServeHTTP(w, req)
+	})
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		proxy.ServeHTTP(w, req)
+	})
+	srv := &http.Server{Addr: addr, Handler: r}
+	t.Logf("serving on %s", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		t.Fatal(err)
+	}
+}

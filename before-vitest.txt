@@ -1,0 +1,5 @@
+   × lists a login the CLI and a saved account share once 64ms
+   × shows the shared login as the default when the CLI's login is 15ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+ Test Files  1 failed (1)
+      Tests  2 failed | 5 passed (7)

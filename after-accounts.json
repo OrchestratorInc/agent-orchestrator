@@ -1,0 +1,80 @@
+{
+    "accounts": [
+        {
+            "id": "device-claude",
+            "provider": "claude",
+            "device": true,
+            "email": "user@example.com",
+            "plan": "team",
+            "default": false,
+            "signedIn": true,
+            "limits": {
+                "windows": [
+                    {
+                        "id": "five_hour",
+                        "label": "Session (5h)",
+                        "usedPercent": 9,
+                        "resetsAt": "2026-11-03T17:50:00.016487Z"
+                    },
+                    {
+                        "id": "seven_day",
+                        "label": "Weekly",
+                        "usedPercent": 2,
+                        "resetsAt": "2026-11-05T22:00:00.016509Z"
+                    },
+                    {
+                        "id": "model:Fable",
+                        "label": "Weekly \u00b7 Fable",
+                        "usedPercent": 0,
+                        "resetsAt": "2026-11-05T22:00:00Z"
+                    }
+                ],
+                "extraUsage": {
+                    "enabled": false,
+                    "usedCredits": 0,
+                    "currency": "USD"
+                },
+                "fetchedAt": "2026-11-03T14:05:13.240965Z"
+            },
+            "sameLoginAs": "d5ed0d17-35be-4f78-8197-d154f76809b0"
+        },
+        {
+            "id": "d5ed0d17-35be-4f78-8197-d154f76809b0",
+            "provider": "claude",
+            "device": false,
+            "email": "user@example.com",
+            "plan": "team",
+            "default": true,
+            "signedIn": true,
+            "createdAt": "2026-10-21T05:00:06Z",
+            "limits": {
+                "windows": [
+                    {
+                        "id": "five_hour",
+                        "label": "Session (5h)",
+                        "usedPercent": 9,
+                        "resetsAt": "2026-11-03T17:50:00.008235Z"
+                    },
+                    {
+                        "id": "seven_day",
+                        "label": "Weekly",
+                        "usedPercent": 2,
+                        "resetsAt": "2026-11-05T22:00:00.008258Z"
+                    },
+                    {
+                        "id": "model:Fable",
+                        "label": "Weekly \u00b7 Fable",
+                        "usedPercent": 0,
+                        "resetsAt": "2026-11-05T22:00:00Z"
+                    }
+                ],
+                "extraUsage": {
+                    "enabled": false,
+                    "usedCredits": 0,
+                    "currency": "USD"
+                },
+                "fetchedAt": "2026-11-03T14:05:13.125034Z"
+            }
+        }
+    ]
+}
