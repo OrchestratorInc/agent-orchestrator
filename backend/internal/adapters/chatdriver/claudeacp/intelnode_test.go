@@ -30,12 +30,12 @@ func withIntelMac(t *testing.T, codesign func(context.Context, string, string) e
 	}
 	jitRepairRoot = func() (string, error) { return root, nil }
 	jitNodesMu.Lock()
-	jitNodes = map[string]jitNodeResult{}
+	jitNodes = map[string]string{}
 	jitNodesMu.Unlock()
 	t.Cleanup(func() {
 		jitRepairGOOS, jitRepairGOARCH, codesignNode, jitRepairRoot = oldOS, oldArch, oldSign, oldRoot
 		jitNodesMu.Lock()
-		jitNodes = map[string]jitNodeResult{}
+		jitNodes = map[string]string{}
 		jitNodesMu.Unlock()
 	})
 	return root, &calls
@@ -110,7 +110,7 @@ func TestJITCapableNodeRepairsEntitlementCrash(t *testing.T) {
 
 	// A new daemon reuses the installed copy without re-signing.
 	jitNodesMu.Lock()
-	jitNodes = map[string]jitNodeResult{}
+	jitNodes = map[string]string{}
 	jitNodesMu.Unlock()
 	reused, err := jitCapableNode(context.Background(), node)
 	if err != nil || reused != got || *calls != 1 {
@@ -168,7 +168,7 @@ func TestJITCapableNodeRebuildsUnusableInstalledCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	jitNodesMu.Lock()
-	jitNodes = map[string]jitNodeResult{}
+	jitNodes = map[string]string{}
 	jitNodesMu.Unlock()
 
 	rebuilt, err := jitCapableNode(context.Background(), node)
@@ -177,5 +177,48 @@ func TestJITCapableNodeRebuildsUnusableInstalledCopy(t *testing.T) {
 	}
 	if content, _ := os.ReadFile(rebuilt); string(content) != healthyNodeScript { //nolint:gosec // Test path.
 		t.Fatalf("installed copy was not rebuilt: %q", content)
+	}
+}
+
+func TestJITCapableNodeRetriesInconclusiveSmokeTest(t *testing.T) {
+	_, calls := withIntelMac(t, fixingCodesign)
+	oldSmoke := runNodeSmoke
+	t.Cleanup(func() { runNodeSmoke = oldSmoke })
+	timedOut := false
+	runNodeSmoke = func(ctx context.Context, node string) (int, string, error) {
+		if !timedOut {
+			timedOut = true
+			return 0, "", context.DeadlineExceeded
+		}
+		return oldSmoke(ctx, node)
+	}
+	node := writeFakeNode(t, crashingNodeScript)
+
+	first, err := jitCapableNode(context.Background(), node)
+	if err != nil || first != node || *calls != 0 {
+		t.Fatalf("timed-out check = %q, %v with %d codesign calls; want the bundled Node for now", first, err, *calls)
+	}
+	second, err := jitCapableNode(context.Background(), node)
+	if err != nil || second == node || *calls != 1 {
+		t.Fatalf("retry = %q, %v with %d codesign calls; want a repaired copy", second, err, *calls)
+	}
+}
+
+func TestJITCapableNodeRetriesFailedRepair(t *testing.T) {
+	fail := true
+	_, calls := withIntelMac(t, func(ctx context.Context, node, entitlements string) error {
+		if fail {
+			return errors.New("codesign unavailable")
+		}
+		return fixingCodesign(ctx, node, entitlements)
+	})
+	node := writeFakeNode(t, crashingNodeScript)
+	if _, err := jitCapableNode(context.Background(), node); err == nil {
+		t.Fatal("jitCapableNode succeeded although codesign failed")
+	}
+	fail = false
+	repaired, err := jitCapableNode(context.Background(), node)
+	if err != nil || repaired == node || *calls != 2 {
+		t.Fatalf("retry = %q, %v with %d codesign calls; want the repair retried", repaired, err, *calls)
 	}
 }

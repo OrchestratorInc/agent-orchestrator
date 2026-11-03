@@ -41,12 +41,12 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 	oldRoot := jitRepairRoot
 	jitRepairRoot = func() (string, error) { return root, nil }
 	jitNodesMu.Lock()
-	jitNodes = map[string]jitNodeResult{}
+	jitNodes = map[string]string{}
 	jitNodesMu.Unlock()
 	t.Cleanup(func() {
 		jitRepairRoot = oldRoot
 		jitNodesMu.Lock()
-		jitNodes = map[string]jitNodeResult{}
+		jitNodes = map[string]string{}
 		jitNodesMu.Unlock()
 	})
 

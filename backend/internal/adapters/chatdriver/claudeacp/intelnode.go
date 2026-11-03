@@ -64,16 +64,13 @@ var (
 	jitRepairRoot   = defaultJITRepairRoot
 )
 
-type jitNodeResult struct {
-	node string
-	err  error
-}
-
-// jitNodes caches the Node to launch for each bundled Node path, so the smoke
-// test and any repair run once per daemon.
+// jitNodes caches the Node to launch for each bundled Node path once that
+// choice is settled, so the smoke test and any repair run once per daemon.
+// Only settled choices are kept: an inconclusive smoke test (a timeout, a
+// Node that could not start) or a failed repair is retried on the next start.
 var (
 	jitNodesMu sync.Mutex
-	jitNodes   = map[string]jitNodeResult{}
+	jitNodes   = map[string]string{}
 )
 
 // jitCapableNode returns the Node executable the adapter should run in place
@@ -85,38 +82,41 @@ func jitCapableNode(ctx context.Context, node string) (string, error) {
 	jitNodesMu.Lock()
 	defer jitNodesMu.Unlock()
 	if cached, ok := jitNodes[node]; ok {
-		return cached.node, cached.err
+		return cached, nil
 	}
-	resolved, err := resolveJITCapableNode(ctx, node)
-	if ctx.Err() != nil {
-		// A cancelled caller proves nothing about the binary; retry next time.
-		return resolved, err
+	resolved, settled, err := resolveJITCapableNode(ctx, node)
+	if err == nil && settled {
+		jitNodes[node] = resolved
 	}
-	jitNodes[node] = jitNodeResult{node: resolved, err: err}
 	return resolved, err
 }
 
-func resolveJITCapableNode(ctx context.Context, node string) (string, error) {
+// resolveJITCapableNode picks the Node to launch. settled is false when the
+// choice rests on an inconclusive smoke test and should be made again later.
+func resolveJITCapableNode(ctx context.Context, node string) (string, bool, error) {
 	crashed, err := nodeCrashesOnJIT(ctx, node)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return "", false, ctxErr
 		}
 		// A smoke test that cannot run says nothing about the entitlement:
-		// launch the bundled Node as before and let any real failure surface
-		// through the normal ACP error path.
-		return node, nil //nolint:nilerr // Deliberately falls back to the unrepaired launch path.
+		// launch the bundled Node this time and let any real failure surface
+		// through the normal ACP error path, but check again next start.
+		return node, false, nil
 	}
 	if !crashed {
-		return node, nil
+		return node, true, nil
 	}
 	repaired, err := repairNodeJIT(ctx, node)
 	if err != nil {
-		return "", fmt.Errorf("packaged Node at %s crashes when V8 compiles JavaScript on this Intel Mac "+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", false, ctxErr
+		}
+		return "", false, fmt.Errorf("packaged Node at %s crashes when V8 compiles JavaScript on this Intel Mac "+
 			"(its signature lacks com.apple.security.cs.allow-unsigned-executable-memory), and AO could not "+
 			"re-sign a copy: %w. Switch the session to Terminal mode until an updated AO build is installed", node, err)
 	}
-	return repaired, nil
+	return repaired, true, nil
 }
 
 // nodeCrashesOnJIT reports whether node dies with the missing-entitlement V8
