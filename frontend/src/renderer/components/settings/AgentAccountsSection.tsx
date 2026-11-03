@@ -1,7 +1,7 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
@@ -39,7 +39,10 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
-	const rows = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	// The CLI signed in, outside AO, to a login already added shows as that one account.
+	const rows = withoutSameLogins(providerAccounts);
+	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id);
 	const login = logins[provider];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
@@ -109,21 +112,22 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
 			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
-			{cliLogin && !rows.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+			{cliLogin && !providerAccounts.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
 				<p className="truncate text-sm font-medium text-foreground">{t("settings.agentAccounts.cliLoginOf", { provider: providerNames[provider] })}</p>
 				<Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.harness.login")}</Button>
 			</div> : null}
-			{rows.map((account) => <AccountRow
+			{rows.map((account) => { const cliTwin = cliTwinOf(account); return <AccountRow
 				key={account.id}
-				account={account}
-				aoTokens={tokensByAccount.get(account.id)}
+				account={cliTwin?.default ? { ...account, default: true } : account}
+				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
+				alsoCliLogin={Boolean(cliTwin)}
 				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
-			/>)}
+			/>; })}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -137,9 +141,11 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	</>;
 }
 
-function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, aoTokens, alsoCliLogin = false, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
 	aoTokens: number | undefined;
+	/** The CLI's own login is signed in to this account too, and folded into it. */
+	alsoCliLogin?: boolean;
 	busy: string | null;
 	/** Only on the CLI's own login, which has no folder of its own to remove. */
 	cliLogin?: CliLoginControls;
@@ -179,6 +185,7 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="destructive-ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
+		{alsoCliLogin ? <p className="mt-0.5 text-xs text-muted-foreground">{t("settings.agentAccounts.alsoCliLogin", { provider: providerNames[account.provider] })}</p> : null}
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
 		<AccountLimits account={account} />
 	</div>;

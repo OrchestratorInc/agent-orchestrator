@@ -3789,6 +3789,7 @@
 	"settings.agentAccounts.checkSignIn": "Comprobar inicio de sesión",
 	"settings.agentAccounts.loginWaiting": "Aún no has iniciado sesión. Termina en la terminal y vuelve a comprobar.",
 	"settings.agentAccounts.loginDuplicate": "{{email}} ya está añadida.",
+	"settings.agentAccounts.alsoCliLogin": "La CLI de {{provider}} de este equipo también tiene la sesión iniciada en esta cuenta.",
 	"settings.agentAccounts.loginMismatch": "Esta cuenta es {{email}}. Inicia sesión de nuevo con ese acceso.",
 	"settings.agentAccounts.signInAgain": "Iniciar sesión de nuevo",
 	"settings.agentAccounts.aoUsage": "{{tokens}} tokens en Orchestrator, últimos 30 días",

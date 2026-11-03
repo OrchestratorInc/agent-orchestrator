@@ -3704,6 +3704,7 @@
 	"settings.agentAccounts.checkSignIn": "检查登录",
 	"settings.agentAccounts.loginWaiting": "尚未登录。请在终端中完成后再检查。",
 	"settings.agentAccounts.loginDuplicate": "{{email}} 已添加。",
+	"settings.agentAccounts.alsoCliLogin": "这台电脑上的 {{provider}} CLI 也登录了此账号。",
 	"settings.agentAccounts.loginMismatch": "此账户是 {{email}}。请使用该登录重新登录。",
 	"settings.agentAccounts.signInAgain": "重新登录",
 	"settings.agentAccounts.aoUsage": "Orchestrator 中 {{tokens}} 个 token，最近 30 天",
