@@ -1,7 +1,7 @@
 {
 	"name": "@aoagents/ao-linux-x64",
 	"version": "0.10.0",
-	"description": "Agent Orchestrator CLI binary for Linux x64.",
+	"description": "Orchestrator CLI binary for Linux x64.",
 	"license": "MIT",
 	"os": [
 		"linux"
