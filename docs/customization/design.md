@@ -1,6 +1,6 @@
 # 多编码 Agent 桌面编排平台 — 详细设计 V0.1
 
-> 状态：**初版详细设计，可进入工程评审与 M0/M1 实施；尚未编码或运行验证**。
+> 状态：**初版详细设计已完成；Workflow 业务代码尚未实现。M0 已完成无预算范围的环境、构建和部分桌面/Agent 预检，正式验收仍为 BLOCKED；M0-05 预算暂缓。M1-01～M1-05 的限定零 Provider 任务计划已建立，尚未开始代码实现**（见 [m0-report.md](m0-report.md) 与 [m1-plan.md](m1-plan.md)）。
 > 日期：2026-11-03；基座：Orchestrator.inc 上游 `23840aa54104`；本地改造分支：`feat/multi-agent-desktop`。
 > 需求输入：`requirements.md` Q1–Q10；源码事实：`gap-analysis.md`。未来调整以验证结果和明确需求变更为准。
 
@@ -401,25 +401,18 @@ Attempt 产物
 
 ## 14. 实施前检查与关键风险
 
-- **运行基线**：当前用户机器 Node 为 22，`backend/go.mod` 要求 Go 1.27.1；需隔离/升级开发工具后再执行完整 build/typecheck/test，本次未执行。
-- **四 Agent 兼容**：源码有适配器，不表示本机 CLI 已安装/已认证；M0 必须形成能力实测矩阵，不能以目录存在代替验证。
-- **Windows 沙箱**：默认 Session 工作区不构成安全边界。详细实现前必须选择真正可执行的 OS 级限制或降低默认权限。
-- **上游同步**：尽量添加独立 Workflow 包和 UI 子模块，减少侵入 Session Manager 与复杂的现有 Electron 主进程。
+- **运行基线**：M0 已在隔离工作树完成 Go build/vet、前端 typecheck/build 与 Dev Electron 启动；Windows 全量 Go/Vitest 测试仍非绿，Go 工具链通过 GOTOOLCHAIN=auto 使用缓存的 1.27.1。详细结果见 [m0-report.md](m0-report.md)。
+- **四 Agent 兼容**：M0 的 A-01 仅验证 CLI/身份/驱动预检与模型目录，真实 Chat 轮次尚未执行；M0-05 预算暂缓。能力矩阵必须按运行时事实驱动，不以源码存在代替验证。
+- **Windows 沙箱**：默认 Session 工作区不构成安全边界。后续执行层实现前必须选择真正可执行的 OS 级限制或降低默认权限。
+- **上游同步**：M1 尽量添加独立 Workflow 包和 UI 子模块，减少侵入 Session Manager 与复杂的现有 Electron 主进程。
 - **原仓库数据**：开发运行需配置独立数据目录；不触碰已安装 AO 的 `~/.ao` 状态，不自动修改 `.codex/` / `.claude/` 配置。
-- **数据库与 API**：新增 migration、sqlc、OpenAPI 生成产物需与仓库 CI 对齐；本次只有文档变更。
-- **产品约束**：首次版本默认不自动合并目标分支、不远程 push、不允许运行未经审批的系统级危险命令。
+- **数据库与 API**：M1 新增 migration、sqlc、OpenAPI 生成产物必须遵循 `AGENTS.md` 并与仓库 CI 对齐；本轮仅更新文档，不含业务代码。
+- **产品约束**：首版默认不自动合并目标分支、不远程 push、不允许运行未经审批的系统级危险命令。
 
-## 15. 接下来的第一张开发任务单（建议）
+## 15. 当前实施任务入口
 
-**M0-01：Windows 基座与四 Agent 能力验证**
+M0 的执行结果、剩余阻断与 M0-05 预算前提统一记录在 [m0-report.md](m0-report.md)；M0-05 预算暂未批准，后续执行，当前不得发送真实 Provider 请求。
 
-输入：`feat/multi-agent-desktop` 当前 HEAD 及测试 Git 仓库、独立 `AO_DATA_DIR`。
+M1 的实施拆解与验收标准统一记录在 [m1-plan.md](m1-plan.md)。当前第一项为 **M1-01：数据库迁移与领域模型**，按顺序完成 M1-01～M1-05。M1 只允许本地后端核心与 Fake/Stub 测试，不启动真实 Agent、不改用户 `~/.ao` 数据、不触碰 `.codex/` / `.claude/` 配置；M2～M6 不在本阶段提前实现。
 
-执行：
-1. 安装或选择隔离 Node 24 / Go 1.27.1（先核实不污染全局配置）。
-2. `npm ci`、Go build、最小测试；能启动独立 Electron/Daemon 实例并不读取真实 AO 用户数据。
-3. 对 Codex、Claude、OMP、DeepSeek Harness 逐一验证 binary、版本、登录、Chat/TUI、模型切换、消息/Queue/Steer/Cancel/Resume、权限强制执行、Token 使用量事件。
-4. 输出结构化 capability matrix、未通过项与可安全降级策略。
-5. 仅在通过 M0 后启动工作流迁移与 Scheduler 实现。
-
-**通过条件**：可重现实验命令、工具版本、最小日志、能力矩阵和失败限制；不需要四个执行器都支持所有特性，但所有缺失必须可检测、可提示、不误导用户。
+**M1-01 开始前**：复核 SQLite migration / sqlc / domain 现有模式，确认测试数据库路径和生成命令；遵循根目录 `AGENTS.md`。若未来准备向上游提交 Feature PR，还需先满足 `CONTRIBUTING.md` 的 core-team approval 要求。

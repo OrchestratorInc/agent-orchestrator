@@ -1,7 +1,8 @@
 # M0 详细设计：Windows 基座与四种编码 Agent 能力验证
 
 > 文档版本：V0.1，2026-11-03
-> 状态：**设计已完成，M0 尚未执行；所有测试结果均待验证。**
+> 状态：**设计已完成；M0-01～M0-04 的无预算验证工作已执行，子项包含 PARTIAL / NOT_TESTED / BLOCKED；M0-05 预算暂未批准，后续执行。** 结果见 [m0-report.md](m0-report.md)，能力矩阵见 [m0-capability-matrix.md](m0-capability-matrix.md)，差距单见 [m0-adapter-gaps.md](m0-adapter-gaps.md)。
+> 当前判定：**M0 正式验收 BLOCKED；M1 可按用户授权的零 Provider 范围先行**（见 m0-report.md §8.4 与 [m1-plan.md](m1-plan.md)）。
 > 工作区：`E:\code\agent-orchestrator`；开发分支：`feat/multi-agent-desktop`。
 > 上游基线：`23840aa54104`；对应总体设计 `design.md` 第 13—15 节，需求 `requirements.md` Q1—Q10。
 > 范围：M0-01（环境、现有桌面应用和 Codex CLI / Claude Code CLI / Oh My Pi / DeepSeek Harness 的真实能力验证）。
@@ -278,15 +279,19 @@ next_action:
 - Token/成本不可观测：显示 unknown/estimated，禁用无法保证的硬预算预测。
 - 远程 Worker：M0 不测试真实远程执行；只检查后续接口规划完整即可。
 
-### 8.3 M0 完成定义
+### 8.3 M0 完成定义与 M1 限定授权
 
-由用户确认 `m0-report.md` 的结果分级：`PASS`（全部强制项）、`CONDITIONAL`（记录降级且明确批准）、`BLOCKED`（基础或安全门槛未过）。仅在 PASS 或已签字的 CONDITIONAL 情况下进入 M1。所有结论应带具体证据/日期/版本，不能自动用设计假设替代验证结果。
+由用户确认 `m0-report.md` 的结果分级：`PASS`（全部强制项）、`CONDITIONAL`（记录降级且明确批准）、`BLOCKED`（基础或安全门槛未过）。**M0 正式验收只有在 PASS 或用户明确批准的 CONDITIONAL 下才能关闭。**
+
+若 M0 仍为 BLOCKED，用户可以在完成 M1 继承性分流后，单独授权一个明确限定的 M1 工作范围；该授权不改变 M0 状态，也不能被描述为 M0 已通过。当前授权仅覆盖 [m1-plan.md](m1-plan.md) 中 M1-01～M1-05 的本地后端核心，严格禁止真实 Agent/Provider 调用，M0-05 预算仍暂缓。后续如需扩大到 M2～M6，必须重新确认范围与安全边界。
+
+所有结论应带具体证据/日期/版本，不能自动用设计假设替代验证结果。
 
 ## 9. 风险、待决策项与下一步
 
 | 风险 | 影响 | 处理 |
 | --- | --- | --- |
-| Node 22、Go 1.26 与上游要求不符 | 无法可靠构建 / 测试 | 优先准备隔离 Node 24、Go 1.27.1；不要改全局安装 |
+| 工具链版本与获取方式 | Go 本地安装为 1.26.3，仓库要求 1.27.1；本机通过 GOTOOLCHAIN=auto 构建，但是否接受隐式工具链仍待确认。Node 22.20.0 已实测可完成 install/typecheck/build，仓库未声明 Node 主版本 | 不改全局安装；按 m0-report.md §8.3 留待用户确认 Go 工具链策略 |
 | CLI 未安装、登录状态未知 | 不能运行真实 Chat | 分类 BLOCKED；用户自行完成登录后重试 |
 | OMP / DeepSeek Harness 的 ACP 版本或特定模型协议有差异 | 模型/effort/审批不一致 | 使用各 Adapter 的探测和字段映射；最小样本验证 |
 | Windows shell 进程/终端行为不同 | 进程残留或启动失败 | 测试 ConPTY、host adopt、进程树与退出清理 |
@@ -294,4 +299,8 @@ next_action:
 | Provider API 限流或费用 | 测试不完整、超额 | 先设置明确预算，再按最小轮次采样 |
 | 旧 Daemon / Electron 实例共用 Profile | 会话污染/锁冲突 | 检查 AO_DATA_DIR、AO_RUN_FILE、AO_DEV_ELECTRON_DIR 及 PID |
 
-**下一项实际开发任务**：执行 `M0-01` 环境只读检查并登记结果，然后经审批创建试验 Worktree 与隔离数据目录，依序进行构建和 Agent 真实能力验证。**本文件创建本身不代表 M0 已执行。**
+**已执行**：M0-01～M0-04 中已批准的无预算验证工作，包括环境/隔离、Go 与前端构建、独立 Daemon、Dev Electron、W-01/W-02/W-05/W-06/W-09/W-10 的部分场景，以及 A-01 四 Agent 预检（0 provider turn）；各子项结论以 [m0-report.md](m0-report.md) 为准。
+
+**暂缓**：M0-05 预算尚未批准，后续执行；A-02～A-15 未执行，W-07 未测试，W-03/W-04/W-08 的 Session-scoped 场景未完成。Windows 的 `go test ./...` 与 `npm test` 基线非绿，前端仍有 18 个文件 / 21 个测试待分诊。
+
+**下一项开发任务**：按 [m1-plan.md](m1-plan.md) 从 **M1-01 数据库迁移与领域模型** 开始，严格保持零 Provider 边界；M0-05 只有在用户后续明确批准预算后再执行。**本设计文件本身不代表任何 M1 代码已实现；验收结论以 M0/M1 各自报告为准。**
