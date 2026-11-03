@@ -142,6 +142,7 @@ func (s *Service) managedRecordMatchesPlan(record managedRecord, plan Plan) bool
 // opencode-v2 launcher but installs bin/opencode, and the Copilot resolver
 // follows the npm loader to its platform binary (copilot-darwin-arm64).
 var managedCLINames = map[Target]string{
+	TargetJCode:      "jcode",
 	TargetOpencodeV2: "opencode",
 	TargetCopilot:    "copilot",
 }

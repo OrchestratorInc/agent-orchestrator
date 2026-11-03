@@ -17162,6 +17162,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - jcode
           - fake
           type: string
         approvalMode:
@@ -17880,6 +17881,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - jcode
           - cloudflared
           - cua-driver
           type: string
@@ -21314,6 +21316,7 @@ components:
           - command-code
           - memcode
           - hermes
+          - jcode
           type: string
         issueId:
           type: string

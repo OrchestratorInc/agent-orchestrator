@@ -28,6 +28,9 @@ type officialManagedRecipe struct {
 	// command, when set, replaces the vendor's script: AO downloads the
 	// release itself because the script cannot run beside live sessions.
 	command func(dir, pin, goos, goarch string) ([]string, error)
+	// firstInstall installs the first copy as an AO release too, for a vendor
+	// installer whose side effects the user's own install should not get.
+	firstInstall bool
 }
 
 // managedInstallerPath is the PATH an official installer runs with: system
@@ -94,6 +97,23 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 			return officialInstallerEnv(dir, "MEMCODE_INSTALL_DIR="+filepath.Join(dir, "bin"), "MEMCODE_VERSION="+version)
 		},
 		args: noArgs,
+	},
+	// jcode.sh/install always appends PATH lines to shell profiles, runs
+	// `jcode setup-hotkey`, and reloads a running jcode server. In a release
+	// with a private HOME the profiles and hotkey state stay inside it; the
+	// reload and telemetry have their own switches. The script still checks
+	// the archive against the release's SHA256SUMS.
+	TargetJCode: {
+		binRel: filepath.Join("bin", "jcode"),
+		env: func(dir, pin string) []string {
+			return officialInstallerEnv(dir,
+				"JCODE_INSTALL_DIR="+filepath.Join(dir, "bin"),
+				"JCODE_VERSION="+withV(pin),
+				"JCODE_SKIP_SERVER_RELOAD=1",
+				"JCODE_NO_TELEMETRY=1")
+		},
+		args:         noArgs,
+		firstInstall: true,
 	},
 	// fx takes its release tag as the first argument.
 	TargetFX: {

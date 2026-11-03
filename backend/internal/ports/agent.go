@@ -822,8 +822,11 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
-	Config          AgentConfig
-	DataDir         string
+	Config  AgentConfig
+	DataDir string
+	// Env carries the launch environment overrides, including provider state
+	// roots. Restore eligibility must inspect the same state as the runtime.
+	Env             map[string]string
 	Kind            domain.SessionKind
 	Permissions     PermissionMode
 	AllowedTools    []string
@@ -844,8 +847,10 @@ type RestoreConfig struct {
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
 type SessionRef struct {
-	ID            string
-	Metadata      map[string]string
+	ID       string
+	Metadata map[string]string
+	// Env is the session's provider environment, including native state roots.
+	Env           map[string]string
 	WorkspacePath string
 	// DataDir is AO's isolated state root. Native lifecycle commands must use it
 	// as their stable working/configuration root, never the session worktree.

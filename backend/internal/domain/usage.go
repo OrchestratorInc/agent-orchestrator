@@ -16,6 +16,9 @@ const (
 	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
 	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
 	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	// UsageSourceJCodeLedger is AO's append-only copy of the token_usage
+	// jcode stores on each assistant message of its native session file.
+	UsageSourceJCodeLedger UsageSourceKind = "jcode_ledger"
 )
 
 // UsageBindingState tracks the root native-session binding lifecycle.

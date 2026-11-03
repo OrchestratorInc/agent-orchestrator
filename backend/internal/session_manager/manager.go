@@ -7072,13 +7072,14 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
+		Env:           env,
 		WorkspacePath: workspacePath,
 		Metadata: map[string]string{
 			ports.MetadataKeyAgentSessionID: meta.AgentSessionID,
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
+	cfg := ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, Env: env, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions}
 	var cmd []string
 	var ok bool
 	var err error
