@@ -119,7 +119,7 @@ func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) boo
 	if kimi == "" {
 		kimi = filepath.Join(home, ".kimi-code")
 	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi, domain.HarnessOMP: ompRoot(home)}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
@@ -421,8 +421,8 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	case domain.HarnessCodex:
 		// Archived Codex threads are not resumable without unarchiving them in Codex.
 		dir = filepath.Join(root, "sessions")
-	case domain.HarnessPi:
-		// Pi stores one JSONL per conversation under sessions/<cwd-dashed>/.
+	case domain.HarnessPi, domain.HarnessOMP:
+		// Pi and OMP store one JSONL per conversation under sessions/<cwd-dashed>/.
 		dir = filepath.Join(root, "sessions")
 	case domain.HarnessDroid:
 		dir = filepath.Join(root, droidSessions)
@@ -459,8 +459,8 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 			if key = codexThreadID(path); key == "" {
 				return nil
 			}
-		case domain.HarnessPi:
-			// Each Pi JSONL is one conversation; the default key (its path) groups it alone.
+		case domain.HarnessPi, domain.HarnessOMP:
+			// Each JSONL is one conversation; the default key (its path) groups it alone.
 			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
@@ -542,6 +542,9 @@ func (f sourceFiles) nativeID() string {
 	if f.harness == domain.HarnessPi && len(f.paths) > 0 {
 		return piNativeID(f.paths[0])
 	}
+	if f.harness == domain.HarnessOMP && len(f.paths) > 0 {
+		return ompNativeIDFromPath(f.paths[0])
+	}
 	return f.key
 }
 
@@ -588,7 +591,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
 	projects := s.registeredDiscoveryRoots(dests)
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessPi, domain.HarnessOMP}
 	for harness := range harnessImporters {
 		harnesses = append(harnesses, harness)
 	}
@@ -796,7 +799,7 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	switch source.harness {
 	case domain.HarnessClaudeCode:
 		rec.Metadata.Model = source.model
-	case domain.HarnessPi:
+	case domain.HarnessPi, domain.HarnessOMP:
 		rec.Metadata.Model, rec.Metadata.Effort = source.model, source.effort
 	}
 	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)

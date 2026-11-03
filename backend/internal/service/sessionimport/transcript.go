@@ -354,6 +354,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if importer, ok := harnessImporters[harness]; ok {
 		return importer.read(ctx, root, paths...)
 	}
+	if harness == domain.HarnessOMP {
+		return readOMPTranscript(ctx, root, paths...)
+	}
 	if harness == domain.HarnessPi {
 		return readPiTranscript(ctx, root, paths...)
 	}
