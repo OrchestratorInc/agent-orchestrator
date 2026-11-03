@@ -12,6 +12,9 @@ import { SessionTabRegistry } from "./sessions";
 import { TrustedInput } from "./trusted-input";
 
 const MAX_BACKOFF_MS = 60_000;
+const RECONNECT_ALARM = "ao-reconnect";
+// Chrome's minimum alarm period.
+const RECONNECT_ALARM_MINUTES = 0.5;
 
 export type BridgeStatus = {
 	state: "connecting" | "connected" | "disconnected";
@@ -54,6 +57,16 @@ export class Bridge {
 			this.handleUi(message).then(sendResponse, (error) => sendResponse({ error: String(error) }));
 			return true as unknown as void;
 		});
+		// Chrome suspends an idle MV3 service worker, which also drops the
+		// reconnect timer, and only an extension event starts it again. These
+		// events reconnect after AO restarts or Chrome starts. An open native
+		// port keeps the worker alive, so connect() is a no-op while connected.
+		this.chrome.alarms.onAlarm.addListener((alarm) => {
+			if (alarm.name === RECONNECT_ALARM) this.connect();
+		});
+		this.chrome.runtime.onStartup.addListener(() => this.connect());
+		this.chrome.runtime.onInstalled.addListener(() => this.connect());
+		void this.chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: RECONNECT_ALARM_MINUTES }).catch(() => undefined);
 		void this.updateBadge();
 		this.connect();
 	}

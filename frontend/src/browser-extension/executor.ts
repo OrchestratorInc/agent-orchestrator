@@ -13,7 +13,7 @@ import type { NetworkCapture } from "./network";
 import { evaluateUrl, parsePolicy, type SitePolicy, trustedInputAllowed } from "./policy";
 import { BridgeError, isRecord, stringArg } from "./protocol";
 import { annotatePng, base64ToBytes, bytesToBase64, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
-import type { ActiveTab, SessionTabRegistry, SessionTabs } from "./sessions";
+import { groupTitle, type ActiveTab, type SessionTabRegistry, type SessionTabs } from "./sessions";
 import type { RefInfo } from "./snapshot";
 import type { TrustedInput } from "./trusted-input";
 import { normalizeAgentURL, originOf } from "./urls";
@@ -314,10 +314,13 @@ export class Executor {
 
 	/**
 	 * Chrome drops trusted input to hidden pages, so show the agent's tab in
-	 * its window (without focusing the window) and wait until it is visible.
+	 * its own window (without focusing the window) and wait until it is visible.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
-		if (!page.tab.active) await this.deps.chrome.tabs.update(page.tabId, { active: true });
+		const chrome = this.deps.chrome;
+		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
+		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
+		if (window?.state === "minimized") await chrome.windows.update(page.tab.windowId, { state: "normal" }).catch(() => undefined);
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
@@ -325,7 +328,7 @@ export class Executor {
 			if (Date.now() >= deadline) {
 				throw new BridgeError(
 					"BROWSER_TAB_HIDDEN",
-					"Chrome is hiding the AO tab (is its window minimized?); trusted input needs the tab on screen",
+					`Chrome is hiding the "${groupTitle(ctx.sessionId)}" window; keep it on screen (it may sit beside your other windows) so trusted input and screenshots can reach it`,
 				);
 			}
 			await sleep(50, ctx.signal);

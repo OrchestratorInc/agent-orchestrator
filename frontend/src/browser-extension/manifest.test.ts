@@ -21,7 +21,7 @@ describe("extension manifest", () => {
 	it("asks only for what Chrome mode needs and never declares content scripts", () => {
 		expect(manifest.manifest_version).toBe(3);
 		expect([...manifest.permissions].sort()).toEqual(
-			["debugger", "nativeMessaging", "scripting", "storage", "tabGroups", "tabs", "webNavigation", "webRequest"].sort(),
+			["alarms", "debugger", "nativeMessaging", "scripting", "storage", "tabGroups", "tabs", "webNavigation", "webRequest"].sort(),
 		);
 		expect(manifest.host_permissions).toEqual(["<all_urls>"]);
 		// Content runs only in tabs an approved session owns, injected on demand.

@@ -52,6 +52,8 @@ class FakeChrome {
 	debuggerCalls: { method: string; params?: Record<string, unknown> }[] = [];
 	attached = 0;
 	windowsCreated: string[] = [];
+	windowStates = new Map<number, string>();
+	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
 	events = {
 		tabsRemoved: event(),
@@ -187,8 +189,13 @@ class FakeChrome {
 					self.windowsCreated.push(url ?? "");
 					return { id: self.nextWindow++, focused: true };
 				},
+				get: async (windowId) => ({ id: windowId, focused: false, state: self.windowStates.get(windowId) ?? "normal" }),
 				getLastFocused: async () => ({ id: 1, focused: true }),
-				update: async () => ({ id: 1, focused: true }),
+				update: async (windowId, props) => {
+					self.windowUpdates.push({ windowId, ...props });
+					if (props.state) self.windowStates.set(windowId, props.state);
+					return { id: windowId, focused: false };
+				},
 				remove: async () => undefined,
 				onRemoved: self.events.windowsRemoved,
 			},
@@ -222,6 +229,7 @@ class FakeChrome {
 				onErrorOccurred: self.events.navError,
 			},
 			webRequest: { onBeforeRequest: self.events.requestStarted, onCompleted: self.events.requestCompleted, onErrorOccurred: event() } as never,
+			alarms: { create: async () => undefined, onAlarm: event() },
 			action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined, setTitle: async () => undefined },
 		} as ChromeApi;
 	}
@@ -365,6 +373,34 @@ describe("Executor", () => {
 		expect(await run("snapshot", { interactive: true, delta: true })).toMatchObject({ kind: "unchanged", revision: 2, baseRevision: 1 });
 	});
 
+	it("gives each session its own unfocused window instead of the user's", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
+		// Window 1 is the user's focused window in the fake.
+		expect(windowOf("https://shop.test/")).not.toBe(1);
+		expect(windowOf("https://shop.test/done")).not.toBe(1);
+		expect(windowOf("https://shop.test/")).not.toBe(windowOf("https://shop.test/done"));
+		// A second tab for a session joins that session's window.
+		await run("tab-new", { url: "https://shop.test/more" }, "s1");
+		expect(windowOf("https://shop.test/more")).toBe(windowOf("https://shop.test/"));
+	});
+
+	it("restores a minimized agent window for trusted input without focusing it", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		fake.windowStates.set(sessionWindow, "minimized");
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
+		expect(fake.windowUpdates).toEqual([{ windowId: sessionWindow, state: "normal" }]);
+	});
+
 	it("blocks denied sites and non-web pages", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
@@ -488,8 +524,9 @@ describe("Executor", () => {
 		const { fake, run, approve } = setup();
 		await approve();
 		await run("open", { url: "https://shop.test/" });
-		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: 1 });
-		// The user switches to a personal tab during every capture.
+		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: sessionWindow });
+		// The user switches the session's window to another tab during every capture.
 		fake.duringCapture = () => fake.activate(personal.id!);
 		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
 

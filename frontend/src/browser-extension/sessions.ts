@@ -1,5 +1,5 @@
 // AO session ↔ Chrome tab group ownership. Each AO session works only in its
-// own tab group ("AO · <session>") in the user's window. Tabs get AO's
+// own tab group ("AO · <session>") in its own Chrome window. Tabs get AO's
 // logical ids (t1, t2, …). A tab the user drags out of the group is no longer
 // the agent's; a tab the user drags in becomes the agent's.
 
@@ -121,11 +121,16 @@ export class SessionTabRegistry {
 			const windows = await this.chrome.tabs.query({ windowId }).catch(() => []);
 			if (windows.length === 0) windowId = undefined;
 		}
+		let tab: (Tab & { id?: number }) | undefined;
 		if (windowId === undefined) {
-			const focused = await this.chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
-			windowId = focused?.id ?? (await this.chrome.windows.create({ type: "normal", focused: false })).id;
+			// The session's own unfocused window: trusted input and screenshots
+			// need the agent's tab in front of its window, which must never be
+			// a window the user is working in.
+			const created = await this.chrome.windows.create({ type: "normal", focused: false, state: "normal", url: url ?? "about:blank" });
+			windowId = created.id;
+			tab = created.tabs?.[0];
 		}
-		const tab = await this.chrome.tabs.create({ url: url ?? "about:blank", active: false, windowId });
+		tab ??= await this.chrome.tabs.create({ url: url ?? "about:blank", active: false, windowId });
 		if (tab.id === undefined) throw new BridgeError("BROWSER_TARGET_UNAVAILABLE", "Chrome did not create a tab");
 		this.creating.add(tab.id);
 		try {
