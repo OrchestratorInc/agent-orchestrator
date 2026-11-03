@@ -1,7 +1,7 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Cloud, FolderClosed, GitFork, GitPullRequest, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
+import { Cloud, FolderClosed, GitFork, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -50,7 +50,7 @@ import { CLOUD_PROJECT_KIND, findProjectOrchestrator, STANDALONE_PROJECT_KIND } 
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { CreateProjectFlow } from "../CreateProjectFlow";
+import { CreateProjectFlow, GitHubIcon } from "../CreateProjectFlow";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -61,13 +61,12 @@ import {
 	PreviewBoard,
 	PreviewChat,
 	PreviewNewChat,
-	PreviewSessionPullRequest,
+	PreviewScene,
 	PreviewSidebar,
 	PreviewStage,
-	PreviewWindow,
 	type PreviewCard,
 	type PreviewSidebarProject,
-	type PreviewSidebarSession,
+	type ScenePage,
 } from "./OnboardingPreviews";
 import { PhoneWorkersScreen } from "./OnboardingPhone";
 
@@ -111,7 +110,14 @@ const STARTER_PROMPTS = [
 	{ label: "firstRun.startPromptTestsLabel", prompt: "firstRun.startPromptTests" },
 ] as const;
 
-const ORCH_POINTS = ["firstRun.orchPoint1", "firstRun.orchPoint2", "firstRun.orchPoint3"] as const;
+/** "How Orchestrator works": the three parts the welcome preview plays. */
+const ORCH_POINTS = [
+	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
+	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
+	{ title: "firstRun.orchPoint3Title", body: "firstRun.orchPoint3Body" },
+] as const;
+/** How long each part of the story holds before the next plays. */
+const POINT_HOLD_MS = [4200, 3800, 4800] as const;
 
 type SystemInstallTarget = "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
 type InstallJob = components["schemas"]["InstallJob"];
@@ -207,7 +213,6 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	const index = STEPS.indexOf(step);
 	const reduceMotion = useReducedMotion();
 	const [footerSlot, setFooterSlot] = useState<HTMLDivElement | null>(null);
-	const [previewSlot, setPreviewSlot] = useState<HTMLDivElement | null>(null);
 	const [confirmingSkip, setConfirmingSkip] = useState(false);
 	// The window's width, for the copy column / stage split (stage from 900px).
 	const rowRef = useRef<HTMLDivElement>(null);
@@ -263,10 +268,32 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	};
 	useOnboardingStep("welcome", step === "welcome");
 	const first = step === "welcome";
+	// The welcome story plays on its own and loops; each loop replays the chat.
+	const [point, setPoint] = useState(0);
+	const [cycle, setCycle] = useState(0);
+	useEffect(() => {
+		if (step !== "welcome") return;
+		const timer = window.setTimeout(() => {
+			if (point === ORCH_POINTS.length - 1) setCycle((current) => current + 1);
+			setPoint((point + 1) % ORCH_POINTS.length);
+		}, POINT_HOLD_MS[point]);
+		return () => window.clearTimeout(timer);
+	}, [step, point]);
+	const toolAgents = useToolAgents();
+	const account = cloud.status === "authenticated" ? cloud.session : null;
+	const scene = (
+		<OnboardingScene
+			step={step}
+			point={point}
+			cycle={cycle}
+			account={account ? { name: account.user.displayName?.trim() || account.user.email, avatarUrl: account.user.avatarUrl } : null}
+			pickerAgents={toolAgents.pickerAgents}
+			selectedAgentId={toolAgents.selectedId}
+		/>
+	);
 
 	return (
 		<FooterSlotContext.Provider value={footerSlot}>
-		<PreviewSlotContext.Provider value={previewSlot}>
 		<div
 			className={cn("fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
 			data-testid="first-run-onboarding"
@@ -276,10 +303,9 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		>
 			{/* Window drag strip over the top edge; the macOS traffic lights sit in it. */}
 			<div aria-hidden="true" className="absolute inset-x-0 top-0 z-10 h-toolbar" style={dragStyle} />
-			{/* The copy cross-fades per step; the preview stage on the right stays
-			    mounted, so the wallpaper, window and phone never blink. Each step
-			    portals its window into the stage, and the outgoing step stays
-			    mounted under the incoming one until its fade ends. */}
+			{/* The copy changes per step; the preview stage on the right stays
+			    mounted with one app window whose parts animate from step to step
+			    (OnboardingScene), so nothing in it is ever swapped out whole. */}
 			{/* On the project step the copy's column widens over the whole window
 			    (the stage column closes to nothing) so the setup sits centred; the
 			    stage keeps its full layout width meanwhile and is cropped, not
@@ -299,13 +325,11 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							initial={reduceMotion ? false : { opacity: 0 }}
 							animate={{ opacity: 1 }}
 							// The outgoing copy leaves at once (the column is see-through in a
-							// translucent window, so two steps' text must never overlap). Its
-							// preview keeps its own fade in the stage, and the step stays
-							// mounted until that finishes.
+							// translucent window, so two steps' text must never overlap).
 							exit={{ opacity: 0, transition: { duration: 0 } }}
 							transition={FADE}
 						>
-							{step === "welcome" ? <WelcomeStep onNext={goNext} /> : null}
+							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
 							{step === "tools" ? <ToolsStep onNext={goNext} /> : null}
 							{step === "project" ? <FirstProjectStep onFinish={onFinish} /> : null}
@@ -322,7 +346,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 							phoneShown={step === "signin"}
 							opaque={step === "signin"}
 						>
-							<div ref={setPreviewSlot} className="absolute inset-0" />
+							{scene}
 						</PreviewStage>
 					</div>
 				) : null}
@@ -354,7 +378,6 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 				onOpenChange={setConfirmingSkip}
 			/>
 		</div>
-		</PreviewSlotContext.Provider>
 		</FooterSlotContext.Provider>
 	);
 }
@@ -381,31 +404,6 @@ function Progress({ index }: { index: number }) {
 }
 
 const FooterSlotContext = createContext<HTMLDivElement | null>(null);
-const PreviewSlotContext = createContext<HTMLDivElement | null>(null);
-
-/** Puts a step's app window contents into the shared stage. The old step's
- * contents fade out as the new one's fade in; the glass plate under both stays. */
-function StagePreview({ children }: { children: ReactNode }) {
-	const slot = useContext(PreviewSlotContext);
-	const reduceMotion = useReducedMotion();
-	// The stage's camera frames only the current step's focus, not one leaving.
-	const present = useIsPresent();
-	if (!slot) return null;
-	return createPortal(
-		<motion.div
-			className="absolute inset-0"
-			data-stage-exiting={present ? undefined : ""}
-			initial={reduceMotion ? false : { opacity: 0 }}
-			animate={{ opacity: 1 }}
-			exit={{ opacity: 0, transition: reduceMotion ? { duration: 0 } : FADE }}
-			transition={FADE}
-		>
-			{children}
-		</motion.div>,
-		slot,
-	);
-}
-
 /** Portals the step's own action into the bottom strip, which does not fade. */
 function StepAction({ children }: { children: ReactNode }) {
 	const slot = useContext(FooterSlotContext);
@@ -415,42 +413,39 @@ function StepAction({ children }: { children: ReactNode }) {
 	return createPortal(children, slot);
 }
 
-/** One page: the copy and controls on the left, the app's own UI in the stage. */
+/** One page's copy and controls. The app preview beside it is the flow's one
+ * persistent scene (OnboardingScene), driven by the step. */
 function StepSplit({
 	icon,
 	title,
 	body,
 	children,
-	preview,
 	centered = false,
 }: {
 	icon?: ReactNode;
-	/** The stage is closed on this step: centre the copy in the window. */
+	/** The stage is closed on this step: centre the copy across the window. */
 	centered?: boolean;
 	title: string;
 	body?: ReactNode;
 	children?: ReactNode;
-	preview: ReactNode;
 }) {
 	return (
-		<>
-			{/* Fixed top anchor: the title sits at the same height on every step;
-			    only what is under it changes. */}
-			<div
-				className={cn(
-					"flex min-h-0 w-full flex-col overflow-y-auto bg-background",
-					centered ? "items-center justify-center px-12 py-10" : "pb-10 pl-12 pr-10 pt-[max(5rem,18vh)]",
-				)}
-			>
-				<div className="flex w-full max-w-md flex-col">
-					{icon ? <div className="pb-5">{icon}</div> : null}
-					<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
-					{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
-					{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
-				</div>
+		// Fixed top anchor: the title sits at the same height on every step,
+		// centred or not, so only what is under it changes and the copy only
+		// moves sideways as the stage closes (the column widens under it).
+		<div
+			className={cn(
+				"flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-10 pt-[max(5rem,18vh)]",
+				centered ? "items-center px-12" : "pl-12 pr-10",
+			)}
+		>
+			<div className="flex w-full max-w-md flex-col">
+				{icon ? <div className="pb-5">{icon}</div> : null}
+				<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
+				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
+				{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
 			</div>
-			<StagePreview>{preview}</StagePreview>
-		</>
+		</div>
 	);
 }
 
@@ -489,161 +484,153 @@ function CheckRow({ icon, label, detail, trailing }: { icon?: ReactNode; label: 
 }
 
 /** Example work for the previews: clearly sample tasks, not the user's data. */
-function useExampleCards() {
+function useExampleTasks() {
 	const { t } = useTranslation();
-	return useMemo(() => {
-		const tasks = [
-			{ id: "example-1", title: t("firstRun.exampleTask1"), branch: "tests/sign-in", provider: "claude-code" },
-			{ id: "example-2", title: t("firstRun.exampleTask2"), branch: "fix/auth-redirect", provider: "codex" },
-			{ id: "example-3", title: t("firstRun.exampleTask3"), branch: "docs/readme", provider: "claude-code" },
-		] as const;
-		return tasks;
-	}, [t]);
+	return useMemo(() => [
+		{ id: "example-1", title: t("firstRun.exampleTask1"), provider: "claude-code" },
+		{ id: "example-2", title: t("firstRun.exampleTask2"), provider: "codex" },
+		{ id: "example-3", title: t("firstRun.exampleTask3"), provider: "claude-code" },
+	] as const, [t]);
 }
 
-function card(task: ReturnType<typeof useExampleCards>[number], rest: Omit<PreviewCard, "id" | "title" | "branch" | "provider">): PreviewCard {
-	return { ...task, ...rest };
+/**
+ * Where the example work stands at each beat of the story:
+ * - none: nothing started yet (the person is still describing it);
+ * - working: the orchestrator has started a worker on each task;
+ * - sorted: the board has sorted them by what they need from you: one is
+ *   approved and ready, one waits on your input, one is still going.
+ */
+type WorkStage = "none" | "working" | "sorted";
+
+function exampleCards(tasks: ReturnType<typeof useExampleTasks>, stage: WorkStage): PreviewCard[] {
+	const [task1, task2, task3] = tasks;
+	if (stage === "none") return [];
+	if (stage === "working") {
+		return tasks.map((task): PreviewCard => ({ ...task, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }));
+	}
+	return [
+		{ ...task2, column: "building", status: "needs_input", minutesAgo: 4 },
+		{ ...task3, column: "building", status: "working", displayStatus: "Working", working: true, minutesAgo: 1 },
+		{ ...task1, column: "ready", status: "approved", displayStatus: "Approved", minutesAgo: 2 },
+	];
 }
 
-/** The example project in the sidebar with its board open and the example
- * tasks under it, matching ExampleBoard. */
-function useExampleSidebarProjects(): PreviewSidebarProject[] {
+/**
+ * The flow's one app window. Its state comes from the step (and, on Welcome,
+ * the story's current part), and every change animates in place: the chat
+ * page, the board and New chat slide across the center panel; session rows
+ * unfold in the sidebar; cards rise onto the board and glide between lanes;
+ * the agent picker opens like the app's menus; the account row rolls over.
+ */
+function OnboardingScene({
+	step,
+	point,
+	cycle,
+	account,
+	pickerAgents,
+	selectedAgentId,
+}: {
+	step: Step;
+	point: number;
+	cycle: number;
+	account: { name: string; avatarUrl?: string } | null;
+	pickerAgents: Array<{ id: string; label: string; dimmed?: boolean }>;
+	selectedAgentId?: string;
+}) {
 	const { t } = useTranslation();
-	const [task1, task2, task3] = useExampleCards();
-	return [{
-		name: t("firstRun.projectPlaceholder"),
-		active: true,
-		sessions: [
-			{ title: task1.title, status: "working", working: true, minutesAgo: 1 },
-			{ title: task2.title, status: "needs_input", minutesAgo: 4 },
-			{ title: task3.title, status: "mergeable", minutesAgo: 12 },
-		],
-	}];
-}
-
-// ── 0. Welcome ──────────────────────────────────────────────────────────────
-
-/** The welcome page's board, reused (dimmed) as context on other steps. */
-function ExampleBoard() {
-	const [task1, task2, task3] = useExampleCards();
+	const tasks = useExampleTasks();
+	const project = t("firstRun.projectPlaceholder");
+	const welcome = step === "welcome";
+	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
+	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
+	const cards = exampleCards(tasks, stage);
+	const sidebarProject: PreviewSidebarProject = {
+		name: project,
+		active: page === "board",
+		orchestratorActive: page === "chat",
+		sessions: cards
+			.slice()
+			.sort((a, b) => tasks.findIndex((task) => task.id === a.id) - tasks.findIndex((task) => task.id === b.id))
+			.map((card) => ({ title: card.title, status: card.status, working: card.working, minutesAgo: card.minutesAgo })),
+	};
 	return (
-		<PreviewBoard
-			lanes={[
-				{ column: "building", cards: [
-					card(task1, { status: "working", displayStatus: "Working", working: true, minutesAgo: 1 }),
-					card(task2, { status: "needs_input", minutesAgo: 4 }),
-				] },
-				{ column: "ready", cards: [
-					card(task3, { status: "mergeable", displayStatus: "Mergeable", minutesAgo: 12, prs: [{ number: 42, state: "open" }] }),
-				] },
-			]}
+		<PreviewScene
+			page={page}
+			sidebar={<PreviewSidebar projects={[sidebarProject]} account={account} />}
+			chat={
+				<PreviewChat
+					focus={page === "chat"}
+					runId={cycle}
+					title={t("shell.orchestrator")}
+					provider="claude-code"
+					message={t("firstRun.exampleMessage")}
+					reply={t("firstRun.exampleReply")}
+				/>
+			}
+			board={
+				<PreviewBoard
+					cards={cards}
+					focus={welcome && page === "board"}
+					liftedId={stage === "sorted" && welcome ? tasks[1].id : undefined}
+				/>
+			}
+			newChat={
+				<PreviewNewChat
+					agents={pickerAgents}
+					selectedId={selectedAgentId}
+					project={project}
+					menuOpen={page === "new"}
+				/>
+			}
 		/>
 	);
 }
 
-/** The same example work on the mobile app's Workers tab. */
+/** The same example work on the mobile app's Workers tab, as the story ends. */
 function ExamplePhone() {
 	const { t } = useTranslation();
-	const [task1, task2, task3] = useExampleCards();
+	const [task1, task2, task3] = useExampleTasks();
 	return (
 		<PhoneWorkersScreen
 			project={t("firstRun.projectPlaceholder")}
 			workers={[
-				{ ...task1, status: "working", minutesAgo: 1 },
+				{ ...task3, status: "working", minutesAgo: 1 },
 				{ ...task2, status: "needs_input", minutesAgo: 4 },
-				{ ...task3, status: "mergeable", minutesAgo: 12, prNumber: 42 },
+				{ ...task1, status: "approved", minutesAgo: 2 },
 			]}
 		/>
 	);
 }
 
-/** How long each part of the story holds before the next plays. */
-const POINT_HOLD_MS = [3800, 3800, 4600] as const;
+// ── 0. Welcome ──────────────────────────────────────────────────────────────
 
-/** "How Orchestrator works", played by the app itself: the person's message to
- * the orchestrator, the workers it starts on the board, then their pull
- * requests waiting for review and merge. One window throughout; the camera
- * moves to each part and the content changes in place (cards glide between
- * lanes), with no fades. */
-function OrchestratorShowcase({ point }: { point: number }) {
+function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 	const { t } = useTranslation();
-	const [task1, task2, task3] = useExampleCards();
-	const workers = (statuses: Array<Pick<PreviewSidebarSession, "status" | "working" | "minutesAgo">>): PreviewSidebarProject[] => [{
-		name: t("firstRun.projectPlaceholder"),
-		active: true,
-		sessions: [task1, task2, task3].map((task, i) => ({ title: task.title, ...statuses[i]! })),
-	}];
-	if (point === 0) {
-		return (
-			<PreviewWindow page="session" sidebar={<PreviewSidebar projects={[{ name: t("firstRun.projectPlaceholder"), active: true, orchestratorActive: true }]} />}>
-				<PreviewChat focus title={t("shell.orchestrator")} provider="claude-code" message={t("firstRun.exampleMessage")} reply={t("firstRun.exampleReply")} />
-			</PreviewWindow>
-		);
-	}
-	const building = point === 1;
-	return (
-		<PreviewWindow
-			sidebar={
-				<PreviewSidebar
-					projects={workers(building
-						? [{ status: "working", working: true }, { status: "working", working: true }, { status: "working", working: true }]
-						: [{ status: "review_pending", minutesAgo: 6 }, { status: "mergeable", minutesAgo: 8 }, { status: "approved", minutesAgo: 11 }])}
-				/>
-			}
-		>
-			<PreviewBoard
-				focusCards
-				layoutCards
-				stagger={building}
-				lanes={building ? [
-					{ column: "building", cards: [
-						card(task1, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-						card(task2, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-						card(task3, { status: "working", displayStatus: "Working", working: true, minutesAgo: 0 }),
-					] },
-				] : [
-					{ column: "needs_review", cards: [
-						card(task1, { status: "review_pending", displayStatus: "Review pending", minutesAgo: 6, prs: [{ number: 12, state: "open" }] }),
-					] },
-					{ column: "ready", cards: [
-						card(task2, { status: "mergeable", displayStatus: "Mergeable", minutesAgo: 8, prs: [{ number: 13, state: "open" }] }),
-						card(task3, { status: "approved", displayStatus: "Approved", minutesAgo: 11, prs: [{ number: 14, state: "open" }] }),
-					] },
-				]}
-			/>
-		</PreviewWindow>
-	);
-}
-
-function WelcomeStep({ onNext }: { onNext: () => void }) {
-	const { t } = useTranslation();
-	// The story plays on its own and loops; the list beside it follows along.
-	const [point, setPoint] = useState(0);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setPoint((current) => (current + 1) % ORCH_POINTS.length), POINT_HOLD_MS[point]);
-		return () => window.clearTimeout(timer);
-	}, [point]);
 	return (
 		<StepSplit
 			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
-			preview={<OrchestratorShowcase point={point} />}
 		>
 			<div className="flex flex-col gap-2">
 				<p className="text-xs font-medium text-muted-foreground">{t("firstRun.orchTitle")}</p>
-				<ol className="flex flex-col gap-1">
-					{ORCH_POINTS.map((key, i) => (
-						<li
-							key={key}
-							aria-current={i === point ? "step" : undefined}
-							className={cn(
-								"flex gap-3 py-1 text-sm leading-relaxed transition-colors duration-normal",
-								i === point ? "text-foreground" : "text-muted-foreground",
-							)}
-						>
-							<span className="w-3 shrink-0 tabular-nums">{i + 1}</span>
-							<span className="text-pretty">{t(key)}</span>
+				{/* Follows the preview: the part playing is marked by a bar that
+				    slides down the list as the story moves on. */}
+				<ol className="flex flex-col">
+					{ORCH_POINTS.map(({ title, body }, i) => (
+						<li key={title} aria-current={i === point ? "step" : undefined} className="relative flex gap-3 py-2 pl-3">
+							{i === point ? (
+								<motion.span
+									layoutId="first-run-point"
+									className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-foreground"
+									transition={{ type: "spring", visualDuration: 0.35, bounce: 0.1 }}
+								/>
+							) : null}
+							<span className={cn("w-3 shrink-0 text-sm tabular-nums transition-colors duration-300", i === point ? "text-foreground" : "text-muted-foreground")}>{i + 1}</span>
+							<span className="flex min-w-0 flex-col gap-0.5">
+								<span className={cn("text-sm font-medium transition-colors duration-300", i === point ? "text-foreground" : "text-muted-foreground")}>{t(title)}</span>
+								<span className="text-pretty text-xs leading-relaxed text-muted-foreground">{t(body)}</span>
+							</span>
 						</li>
 					))}
 				</ol>
@@ -671,7 +658,6 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
 	const [waiting, setWaiting] = useState(false);
 	const account = cloud.status === "authenticated" ? cloud.session : null;
-	const exampleProjects = useExampleSidebarProjects();
 	const accountName = account ? (account.user.displayName?.trim() || account.user.email) : "";
 	const browserWaiting = waiting && !localAuth.available;
 	const signIn = () => {
@@ -688,18 +674,6 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 		<StepSplit
 			icon={<img src={appIcon} alt="" className="size-12 select-none" draggable={false} />}
 			title={t("firstRun.signInTitle")}
-			preview={
-				<PreviewWindow
-					sidebar={
-						<PreviewSidebar
-							account={account ? { name: accountName, avatarUrl: account.user.avatarUrl } : null}
-							projects={exampleProjects}
-						/>
-					}
-				>
-					<ExampleBoard />
-				</PreviewWindow>
-			}
 		>
 			{cloud.status === "loading" ? (
 				<Waiting>{t("firstRun.signInChecking")}</Waiting>
@@ -804,6 +778,29 @@ function agentRowState(agent: AgentReadinessSnapshot): AgentRowState {
 
 const AGENT_STATE_ORDER: Record<AgentRowState, number> = { ready: 0, signin: 1, checking: 2, missing: 3 };
 
+/**
+ * The agents the tools list shows (installed ones, plus the suggested ones to
+ * install), ready first; and the New chat picker's view of them for the
+ * preview: the ready ones, or until one is, the candidates dimmed.
+ */
+function useToolAgents() {
+	const readiness = useAgentReadinessQuery();
+	return useMemo(() => {
+		const agents = (readiness.data?.agents ?? [])
+			.filter((agent) => agent.installation.state !== "not_installed" || SUGGESTED_AGENTS.includes(agent.id))
+			.map((agent) => ({ agent, state: agentRowState(agent) }))
+			.sort((a, b) =>
+				AGENT_STATE_ORDER[a.state] - AGENT_STATE_ORDER[b.state] ||
+				(DEFAULT_AGENT_PRIORITY_RANK.get(a.agent.id) ?? 99) - (DEFAULT_AGENT_PRIORITY_RANK.get(b.agent.id) ?? 99) ||
+				a.agent.label.localeCompare(b.agent.label))
+			.slice(0, 6);
+		const anyReady = agents.some((row) => row.state === "ready");
+		const pickerAgents = (anyReady ? agents.filter((row) => row.state === "ready") : agents)
+			.map(({ agent }) => ({ id: agent.id, label: agent.label, dimmed: !anyReady }));
+		return { agents, anyReady, pickerAgents, selectedId: anyReady ? pickerAgents[0]?.id : undefined };
+	}, [readiness.data]);
+}
+
 function ToolsStep({ onNext }: { onNext: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -812,7 +809,6 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const readiness = useAgentReadinessQuery();
 	const authPlans = useAgentAuthPlans();
 	const startAuth = useStartAgentAuth();
-	const [task1, task2] = useExampleCards();
 	const [workflow, setWorkflow] = useState<AuthTerminalWorkflow | null>(null);
 	const [authError, setAuthError] = useState<string | null>(null);
 	const [checking, setChecking] = useState(false);
@@ -837,18 +833,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const ghChecking = gate.checking || ghAuth.isPending;
 	const ghInstalling = install.isRunning("gh");
 
-	const agents = useMemo(() => {
-		const all = readiness.data?.agents ?? [];
-		return all
-			.filter((agent) => agent.installation.state !== "not_installed" || SUGGESTED_AGENTS.includes(agent.id))
-			.map((agent) => ({ agent, state: agentRowState(agent) }))
-			.sort((a, b) =>
-				AGENT_STATE_ORDER[a.state] - AGENT_STATE_ORDER[b.state] ||
-				(DEFAULT_AGENT_PRIORITY_RANK.get(a.agent.id) ?? 99) - (DEFAULT_AGENT_PRIORITY_RANK.get(b.agent.id) ?? 99) ||
-				a.agent.label.localeCompare(b.agent.label))
-			.slice(0, 6);
-	}, [readiness.data]);
-	const anyReady = agents.some((row) => row.state === "ready");
+	const { agents, anyReady } = useToolAgents();
 	const signingInAgent = workflow?.agentId;
 	const signingInReady = agents.some((row) => row.agent.id === signingInAgent && row.state === "ready");
 
@@ -904,41 +889,10 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 		}
 	};
 
-	// The New chat agent picker lists the agents that are ready; until one is,
-	// it shows the candidates dimmed.
-	const pickerAgents = (anyReady ? agents.filter((row) => row.state === "ready") : agents)
-		.map(({ agent }) => ({ id: agent.id, label: agent.label, dimmed: !anyReady }));
-	const selectedAgent = anyReady ? pickerAgents[0] : undefined;
-	// The preview follows the first thing left to do: until gh is set up, what it
-	// gives a worker (its pull request, ready to merge); then the agent picker.
-	const showGitHub = !ghChecking && !(ghInstalled && ghSignedIn);
-
 	return (
 		<StepSplit
 			title={t("firstRun.toolsTitle")}
 			body={t("firstRun.toolsBody")}
-			preview={showGitHub ? (
-				<PreviewWindow
-					page="session"
-					sidebar={<PreviewSidebar projects={[{ name: t("firstRun.projectPlaceholder"), active: true, sessions: [
-						{ title: task1.title, status: "working", working: true, minutesAgo: 1 },
-						{ title: task2.title, status: "mergeable", minutesAgo: 9 },
-					] }]} />}
-				>
-					<PreviewSessionPullRequest
-						sessionId={task2.id}
-						title={task2.title}
-						provider={task2.provider}
-						message={task2.title}
-						reply={t("firstRun.toolsPrReply", { number: 127 })}
-						pr={{ number: 127, title: task2.title, branch: task2.branch }}
-					/>
-				</PreviewWindow>
-			) : (
-				<PreviewWindow page="new" sidebar={<PreviewSidebar dimBody dimFooter projects={[{ name: t("firstRun.projectPlaceholder") }]} />}>
-					<PreviewNewChat agents={pickerAgents} selectedId={selectedAgent?.id} project={t("firstRun.projectPlaceholder")} />
-				</PreviewWindow>
-			)}
 		>
 			{ghChecking || readiness.isPending ? (
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
@@ -946,7 +900,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 				<div className="flex flex-col gap-2">
 					<ul className="overflow-hidden rounded-lg bg-card">
 						<CheckRow
-							icon={<GitPullRequest className="size-icon-base text-muted-foreground" aria-hidden="true" />}
+							icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
 							label={t("firstRun.githubTitle")}
 							detail={install.error("gh") ?? (ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined)}
 							trailing={ghInstalling ? <RowSpinner />
@@ -1002,7 +956,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			{authError ? <p className="text-xs text-destructive" role="alert">{authError}</p> : null}
 			<StepAction>
 				{/* At least one ready agent is needed to orchestrate anything; GitHub
-				    stays optional (local work still runs without pull requests). */}
+				    stays optional (agents still work locally without it). */}
 				<Button variant="primary" onClick={onNext} disabled={!anyReady}>{t("firstRun.continue")}</Button>
 			</StepAction>
 		</StepSplit>
@@ -1049,7 +1003,6 @@ function ProjectChooser() {
 	const { t } = useTranslation();
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const projects = useWorkspaceQuery().data ?? [];
-	const localProjects = useLocalProjects();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource; nonce: number } | null>(null);
 	const request = (source: ProjectSource) => setSourceSignal({ source, nonce: Date.now() });
 
@@ -1058,21 +1011,6 @@ function ProjectChooser() {
 			centered
 			title={t("firstRun.projectTitle")}
 			body={t("firstRun.projectBody")}
-			preview={
-				// The sidebar's Projects list, where the new project lands.
-				<PreviewWindow
-					sidebar={
-						<PreviewSidebar
-							projects={[
-								...localProjects.map((project) => ({ name: project.name })),
-								{ name: t("firstRun.projectPlaceholder"), active: true },
-							]}
-						/>
-					}
-				>
-					<PreviewBoard lanes={[]} />
-				</PreviewWindow>
-			}
 		>
 			{/* Adding a project moves the page on by itself; Continue holds the strip steady. */}
 			<StepAction>
@@ -1133,24 +1071,6 @@ function FirstTask({ project, onFinish }: { project: ReturnType<typeof useLocalP
 			centered
 			title={t("firstRun.startTitle")}
 			body={t("firstRun.startBody", { project: project.name })}
-			preview={
-				// The orchestrator's chat, with the first message as it will be sent.
-				<PreviewWindow
-					page="session"
-					sidebar={
-						<PreviewSidebar
-							projects={[{
-								name: project.name,
-								active: true,
-								orchestratorActive: true,
-							}]}
-						/>
-					}
-				>
-					{/* Until the orchestrator exists, show it with the default agent. */}
-					<PreviewChat title={t("shell.orchestrator")} provider={orchestrator?.provider ?? "claude-code"} message={prompt.trim() || undefined} />
-				</PreviewWindow>
-			}
 		>
 			<div className="flex flex-col gap-2">
 				<Label htmlFor="first-run-prompt">{t("firstRun.startPromptLabel")}</Label>

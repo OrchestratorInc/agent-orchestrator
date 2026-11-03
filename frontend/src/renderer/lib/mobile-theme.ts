@@ -83,6 +83,6 @@ export function themeFor(scheme: "light" | "dark", style: ThemeStyle = DEFAULT_T
 }
 
 /** theme.ts statusVisual's colours, for the statuses the preview shows. */
-export function statusColor(theme: MobileTheme, status: "working" | "needs_input" | "mergeable"): string {
+export function statusColor(theme: MobileTheme, status: "working" | "needs_input" | "approved"): string {
 	return status === "working" ? theme.orange : status === "needs_input" ? theme.amber : theme.green;
 }
