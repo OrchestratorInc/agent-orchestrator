@@ -50,7 +50,7 @@ func TestRepoLocalDiscoveryUsesEachNativeRoot(t *testing.T) {
 	t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })
 	repos := []string{t.TempDir(), t.TempDir()}
 	harnessImporters[domain.HarnessGemini] = harnessImporter{
-		mode:               domain.SessionModeTUI,
+		mode: domain.SessionModeTUI,
 		discoverRegistered: func(_ context.Context, roots []string) ([]sourceFiles, error) {
 			if len(roots) != 2 {
 				t.Fatalf("registered roots = %v", roots)
