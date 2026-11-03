@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
@@ -225,6 +226,40 @@ func TestCodexLoginExplainsCodexInstallThatCannotStart(t *testing.T) {
 				t.Fatalf("error = %q, want reinstall hint with reason %q", msg, tt.wantReason)
 			}
 		})
+	}
+}
+
+func TestCodexLoginStartProbeTimesOutWhenLauncherChildHoldsPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell launcher fixture is Unix-specific")
+	}
+	previous := codexStartProbeTimeout
+	codexStartProbeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { codexStartProbeTimeout = previous })
+
+	// Login fails; --version hangs and leaves a background child that inherits
+	// stdout/stderr, so killing only the launcher would not close the pipes.
+	launcher := filepath.Join(t.TempDir(), "codex")
+	script := "#!/bin/sh\n[ \"$1\" = --version ] || exit 1\nsleep 30 &\nsleep 30\n"
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{In: strings.NewReader("1\n"), Out: io.Discard, Err: io.Discard}
+	cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", launcher})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	select {
+	case err := <-done:
+		if err == nil || err.Error() != "codex login failed: exit status 1" {
+			t.Fatalf("Execute error = %v, want Codex's own login failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("codex-login still waiting on the start probe 10s after its 300ms timeout")
 	}
 }
 

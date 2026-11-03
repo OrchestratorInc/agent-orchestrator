@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const codexFileStoreOverride = `cli_auth_credentials_store="file"`
@@ -113,7 +114,7 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 	return nil
 }
 
-const codexStartProbeTimeout = 15 * time.Second
+var codexStartProbeTimeout = 15 * time.Second
 
 // codexStartFailure returns why codex cannot even print its version, or ""
 // when it can. That separates a login Codex rejected from an install that
@@ -125,7 +126,11 @@ func codexStartFailure(ctx context.Context, codex string) string {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, codexStartProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, codex, "--version") //nolint:gosec,forbidigo // same resolved binary and env as the login child.
+	cmd := aoprocess.CommandContext(probeCtx, codex, "--version")
+	// An npm launcher's child can outlive it and hold the output pipes open;
+	// stop the whole tree and bound the pipe wait so the probe honours its timeout.
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, codex)
 	output, err := cmd.CombinedOutput()
 	if err == nil || probeCtx.Err() != nil {
