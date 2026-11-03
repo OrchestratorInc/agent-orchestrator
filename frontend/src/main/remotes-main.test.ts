@@ -71,9 +71,7 @@ describe("registerRemotesIpc", () => {
 		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "a".repeat(64) });
 		await ipc.invoke("remotes:pruneAccountHosts", TEST_ACCOUNT, ["h_workbox"]);
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
-		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
-			{ hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "old", accountUserId: TEST_ACCOUNT },
-		]);
+		expect(await readFile(file, "utf8")).toBe(original);
 	});
 
 	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:issueAccountToken", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
@@ -435,16 +433,18 @@ describe("registerRemotesIpc", () => {
 		]);
 	});
 
-	it("preserves and shows a legacy pairing when its host is discovered in the account", async () => {
+	it("replaces a typed password with the account's token once the account lists the host", async () => {
+		// A password typed here goes stale when the host rotates it; the account's
+		// token is kept current by the host itself.
 		const file = await tempFile();
 		await writeFile(file, JSON.stringify({ remotes: [
-			{ hostId: "h_legacy", label: "Old", url: "https://old.example", password: "pairing-password" },
+			{ hostId: "h_legacy", label: "Old", url: "https://old.example", password: "stale-pw" },
 		] }));
 		const ipc = fakeIpc();
-		registerRemotes(ipc.ipcMain, {
-			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }),
-			requireAccount: signedIn, getAccountId: async () => "user-a",
-		});
+		const closed = vi.fn().mockResolvedValue(undefined);
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
+		await registry.connect({ hostId: "h_legacy", label: "Old", url: "https://old.example", password: "stale-pw" });
+		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, getAccountId: async () => "user-a" });
 
 		await ipc.invoke("remotes:importAccountHost", "user-a", {
 			hostId: "h_legacy", label: "Discovered", url: "https://new.example", password: "a".repeat(64),
@@ -452,7 +452,31 @@ describe("registerRemotesIpc", () => {
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_legacy", label: "Discovered", url: "https://new.example" },
 		]);
-		const saved = JSON.parse(await readFile(file, "utf8")) as { remotes: Array<{ password: string }> };
-		expect(saved.remotes[0]?.password).toBe("pairing-password");
+		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+			{ hostId: "h_legacy", label: "Discovered", url: "https://new.example", password: "a".repeat(64), accountUserId: "user-a" },
+		]);
+		// The proxy on the old address goes; the next connect uses the token.
+		expect(closed).toHaveBeenCalledOnce();
+
+		// Removed from the account, it is removed here too.
+		await ipc.invoke("remotes:pruneAccountHosts", "user-a", []);
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
+	});
+
+	it("replaces a typed password at the same address without dropping the live proxy early", async () => {
+		const file = await tempFile();
+		const closed = vi.fn().mockResolvedValue(undefined);
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
+		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn });
+
+		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "b".repeat(64) });
+		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+			{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "b".repeat(64), accountUserId: TEST_ACCOUNT },
+		]);
+		expect(closed).not.toHaveBeenCalled();
+		// The saved credential changed, so the old proxy no longer counts as connected.
+		expect(registry.connected({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "b".repeat(64) })).toBeUndefined();
 	});
 });

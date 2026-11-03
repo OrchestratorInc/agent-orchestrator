@@ -24,9 +24,13 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
 	const setEnabled = useUiStore((state) => state.setRemoteHosts);
-	const { status, signIn } = useCloudSession();
+	const { status, signIn, session } = useCloudSession();
+	const accountId = session?.user.id ?? "";
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const editRequest = settingsModal?.scope === "global" ? settingsModal.editRemoteHost : undefined;
+	const handledEditRequest = useRef<typeof settingsModal>(null);
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
 	const [saved, setSaved] = useState<SavedHost[]>([]);
@@ -61,6 +65,26 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		// The bridge is fixed for the lifetime of this Settings page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [status]);
+
+	const startEdit = (host: SavedHost) => {
+		setEditing(host);
+		setLabel(host.label);
+		setUrl(host.url);
+		setPassword("");
+		setFormError("");
+		formRef.current?.scrollIntoView?.({ block: "nearest" });
+	};
+
+	// A host whose password was rejected opens here, ready for its new one.
+	useEffect(() => {
+		if (!editRequest || handledEditRequest.current === settingsModal) return;
+		const host = saved.find((item) => item.hostId === editRequest);
+		if (!host) return;
+		handledEditRequest.current = settingsModal;
+		startEdit(host);
+		// startEdit only sets form state.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [editRequest, saved, settingsModal]);
 
 	const resetForm = () => {
 		setEditing(null);
@@ -100,6 +124,9 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 				const { hostKeys } = await readAccountHostDirectory(cloudBaseUrl);
 				const { token, hostKey } = await aoBridge.remotes.issueAccountToken(current.url);
 				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token, hostKey: hostKeys ? hostKey : undefined });
+				// Keep the account's credential, not the typed password: the host
+				// keeps its account token current when its password changes.
+				if (accountId) await aoBridge.remotes.importAccountHost(accountId, { hostId: current.hostId, label: current.label, url: current.url, password: token });
 			}
 			await load();
 			resetForm();
@@ -112,12 +139,15 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		}
 	};
 
+	// Removing a linked host deletes its account record, which every signed-in device follows.
+	const removesFromAccount = Boolean(confirmingRemoval?.hostId && cloudBaseUrl);
+
 	const remove = async () => {
 		if (!confirmingRemoval) return;
 		setRemoveBusy(true);
 		setRemoveError("");
 		try {
-			if (confirmingRemoval.hostId && cloudBaseUrl) await deleteAccountRemoteHost(cloudBaseUrl, confirmingRemoval.hostId);
+			if (removesFromAccount) await deleteAccountRemoteHost(cloudBaseUrl, confirmingRemoval.hostId);
 			await aoBridge.remotes.remove(confirmingRemoval.url);
 			if (confirmingRemoval.hostId) await disconnectHost(confirmingRemoval.hostId);
 			await load();
@@ -173,14 +203,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					)}
 				>
 					<div className="flex items-center gap-1">
-						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
-							setEditing(host);
-							setLabel(host.label);
-							setUrl(host.url);
-							setPassword("");
-							setFormError("");
-							formRef.current?.scrollIntoView?.({ block: "nearest" });
-						}} size="icon-sm" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
+						<Button aria-label={t("remote.editHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => startEdit(host)} size="icon-sm" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-base" /></Button>
 						<Button aria-label={t("remote.removeHost", { label: host.label })} disabled={busy || removeBusy} onClick={() => {
 							setConfirmingRemoval(host);
 							setRemoveError("");
@@ -214,7 +237,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		<ConfirmDialog
 			busy={removeBusy}
 			confirmLabel={t("shell.remove")}
-			description={t("remote.removeDescription")}
+			description={t(removesFromAccount ? "remote.removeFromAccountDescription" : "remote.removeDescription")}
 			destructive
 			error={removeError || null}
 			onConfirm={() => void remove()}

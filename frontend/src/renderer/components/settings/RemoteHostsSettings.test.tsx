@@ -5,6 +5,12 @@ import { useUiStore } from "../../stores/ui-store";
 
 const saved = vi.hoisted(() => ({ entries: [] as Array<{ hostId: string; label: string; url: string }> }));
 const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
+const cloud = vi.hoisted(() => ({ baseUrl: "" }));
+const accountHosts = vi.hoisted(() => ({
+	readAccountHostDirectory: vi.fn(async () => ({ hosts: [], hostKeys: false })),
+	saveAccountRemoteHost: vi.fn(async () => undefined),
+	deleteAccountRemoteHost: vi.fn(async () => undefined),
+}));
 const remotes = vi.hoisted(() => ({
 	list: vi.fn(async () => saved.entries),
 	add: vi.fn(async ({ label, url }: { label: string; url: string }) => {
@@ -18,11 +24,14 @@ const remotes = vi.hoisted(() => ({
 		saved.entries = saved.entries.map((host) => ({ ...host, label: changes.label ?? host.label, url: changes.url ?? host.url }));
 		return "online" as const;
 	}),
+	issueAccountToken: vi.fn(async () => ({ token: "t".repeat(64) })),
+	importAccountHost: vi.fn(async () => undefined),
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { remotes } }));
-vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, signIn: vi.fn() }) }));
+vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, signIn: vi.fn(), session: { user: { id: "user-a" } } }) }));
+vi.mock("../../lib/account-remote-hosts", () => accountHosts);
 vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
-vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: cloud.baseUrl } }) }));
 
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 
@@ -30,8 +39,12 @@ const renderSettings = () => render(<QueryClientProvider client={new QueryClient
 
 afterEach(() => {
 	account.status = "authenticated";
+	cloud.baseUrl = "";
 	saved.entries = [];
-	useUiStore.setState({ remoteHosts: false });
+	useUiStore.setState({ remoteHosts: false, settingsModal: null });
+	remotes.importAccountHost.mockClear();
+	accountHosts.saveAccountRemoteHost.mockClear();
+	accountHosts.deleteAccountRemoteHost.mockClear();
 	remotes.connect.mockClear();
 	remotes.list.mockClear();
 	remotes.add.mockClear();
@@ -136,4 +149,39 @@ it("requires confirmation before forgetting a host", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 	await waitFor(() => expect(remotes.remove).toHaveBeenCalledWith("http://box-a:3001"));
 	expect(await screen.findByText("No hosts yet. Add one below.")).toBeVisible();
+});
+
+it("keeps the account's token rather than the typed password once a host is linked", async () => {
+	cloud.baseUrl = "https://cloud.test";
+	renderSettings();
+	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Box A" } });
+	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
+	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
+	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
+	await waitFor(() => expect(remotes.importAccountHost).toHaveBeenCalledWith("user-a", {
+		hostId: "box-a", label: "Box A", url: "http://box-a:3001", password: "t".repeat(64),
+	}));
+	expect(accountHosts.saveAccountRemoteHost).toHaveBeenCalledWith("https://cloud.test", expect.objectContaining({ hostId: "box-a", token: "t".repeat(64) }));
+});
+
+it("opens the edit form of a host whose password was rejected", async () => {
+	saved.entries = [
+		{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" },
+		{ hostId: "box-b", label: "Box B", url: "http://box-b:3001" },
+	];
+	useUiStore.getState().openGlobalSettings("remoteHosts", { editRemoteHost: "box-b" });
+	renderSettings();
+	expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue("Box B");
+	expect(screen.getByRole("textbox", { name: "Address" })).toHaveValue("http://box-b:3001");
+	expect(screen.getByLabelText("Connection password")).toHaveValue("");
+});
+
+it("says that removing a linked host removes it from every device", async () => {
+	cloud.baseUrl = "https://cloud.test";
+	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
+	renderSettings();
+	fireEvent.click(await screen.findByRole("button", { name: "Remove Box A" }));
+	expect(screen.getByText(/removes the host from your AO account, so none of your devices list it/i)).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+	await waitFor(() => expect(accountHosts.deleteAccountRemoteHost).toHaveBeenCalledWith("https://cloud.test", "box-a"));
 });
