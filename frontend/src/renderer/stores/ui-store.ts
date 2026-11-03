@@ -191,6 +191,9 @@ export type UiState = {
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
+	// Full-window first-run onboarding is showing; transient shell notices wait.
+	firstRunOnboardingOpen: boolean;
+	setFirstRunOnboardingOpen: (open: boolean) => void;
 	projectCreationPending: boolean;
 	// Freestyle cloud projects just created, whose board starts the orchestrator
 	// on its own instead of waiting for the Orchestrator button.
@@ -413,6 +416,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
+	firstRunOnboardingOpen: false,
+	setFirstRunOnboardingOpen: (open) => set({ firstRunOnboardingOpen: open }),
 	projectCreationPending: false,
 	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},

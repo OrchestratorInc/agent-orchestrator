@@ -6200,6 +6200,96 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	mask-composite: exclude;
 }
 
+/* First-run onboarding previews draw the app window translucent over a
+ * wallpaper, with the same material model as above: the stage keeps solid
+ * copies of the theme, the window clears its canvases, blurs the wallpaper
+ * (standing in for native vibrancy) and paints the tint, a little more
+ * opaque than the app's 70% so the preview reads clearly. */
+.onboarding-preview-stage {
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
+	background:
+		linear-gradient(#0a1428, #0a1428),
+		linear-gradient(#7fb4f5, #7fb4f5),
+		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
+	background-blend-mode: screen, multiply, normal;
+}
+
+.onboarding-preview-window {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	isolation: isolate;
+}
+
+/* The window's glass lives on its own plate that never fades: steps cross-fade
+ * only the window's contents above it. Fading the blurred layer itself would
+ * drop its backdrop and stack two tints mid-transition. */
+.onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 88%, transparent);
+	-webkit-backdrop-filter: blur(48px) saturate(1.6);
+	backdrop-filter: blur(48px) saturate(1.6);
+	/* An opaque stage (data-opaque) ramps the tint to solid and fills the
+	 * center panel with its own colour, as the app looks with transparency off.
+	 * Only these colours change, so the switch is one smooth ramp; the window's
+	 * contents keep the clear canvases throughout. */
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-panel-backing {
+	border-radius: var(--radius-center-panel);
+	background-color: color-mix(in srgb, var(--background) 0%, transparent);
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 100%, transparent);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: color-mix(in srgb, var(--background) 100%, transparent);
+}
+
+.onboarding-preview-window :is(.z-overlay, [role="dialog"], [role="tooltip"]) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+.onboarding-preview-window :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
+}
+
 /* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a
    purple-blue mist and a few stars, so the nightly channel reads as its own place. */
 .build-info-nightly {
