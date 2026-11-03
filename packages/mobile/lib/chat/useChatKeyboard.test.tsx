@@ -73,3 +73,17 @@ it("ignores a report React Native has already contradicted", async () => {
 	expect(latest?.keyboardVisible).toBe(false);
 	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
 });
+
+// The composer rides keyboard-controller's own progress on the UI thread, and
+// stands at the reconciled height only when that progress missed the open.
+it("lets the composer ride the keyboard, and lifts it by hand only for an open keyboard-controller missed", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.composerLift).toBeUndefined();
+	await fire("controller", "keyboardDidHide");
+	fixture.visible = true;
+	await fire("platform", "keyboardDidShow", { endCoordinates: { height: 312 } });
+	await settle();
+	expect(latest?.composerLift).toBe(latest?.rootStyle?.paddingBottom);
+	expect(latest?.composerLift).toBeGreaterThan(0);
+});

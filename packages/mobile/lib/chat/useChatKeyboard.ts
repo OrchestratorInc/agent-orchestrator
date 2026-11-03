@@ -79,5 +79,8 @@ export function useChatKeyboard({ underHeader = false }: { underHeader?: boolean
 		keyboardVerticalOffset: platform === "ios" ? keyboardVerticalOffset(underHeader ? 0 : headerHeight) : 0,
 		restingInset: dockRestingInset(insets.bottom),
 		dockRiseOverride: platform === "android" ? chatDockRiseOverride(state) : undefined,
+		// How far the composer stands above the screen's bottom when the keyboard's
+		// own progress cannot be trusted; `undefined` rides it (see KeyboardFollower).
+		composerLift: platform === "android" && !state.progressTrusted ? (state.visible ? state.height : 0) : undefined,
 	};
 }

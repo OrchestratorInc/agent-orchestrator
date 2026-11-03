@@ -115,3 +115,15 @@ describe("ao://sessions links in the conversation", () => {
 		expect(source).toContain("<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession}");
 	});
 });
+
+describe("the composer and the keyboard", () => {
+	// In a long chat, or one still loading as it opened, focusing the field kept
+	// the JS thread busy for most of a second, and the keyboard came up over a
+	// composer still at the bottom: the padded root held it back.
+	it("rides the keyboard outside the padded root, by a transform", () => {
+		const root = screenSource.indexOf("</KeyboardAvoidingView>");
+		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
+		expect(follower).toBeGreaterThan(root);
+		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+	});
+});

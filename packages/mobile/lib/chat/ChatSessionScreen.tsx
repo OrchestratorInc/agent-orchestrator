@@ -24,6 +24,7 @@ import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
+import { KeyboardFollower } from "./KeyboardFollower";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useChatKeyboard } from "./useChatKeyboard";
@@ -682,11 +683,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	);
 
 	return (
-		// keyboard-controller's avoider, not React Native's. Both do the same
-		// arithmetic; this one interpolates the padding with the keyboard's own
-		// animation, so the composer travels with the keys. RN's re-renders once per
-		// keyboard event on the JS thread, which is the single-frame jump up when
-		// the keyboard opens.
+		<View style={styles.screen}>
+		{/* keyboard-controller's avoider, not React Native's. Both do the same
+		    arithmetic; this one interpolates the padding with the keyboard's own
+		    animation. RN's re-renders once per keyboard event on the JS thread,
+		    which is the single-frame jump up when the keyboard opens. */}
 		<KeyboardAvoidingView
 			style={[styles.screen, chatKeyboard.rootStyle]}
 			behavior={chatKeyboard.behavior}
@@ -730,9 +731,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					{banners}
 				</View>
 			) : null}
-			{/* The composer floats over the conversation, which scrolls on under its
-			    glass; the timeline leaves its measured height clear at the end. */}
-			<View pointerEvents="box-none" style={styles.floatingComposer} onLayout={measureComposer}>
+			</View>
+			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
+		</KeyboardAvoidingView>
+		{/* The composer floats over the conversation, which scrolls on under its
+		    glass; the timeline leaves its measured height clear at the end. It is
+		    out of the padded root above and rides the keyboard by a transform: the
+		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
+		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
@@ -780,10 +786,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 				/>
 			</View>
-			</View>
-			</View>
-			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
-		</KeyboardAvoidingView>
+		</KeyboardFollower>
+		</View>
 	);
 }
 
