@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 const testID = "11111111-1111-4111-8111-111111111111"
@@ -173,7 +174,7 @@ func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
 	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
 	source := fixture(t, root, cwd)
 	failure := errors.New("synthetic publication failure")
-	_, err := copyWithPublisher(context.Background(), root, source, launch, func(stage, target string) error {
+	_, err := copyWithPublisher(context.Background(), root, source, launch, "", func(stage, target string) error {
 		// At this boundary the complete native directory is ready, but no
 		// target exists yet. An interruption cannot leave a partial target.
 		if _, err := Read(context.Background(), root, filepath.Join(stage, "store.db")); err == nil {
@@ -193,6 +194,41 @@ func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
 	}
 	if archive, err := Read(context.Background(), root, target); err != nil || archive.ID != testID {
 		t.Fatalf("retry = %#v, %v", archive, err)
+	}
+}
+
+func TestSelectedCopyRefusesChangedNativeInputs(t *testing.T) {
+	root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+	source := fixture(t, root, cwd)
+	expected, err := Fingerprint(context.Background(), root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := filepath.Join(filepath.Dir(source), "meta.json")
+	info, err := os.Stat(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := info.ModTime().Add(time.Second)
+	if err := os.Chtimes(sidecar, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, expected); err == nil {
+		t.Fatal("copied changed native source evidence")
+	}
+	target, err := SessionPath(root, launch, testID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("published a stale native copy: %v", err)
+	}
+	fresh, err := Fingerprint(context.Background(), root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CopySelected(context.Background(), root, source, launch, fresh); err != nil {
+		t.Fatal(err)
 	}
 }
 

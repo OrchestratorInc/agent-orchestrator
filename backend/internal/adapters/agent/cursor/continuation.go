@@ -66,7 +66,10 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if archive.ID != r.NativeSessionID {
 		return ports.NativeSessionRef{}, errors.New("cursor source no longer holds the imported conversation")
 	}
-	path, err := cursorstore.Copy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD)
+	if r.SourceCWD != "" && archive.CWD != r.SourceCWD {
+		return ports.NativeSessionRef{}, errors.New("cursor source workspace changed since selection")
+	}
+	path, err := cursorstore.CopySelected(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.SourceFingerprint)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}

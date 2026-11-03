@@ -308,12 +308,21 @@ func Find(ctx context.Context, root, id string) (string, bool, error) {
 
 // Copy publishes a private native snapshot once, leaving the source unchanged.
 func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
-	return copyWithPublisher(ctx, root, source, launchCWD, publishDirectory)
+	return CopySelected(ctx, root, source, launchCWD, "")
 }
 
-func copyWithPublisher(ctx context.Context, root, source, launchCWD string, publish func(string, string) error) (string, error) {
+// CopySelected additionally verifies the discovery evidence before snapshotting
+// and before publishing the completed copy. Empty evidence supports old imports.
+func CopySelected(ctx context.Context, root, source, launchCWD, expected string) (string, error) {
+	return copyWithPublisher(ctx, root, source, launchCWD, expected, publishDirectory)
+}
+
+func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
 	root, err := providerRoot(root)
 	if err != nil {
+		return "", err
+	}
+	if err := checkFingerprint(ctx, root, source, expected); err != nil {
 		return "", err
 	}
 	db, tx, actual, err := snapshot(ctx, root, source)
@@ -399,6 +408,9 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD string, publ
 	}
 	// The complete directory appears in one no-replace operation. A failure or
 	// interruption before publication leaves no reservation blocking a retry.
+	if err := checkFingerprint(ctx, root, actual, expected); err != nil {
+		return "", err
+	}
 	if err := publish(stage, filepath.Dir(target)); err != nil {
 		return "", fmt.Errorf("publish cursor target: %w", err)
 	}

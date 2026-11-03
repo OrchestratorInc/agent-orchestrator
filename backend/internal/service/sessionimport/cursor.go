@@ -3,11 +3,9 @@ package sessionimport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,6 +44,7 @@ func readCursorTranscript(ctx context.Context, root string, paths ...string) (tr
 }
 
 func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
+	root = canonical(root)
 	var files []sourceFiles
 	err := filepath.WalkDir(filepath.Join(root, "chats"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -58,7 +57,7 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil || !filepath.IsLocal(rel) || filepath.Dir(filepath.Dir(filepath.Dir(rel))) != "." {
 			return nil //nolint:nilerr // Only chats/<cwd hash>/<id>/store.db is native state.
 		}
-		fingerprint, err := cursorFingerprint(root, path)
+		fingerprint, err := cursorstore.Fingerprint(ctx, root, path)
 		if err != nil {
 			return nil //nolint:nilerr // Missing or unsafe archive inputs are ineligible.
 		}
@@ -76,32 +75,4 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		return nil
 	})
 	return files, err
-}
-
-func cursorFingerprint(root, path string) (string, error) {
-	provider, err := os.OpenRoot(root)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = provider.Close() }()
-	rel, err := filepath.Rel(root, path)
-	if err != nil || !filepath.IsLocal(rel) {
-		return "", errors.New("cursor database is outside provider home")
-	}
-	var fingerprint strings.Builder
-	for _, input := range []string{rel, rel + "-wal", filepath.Join(filepath.Dir(rel), "meta.json")} {
-		info, err := provider.Lstat(input)
-		if errors.Is(err, os.ErrNotExist) && input == rel+"-wal" {
-			fingerprint.WriteString("wal:absent;")
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if !info.Mode().IsRegular() {
-			return "", errors.New("cursor archive input is not a regular file")
-		}
-		_, _ = fmt.Fprintf(&fingerprint, "%s:%d:%d;", input, info.Size(), info.ModTime().UnixNano())
-	}
-	return fingerprint.String(), nil
 }
