@@ -125,7 +125,7 @@ func TestJITCapableNodeReportsFailedRepair(t *testing.T) {
 	if err == nil {
 		t.Fatal("jitCapableNode succeeded although the re-signed copy still crashes")
 	}
-	for _, want := range []string{"allow-unsigned-executable-memory", "Terminal mode", "still crashes"} {
+	for _, want := range []string{"allow-unsigned-executable-memory", "Terminal mode", "does not run JavaScript"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want it to mention %q", err, want)
 		}
@@ -138,5 +138,44 @@ func TestJITCapableNodeLeavesUnrelatedFailures(t *testing.T) {
 	got, err := jitCapableNode(context.Background(), node)
 	if err != nil || got != node || *calls != 0 {
 		t.Fatalf("jitCapableNode = %q, %v with %d codesign calls; want bundled Node unchanged", got, err, *calls)
+	}
+}
+
+const failingNodeScript = "#!/bin/sh\necho 'cannot start' >&2\nexit 1\n"
+
+func TestJITCapableNodeRejectsRepairThatFailsOtherwise(t *testing.T) {
+	root, _ := withIntelMac(t, func(_ context.Context, node, _ string) error {
+		return os.WriteFile(node, []byte(failingNodeScript), 0o755) //nolint:gosec // Test executable.
+	})
+	node := writeFakeNode(t, crashingNodeScript)
+	_, err := jitCapableNode(context.Background(), node)
+	if err == nil || !strings.Contains(err.Error(), "exit 1") {
+		t.Fatalf("jitCapableNode error = %v, want the re-signed copy's exit 1 rejected", err)
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Fatalf("repair root holds %d entries, want the unusable copy discarded", len(entries))
+	}
+}
+
+func TestJITCapableNodeRebuildsUnusableInstalledCopy(t *testing.T) {
+	_, calls := withIntelMac(t, fixingCodesign)
+	node := writeFakeNode(t, crashingNodeScript)
+	installed, err := jitCapableNode(context.Background(), node)
+	if err != nil {
+		t.Fatalf("jitCapableNode: %v", err)
+	}
+	if err := os.WriteFile(installed, []byte(failingNodeScript), 0o755); err != nil { //nolint:gosec // Test executable.
+		t.Fatal(err)
+	}
+	jitNodesMu.Lock()
+	jitNodes = map[string]jitNodeResult{}
+	jitNodesMu.Unlock()
+
+	rebuilt, err := jitCapableNode(context.Background(), node)
+	if err != nil || rebuilt != installed || *calls != 2 {
+		t.Fatalf("restart = %q, %v with %d codesign calls; want %q rebuilt", rebuilt, err, *calls, installed)
+	}
+	if content, _ := os.ReadFile(rebuilt); string(content) != healthyNodeScript { //nolint:gosec // Test path.
+		t.Fatalf("installed copy was not rebuilt: %q", content)
 	}
 }

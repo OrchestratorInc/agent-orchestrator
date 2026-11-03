@@ -126,6 +126,24 @@ func nodeCrashesOnJIT(ctx context.Context, node string) (bool, error) {
 	return exitCode == 133 || strings.Contains(stderr, nodeJITCrashMarker), nil
 }
 
+// nodeRunsJIT requires a successful smoke run. The bundled Node is judged by
+// nodeCrashesOnJIT, which ignores unrelated failures, but a re-signed copy AO
+// installs must actually work, or Chat would launch an unusable Node.
+func nodeRunsJIT(ctx context.Context, node string) error {
+	exitCode, stderr, err := runNodeSmoke(ctx, node)
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		detail := strings.TrimSpace(stderr)
+		if lines := strings.Split(detail, "\n"); len(lines) > 3 {
+			detail = strings.Join(lines[len(lines)-3:], "\n")
+		}
+		return fmt.Errorf("exit %d: %s", exitCode, detail)
+	}
+	return nil
+}
+
 func repairNodeJIT(ctx context.Context, node string) (string, error) {
 	sum, err := fileSHA256(node)
 	if err != nil {
@@ -140,8 +158,11 @@ func repairNodeJIT(ctx context.Context, node string) (string, error) {
 	finalDir := filepath.Join(root, sum[:16])
 	finalNode := filepath.Join(finalDir, "node")
 	if _, statErr := os.Stat(finalNode); statErr == nil {
-		if crashed, smokeErr := nodeCrashesOnJIT(ctx, finalNode); smokeErr == nil && !crashed {
+		if nodeRunsJIT(ctx, finalNode) == nil {
 			return finalNode, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		if err := os.RemoveAll(finalDir); err != nil {
 			return "", fmt.Errorf("remove stale re-signed Node: %w", err)
@@ -169,12 +190,8 @@ func repairNodeJIT(ctx context.Context, node string) (string, error) {
 	if err := codesignNode(ctx, stagedNode, entitlements); err != nil {
 		return "", err
 	}
-	crashed, err := nodeCrashesOnJIT(ctx, stagedNode)
-	if err != nil {
-		return "", fmt.Errorf("check re-signed Node: %w", err)
-	}
-	if crashed {
-		return "", errors.New("re-signed Node still crashes when V8 compiles JavaScript")
+	if err := nodeRunsJIT(ctx, stagedNode); err != nil {
+		return "", fmt.Errorf("re-signed Node does not run JavaScript: %w", err)
 	}
 	if err := os.Rename(stage, finalDir); err != nil {
 		return "", fmt.Errorf("install re-signed Node: %w", err)
