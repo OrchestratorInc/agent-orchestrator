@@ -3491,9 +3491,18 @@ func TestACPDriverRestatesPromptErrorThroughBinding(t *testing.T) {
 		if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			t.Fatalf("StartDeferredTurn: %v", err)
 		}
+		// The turn is released only after TurnCompleted, just before the
+		// controller announces it is ready; wait for that, as a caller sending
+		// the next turn must, or the next SendTurn can find the turn in flight.
+		var completed *ports.ChatEvent
 		for {
-			if event := nextEvent(t, opened.Events()); event.Kind == ports.ChatEventTurnCompleted {
-				return event
+			event := nextEvent(t, opened.Events())
+			if event.Kind == ports.ChatEventTurnCompleted {
+				completed = &event
+				continue
+			}
+			if completed != nil && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
+				return *completed
 			}
 		}
 	}
