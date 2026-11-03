@@ -189,10 +189,14 @@ type hibernateOptions struct {
 	// ignoreViews lets a refresh run under an open view: the user's next
 	// message is about to wake the session anyway.
 	ignoreViews bool
+	// loginRefresh stops a provider its login refused once a fresh reading
+	// found that login working, so the next message starts a process that
+	// reads the current credentials.
+	loginRefresh bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.loginRefresh {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -202,7 +206,7 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+	if (o.forUpdate || o.versionRefresh || o.loginRefresh) && candidate.Kind == domain.KindOrchestrator {
 		// Idle hibernation keeps orchestrators running. An update or a move to
 		// a new release stops them only to start them again, so they go too,
 		// under the same turn, queue and approval checks.
@@ -408,6 +412,10 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, opts h
 		// one, so a failed start keeps the user's queued messages.
 		s.noteVersionSwitch(id, fresh.StaleBinary.Version)
 		s.log.Info("chat session stopped to move to a new harness release", "session", id, "harness", fresh.Harness, "version", fresh.StaleBinary.Version)
+		return true, nil
+	}
+	if opts.loginRefresh {
+		s.log.Info("chat session stopped to pick up a confirmed login", "session", id, "harness", fresh.Harness)
 		return true, nil
 	}
 	if opts.forUpdate {

@@ -3,9 +3,12 @@ package chat_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
@@ -132,4 +135,82 @@ func TestConfirmedLoginKeepsSessionWaitingWhileSomethingStillWaits(t *testing.T)
 			}
 		})
 	}
+}
+
+// storeActivity records signals and writes their state to the session row, the
+// part of the lifecycle reducer hibernation eligibility reads.
+type storeActivity struct {
+	recordingActivity
+	st *sqlite.Store
+}
+
+func (a *storeActivity) ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error {
+	_ = a.recordingActivity.ApplyActivitySignal(ctx, id, signal)
+	rec, found, err := a.st.GetSession(ctx, id)
+	if err != nil || !found {
+		return err
+	}
+	rec.Activity = domain.Activity{State: signal.State, LastActivityAt: signal.Timestamp}
+	return a.st.UpdateSession(ctx, rec)
+}
+
+// A provider process its login refused can hold credentials another process has
+// since replaced, and keep refusing every turn while fresh processes on the same
+// login work (issue #7677). Once a reading confirms the login, the refused
+// process stops, even for a viewed orchestrator, and the next message resumes
+// the conversation in a new one. The failed turn is not retried.
+func TestConfirmedLoginReplacesRefusedProvider(t *testing.T) {
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	var activity *storeActivity
+	h, old := hibernationHarnessWith(t, "", func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		activity = &storeActivity{st: opts.Store.(*sqlite.Store)}
+		opts.Activity = activity
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	h.activity = &activity.recordingActivity
+	ctx := context.Background()
+	makeOrchestrator(t, h)
+	if err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
+		t.Fatal(err)
+	}
+	refuseLogin(t, h)
+	h.advance(time.Second)
+	if !confirmLogin(t, h) {
+		t.Fatal("ConfirmConversationLogin did not clear the demand")
+	}
+
+	h.svc.LoginConfirmed(ctx, testSession)
+
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.calls.Load() != 1 || rec.HibernatedAt == nil {
+		t.Fatalf("refused provider stops = %d, hibernated at = %v; want it stopped", old.calls.Load(), rec.HibernatedAt)
+	}
+	if rec.Activity.State != domain.ActivityIdle {
+		t.Fatalf("activity = %q, want idle", rec.Activity.State)
+	}
+
+	woke := wakeOnNewRelease(t, h, old, nil)
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after sign-in", ClientMessageID: "after-sign-in"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not wake in a new provider process")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 1 && got[0] == "after sign-in" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("new provider received %v, refused one %v", resumed.sentTexts(), old.sentTexts())
 }
