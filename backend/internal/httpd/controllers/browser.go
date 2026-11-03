@@ -23,6 +23,7 @@ var browserTelemetryActions = map[string]struct{}{
 	"tab-select": {}, "tab-close": {}, "scroll": {}, "select": {}, "check": {}, "uncheck": {}, "get": {}, "wait": {},
 	"screenshot": {}, "network-start": {}, "network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
 	"console": {}, "errors": {}, "frame": {}, "dialog": {}, "devtools-open": {}, "devtools-close": {},
+	"target": {},
 }
 
 // BrowserService authorizes and executes session-scoped browser operations.
@@ -31,15 +32,61 @@ type BrowserService interface {
 	Execute(ctx context.Context, sessionID domain.SessionID, capability, action string, args map[string]interface{}) (browserruntime.Result, string, error)
 }
 
-// BrowserController exposes the loopback-only browser command API.
-type BrowserController struct {
-	Svc BrowserService
+// BrowserChromeService installs and reports Chrome mode: the native host
+// registration and extension bundle that let sessions use the user's Chrome.
+type BrowserChromeService interface {
+	ChromeStatus() BrowserChromeStatusResponse
+	SetupChrome() (BrowserChromeStatusResponse, error)
+	RemoveChrome() (BrowserChromeStatusResponse, error)
 }
 
-// Register adds browser status and command routes to the API router.
+// BrowserController exposes the loopback-only browser command API.
+type BrowserController struct {
+	Svc    BrowserService
+	Chrome BrowserChromeService
+}
+
+// Register adds browser status, command, and Chrome-mode routes to the API router.
 func (c *BrowserController) Register(r chi.Router) {
 	r.Get("/browser/status", c.status)
 	r.Post("/browser/commands", c.execute)
+	r.Get("/browser/chrome", c.chromeStatus)
+	r.Post("/browser/chrome", c.chromeSetup)
+	r.Delete("/browser/chrome", c.chromeRemove)
+}
+
+func (c *BrowserController) chromeStatus(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/browser/chrome")
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.Chrome.ChromeStatus())
+}
+
+func (c *BrowserController) chromeSetup(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/browser/chrome")
+		return
+	}
+	status, err := c.Chrome.SetupChrome()
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "BROWSER_CHROME_SETUP_FAILED", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, status)
+}
+
+func (c *BrowserController) chromeRemove(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/browser/chrome")
+		return
+	}
+	status, err := c.Chrome.RemoveChrome()
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "BROWSER_CHROME_REMOVE_FAILED", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, status)
 }
 
 func (c *BrowserController) status(w http.ResponseWriter, r *http.Request) {
@@ -57,11 +104,18 @@ func (c *BrowserController) status(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	transport := status.Transport
+	if transport == "" {
+		transport = browserruntime.TransportElectron
+	}
 	envelope.WriteJSON(w, http.StatusOK, BrowserStatusResponse{
-		SessionID:   sessionID,
-		Connected:   status.Connected,
-		ConnectedAt: status.ConnectedAt,
-		Transport:   "electron-webcontents-debugger",
+		SessionID:     sessionID,
+		Connected:     status.Connected,
+		ConnectedAt:   status.ConnectedAt,
+		Transport:     transport,
+		Target:        status.Target,
+		Client:        status.Client,
+		ClientVersion: status.ClientVersion,
 	})
 }
 

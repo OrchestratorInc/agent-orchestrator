@@ -3,7 +3,10 @@ package commandcodeacp
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -189,50 +192,50 @@ func TestNewDriverTargetsCommandCodeHarness(t *testing.T) {
 	}
 }
 
-// TestSessionPreambleDeliversStandingInstructions covers the only channel this
-// agent executes. The workspace SessionStart hook is fired only by the TUI
-// lifecycle and session/new ignores _meta, so standing instructions would
-// otherwise never reach a Chat session.
-func TestSessionPreambleDeliversStandingInstructions(t *testing.T) {
-	blocks := sessionPreamble(acpdriver.LaunchConfig{
+func TestConfigurePointsTheSessionAtItsOwnHome(t *testing.T) {
+	dataDir := t.TempDir()
+	args, env, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SessionID:    "mer-home-1",
+		DataDir:      dataDir,
 		SystemPrompt: "You are an AO worker. Coordinate through the board.",
 	})
-	if len(blocks) != 1 {
-		t.Fatalf("blocks = %d, want 1", len(blocks))
+	if err != nil {
+		t.Fatalf("configure: %v", err)
 	}
-	resource := blocks[0].Resource
-	if resource == nil || resource.Resource.TextResourceContents == nil {
-		t.Fatalf("block = %#v, want an embedded resource the agent's promptPart executes", blocks[0])
+	for _, arg := range args {
+		if strings.Contains(arg, "worker") || strings.Contains(arg, "--append-system-prompt") {
+			t.Fatalf("argv leaked the system prompt or used an unsupported flag: %#v", args)
+		}
 	}
-	contents := resource.Resource.TextResourceContents
-	if contents.Uri != standingInstructionsURI {
-		t.Fatalf("uri = %q, want %q", contents.Uri, standingInstructionsURI)
+	home := env["HOME"]
+	if home == "" || env["USERPROFILE"] != home {
+		t.Fatalf("env = %#v, want HOME and USERPROFILE to agree", env)
 	}
-	if contents.Text != "You are an AO worker. Coordinate through the board." {
-		t.Fatalf("text = %q, want the standing instructions verbatim", contents.Text)
+	if want := filepath.Join(dataDir, "harnesses", "command-code", "mer-home-1"); home != want {
+		t.Fatalf("HOME = %q, want %q", home, want)
 	}
-	if contents.MimeType == nil || *contents.MimeType != "text/markdown" {
-		t.Fatalf("mimeType = %v, want text/markdown", contents.MimeType)
+	memory, err := os.ReadFile(filepath.Join(home, ".commandcode", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read session memory: %v", err)
+	}
+	if !strings.Contains(string(memory), "Coordinate through the board") {
+		t.Fatalf("session memory = %q, want the standing instructions", memory)
 	}
 }
 
-// A resumed conversation is process input, not transcript history, so the
-// recomputed standing context must reach the provider again. A whitespace-only
-// prompt is not standing context and must produce no preamble at all.
-func TestSessionPreambleHandlesResumeAndEmptyPrompts(t *testing.T) {
-	resumed := sessionPreamble(acpdriver.LaunchConfig{
-		SystemPrompt: "  Recomputed instructions for resume  ",
-	})
-	if len(resumed) != 1 {
-		t.Fatalf("resume blocks = %d, want 1", len(resumed))
+// A session that cannot write its memory would run with no AO role at all, so the
+// launch fails rather than starting a role-less conversation.
+func TestConfigureFailsWhenTheSessionHomeCannotBeWritten(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "file-not-a-dir")
+	if err := os.WriteFile(dataDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocking file: %v", err)
 	}
-	if got := resumed[0].Resource.Resource.TextResourceContents.Text; got != "Recomputed instructions for resume" {
-		t.Fatalf("resume text = %q, want the trimmed standing instructions", got)
-	}
-	for _, empty := range []string{"", " \n\t "} {
-		if blocks := sessionPreamble(acpdriver.LaunchConfig{SystemPrompt: empty}); blocks != nil {
-			t.Errorf("sessionPreamble(%q) = %v, want nil", empty, blocks)
-		}
+	if _, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SessionID:    "mer-home-2",
+		DataDir:      dataDir,
+		SystemPrompt: "You are an AO worker.",
+	}); err == nil {
+		t.Fatal("configure succeeded without a writable session home")
 	}
 }
 

@@ -17,6 +17,7 @@
 package cli_test
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,6 +28,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
 // aoBin is the path to the binary built once for the whole suite.
@@ -288,6 +291,49 @@ func TestE2E_ShutdownGuard(t *testing.T) {
 	// The daemon survived both.
 	out, _ := e.run(t, "status", "--json")
 	mustContain(t, out, `"state": "ready"`)
+}
+
+// Two daemons share AO_DATA_DIR but have their own ports and run-files (issue
+// #3716). The second must not open ao.db: it waits through the installer drain
+// and remaining capped shutdown stages, then exits 75. Once the owner stops,
+// it starts normally.
+func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
+	first := newEnv(t)
+	first.startDaemon(t)
+
+	second := newEnv(t)
+	second.dataDir = first.dataDir
+	const shutdownTimeout = 100 * time.Millisecond
+	installerTimeout := max(shutdownTimeout, systeminstall.DefaultShutdownTimeout())
+	wait := 8*shutdownTimeout + installerTimeout + 18*time.Second
+	// A regressed lock would let this daemon serve forever, so bound the run.
+	ctx, cancel := context.WithTimeout(context.Background(), wait+15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, aoBin, "daemon")
+	cmd.Env = append(second.environ(""), "AO_SHUTDOWN_TIMEOUT="+shutdownTimeout.String())
+	cmd.WaitDelay = 5 * time.Second
+	b, err := cmd.CombinedOutput()
+	out := string(b)
+	t.Logf("$ ao daemon (second daemon, same data dir)\n%s", out)
+	if ctx.Err() != nil {
+		t.Fatalf("second daemon exceeded its %s lock wait plus 15s margin; killed it", wait)
+	}
+	var ee *exec.ExitError
+	if !asExit(err, &ee) || ee.ExitCode() != 75 {
+		t.Fatalf("second daemon: %v, want exit 75", err)
+	}
+	mustContain(t, out, "waiting for another AO process to release the data dir")
+	mustContain(t, out, fmt.Sprintf("waited %s for it to exit, refusing to start", wait))
+	if _, err := os.Stat(second.runFile); !os.IsNotExist(err) {
+		t.Fatal("the refused daemon must not write a run-file")
+	}
+	out, _ = first.run(t, "status", "--json")
+	mustContain(t, out, `"state": "ready"`)
+
+	if out, code := first.run(t, "stop"); code != 0 {
+		t.Fatalf("stop first daemon: exit %d, out %s", code, out)
+	}
+	second.startDaemon(t)
 }
 
 func TestE2E_StaleRunFile(t *testing.T) {

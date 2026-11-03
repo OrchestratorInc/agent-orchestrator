@@ -49,6 +49,7 @@ describe("WindowTitlebar", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (platformDescriptor) {
       Object.defineProperty(navigator, "platform", platformDescriptor);
     } else {
@@ -96,6 +97,16 @@ describe("WindowTitlebar", () => {
     expect(
       screen.queryByRole("button", { name: "Window" }),
     ).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("shows shell debugging actions only in development: %s", async (development) => {
+    vi.stubEnv("DEV", development);
+    const { WindowTitlebar } = await loadWindowTitlebar();
+    render(<TooltipProvider><WindowTitlebar /></TooltipProvider>);
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByRole("menuitem", { name: /Reload/ }) !== null).toBe(development);
+    expect(screen.queryByRole("menuitem", { name: /DevTools/ }) !== null).toBe(development);
+    expect(screen.getByRole("menuitem", { name: /Zoom In/ })).toBeInTheDocument();
   });
 
   it("renders the back and forward navigation buttons", async () => {
@@ -200,7 +211,7 @@ describe("WindowTitlebar", () => {
       /html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.browser-popout-overlay,\s*html\[data-native-browser-composition="true"\]\[data-ao-platform="win32"\] \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
-      /body:has\(#root \.platform-windows\) > \.browser-popout-overlay,\s*body:has\(#root \.platform-windows\) > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
+      /html\[data-shell-windows\] body > \.browser-popout-overlay,\s*html\[data-shell-windows\] body > \.files-popout-overlay\s*{\s*top: var\(--size-window-titlebar\);/s,
     );
     expect(css).toMatch(
       /\.platform-windows\s*{\s*--size-center-panel-inset: 8px;\s*--size-center-panel-inline-inset: 8px;\s*--size-center-panel-bottom-inset: 8px;/s,

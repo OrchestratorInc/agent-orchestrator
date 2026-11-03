@@ -206,7 +206,7 @@ func TestCleanupReportsOnlyStepAndExitStatus(t *testing.T) {
 	if strings.Contains(log.String(), "abcdef") || strings.Contains(log.String(), "[REDACTED]def") || !strings.Contains(log.String(), "inherited-secret") {
 		t.Fatalf("output must stay in the log with longest configured values redacted first: %s", log.String())
 	}
-	if got := cleanupSkipReason(errors.Join(ErrCleanupScript, errors.New("secret output"))); got != "workspace cleanup script failed" {
+	if got := cleanupRefusalFor(errors.Join(ErrCleanupScript, errors.New("secret output"))).reason; got != "workspace cleanup script failed" {
 		t.Fatalf("untyped cleanup errors must not expose their message: %q", got)
 	}
 }
@@ -361,9 +361,9 @@ func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
 // A Cleanup step runs without a limit unless it sets one; one that sets one
 // is stopped at it and reported as timed out, keeping the worktree.
 func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
-	previous := scriptStepMinute
-	scriptStepMinute = 100 * time.Millisecond
-	t.Cleanup(func() { scriptStepMinute = previous })
+	previous := scriptStepTimeoutUnit
+	scriptStepTimeoutUnit = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepTimeoutUnit = previous })
 	slow := "sleep 2"
 	if runtime.GOOS == "windows" {
 		slow = "ping -n 3 127.0.0.1 > NUL"
@@ -382,9 +382,9 @@ func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 // A step that exits cleanly at the very moment its limit expires succeeded and
 // must not be reported as timed out.
 func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
-	previousMinute, previousRun := scriptStepMinute, runCleanupStep
-	scriptStepMinute = 20 * time.Millisecond
-	t.Cleanup(func() { scriptStepMinute, runCleanupStep = previousMinute, previousRun })
+	previousMinute, previousRun := scriptStepTimeoutUnit, runCleanupStep
+	scriptStepTimeoutUnit = 20 * time.Millisecond
+	t.Cleanup(func() { scriptStepTimeoutUnit, runCleanupStep = previousMinute, previousRun })
 	runCleanupStep = func(ctx context.Context, _, _ string, _ map[string]string, _ io.Writer) error {
 		<-ctx.Done()
 		return nil

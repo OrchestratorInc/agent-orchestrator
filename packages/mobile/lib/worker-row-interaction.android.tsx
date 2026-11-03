@@ -35,6 +35,10 @@ export function WorkerRowInteraction({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [actionsOpen, setActionsOpen] = useState(false);
+	// The rail's controls exist only while the row is off its resting position,
+	// as on iOS: a resting row is hidden behind its foreground, and building two
+	// ripple buttons and their icons under every mounted row was most of a row.
+	const [actionsMounted, setActionsMounted] = useState(false);
 	const [menuVisible, setMenuVisible] = useState(false);
 	const closeRef = useRef<() => void>(() => {});
 	const translationX = useRef(new Animated.Value(0)).current;
@@ -52,7 +56,10 @@ export function WorkerRowInteraction({
 			toValue: target,
 			duration: 180,
 			useNativeDriver: true,
-		}).start();
+		}).start(({ finished }) => {
+			// Keep the controls through the closing motion; drop them once settled.
+			if (finished && translationXRef.current === 0) setActionsMounted(false);
+		});
 	}, [translationX]);
 	const trackFinger = useCallback((value: number) => {
 		moveTo(value, false);
@@ -105,6 +112,7 @@ export function WorkerRowInteraction({
 			.failOffsetY([-LONG_PRESS_DISTANCE, LONG_PRESS_DISTANCE])
 			.onStart(() => {
 				startingOffset = translationXRef.current;
+				setActionsMounted(true);
 			})
 			.onUpdate((event) => {
 				trackFinger(startingOffset + event.translationX);
@@ -136,7 +144,7 @@ export function WorkerRowInteraction({
 		<>
 			<View style={shellStyle}>
 				<View pointerEvents={enabled ? "auto" : "none"} style={styles.actionRail}>
-					{rightActions}
+					{actionsMounted ? rightActions : null}
 				</View>
 				{enabled ? (
 					<GestureDetector gesture={gesture}>

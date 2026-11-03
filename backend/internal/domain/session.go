@@ -356,6 +356,14 @@ type SessionRecord struct {
 	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
+	// BranchNaming is set while a task's generated branch name is on the way:
+	// from the start of naming until the background rename settles. Clients keep
+	// the temporary branch private meanwhile. Written only by its narrow setter.
+	BranchNaming bool `json:"branchNaming,omitempty"`
+	// TemporaryBranch is the branch a task started on before its generated name
+	// replaced it. The session keeps owning refs under it, and full-row writes
+	// never put it back. Written only by the rename.
+	TemporaryBranch string `json:"-"`
 }
 
 // SessionStaleBinary describes a launch left on a replaced harness release.
@@ -521,6 +529,9 @@ type Session struct {
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
+	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
+	// archive: clients list its failure but raise no error for it.
+	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`

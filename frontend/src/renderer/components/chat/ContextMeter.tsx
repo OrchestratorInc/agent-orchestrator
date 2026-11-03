@@ -135,7 +135,7 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
 	// A border separates the tooltip without the layered shadow's hover halos.
-	const tooltipSurface = "border border-border shadow-none";
+	const tooltipSurface = "border border-(--color-border-overlay) shadow-none";
 
 	// Failed turns can report 0 used with a valid model limit. That draws as an
 	// empty 0% ring until the next turn reports a real reading. Without a window

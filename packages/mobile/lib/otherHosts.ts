@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
 import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
 import { shouldKeepPolling, userFacingError } from "./connectionError";
 import type { Endpoint } from "./endpoints";
 import { findHost, type Host } from "./hosts";
+import { EMPTY_LINK_TRACKER, failedPollOutcome, recordPoll, SLOW_POLL_MS, type LinkTracker, type PollOutcome } from "./linkHealth";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { pollIntervalFor } from "./pollInterval";
 import { sameServerConfig } from "./sameConfig";
@@ -24,11 +26,23 @@ export type HostSnapshot = {
 	projects: ProjectInfo[];
 	projectsKnown: boolean;
 	sessions: DashboardSession[];
+	/**
+	 * The size of the archive the poll left out of `sessions`, when this machine
+	 * pages it. Null before the first answer and for a daemon that predates
+	 * paging, whose `sessions` still holds every archived worker.
+	 */
+	archive?: ArchiveSummary | null;
 	orchestrators: OrchestratorLink[];
 	orchestratorId: string | null;
 	stats: DashboardStats;
 	notificationsUnread: number;
 	lastSyncAt: number;
+	/**
+	 * Recent poll and race outcomes, classified with the phone's network by
+	 * classifyLink, so this machine gets the same grace period as the selected
+	 * one instead of reading as offline after a single unanswered poll.
+	 */
+	linkTracker?: LinkTracker;
 };
 
 export type VerifiedHostSnapshot = HostSnapshot & {
@@ -50,6 +64,7 @@ export function emptyHostSnapshot(host: Host): HostSnapshot {
 		projects: [],
 		projectsKnown: false,
 		sessions: [],
+		archive: null,
 		orchestrators: [],
 		orchestratorId: null,
 		stats: {},
@@ -78,6 +93,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 	let lastProjects = previous?.projects ?? [];
 	let projectsKnown = previous?.projectsKnown ?? false;
 	let busy: Promise<void> | null = null;
+	let tracker = previous?.linkTracker ?? EMPTY_LINK_TRACKER;
 	const runner: Runner = {
 		config: seed?.config ?? null,
 		refresh: () => {
@@ -88,6 +104,10 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		stop: () => { stopped = true; if (timer) clearTimeout(timer); if (upgradeTimer) clearInterval(upgradeTimer); },
 	};
 	const update = (patch: Partial<HostSnapshot>) => { if (!stopped) publish(patch); };
+	const record = (outcome: PollOutcome) => {
+		tracker = recordPoll(tracker, outcome, Date.now());
+		update({ linkTracker: tracker });
+	};
 	const schedule = (ms: number) => {
 		if (timer) clearTimeout(timer);
 		if (!stopped) timer = setTimeout(() => void runner.refresh(), ms);
@@ -106,6 +126,8 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			if (!result.ok || result.hostId !== host.id) {
 				runner.config = null;
 				const incompatible = !result.ok && result.reason === "incompatible";
+				// An incompatible host answered; nothing answering at all is a failed race.
+				record(incompatible ? "answered-error" : "no-answer");
 				update({ config: null, connection: "closed", loading: false, error: incompatible ? "Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
 				schedule(15_000);
 				return;
@@ -117,6 +139,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			if (stopped) return;
 			runner.config = null;
 			update({ config: null, connection: "closed", loading: false, error: userFacingError(cause), errorStatus: null });
+			record("no-answer");
 			schedule(15_000);
 		}
 	};
@@ -155,8 +178,10 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		const c = runner.config;
 		if (!c || !isConfigured(c) || stopped) return;
 		try {
+			const startedAt = Date.now();
 			const answer = await getSessions(c, "all");
 			if (stopped || runner.config !== c) return;
+			record(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			if (answer.projects !== null) {
 				lastProjects = answer.projects;
 				projectsKnown = true;
@@ -170,6 +195,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				projects: lastProjects,
 				projectsKnown,
 				sessions: answer.sessions,
+				archive: answer.archive ?? null,
 				orchestrators: answer.orchestrators,
 				orchestratorId: answer.orchestratorId,
 				stats: answer.stats,
@@ -187,6 +213,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;
+			record(failedPollOutcome(cause, status));
 			connected = false;
 			update({ connection: "closed", loading: false, error: userFacingError(cause), errorStatus: status ?? null });
 			if (!shouldKeepPolling(status)) {
@@ -250,6 +277,7 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 				if (patch.sessions) next.sessions = reconcileRows(previous.sessions, patch.sessions);
 				if (patch.projects) next.projects = reconcileRows(previous.projects, patch.projects);
 				if (patch.orchestrators) next.orchestrators = reconcileRows(previous.orchestrators, patch.orchestrators);
+				if ("archive" in patch && sameArchiveSummary(previous.archive, patch.archive)) next.archive = previous.archive;
 				if (Object.keys(patch).every((key) => next[key as keyof HostSnapshot] === previous[key as keyof HostSnapshot])) return current;
 				return { ...current, [host.id]: next };
 			});

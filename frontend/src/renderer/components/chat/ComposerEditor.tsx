@@ -66,6 +66,8 @@ export type ComposerEditorSnapshot = {
 	text: string;
 	hasText: boolean;
 	trigger?: ComposerTrigger;
+	/** The caret's offset into text; undefined without a selection in the editor. */
+	caret?: number;
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -408,24 +410,58 @@ function $removeImageTokens(remove: (path: string) => boolean): void {
 	}
 }
 
+// The text content of container's descendants before target, in document
+// order, counted as $serializeComposer counts it.
+function $textBefore(container: LexicalNode, target: LexicalNode): number {
+	if (!$isElementNode(container)) return 0;
+	let count = 0;
+	for (const child of container.getChildren()) {
+		if (child.is(target)) return count;
+		if ($isElementNode(child) && child.isParentOf(target)) return count + $textBefore(child, target);
+		count += child.getTextContent().length;
+	}
+	return count;
+}
+
+/** Where the selection's focus sits in $serializeComposer's text. */
+function $caretOffset(): number | undefined {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return undefined;
+	const point = selection.focus;
+	const node = point.getNode();
+	let offset = 0;
+	for (const paragraph of $getRoot().getChildren()) {
+		if (paragraph.is(node) || ($isElementNode(paragraph) && paragraph.isParentOf(node))) {
+			const within = point.type === "element" && $isElementNode(node)
+				? node.getChildren().slice(0, point.offset).reduce((sum, child) => sum + child.getTextContent().length, 0)
+				: point.offset;
+			return offset + $textBefore(paragraph, node) + within;
+		}
+		offset += paragraph.getTextContent().length + 1;
+	}
+	return undefined;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
+	const caret = $caretOffset();
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0 };
+	if (!active) return { text, hasText: text.trim().length > 0, caret };
 	return {
 		text,
 		hasText: text.trim().length > 0,
+		caret,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,
@@ -445,15 +481,17 @@ const EditorBridge = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		enterSends: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
+		onEmptyChange: (empty: boolean) => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -513,16 +551,15 @@ const EditorBridge = forwardRef<
 	);
 
 	useLayoutEffect(() => {
-		const dismissIfNotEmpty = () => {
-			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
-		};
-		editor.getEditorState().read(dismissIfNotEmpty);
+		// Draft edits and Tab acceptance only hide the hint; Escape dismisses it.
+		const updateEmpty = () => onEmptyChange($serializeComposer().length === 0);
+		editor.getEditorState().read(updateEmpty);
 		return editor.registerUpdateListener(({ editorState, tags }) => {
-			editorState.read(dismissIfNotEmpty);
+			editorState.read(updateEmpty);
 			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
 			editorState.read(() => onChange(editorSnapshot()));
 		});
-	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
+	}, [editor, onChange, onEmptyChange]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -530,7 +567,8 @@ const EditorBridge = forwardRef<
 			// bubble listener. A prevented event was already handled there and must not
 			// also insert a newline or a second completion token.
 			if (event?.defaultPrevented) return true;
-			if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+			if (event?.isComposing || event?.keyCode === 229 || event?.shiftKey || editor.isComposing()) return false;
+			if (key === "Enter" && !enterSends && !event?.metaKey && !event?.ctrlKey) return false;
 			const snapshot = editorSnapshot();
 			if (
 				key === "Tab" && promptSuggestion && !snapshot.text &&
@@ -543,7 +581,6 @@ const EditorBridge = forwardRef<
 				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
 				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
 				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
-				onDismissSuggestion();
 				if (event) {
 					completionHandledEvents.add(event);
 					event.preventDefault();
@@ -569,7 +606,10 @@ const EditorBridge = forwardRef<
 		const removeEnter = editor.registerCommand(
 			KEY_ENTER_COMMAND,
 			(event) => {
-				if (event?.isComposing || event?.shiftKey || editor.isComposing()) return false;
+				// Claim only the editor command: the browser must still confirm the IME
+				// candidate, without Lexical inserting a newline or selecting a suggestion.
+				if (event?.isComposing || event?.keyCode === 229) return true;
+				if (event?.shiftKey || editor.isComposing()) return false;
 				if (complete(event, "Enter")) return true;
 				return false;
 			},
@@ -593,7 +633,7 @@ const EditorBridge = forwardRef<
 			removeTab();
 			removeEscape();
 		};
-	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+	}, [editor, enterSends, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
 	return null;
 });
@@ -626,6 +666,7 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
 		label: string;
@@ -645,6 +686,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		enterSends,
 		concealed,
 		label,
 		placeholder,
@@ -665,7 +707,8 @@ export const ComposerEditor = forwardRef<
 	const { t } = useTranslation();
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
-	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const [empty, setEmpty] = useState(true);
+	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -751,8 +794,10 @@ export const ComposerEditor = forwardRef<
 				<EditorBridge
 					ref={ref}
 					disabled={disabled}
+					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
+					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}

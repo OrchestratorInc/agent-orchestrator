@@ -224,7 +224,11 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		}
 		return complete
 	})
-	rows, err := st.LoadConversationSnapshot(ctx, second.ConversationID())
+	// Replay can consume the wait budget. The committed snapshot and archive are
+	// separate reads and must not fail because that wait just expired.
+	readCtx, readCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer readCancel()
+	rows, err := st.LoadConversationSnapshot(readCtx, second.ConversationID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +237,7 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		rows.Messages[1].Text != expected || rows.Messages[1].Streaming {
 		t.Fatal("replay changed the turn or lost/duplicated content")
 	}
-	archive, err := st.ProviderEventsSince(ctx, second.ConversationID(), 0, acpReplayFrames+100)
+	archive, err := st.ProviderEventsSince(readCtx, second.ConversationID(), 0, acpReplayFrames+100)
 	if err != nil {
 		t.Fatal(err)
 	}

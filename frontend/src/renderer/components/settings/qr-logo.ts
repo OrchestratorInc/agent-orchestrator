@@ -1,7 +1,9 @@
-import aoLogo from "../../assets/ao-logo.svg";
+import aoLogo from "../../assets/ao-qr-logo.png";
 
 /**
- * The logo drawn in the middle of a QR code, decoded once for the whole app.
+ * The logo drawn in the middle of a QR code, decoded once for the whole app:
+ * Ruto from the mobile app's icon, without the tile, so it sits clean on the
+ * code's white paper and reads as "scan me with that app".
  *
  * It starts loading when the QR module is first imported, long before a code
  * is drawn, so the first code a user sees already has its logo. A canvas can

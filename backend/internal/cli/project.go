@@ -2,11 +2,12 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -76,6 +77,7 @@ type workspaceRepoDetails struct {
 // agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
 	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 	Mode        string `json:"mode,omitempty"`
 	Permissions string `json:"permissions,omitempty"`
 }
@@ -106,23 +108,26 @@ type containerReapConfig struct {
 
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
-// --config-json.
+// --config-json. Every domain key must be modeled here, or set-config drops it
+// (TestProjectConfigMirrorsDomainJSONKeys guards this).
 type projectConfig struct {
-	ContainerReap     *containerReapConfig `json:"containerReap,omitempty"`
-	CanonicalRepoURL  string               `json:"canonicalRepoURL,omitempty"`
-	DefaultBranch     string               `json:"defaultBranch,omitempty"`
-	SessionPrefix     string               `json:"sessionPrefix,omitempty"`
-	Env               map[string]string    `json:"env,omitempty"`
-	Symlinks          []string             `json:"symlinks,omitempty"`
-	PostCreate        []string             `json:"postCreate,omitempty"`
-	AgentRules        string               `json:"agentRules,omitempty"`
-	AgentRulesFile    string               `json:"agentRulesFile,omitempty"`
-	OrchestratorRules string               `json:"orchestratorRules,omitempty"`
-	AgentConfig       agentConfig          `json:"agentConfig,omitempty"`
-	Worker            roleOverride         `json:"worker,omitempty"`
-	Orchestrator      roleOverride         `json:"orchestrator,omitempty"`
-	TrackerIntake     trackerIntakeConfig  `json:"trackerIntake,omitempty"`
-	AutoReview        bool                 `json:"autoReview,omitempty"`
+	ContainerReap         *containerReapConfig `json:"containerReap,omitempty"`
+	CanonicalRepoURL      string               `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch         string               `json:"defaultBranch,omitempty"`
+	SessionPrefix         string               `json:"sessionPrefix,omitempty"`
+	Env                   map[string]string    `json:"env,omitempty"`
+	Symlinks              []string             `json:"symlinks,omitempty"`
+	PostCreate            []string             `json:"postCreate,omitempty"`
+	PreRemove             []string             `json:"preRemove,omitempty"`
+	AgentRules            string               `json:"agentRules,omitempty"`
+	AgentRulesFile        string               `json:"agentRulesFile,omitempty"`
+	OrchestratorRules     string               `json:"orchestratorRules,omitempty"`
+	OrchestratorRulesFile string               `json:"orchestratorRulesFile,omitempty"`
+	AgentConfig           agentConfig          `json:"agentConfig,omitempty"`
+	Worker                roleOverride         `json:"worker,omitempty"`
+	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
+	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
+	AutoReview            bool                 `json:"autoReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
@@ -136,26 +141,28 @@ type setConfigRequest struct {
 }
 
 type projectSetConfigOptions struct {
-	canonicalRepoURL  string
-	defaultBranch     string
-	sessionPrefix     string
-	model             string
-	permission        string
-	workerAgent       string
-	orchestratorAgent string
-	agentRules        string
-	agentRulesFile    string
-	orchestratorRules string
-	env               []string
-	symlink           []string
-	postCreate        []string
-	trackerIntake     bool
-	trackerRepo       string
-	trackerAssignee   string
-	reviewers         []string
-	configJSON        string
-	clear             bool
-	json              bool
+	canonicalRepoURL      string
+	defaultBranch         string
+	sessionPrefix         string
+	model                 string
+	permission            string
+	workerAgent           string
+	orchestratorAgent     string
+	agentRules            string
+	agentRulesFile        string
+	orchestratorRules     string
+	orchestratorRulesFile string
+	env                   []string
+	symlink               []string
+	postCreate            []string
+	preRemove             []string
+	trackerIntake         bool
+	trackerRepo           string
+	trackerAssignee       string
+	reviewers             []string
+	configJSON            string
+	clear                 bool
+	json                  bool
 }
 
 type projectListResult struct {
@@ -296,11 +303,13 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set-config <id>",
 		Short: "Set the per-project config",
-		Long: "Replace a project's per-project config (branch, session prefix, env, " +
-			"symlinks, post-create, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
+		Long: "Update a project's per-project config (branch, session prefix, env, " +
+			"symlinks, post-create, pre-remove, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
 			"is resolved when a session spawns.\n\n" +
-			"Set fields via flags, pass the whole object with --config-json, or --clear " +
-			"to remove all config.",
+			"Field flags change only the fields they name and keep the rest of the saved config; " +
+			"a repeatable flag replaces that whole list or map. Field flags refuse a degraded " +
+			"project, whose config cannot be read; use --config-json to replace its config. " +
+			"--config-json replaces the whole config with the given object, and --clear removes all config.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 				return usageError{err}
@@ -312,7 +321,10 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := strings.TrimSpace(args[0])
-			config, err := buildProjectConfig(opts)
+			current := func() (projectConfig, error) {
+				return ctx.currentProjectConfig(cmd.Context(), id)
+			}
+			config, err := buildProjectConfig(opts, cmd.Flags().Changed, current)
 			if err != nil {
 				return err
 			}
@@ -339,9 +351,11 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.agentRules, "agent-rules", "", "Project-specific standing instructions for worker sessions")
 	f.StringVar(&opts.agentRulesFile, "agent-rules-file", "", "Repo-relative file containing worker standing instructions")
 	f.StringVar(&opts.orchestratorRules, "orchestrator-rules", "", "Project-specific standing instructions for orchestrator sessions")
+	f.StringVar(&opts.orchestratorRulesFile, "orchestrator-rules-file", "", "Repo-relative file containing orchestrator standing instructions")
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
+	f.StringArrayVar(&opts.preRemove, "pre-remove", nil, "Command to run before workspace removal (repeatable)")
 	f.BoolVar(&opts.trackerIntake, "tracker-intake", false, "Opt this project into issue intake (GitHub or GitLab; provider inferred from git origin). Inert unless the daemon also has AO_TRACKER_INTAKE=on")
 	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "Provider-native repo for issue intake (owner/repo or group/subgroup/repo; default: derive from git origin)")
 	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "Issue assignee required for intake eligibility")
@@ -352,11 +366,20 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
+// projectConfigFlags are the set-config flags that edit one config field.
+var projectConfigFlags = []string{
+	"canonical-repo-url", "default-branch", "session-prefix", "model", "permission",
+	"worker-agent", "orchestrator-agent", "agent-rules", "agent-rules-file",
+	"orchestrator-rules", "orchestrator-rules-file", "env", "symlink", "post-create",
+	"pre-remove", "tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
+}
+
 // buildProjectConfig turns the set-config flags into the typed config sent to
 // the daemon. --clear empties the config; --config-json supplies the whole
-// object; otherwise the field flags form the config. The daemon validates the
-// values.
-func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
+// object; otherwise each changed field flag overwrites its field in the current
+// config, so fields the CLI has no flag for (effort, ...) survive.
+// The daemon validates the values.
+func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) bool, current func() (projectConfig, error)) (projectConfig, error) {
 	if opts.clear {
 		return projectConfig{}, nil
 	}
@@ -368,34 +391,71 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		return cfg, nil
 	}
 
+	if !slices.ContainsFunc(projectConfigFlags, changed) {
+		return projectConfig{}, usageError{errors.New("usage: provide at least one config flag, --config-json, or --clear")}
+	}
 	env, err := parseEnvPairs(opts.env)
 	if err != nil {
 		return projectConfig{}, err
 	}
-	cfg := projectConfig{
-		CanonicalRepoURL:  opts.canonicalRepoURL,
-		DefaultBranch:     opts.defaultBranch,
-		SessionPrefix:     opts.sessionPrefix,
-		Env:               env,
-		Symlinks:          opts.symlink,
-		PostCreate:        opts.postCreate,
-		AgentRules:        opts.agentRules,
-		AgentRulesFile:    opts.agentRulesFile,
-		OrchestratorRules: opts.orchestratorRules,
-		AgentConfig:       agentConfig{Model: opts.model, Permissions: opts.permission},
-		Worker:            roleOverride{Agent: opts.workerAgent},
-		Orchestrator:      roleOverride{Agent: opts.orchestratorAgent},
-		TrackerIntake: trackerIntakeConfig{
-			Enabled:  opts.trackerIntake,
-			Repo:     opts.trackerRepo,
-			Assignee: opts.trackerAssignee,
-		},
-		Reviewers: reviewersForFlags(opts.reviewers),
+	cfg, err := current()
+	if err != nil {
+		return projectConfig{}, err
 	}
-	if reflect.DeepEqual(cfg, projectConfig{}) {
-		return projectConfig{}, usageError{errors.New("usage: provide at least one config flag, --config-json, or --clear")}
+	setIfChanged := func(name string, field *string, value string) {
+		if changed(name) {
+			*field = value
+		}
+	}
+	setIfChanged("canonical-repo-url", &cfg.CanonicalRepoURL, opts.canonicalRepoURL)
+	setIfChanged("default-branch", &cfg.DefaultBranch, opts.defaultBranch)
+	setIfChanged("session-prefix", &cfg.SessionPrefix, opts.sessionPrefix)
+	setIfChanged("model", &cfg.AgentConfig.Model, opts.model)
+	setIfChanged("permission", &cfg.AgentConfig.Permissions, opts.permission)
+	setIfChanged("worker-agent", &cfg.Worker.Agent, opts.workerAgent)
+	setIfChanged("orchestrator-agent", &cfg.Orchestrator.Agent, opts.orchestratorAgent)
+	setIfChanged("agent-rules", &cfg.AgentRules, opts.agentRules)
+	setIfChanged("agent-rules-file", &cfg.AgentRulesFile, opts.agentRulesFile)
+	setIfChanged("orchestrator-rules", &cfg.OrchestratorRules, opts.orchestratorRules)
+	setIfChanged("orchestrator-rules-file", &cfg.OrchestratorRulesFile, opts.orchestratorRulesFile)
+	setIfChanged("tracker-repo", &cfg.TrackerIntake.Repo, opts.trackerRepo)
+	setIfChanged("tracker-assignee", &cfg.TrackerIntake.Assignee, opts.trackerAssignee)
+	if changed("tracker-intake") {
+		cfg.TrackerIntake.Enabled = opts.trackerIntake
+	}
+	if changed("env") {
+		cfg.Env = env
+	}
+	if changed("symlink") {
+		cfg.Symlinks = opts.symlink
+	}
+	if changed("post-create") {
+		cfg.PostCreate = opts.postCreate
+	}
+	if changed("pre-remove") {
+		cfg.PreRemove = opts.preRemove
+	}
+	if changed("reviewer") {
+		cfg.Reviewers = reviewersForFlags(opts.reviewers)
 	}
 	return cfg, nil
+}
+
+// currentProjectConfig reads the project's saved config so set-config flags can
+// edit it in place. A degraded project reports no config, and merging into
+// nothing would wipe it, so it is refused.
+func (c *commandContext) currentProjectConfig(ctx context.Context, id string) (projectConfig, error) {
+	var res projectGetResult
+	if err := c.getJSON(ctx, "projects/"+url.PathEscape(id), &res); err != nil {
+		return projectConfig{}, err
+	}
+	if res.Status == "degraded" {
+		return projectConfig{}, fmt.Errorf("project %s is degraded (%s); its config cannot be read, so use --config-json to replace it", id, res.Project.ResolveError)
+	}
+	if res.Project.Config == nil {
+		return projectConfig{}, nil
+	}
+	return *res.Project.Config, nil
 }
 
 // reviewersForFlags turns repeated --reviewer harness values into the config

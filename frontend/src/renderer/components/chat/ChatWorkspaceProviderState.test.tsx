@@ -1,6 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import {
@@ -11,24 +10,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-// The sign-in banner reads the session's account; these tests cover the chrome
-// without a daemon, so the account reads answer nothing.
-vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
-	useSessionAgentAccounts: () => ({ data: undefined }),
-	useAgentAccounts: () => ({ data: undefined }),
-	useAgentAccountActions: () => ({}),
-}));
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
+import { renderChat as render } from "../../test/render-chat";
 
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.
@@ -122,6 +104,41 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
+	// Claude keeps one task list for the session and re-sends it into every later turn.
+	// Those are copies of one list, so only the latest turn's copy is current.
+	it("shows a list that spans turns once, on the latest turn that carries it", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const spanning: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan:
+					turn.id === "turn-1"
+						? {
+								spansTurns: true,
+								steps: current.steps.map((step) => ({ ...step, status: "pending" as const })),
+							}
+						: { ...current, spansTurns: true },
+			})),
+		};
+		render(<ChatWorkspace snapshot={spanning} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+	});
+
+	it("keeps a separate plan on each turn when the plans are per turn", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const perTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan: turn.id === "turn-1" ? { steps: [{ text: "Read the store", status: "completed" }] } : current,
+			})),
+		};
+		render(<ChatWorkspace snapshot={perTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+	});
+
 	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {
@@ -149,6 +166,9 @@ describe("plan", () => {
 });
 
 describe("provider state chrome", () => {
+	// The notice never repeats the provider's error; the timeline already shows it once.
+	const expiredNotice = "Your Codex login has expired. Log in again to keep using this chat.";
+
 	it.each(["completion", "notification", "both"])("keeps the %s failure in chat while preserving sign-in guidance", (source) => {
 		const reason = "Provider access denied.\n\nContact your administrator.";
 		const snapshot: ConversationSnapshot = {
@@ -200,17 +220,13 @@ describe("provider state chrome", () => {
 		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
 			fireEvent.click(trigger);
 		}
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 		expect(screen.getByText(/Contact your administrator/)).toBeInTheDocument();
 		expect(screen.getByText("Earlier recovered warning")).toBeInTheDocument();
 
 		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
-		expect(screen.getByRole("alert")).toHaveTextContent("login");
-		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
 
 		rerender(
@@ -219,12 +235,13 @@ describe("provider state chrome", () => {
 			/>,
 		);
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
-		expect(screen.getByRole("alert")).toHaveTextContent("Session expired.");
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
 	});
 
 	it("keeps credential recovery available when the failure is not in loaded history", () => {
 		render(<ChatWorkspace snapshot={chatFixtureReauth} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(/Provider authentication needs attention/);
+		expect(screen.getByText(expiredNotice)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 	});
 
 	it("reports a provider-side thread fault while the controller is healthy", () => {

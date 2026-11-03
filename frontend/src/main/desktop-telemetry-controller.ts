@@ -39,6 +39,7 @@ export class DesktopTelemetryController {
 		now?: () => number;
 		broadcast?: (view: TelemetryPolicyView) => void;
 		clearRendererQueues?: () => Promise<void>;
+		clearTransportCache?: () => Promise<void>;
 	}) {
 		this.view = this.toView(options.authority.snapshot(), "applied");
 		this.operation = Promise.resolve(this.view);
@@ -50,6 +51,14 @@ export class DesktopTelemetryController {
 		return this.serialize(async () => {
 			const snapshot = await this.options.authority.load();
 			this.view = this.toView(snapshot, snapshot.acknowledged ? "applied" : "cleanup_failed");
+			if (!snapshot.eventsEnabled && this.options.clearTransportCache) {
+				this.pendingDesktopCleanup = async () => {
+					try { await this.options.clearTransportCache?.(); return true; }
+					catch { return false; }
+				};
+				if (await this.pendingDesktopCleanup()) this.pendingDesktopCleanup = null;
+				else this.view = this.toView({ ...snapshot, acknowledged: false }, "cleanup_pending", "cleanup_failed");
+			}
 			if (snapshot.acknowledged && this.captureEnabled(snapshot)) this.transport = await this.options.transportFactory();
 			this.publish();
 			return this.snapshot();
@@ -108,15 +117,18 @@ export class DesktopTelemetryController {
 
 	private async disable(): Promise<TelemetryPolicyView> {
 		const closingTransport = this.transport;
+		const previousCleanup = this.pendingDesktopCleanup;
 		let transportDrained = true;
 		try { await closingTransport?.closeAndDrain(); } catch { transportDrained = false; }
 		this.transport = null;
 		this.pendingDesktopCleanup = async () => {
 			let purged = true;
+			if (previousCleanup && !(await previousCleanup())) purged = false;
 			if (!transportDrained) {
 				try { await closingTransport?.closeAndDrain(); transportDrained = true; } catch { purged = false; }
 			}
 			try { await closingTransport?.clearCache(); } catch { purged = false; }
+			try { await this.options.clearTransportCache?.(); } catch { purged = false; }
 			try { await this.options.clearRendererQueues?.(); } catch { purged = false; }
 			return purged;
 		};

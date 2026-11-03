@@ -5,7 +5,7 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -23,6 +23,12 @@ export type EventTransport = {
 };
 
 const INVALIDATE_WINDOW_MS = 150;
+// A session_updated that carries only the session id comes from usage
+// bookkeeping (rarely an agent switch, cleanup fact or reported PR) and cannot
+// say whether the board changed. During long agent runs these arrive faster than
+// the window above and refetched the whole workspace every window for hours
+// (#6763), so they refresh it at most once per this interval.
+const ID_ONLY_WORKSPACE_REFRESH_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
 const EVENTSOURCE_CLOSED = 2;
@@ -72,6 +78,11 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// refreshed by their own events. A fresh stream starts at the newest event,
 			// so a lifecycle refresh must cover whatever changed in the gap.
 			let allEventScopedCachesInvalidationPending = false;
+			// An id-only update waits here until the workspace is a full
+			// ID_ONLY_WORKSPACE_REFRESH_MS old; any workspace refresh covers it.
+			let idOnlyWorkspaceRefreshPending = false;
+			let idOnlyWorkspaceTimer: ReturnType<typeof setTimeout> | undefined;
+			let lastWorkspaceRefreshAt = Number.NEGATIVE_INFINITY;
 			let retryTimer: ReturnType<typeof setTimeout> | undefined;
 			let source: EventSource | undefined;
 			let sourceBaseUrl: string | undefined;
@@ -232,6 +243,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(sessionScmSummaryQueryKey());
 					invalidate(sessionUsageQueryRoot);
 					workspaceInvalidationPending = false;
+					lastWorkspaceRefreshAt = Date.now();
+					idOnlyWorkspaceRefreshPending = false;
 				}
 				if (allEventScopedCachesInvalidationPending) {
 					invalidate(["session-reviews"]);
@@ -266,18 +279,56 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				pendingInterfaceTransitionSessions.clear();
 				for (const scope of pendingModelCatalogScopes.values()) {
-					// Project pickers can resolve to the global catalog in the daemon.
-					// A global update must refresh those views and Settings together.
-					invalidate(scope.projectId
-						? ["agent-models", scope.agentId, scope.projectId]
-						: ["agent-models", scope.agentId]);
+					// Catalogs are device-wide: pickers key them by agent, not by the
+					// project the event names, so refresh every view of this agent
+					// (pickers and Settings) together.
+					invalidate(["agent-models", scope.agentId]);
 				}
 				pendingModelCatalogScopes.clear();
+			};
+			// A busy stream must not postpone visible updates until traffic
+			// stops, and the first event after a quiet period must not wait out
+			// a full window either. Flush on the leading edge when the last
+			// flush is at least one window old; otherwise coalesce this and
+			// later events into a single trailing flush. invalidate() still
+			// dedups the resulting refetches per key, so the leading edge
+			// cannot start a refetch storm.
+			const scheduleFlush = () => {
+				if (refreshTimer !== undefined) return;
+				const sinceLastFlush = Date.now() - lastFlushAt;
+				if (sinceLastFlush >= INVALIDATE_WINDOW_MS) {
+					lastFlushAt = Date.now();
+					flushPending();
+					return;
+				}
+				refreshTimer = setTimeout(() => {
+					refreshTimer = undefined;
+					lastFlushAt = Date.now();
+					flushPending();
+				}, INVALIDATE_WINDOW_MS - sinceLastFlush);
+			};
+			// Marks the workspace for the next flush once it is a full interval
+			// old; until then a single timer waits for that moment.
+			const queueIdOnlyWorkspaceRefresh = () => {
+				idOnlyWorkspaceRefreshPending = true;
+				const wait = lastWorkspaceRefreshAt + ID_ONLY_WORKSPACE_REFRESH_MS - Date.now();
+				if (wait <= 0) {
+					workspaceInvalidationPending = true;
+					return;
+				}
+				if (idOnlyWorkspaceTimer !== undefined) return;
+				idOnlyWorkspaceTimer = setTimeout(() => {
+					idOnlyWorkspaceTimer = undefined;
+					if (!idOnlyWorkspaceRefreshPending) return;
+					queueIdOnlyWorkspaceRefresh();
+					if (workspaceInvalidationPending) scheduleFlush();
+				}, wait);
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
+				let idOnlySessionUpdate = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -362,10 +413,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof payload?.conversationId !== "string" &&
 							typeof payload?.interfaceTransitionId !== "string"
 						) {
+							idOnlySessionUpdate =
+								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
 							// Async chat startup changes the session's provisionState, but
-							// does not emit a conversationId. Refresh the open conversation
-							// so its controller state can leave "connecting".
-							pendingConversationSessions.add(decoded.sessionId);
+							// does not emit a conversationId, and the controller turning
+							// ready writes nothing of its own: whichever session update
+							// follows is what lets an open chat leave "connecting". Once the
+							// chat is ready or working, an id-only update (usage bookkeeping,
+							// cleanup facts, agent-switch rows) changes nothing in it, and
+							// refetching for each one reloaded its whole page every few seconds.
+							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
+								pendingConversationSessions.add(decoded.sessionId);
+							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
 					} catch {
@@ -373,26 +432,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
-				// A busy stream must not postpone visible updates until traffic
-				// stops, and the first event after a quiet period must not wait out
-				// a full window either. Flush on the leading edge when the last
-				// flush is at least one window old; otherwise coalesce this and
-				// later events into a single trailing flush. invalidate() still
-				// dedups the resulting refetches per key, so the leading edge
-				// cannot start a refetch storm.
-				if (refreshTimer !== undefined) return;
-				const sinceLastFlush = Date.now() - lastFlushAt;
-				if (sinceLastFlush >= INVALIDATE_WINDOW_MS) {
-					lastFlushAt = Date.now();
-					flushPending();
-					return;
-				}
-				refreshTimer = setTimeout(() => {
-					refreshTimer = undefined;
-					lastFlushAt = Date.now();
-					flushPending();
-				}, INVALIDATE_WINDOW_MS - sinceLastFlush);
+				if (idOnlySessionUpdate) queueIdOnlyWorkspaceRefresh();
+				else if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
+				scheduleFlush();
 			};
 
 			// Consecutive scheduled rebuilds since the stream last opened. Paces
@@ -528,6 +570,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				healthAttempt += 1;
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+				if (idOnlyWorkspaceTimer !== undefined) clearTimeout(idOnlyWorkspaceTimer);
 				pendingConversationSessions.clear();
 				pendingReviewSessions.clear();
 				pendingInterfaceTransitionSessions.clear();

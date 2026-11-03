@@ -145,8 +145,6 @@ async function installSwitchingChat(
 		}
 		await route.fulfill({ json: { status: "ok" } });
 	});
-	// Agent switching is behind Developer Mode for now.
-	await page.addInitScript(() => window.localStorage.setItem("ao.developerMode", "true"));
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	await expect(page.getByRole("region", { name: "Chat" })).toBeVisible();
 	return requests;

@@ -108,10 +108,13 @@ export function useStayAwake(enabled = true) {
 					for (const result of results) if (result.status === "rejected") throw result.reason;
 					await start();
 				} else await updateMobile(true, false);
+			} else if (change.lidClosed === true) {
+				// Reject a failed lid opt-in before creating or resuming desktop ownership.
+				await updateMobile(true, true);
+				await ensureDesktop();
 			} else {
 				await ensureDesktop();
-				// Main toggle is idle-only. Closed-lid wake requires the explicit option.
-				if (change.lidClosed === true || change.rememberMobile) await updateMobile(true, change.lidClosed === true);
+				if (change.rememberMobile) await updateMobile(true, false);
 			}
 		},
 	});

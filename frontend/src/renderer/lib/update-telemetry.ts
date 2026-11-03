@@ -1,6 +1,6 @@
 import type { UpdateOutcome } from "../../shared/update-telemetry";
 import { aoBridge } from "./bridge";
-import { captureRendererEvent } from "./telemetry";
+import { captureRendererEvent, clearCheckUpdateFailures, telemetryStorage } from "./telemetry";
 
 /**
  * Forwards update outcomes decided by the main process.
@@ -17,6 +17,11 @@ import { captureRendererEvent } from "./telemetry";
  */
 export function startUpdateTelemetry(): () => void {
 	const off = aoBridge.updates.onTelemetry?.((outcome: UpdateOutcome) => {
+		if (outcome.event === "ao.renderer.update_check_succeeded") {
+			const storage = telemetryStorage();
+			if (storage) clearCheckUpdateFailures(storage);
+			return;
+		}
 		void captureRendererEvent(outcome.event, {
 			phase: outcome.phase,
 			trigger: outcome.trigger,

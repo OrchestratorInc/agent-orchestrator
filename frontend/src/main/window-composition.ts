@@ -29,9 +29,11 @@ export function createWindowComposition(options: {
 	WebContentsView: WebContentsViewConstructor;
 	preload: string;
 	platform: NodeJS.Platform;
+	allowShellDebugging?: boolean;
 }): WindowComposition {
 	const shellView = new options.WebContentsView({
 		webPreferences: {
+			devTools: options.allowShellDebugging === true,
 			preload: options.preload,
 			contextIsolation: true,
 			nodeIntegration: false,

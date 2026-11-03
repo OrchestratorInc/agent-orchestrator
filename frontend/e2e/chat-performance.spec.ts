@@ -21,6 +21,7 @@ test.describe("live renderer performance workloads", () => {
 	for (const workload of [
 		"events",
 		"streaming",
+		"markdownBlocks",
 		"highlighting",
 		"history",
 	] as const) {

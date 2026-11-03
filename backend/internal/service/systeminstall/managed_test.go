@@ -249,6 +249,49 @@ func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	}
 }
 
+func TestFailedManagedStartupIncludesOutputAndKeepsCurrentRelease(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
+		t.Fatalf("first update = %+v", job)
+	}
+	commands := f.s.commands
+	f.s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, _ = io.WriteString(stdout, "starting candidate\n")
+			_, _ = io.WriteString(stderr, "error: missing native binding\n")
+			return errors.New("exit status 1")
+		}
+		return commands.Run(ctx, argv, stdout, stderr)
+	})
+	job := f.update(t, "1.2.0")
+	if job.Status != StatusFailed || job.Error != "The new codex did not start." {
+		t.Fatalf("failed startup = %+v", job)
+	}
+	for _, want := range []string{"starting candidate", "error: missing native binding", "exit status 1"} {
+		if !strings.Contains(job.Output, want) {
+			t.Errorf("diagnostics missing %q:\n%s", want, job.Output)
+		}
+		if strings.Contains(job.Error, want) {
+			t.Errorf("startup output leaked into the short notice: %s", job.Error)
+		}
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v1") {
+		t.Fatalf("current moved after a failed startup: %q", target)
+	}
+	if record, ok := f.s.readManagedRecord(TargetCodex); !ok || record.Version != "1.1.0" || record.Dir != "v1" {
+		t.Fatalf("working install record changed: %+v, %t", record, ok)
+	}
+	if f.releases.current[domain.HarnessCodex] != "v1" {
+		t.Fatal("failed candidate replaced the recorded working release")
+	}
+	if got := readFile(filepath.Join(f.root, "bin", "codex")); got != "1.1.0\n" {
+		t.Fatalf("working launcher changed: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v2")); !os.IsNotExist(err) {
+		t.Fatalf("the failed candidate directory was kept: %v", err)
+	}
+}
+
 func TestManagedUpdateFailureKeepsPathsOutOfTheNotice(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	// npm exits 0 without writing the executable.

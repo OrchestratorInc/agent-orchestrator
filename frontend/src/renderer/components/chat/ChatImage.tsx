@@ -12,6 +12,7 @@
  * Images mixed into a sentence stay in the sentence.
  */
 
+import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
 import { useTranslation } from "react-i18next";
@@ -119,6 +120,7 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 	if (inLink) {
 		return (
 			<img
+				crossOrigin={mediaCrossOrigin(url)}
 				src={url}
 				alt={label}
 				loading="lazy"
@@ -144,11 +146,12 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 				>
 					{inline ? (
 						<>
-							<img src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
+							<img crossOrigin={mediaCrossOrigin(url)} src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
 							<span>{label}</span>
 						</>
 					) : (
 					<img
+						crossOrigin={mediaCrossOrigin(url)}
 						src={url}
 						alt={label}
 						loading="lazy"
@@ -176,6 +179,7 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 					<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
 					<ChatImageMenu url={url} label={label}>
 						<img
+							crossOrigin={mediaCrossOrigin(url)}
 							src={url}
 							alt={label}
 							className="block max-h-[calc(100svh-8rem)] max-w-full rounded-md object-contain"

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -103,9 +105,22 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 
 // executeImport opens the rewrite store, runs the import, and closes the store.
 // It is the one CLI path that opens the database directly: the import is a
-// one-time bootstrap that must run with the daemon stopped (guarded by the
-// caller), so it cannot go through the daemon's loopback API.
+// one-time bootstrap that must run with the daemon stopped, so it cannot go
+// through the daemon's loopback API. The caller's run-file check misses a
+// daemon with another AO_RUN_FILE or one still starting, so the import also
+// takes the daemon's data-dir lock before opening the store.
 func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, opts legacyimport.Options) (legacyimport.Report, error) {
+	lock, err := datadirlock.Acquire(ctx, cfg.DataDir, 0)
+	if errors.Is(err, datadirlock.ErrLocked) {
+		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop that process before importing", err)}
+	}
+	// A file system that cannot lock files leaves only the run-file check, as
+	// before the lock; lock is nil then and Release a no-op.
+	if err != nil && !errors.Is(err, datadirlock.ErrUnsupported) {
+		return legacyimport.Report{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
 	store, err := sqlite.Open(cfg.DataDir)
 	if err != nil {
 		return legacyimport.Report{}, fmt.Errorf("open store: %w", err)

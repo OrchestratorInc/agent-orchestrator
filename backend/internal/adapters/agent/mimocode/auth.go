@@ -11,7 +11,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-var authProbeTimeout = 10 * time.Second
+var authProbeTimeout = 20 * time.Second
+var authVerificationTimeout = 20 * time.Second
 
 var runAuthProbe = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, binary, args...).CombinedOutput()
@@ -34,6 +35,19 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if status, ok := providerListStatus(string(out)); ok && status == ports.AgentAuthStatusConfigured {
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
+		// Credential detection and optional verification have separate budgets.
+		// Once credentials are known, an interrupted verification is inconclusive.
+		verificationCtx, cancelVerification := context.WithTimeout(ctx, authVerificationTimeout)
+		defer cancelVerification()
+		status = verifySelectedConnection(verificationCtx, binary)
+		if err := verificationCtx.Err(); err != nil {
+			code := "probe_timeout"
+			if err == context.Canceled {
+				code = "probe_cancelled"
+			}
+			ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("provider_validation", code))
+			return ports.AgentAuthStatusConfigured, nil
+		}
 		return status, nil
 	}
 	// MiMo Auto is usable without a login, so it is absent from `auth list`.
