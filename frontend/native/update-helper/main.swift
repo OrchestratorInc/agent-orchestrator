@@ -116,6 +116,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         let completion = readJSON(UpdateCompletion.self, at: attempt.appendingPathComponent("complete.json"))
         let failure = readJSON(UpdateFailure.self, at: attempt.appendingPathComponent("error.json"))
         let now = Date().timeIntervalSince1970 * 1000
+        if failure != nil { state.noteFailure(now: now) }
         return state.stage(now: now,
                            parentAlive: processAlive(request.parentPID), completion: completion, failure: failure?.message, legacy: legacyEvidence(now: now))
     }
@@ -219,6 +220,8 @@ guard attempt == attempt.resolvingSymlinksInPath(),
       executable == attempt.appendingPathComponent("ao-update-progress"),
       let request = readJSON(UpdateRequest.self, at: attempt.appendingPathComponent("request.json")), request.valid else { exit(2) }
 let controller = ProgressController(attempt: attempt, request: request)
+let isDetachedCopy = ProcessInfo.processInfo.environment[detachedSinceKey] != nil
+var detachTried = false
 // READY is the handshake the parent waits for before it lets Squirrel quit AO.
 FileHandle.standardOutput.write(Data("READY\n".utf8))
 // Stay a plain process, not an AppKit app, until a stage needs the window.
@@ -235,20 +238,17 @@ while true {
         exit(0)
     }
     if next.presentsWindow {
-        // AO is still our parent: its quit has stalled for three minutes, or
-        // AO died after writing a failure and launchd has not adopted us yet.
-        // Hand the window to an orphaned copy.
-        if getppid() != 1 {
-            if ProcessInfo.processInfo.environment[detachedSinceKey] == nil,
-               detachForWindow(executable: executable, attempt: attempt, since: controller.state.waitingSince) {
-                exit(0)
-            }
-            // The copy waits for the helper that started it to exit.
-            for _ in 0..<40 where getppid() != 1 { Thread.sleep(forTimeInterval: 0.05) }
+        if getppid() == 1 { break }
+        // AO is still our parent (its quit has stalled for three minutes):
+        // hand the window to an orphaned copy. If that copy can't start, or
+        // this is the copy and its starter hasn't exited yet, stay headless
+        // until launchd adopts us rather than start AppKit as AO's child.
+        if !isDetachedCopy && !detachTried {
+            detachTried = true
+            if detachForWindow(executable: executable, attempt: attempt, since: controller.state.waitingSince) { exit(0) }
         }
-        break
     }
-    Thread.sleep(forTimeInterval: 0.5)
+    Thread.sleep(forTimeInterval: isDetachedCopy ? 0.05 : 0.5)
 }
 NSApplication.shared.delegate = controller
 NSApplication.shared.run()
