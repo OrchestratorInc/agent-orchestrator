@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { StyleSheet, useWindowDimensions } from "react-native";
+import { Platform, StyleSheet, useWindowDimensions } from "react-native";
 import { rowDividerWidth } from "../divider";
 import type { Theme } from "../theme";
 import { fontScaleCap, radius, space, touchTarget, type } from "../tokens";
@@ -53,6 +53,8 @@ export const COMPOSER_DISC = 34;
 /** The pill's corner, and so also the radius of the glass drawn behind it: half its resting height, a capsule. */
 export const COMPOSER_RADIUS = COMPOSER_HEIGHT / 2;
 
+const ANDROID_TEXT_DROP = Platform.OS === "android" ? space.hair : 0;
+
 export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	// A narrow gutter, as the system's own message fields keep: the pill is the
 	// widest thing on the screen, and every point given to the margin is taken
@@ -75,7 +77,11 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	// the cap it scrolls while the controls remain in place. No side padding of
 	// its own: Android's text field brings some from the platform's theme, which
 	// set the text further in than iOS's, and the row already insets the field.
-	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, paddingHorizontal: 0, textAlignVertical: "top" },
+	//
+	// Android sets DM Sans high in its line, so the placeholder sat 2dp above
+	// the plus and the mic; there the text starts that much lower, the field
+	// the same height.
+	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingTop: space.md + ANDROID_TEXT_DROP, paddingBottom: space.md - ANDROID_TEXT_DROP, paddingHorizontal: 0, textAlignVertical: "top" },
 	// Clipped so the Android ripple keeps to the circle.
 	send: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	stop: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
