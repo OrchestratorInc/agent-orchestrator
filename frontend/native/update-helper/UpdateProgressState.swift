@@ -73,13 +73,17 @@ enum UpdateStage: Equatable {
     case complete
     case reopened
     case legacyComplete
+    // The install failed while AO stayed open. AO's own update dialog shows the
+    // error, so the helper cleans up and exits instead of lingering with a
+    // window that AO's next quit would count as a running AO (#6911).
+    case abandoned
 
     // Whether this stage should bring the helper window on screen. The normal
     // close-and-reopen path (.closing/.installing) stays silent; only the
     // stall/failure paths that need the user's attention surface a window.
     var presentsWindow: Bool {
         switch self {
-        case .closing, .installing, .complete, .legacyComplete:
+        case .closing, .installing, .complete, .legacyComplete, .abandoned:
             return false
         case .recovery, .reopened:
             return true
@@ -89,7 +93,7 @@ enum UpdateStage: Equatable {
 
 struct UpdateProgressState {
     let request: UpdateRequest
-    private var waitingSince: Double
+    private(set) var waitingSince: Double
 
     init(request: UpdateRequest, now: Double) {
         self.request = request
@@ -104,7 +108,7 @@ struct UpdateProgressState {
         if !parentAlive, let legacy, legacy.launched(request, now: now) {
             return legacy.visibleWindow ? .legacyComplete : .reopened
         }
-        if let failure, !failure.isEmpty { return .recovery(failure) }
+        if let failure, !failure.isEmpty { return parentAlive ? .abandoned : .recovery(failure) }
         // A normal update just closes AO and reopens it, and even a slow-but-
         // healthy machine can take a while at each step. Stay hidden (accessory,
         // no window) for the whole budget so nothing pops in front of a working

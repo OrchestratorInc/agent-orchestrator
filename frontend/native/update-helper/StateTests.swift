@@ -27,6 +27,11 @@ struct StateTests {
         assert(UpdateStage.legacyComplete.presentsWindow == false)
         assert(UpdateStage.recovery("x").presentsWindow == true)
         assert(UpdateStage.reopened.presentsWindow == true)
+        assert(UpdateStage.abandoned.presentsWindow == false)
+        // A failure while AO is still open ends the helper: AO shows the error,
+        // and a lingering helper would cancel the install on AO's next quit.
+        assert(state.stage(now: 1001, parentAlive: true, completion: nil, failure: "Failed") == .abandoned)
+        assert(state.stage(now: 181_000, parentAlive: true, completion: nil, failure: "Failed") == .abandoned)
         state.keepWaiting(now: 190_000)
         assert(state.stage(now: 190_001, parentAlive: false, completion: nil, failure: nil) == .installing)
         assert(state.stage(now: 190_001, parentAlive: true, completion: valid, failure: nil) == .closing)

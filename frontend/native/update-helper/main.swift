@@ -29,7 +29,9 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     init(attempt: URL, request: UpdateRequest) {
         self.attempt = attempt
         self.request = request
-        self.state = UpdateProgressState(request: request, now: Date().timeIntervalSince1970 * 1000)
+        // A copy started by detachForWindow() keeps the original's stall clock.
+        let since = ProcessInfo.processInfo.environment[detachedSinceKey].flatMap(Double.init)
+        self.state = UpdateProgressState(request: request, now: since ?? Date().timeIntervalSince1970 * 1000)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -120,7 +122,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     func refresh() {
         let next = currentStage()
-        if next == .complete || next == .legacyComplete {
+        if next == .complete || next == .legacyComplete || next == .abandoned {
             cleanup()
             NSApp.terminate(nil)
             return
@@ -160,7 +162,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
             recovery.isHidden = false
             recovery.arrangedSubviews.prefix(2).forEach { $0.isHidden = true }
             spinner.stopAnimation(nil)
-        case .complete, .legacyComplete: break
+        case .complete, .legacyComplete, .abandoned: break
         }
     }
 
@@ -184,6 +186,28 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 }
 
+let detachedSinceKey = "AO_UPDATE_PROGRESS_SINCE"
+
+// Start a copy of this helper and let this process exit, so the copy is
+// orphaned (its parent becomes launchd) before it starts AppKit. macOS files an
+// AppKit process under the app that is its parent, so a window shown while AO
+// is still our parent would be counted as a running AO, and ShipIt cancels the
+// install when AO finally quits. Returns false if the copy could not start.
+func detachForWindow(executable: URL, attempt: URL, since: Double) -> Bool {
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    // AO stopped reading our stdout after READY; the copy must not write to it.
+    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
+    var environment = ProcessInfo.processInfo.environment
+    environment[detachedSinceKey] = String(since)
+    let argv: [UnsafeMutablePointer<CChar>?] = [strdup(executable.path), strdup(attempt.path), nil]
+    let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    defer { (argv + envp).forEach { free($0) } }
+    var pid: pid_t = 0
+    return posix_spawn(&pid, executable.path, &actions, nil, argv, envp) == 0
+}
+
 // Only a copied helper, outside any .app, may run. Refuse an arbitrary cleanup path.
 guard CommandLine.arguments.count == 2 else { exit(2) }
 let attempt = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
@@ -198,19 +222,32 @@ let controller = ProgressController(attempt: attempt, request: request)
 // READY is the handshake the parent waits for before it lets Squirrel quit AO.
 FileHandle.standardOutput.write(Data("READY\n".utf8))
 // Stay a plain process, not an AppKit app, until a stage needs the window.
-// macOS files an app that AO launches under AO's own bundle identifier, and
+// macOS files an AppKit process whose parent is AO under AO's own bundle
+// identifier (an embedded Info.plist does not change that), and
 // Squirrel's ShipIt cancels the install while any app with that identifier is
 // running ("App Still Running Error"). Starting NSApplication here made this
 // helper cancel the very update it was reporting on (#6911). The window is
-// only needed on the stall and failure paths, after ShipIt has already run or
-// while AO is still open.
+// only needed on the stall and failure paths.
 while true {
     let next = controller.currentStage()
-    if next == .complete || next == .legacyComplete {
+    if next == .complete || next == .legacyComplete || next == .abandoned {
         controller.cleanup()
         exit(0)
     }
-    if next.presentsWindow { break }
+    if next.presentsWindow {
+        // AO is still our parent: its quit has stalled for three minutes, or
+        // AO died after writing a failure and launchd has not adopted us yet.
+        // Hand the window to an orphaned copy.
+        if getppid() != 1 {
+            if ProcessInfo.processInfo.environment[detachedSinceKey] == nil,
+               detachForWindow(executable: executable, attempt: attempt, since: controller.state.waitingSince) {
+                exit(0)
+            }
+            // The copy waits for the helper that started it to exit.
+            for _ in 0..<40 where getppid() != 1 { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        break
+    }
     Thread.sleep(forTimeInterval: 0.5)
 }
 NSApplication.shared.delegate = controller
