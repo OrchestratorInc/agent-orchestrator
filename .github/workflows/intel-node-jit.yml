@@ -40,7 +40,28 @@ jobs:
           node-version: 22
       - name: Check the runner is Intel
         run: test "$(uname -m)" = x86_64
-      - name: Reproduce the crash and the repair
+      - name: Reproduce the crash and the repair with a re-signed stock Node
+        continue-on-error: true
         env:
           AO_REQUIRE_NODE_JIT_REPRO: "1"
         run: go test -count=1 -v -run 'TestJITCapableNode' ./internal/adapters/chatdriver/claudeacp/
+      - name: Download the published 0.14.8 Intel app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ao-0148"
+          gh release download v0.14.8 --repo "$GITHUB_REPOSITORY" --pattern agent-orchestrator-darwin-x64.zip --dir "$RUNNER_TEMP/ao-0148"
+          ditto -x -k "$RUNNER_TEMP/ao-0148/agent-orchestrator-darwin-x64.zip" "$RUNNER_TEMP/ao-0148/app"
+          NODE_BIN="$(find "$RUNNER_TEMP/ao-0148/app" -path '*/Contents/Resources/acp-runtime/node/bin/node' | head -1)"
+          test -n "$NODE_BIN"
+          echo "NODE_BIN=$NODE_BIN" >> "$GITHUB_ENV"
+          codesign -d --entitlements - "$NODE_BIN" || true
+          sw_vers; sysctl -n machdep.cpu.brand_string
+          set +e
+          "$NODE_BIN" -e 'let s=0;for(let i=0;i<1e8;i++)s+=i;console.log("ok")'
+          echo "bundled node exit=$?"
+      - name: Reproduce the crash and the repair with the shipped Node
+        env:
+          AO_REQUIRE_NODE_JIT_REPRO: "1"
+          AO_TEST_BROKEN_NODE: ${{ env.NODE_BIN }}
+        run: go test -count=1 -v -run 'TestJITCapableNodeRepairsRealIntelNode' ./internal/adapters/chatdriver/claudeacp/

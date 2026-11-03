@@ -13,32 +13,13 @@ import (
 // hardware: it signs a copy of Node the way the broken release did (hardened
 // runtime with allow-jit but without allow-unsigned-executable-memory),
 // checks that V8 really crashes, and checks that the repair yields a Node that
-// runs JIT-compiled code. It needs an Intel Mac that enforces the entitlement
+// runs JIT-compiled code. AO_TEST_BROKEN_NODE runs it against a shipped
+// binary (such as a release's acp-runtime Node) instead. It needs an Intel Mac that enforces the entitlement
 // (the reports are on macOS 15) and node on PATH; elsewhere it skips.
 func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
-	source, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not on PATH")
-	}
-	resolved, err := filepath.EvalSymlinks(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	broken := filepath.Join(dir, "node")
-	if err := copyExecutable(resolved, broken); err != nil {
-		t.Fatal(err)
-	}
-	brokenEntitlements := filepath.Join(dir, "broken.entitlements")
-	plist := `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>
-`
-	if err := os.WriteFile(brokenEntitlements, []byte(plist), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := defaultCodesignNode(context.Background(), broken, brokenEntitlements); err != nil {
-		t.Fatalf("sign broken Node: %v", err)
+	broken := os.Getenv("AO_TEST_BROKEN_NODE")
+	if broken == "" {
+		broken = signNodeLikeBrokenRelease(t)
 	}
 
 	ctx := context.Background()
@@ -87,4 +68,35 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 	if !strings.Contains(string(entitlements), "com.apple.security.cs.allow-unsigned-executable-memory") {
 		t.Fatalf("re-signed Node lacks allow-unsigned-executable-memory:\n%s", entitlements)
 	}
+}
+
+// signNodeLikeBrokenRelease copies the node on PATH and signs it the way the
+// broken release did: hardened runtime with allow-jit only.
+func signNodeLikeBrokenRelease(t *testing.T) string {
+	t.Helper()
+	source, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not on PATH")
+	}
+	resolved, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "node")
+	if err := copyExecutable(resolved, broken); err != nil {
+		t.Fatal(err)
+	}
+	brokenEntitlements := filepath.Join(dir, "broken.entitlements")
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>
+`
+	if err := os.WriteFile(brokenEntitlements, []byte(plist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultCodesignNode(context.Background(), broken, brokenEntitlements); err != nil {
+		t.Fatalf("sign broken Node: %v", err)
+	}
+	return broken
 }
