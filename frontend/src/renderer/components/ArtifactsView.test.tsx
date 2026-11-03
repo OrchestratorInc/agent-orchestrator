@@ -8,6 +8,20 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
+vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
+
+// Share is offered only where the control plane serves share links.
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+	return {
+		...actual,
+		useSettings: (...args: Parameters<typeof actual.useSettings>) => {
+			const result = actual.useSettings(...args);
+			return { ...result, settings: { ...result.settings, cloudControlPlaneUrl: "https://cp.test" } as NonNullable<typeof result.settings> };
+		},
+	};
+});
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const mocks = vi.hoisted(() => ({
@@ -268,11 +282,13 @@ describe("ArtifactsView", () => {
 	it.each(["html", "markdown"] as const)("previews a cloud %s artifact using cloud access", async (kind) => {
 		const name = kind === "html" ? "report.html" : "notes.md";
 		const cloud = session("cloud-1", "Cloud notes", [{ name, kind, updatedAt: "2026-10-11T10:00:00Z" }]);
-		cloud.cloud = { orgId: "org-1" };
+		cloud.cloud = { orgId: "org-1", createdByUserId: "me-1" };
 		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
 		const dialog = screen.getByRole("dialog", { name });
+		// A cloud session's file is shared as a local one is.
+		expect(within(dialog).getByRole("button", { name: `Share: ${name}` })).toBeInTheDocument();
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		} else {
@@ -281,6 +297,17 @@ describe("ArtifactsView", () => {
 			expect(preview).toHaveAttribute("data-read-only", "true");
 			expect(preview).toHaveAttribute("data-raw-url", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		}
+	});
+
+	it("offers no Share on another member's cloud session file", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", kind: "markdown", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		const dialog = await screen.findByRole("dialog", { name: "notes.md" });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
@@ -533,7 +560,9 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
+		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
+		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));

@@ -513,6 +513,7 @@ export function toCloudWorkspaceSession(
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
+			...(session.createdByUserId ? { createdByUserId: session.createdByUserId } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
