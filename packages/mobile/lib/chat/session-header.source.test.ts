@@ -22,8 +22,8 @@ describe("session header controls", () => {
 		expect(source("./chatSheetRegistry.ts")).toContain('"conversation-actions": "/conversation-actions",');
 		const layout = source("../../app/_layout.tsx");
 		expect(layout).toMatch(/name="conversation-actions"\s*options=\{\{\s*presentation: "formSheet",/);
-		// iOS can rise to full height so Archive is reachable; Android keeps one detent so a swipe down closes it.
-		expect(layout).toMatch(/name="conversation-actions"[\s\S]*?sheetAllowedDetents: Platform\.OS === "android" \? \[0\.9\] : \[0\.75, 1\],/);
+		// iOS opens at full height so Archive is whole; Android keeps one detent so a swipe down closes it.
+		expect(layout).toMatch(/name="conversation-actions"[\s\S]*?sheetAllowedDetents: Platform\.OS === "android" \? \[0\.9\] : \[1\],/);
 		// No title bar: the actions start under the grabber.
 		expect(layout).toMatch(/name="conversation-actions"[\s\S]*?headerShown: false,/);
 		expect(route).not.toContain("Stack.Screen");

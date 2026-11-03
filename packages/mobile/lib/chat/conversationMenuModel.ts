@@ -84,7 +84,7 @@ export function conversationMenuGroups(state: ConversationMenuState): Conversati
 
 function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
 	switch (action) {
-		case "shell": return { action, label: state.openingShell ? "Opening terminal…" : "Terminal", disabled: state.openingShell, icon: { ios: "terminal", android: "terminal" } };
+		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Shell", disabled: state.openingShell, icon: { ios: "chevron.left.forwardslash.chevron.right", android: "code" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
 		case "artifacts": return { action, label: "Artifacts", subtitle: `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}`, icon: { ios: "doc.text", android: "description" } };
 		case "pin": return { action, label: state.pinned ? "Unpin" : "Pin", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };

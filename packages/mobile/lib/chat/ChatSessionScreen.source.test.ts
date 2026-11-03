@@ -55,7 +55,7 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
 	});
 
-	// The actions sheet holds only Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive.
+	// The actions sheet holds only Shell, Preview, Artifacts, Pin, PR Review, Compact and Archive.
 	it("offers no history map from the actions sheet", () => {
 		expect(screenSource).not.toContain('kind: "conversation-map"');
 		expect(screenSource).toContain("contextPercent: menuContextPercent,");

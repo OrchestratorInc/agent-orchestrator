@@ -221,9 +221,9 @@ function Shell() {
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact-version/[sessionId]" options={{ title: "Version", ...GLASS_HEADER_OPTIONS }} />
 				{/* The conversation's "⋯", a bottom sheet over the chat. iOS opens it
-				    at three quarters and lets it rise to full height, where every
-				    action fits: pinned at three quarters, Archive sat below the
-				    sheet's edge and the list could not be scrolled to it. Android
+				    at full height, where every action fits: at three quarters
+				    Archive sat on the sheet's edge, its hint cut off, and pinned
+				    there the list could not be scrolled to it. Android
 				    pins one detent so any decisive swipe down closes it (see
 				    SHEET_ROUTES), tall enough that the actions fit without
 				    scrolling inside the sheet. No title bar on either platform: the
@@ -232,7 +232,7 @@ function Shell() {
 					name="conversation-actions"
 					options={{
 						presentation: "formSheet",
-						sheetAllowedDetents: Platform.OS === "android" ? [0.9] : [0.75, 1],
+						sheetAllowedDetents: Platform.OS === "android" ? [0.9] : [1],
 						sheetInitialDetentIndex: 0,
 						sheetGrabberVisible: true,
 						sheetCornerRadius,

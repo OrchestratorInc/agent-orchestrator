@@ -17,7 +17,7 @@ describe("conversationMenuGroups", () => {
 	// Only these seven, each in its group, on both platforms.
 	it("offers Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive in four groups", () => {
 		expect(layout({ ...base, artifactCount: 2, hasPullRequest: true })).toEqual([
-			["Open", ["Terminal", "Preview", "Artifacts"]],
+			["Open", ["Shell", "Preview", "Artifacts"]],
 			["Worker", ["Pin", "PR Review"]],
 			["Context", ["Compact"]],
 			["Session", ["Archive"]],
@@ -27,7 +27,7 @@ describe("conversationMenuGroups", () => {
 	// On an empty session both led to an empty page.
 	it("offers Artifacts and PR Review only once there is something to open", () => {
 		expect(layout(base)).toEqual([
-			["Open", ["Terminal", "Preview"]],
+			["Open", ["Shell", "Preview"]],
 			["Worker", ["Pin"]],
 			["Context", ["Compact"]],
 			["Session", ["Archive"]],
@@ -46,10 +46,10 @@ describe("conversationMenuGroups", () => {
 
 	it("drops what the session cannot do, and never shows an empty group", () => {
 		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false })).toEqual([
-			["Open", ["Terminal", "Preview"]],
+			["Open", ["Shell", "Preview"]],
 		]);
 		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false, hasPullRequest: true })).toEqual([
-			["Open", ["Terminal", "Preview"]],
+			["Open", ["Shell", "Preview"]],
 			["Worker", ["PR Review"]],
 		]);
 	});
@@ -64,7 +64,7 @@ describe("conversationMenuGroups", () => {
 
 	it("says what is running and holds it until it finishes", () => {
 		const groups = conversationMenuGroups({ ...base, openingShell: true, compacting: true, pinned: true, previewReady: true });
-		expect(groups[0].items[0]).toMatchObject({ label: "Opening terminal…", disabled: true });
+		expect(groups[0].items[0]).toMatchObject({ label: "Opening shell…", disabled: true });
 		expect(groups[0].items[1].subtitle).toBe("Ready to open");
 		expect(groups[1].items[0].label).toBe("Unpin");
 		expect(groups[2].items[0]).toMatchObject({ label: "Compacting…", disabled: true });
