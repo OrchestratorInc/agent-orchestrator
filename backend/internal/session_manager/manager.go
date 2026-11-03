@@ -3723,9 +3723,10 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
 		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
-		if identityUnverified && requireNativeHistory {
+		preparedImport := pendingPreparedNativeImport(rec)
+		if identityUnverified && requireNativeHistory && !preparedImport {
 			err = ErrNotResumable
-		} else if identityUnverified {
+		} else if identityUnverified && !preparedImport {
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
