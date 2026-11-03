@@ -3877,6 +3877,38 @@ describe("quitAndInstallUpdate", () => {
     } finally { vi.useRealTimers(); restore(); }
   });
 
+  it("gives up on an install whose own steps hang after it gets its turn (#6911)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    vi.useFakeTimers();
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      await flushMicrotasks();
+      // The helper's file writes never settle.
+      const helper = deferred<{ assertAlive: () => void; fail: (message: string) => Promise<void> }>();
+      startMacUpdateProgress.mockReturnValueOnce(helper.promise);
+
+      const install = module.quitAndInstallUpdate("2.1.0");
+      const assertion = expect(install).rejects.toThrow(/install got stuck/);
+      const duplicate = expect(module.quitAndInstallUpdate("2.1.0")).rejects.toThrow(/install got stuck/);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+      await duplicate;
+      expect(startMacUpdateProgress).toHaveBeenCalledTimes(1);
+      const { signal } = (startMacUpdateProgress.mock.calls[0] as unknown as [{ signal: AbortSignal }])[0];
+      expect(signal.aborted).toBe(true);
+
+      // A late helper must not quit AO; it is told the install failed instead.
+      const fail = vi.fn(async () => undefined);
+      helper.resolve({ assertAlive: vi.fn(), fail });
+      await flushMicrotasks();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(fail).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); restore(); }
+  });
+
   it("ignores duplicate downloads during native preparation and accepts a later replacement", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {

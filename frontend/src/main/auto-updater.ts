@@ -3018,9 +3018,12 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   // cache transfer has no cancellation guarantee. Never let its late resolution
   // continue an install request whose caller already received a failure.
   let installAbandoned = false;
-  let installStarted = false;
+  const deadline = installDeadline();
+  // Cancels a helper start that outlives the deadline, so its late result
+  // cannot point active.json at an attempt nobody is waiting on.
+  const helperStart = new AbortController();
   const queued = runSerializedUpdaterOperation("manual-install", async () => {
-    installStarted = true;
+    deadline.started();
     const previousPreparationError = nativePreparationError;
     const assertInstallActive = () => {
       if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
@@ -3054,6 +3057,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         resourcesPath: process.resourcesPath,
         appPath: path.resolve(process.execPath, "..", "..", ".."),
         version,
+        signal: helperStart.signal,
       });
       assertInstallActive();
       progress.assertAlive();
@@ -3090,9 +3094,9 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       throw userFacingInstallError(err);
     }
   });
-  const deadline = installQueueDeadline(() => installStarted);
   macRestartPreparation = Promise.race([queued, deadline.promise]).finally(deadline.clear).then(() => confirmation, err => {
     installAbandoned = true;
+    helperStart.abort(err);
     // A native failure can reject the queued operation before the catch above
     // runs (while the progress helper starts, say), so rewrite it here too, and
     // tell Settings unless it already shows this failure (#5755).
@@ -3109,29 +3113,41 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
 // downloads. If one of those never settles (electron-updater's hand-off of a
 // download to Squirrel has no timeout or cancel), the install waits behind it
 // forever, and because the pending request is reused, every later click shows
-// "Preparing update…" too (#6911). Give up on getting a turn after a minute so
-// the dialog can offer Relaunch AO. Native preparation has its own watchdog,
-// so time spent waiting on it does not count, and neither does a download that
-// is still receiving bytes (a slow network, not a stuck step).
+// "Preparing update…" too (#6911). The same goes for the install's own steps
+// once it has its turn (the progress helper's file writes, say). Give each
+// phase a minute so the dialog can offer Relaunch AO. Native preparation has
+// its own watchdog, so time spent waiting on it does not count, and neither
+// does a download that is still receiving bytes (a slow network, not a stuck
+// step). A late result after the deadline cannot quit AO: every install step
+// checks installAbandoned first.
 const INSTALL_QUEUE_WAIT_MS = 60_000;
 const INSTALL_QUEUE_STUCK_MESSAGE = "Another update step didn't finish, so the install couldn't start. AO stayed open. Relaunch AO to try again.";
+const INSTALL_STEP_STUCK_MESSAGE = "The install got stuck before AO could close. AO stayed open. Relaunch AO to try again.";
 
-function installQueueDeadline(started: () => boolean): { promise: Promise<never>; clear(): void } {
+function installDeadline(): { promise: Promise<never>; started(): void; clear(): void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<never>((_resolve, reject) => {
-    const arm = () => {
-      timer = setTimeout(() => {
-        if (started()) return;
-        if (nativePreparation) return arm();
-        if (lastDownloadProgressAtMs !== undefined && Date.now() - lastDownloadProgressAtMs < INSTALL_QUEUE_WAIT_MS) return arm();
-        recordUpdateDiagnostic("install-queue-timeout");
-        reject(new Error(INSTALL_QUEUE_STUCK_MESSAGE));
-      }, INSTALL_QUEUE_WAIT_MS);
-      timer.unref?.();
-    };
-    arm();
-  });
-  return { promise, clear: () => clearTimeout(timer) };
+  let installStarted = false;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<never>((_resolve, rejectPromise) => { reject = rejectPromise; });
+  // Nothing may be left to catch this if the install settles first.
+  promise.catch(() => undefined);
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (nativePreparation) return arm();
+      if (lastDownloadProgressAtMs !== undefined && Date.now() - lastDownloadProgressAtMs < INSTALL_QUEUE_WAIT_MS) return arm();
+      recordUpdateDiagnostic("install-queue-timeout", { phase: installStarted ? "install" : "queue" });
+      reject(new Error(installStarted ? INSTALL_STEP_STUCK_MESSAGE : INSTALL_QUEUE_STUCK_MESSAGE));
+    }, INSTALL_QUEUE_WAIT_MS);
+    timer.unref?.();
+  };
+  arm();
+  return {
+    promise,
+    // Getting a turn restarts the clock for the install's own steps.
+    started: () => { installStarted = true; arm(); },
+    clear: () => clearTimeout(timer),
+  };
 }
 
 async function waitForNativePreparation(version: string): Promise<void> {

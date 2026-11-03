@@ -50,6 +50,21 @@ it("rejects helper startup failure so AO can stay open", async () => {
 	await expect(readFile(path.join(root, "update-restart", "active.json"))).rejects.toThrow();
 });
 
+it("cleans up instead of handing off when AO gave up on the install (#6911)", async () => {
+	const abort = new AbortController();
+	// The helper never says READY; AO's install deadline fires meanwhile.
+	spawn.mockImplementation(() => { queueMicrotask(() => abort.abort(new Error("install got stuck"))); return child; });
+	await expect(startMacUpdateProgress({ stateDir: root, resourcesPath: path.join(root, "resources"), appPath, version: "2.0.0", signal: abort.signal }))
+		.rejects.toThrow("install got stuck");
+	expect(child.kill).toHaveBeenCalledOnce();
+	await expect(readFile(path.join(root, "update-restart", "active.json"))).rejects.toThrow();
+	// An install already given up on never starts a helper.
+	spawn.mockClear();
+	await expect(startMacUpdateProgress({ stateDir: root, resourcesPath: path.join(root, "resources"), appPath, version: "2.0.0", signal: abort.signal }))
+		.rejects.toThrow("install got stuck");
+	expect(spawn).not.toHaveBeenCalled();
+});
+
 it("acknowledges only the new process running the expected version and bundle", async () => {
 	await start();
 	const options = { stateDir: root, appPath, version: "2.0.0", pid: process.pid + 1 };

@@ -23,7 +23,11 @@ export async function startMacUpdateProgress(options: {
 	resourcesPath: string;
 	appPath: string;
 	version: string;
+	/** Aborted when AO gives up on this install; a late start then cleans up instead of pointing active.json at it. */
+	signal?: AbortSignal;
 }): Promise<{ assertAlive(): void; fail(message: string): Promise<void> }> {
+	const { signal } = options;
+	signal?.throwIfAborted();
 	const root = path.join(options.stateDir, "update-restart");
 	await mkdir(root, { recursive: true, mode: 0o700 });
 	const attempt = await mkdtemp(path.join(root, "attempt-"));
@@ -37,6 +41,10 @@ export async function startMacUpdateProgress(options: {
 	const executable = path.join(attempt, "ao-update-progress");
 	// Preserve the signer's executable bytes. Never re-sign or modify them here.
 	await copyFile(path.join(options.resourcesPath, "update-helper", "ao-update-progress"), executable);
+	if (signal?.aborted) {
+		await rm(attempt, { recursive: true, force: true }).catch(() => undefined);
+		signal.throwIfAborted();
+	}
 	const child = spawn(executable, [attempt], {
 		detached: true,
 		stdio: ["ignore", "pipe", "ignore"],
@@ -55,6 +63,7 @@ export async function startMacUpdateProgress(options: {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			child.removeListener("error", onError);
 			child.removeListener("exit", onExit);
 			child.stdout?.removeListener("data", onData);
@@ -65,6 +74,7 @@ export async function startMacUpdateProgress(options: {
 		};
 		const onError = (error: Error) => finish(error);
 		const onExit = () => finish(new Error("The update progress window could not start. AO has stayed open."));
+		const onAbort = () => finish(signal?.reason instanceof Error ? signal.reason : new Error("Update preparation cancelled."));
 		const onData = (chunk: Buffer) => {
 			output += chunk.toString();
 			if (output.includes("READY\n")) finish();
@@ -73,6 +83,7 @@ export async function startMacUpdateProgress(options: {
 		child.once("error", onError);
 		child.once("exit", onExit);
 		child.stdout?.on("data", onData);
+		signal?.addEventListener("abort", onAbort, { once: true });
 	}).catch(async (error) => {
 		await rm(attempt, { recursive: true, force: true }).catch(() => undefined);
 		throw error;
@@ -80,7 +91,9 @@ export async function startMacUpdateProgress(options: {
 	child.stdout?.destroy();
 	child.unref();
 	try {
+		signal?.throwIfAborted();
 		await atomicJSON(path.join(root, "active.json"), { attempt: path.basename(attempt) });
+		signal?.throwIfAborted();
 		assertAlive();
 	} catch (error) {
 		child.kill();
