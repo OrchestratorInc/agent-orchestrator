@@ -26,6 +26,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		ListItem: slots("ListItem", ["HeadlineContent", "SupportingContent", "LeadingContent", "TrailingContent"]),
 		OutlinedButton: host("OutlinedButton"),
 		RadioButton: host("RadioButton"),
+		RNHostView: host("RNHostView"),
 		Row: host("Row"),
 		SegmentedButton: slots("SegmentedButton", ["Label"]),
 		SingleChoiceSegmentedButtonRow: host("SingleChoiceSegmentedButtonRow"),

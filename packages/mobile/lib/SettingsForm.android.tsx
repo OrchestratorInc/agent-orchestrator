@@ -10,6 +10,7 @@ import {
 	ListItem,
 	OutlinedButton,
 	RadioButton,
+	RNHostView,
 	Row as ComposeRow,
 	SegmentedButton,
 	SingleChoiceSegmentedButtonRow,
@@ -377,39 +378,50 @@ function MenuPickerRow<T extends string>({ icon, label, options, selectedValue, 
 	);
 }
 
-/** Material's single-select segmented buttons, laid under the row's name. */
+/**
+ * Material's single-select segmented buttons, laid under the row's name and
+ * drawn as the Pull Requests filter's. They sit in a Host of their own, hosted
+ * in the row through RNHostView: drawn in the list's own Host, inside a list
+ * item, a segment with rounded ends lost its outline, and only the middle one
+ * kept it.
+ */
 function SegmentedPickerRow<T extends string>({ icon, label, options, selectedValue, onValueChange, disabled = false, testID }: SettingsPickerRowProps<T>) {
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	return (
 		<Row
 			icon={icon}
 			label={label}
 			supporting={
-				<SingleChoiceSegmentedButtonRow modifiers={[fillMaxWidth(), padding(0, space.sm, 0, space.xxs)]}>
-					{options.map((option) => (
-						<SegmentedButton
-							key={option.value}
-							selected={option.value === selectedValue}
-							enabled={!disabled}
-							onClick={() => {
-								if (option.value !== selectedValue) onValueChange(option.value);
-							}}
-							colors={{
-								activeContainerColor: t.accentTint,
-								activeContentColor: t.textPrimary,
-								activeBorderColor: t.borderDefault,
-								inactiveContainerColor: t.bgElevated,
-								inactiveContentColor: t.textSecondary,
-								inactiveBorderColor: t.borderDefault,
-							}}
-							modifiers={testID ? [testIDModifier(`${testID}-${option.value}`)] : undefined}
-						>
-							<SegmentedButton.Label>
-								<Text style={{ typography: "labelLarge", fontFamily: typeface.medium }}>{option.label}</Text>
-							</SegmentedButton.Label>
-						</SegmentedButton>
-					))}
-				</SingleChoiceSegmentedButtonRow>
+				<RNHostView matchContents={{ vertical: true }} modifiers={[fillMaxWidth(), padding(0, space.sm, 0, space.xxs)]}>
+					<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.segmentedHost}>
+						<SingleChoiceSegmentedButtonRow modifiers={[fillMaxWidth()]}>
+							{options.map((option) => (
+								<SegmentedButton
+									key={option.value}
+									selected={option.value === selectedValue}
+									enabled={!disabled}
+									onClick={() => {
+										if (option.value !== selectedValue) onValueChange(option.value);
+									}}
+									colors={{
+										activeContainerColor: t.accentTint,
+										activeContentColor: t.accent,
+										activeBorderColor: t.borderStrong,
+										inactiveContainerColor: t.bgElevated,
+										inactiveContentColor: t.textSecondary,
+										inactiveBorderColor: t.borderStrong,
+									}}
+									modifiers={testID ? [testIDModifier(`${testID}-${option.value}`)] : undefined}
+								>
+									<SegmentedButton.Label>
+										<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: typeface.medium }}>{option.label}</Text>
+									</SegmentedButton.Label>
+								</SegmentedButton>
+							))}
+						</SingleChoiceSegmentedButtonRow>
+					</Host>
+				</RNHostView>
 			}
 			disabled={disabled}
 			testID={testID}
@@ -461,4 +473,5 @@ export function SettingsChoiceSection<T extends string>({ options, selectedValue
 
 const styles = StyleSheet.create({
 	fill: { flex: 1 },
+	segmentedHost: { alignSelf: "stretch" },
 });
