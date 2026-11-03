@@ -308,7 +308,7 @@ export function Button({
 	const { fill, ink, ripple } = buttonColors(t, variant);
 	const feedback = usePressFeedback("button", { tone: ripple });
 	const inactive = disabled || loading;
-	return (
+	const button = (
 		<Pressable
 			accessibilityRole="button"
 			// The label is pinned to the visible title rather than left to the child
@@ -330,7 +330,7 @@ export function Button({
 				{ backgroundColor: fill },
 				inactive && s.btnInactive,
 				pressed && feedback.pressed,
-				style,
+				Platform.OS === "android" ? undefined : style,
 			]}
 		>
 			{loading ? (
@@ -345,6 +345,12 @@ export function Button({
 			)}
 		</Pressable>
 	);
+	if (Platform.OS !== "android") return button;
+	// Android's ripple is masked by a plain rectangle that ignores the view's own
+	// corners, and `overflow` clips only children: pressed, the capsule showed a
+	// sharp-cornered box. A rounded parent's clip does follow its corners, so the
+	// button sits in one, which takes the caller's layout.
+	return <View style={[s.btnClip, style]}>{button}</View>;
 }
 
 /** A chrome glyph from an icon prop: the system symbol, or Lucide where there is none. */
@@ -596,6 +602,7 @@ const makeStyles = (t: Theme) =>
 		// Text only: just enough inset for the press state to frame the title.
 		btnGhost: { paddingHorizontal: space.md },
 		btnInactive: { opacity: stateOpacity.disabled },
+		btnClip: { borderRadius: radius.pill, borderCurve: "continuous", overflow: "hidden" },
 		btnInner: { flexDirection: "row", alignItems: "center", gap: space.xs },
 		btnText: { fontFamily: "DMSans_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", textAlign: "center" },
 

@@ -73,6 +73,6 @@ export function ScrollTopButton({ onPress }: ScrollTopButtonProps) {
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		anchor: { position: "absolute", right: space.lg, bottom: space.lg },
-		circle: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center" },
+		circle: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, overflow: "hidden", alignItems: "center", justifyContent: "center" },
 		filled: { backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
 	});
