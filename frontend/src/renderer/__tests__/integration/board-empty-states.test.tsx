@@ -337,7 +337,9 @@ describe("global board first launch", () => {
 				: originalGet(url));
 			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
 			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
-			expect(await screen.findByRole("alert")).toHaveTextContent("Terminal list unavailable");
+			// The refusal arrives after the terminal list query gives up, which can take
+			// longer than findByRole's default second on a loaded CI runner.
+			expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Terminal list unavailable");
 			expect(postMock).not.toHaveBeenCalled();
 		});
 
