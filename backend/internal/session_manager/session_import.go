@@ -38,7 +38,7 @@ func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 // visible history. The copy taken at import remains when the source is unreadable.
 func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
-	required := source != nil && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
+	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
 	if m.importArchive == nil {
 		if required {
 			return importNotice("native source snapshot validation is unavailable; retry after the import service is ready")
