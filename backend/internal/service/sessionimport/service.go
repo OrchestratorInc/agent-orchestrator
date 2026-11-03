@@ -847,7 +847,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 				projects := s.registeredDiscoveryRoots(dests)
 				if err := s.checkSourceFingerprint(ctx, item.source, projects); err != nil {
 					reads[i].err = err
-					return nil
+					return nil //nolint:nilerr // Collected per item so the batch reports every result.
 				}
 				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
 				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
