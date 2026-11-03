@@ -149,8 +149,19 @@ func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) erro
 // worktree. Existing history is accepted only against the pinned import-time
 // snapshot. A marker preserves its file-based identity; no file is overwritten.
 func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
-	if !aiderHistoryID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.LaunchCWD) || NativeHistoryID(r.ConfigDir) != r.NativeSessionID || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
+	if !aiderHistoryID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.LaunchCWD) || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
 		return errors.New("aider import identity or source path changed")
+	}
+	dst, err := os.OpenRoot(r.LaunchCWD)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
+	if recovered, err := recoverAiderPreparation(ctx, dst, r); err != nil || recovered {
+		return err
+	}
+	if NativeHistoryID(r.ConfigDir) != r.NativeSessionID {
+		return errors.New("aider import source identity changed")
 	}
 	src, err := os.OpenRoot(r.ConfigDir)
 	if err != nil {
@@ -164,11 +175,6 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if r.SourceFingerprint != "" && NativeHistoryFingerprint(data) != r.SourceFingerprint {
 		return errors.New("aider source changed since import")
 	}
-	dst, err := os.OpenRoot(r.LaunchCWD)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dst.Close() }()
 	if _, err := dst.Lstat(aiderHistoryFile); err == nil {
 		if r.SourceFingerprint == "" {
 			return errors.New("aider worktree history has no pinned import snapshot")
@@ -198,7 +204,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	if r.SourceFingerprint != "" && NativeHistoryFingerprint(installed) != r.SourceFingerprint {
 		return errors.New("aider worktree history changed during preparation")
 	}
-	return nil
+	return writeAiderPreparation(ctx, dst, r)
 }
 
 // PrepareImportedSession returns the native copy for AO's separate resume

@@ -236,3 +236,91 @@ func TestAiderPreparedRetryKeepsArchiveAlignedWithNativeSnapshot(t *testing.T) {
 		t.Fatalf("source changed during retry: %q, %v", data, err)
 	}
 }
+
+func TestAiderRecoversPublishedHistoryAfterLostCheckpoint(t *testing.T) {
+	for _, sourceState := range []string{"removed", "changed"} {
+		for _, damage := range []string{"none", "missing proof", "bad proof", "corrupt copy"} {
+			t.Run(sourceState+"/"+damage, func(t *testing.T) {
+				source, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				if err := os.WriteFile(filepath.Join(binDir, "aider"), []byte("#!/bin/sh\nexit 73\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				original := "#### original prompt\n\nOriginal answer\n"
+				path := filepath.Join(source, ".aider.chat.history.md")
+				if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				rt := &fakeRuntime{}
+				m, st, _ := newExitedResumeManager(t, rt, aider.New())
+				project := st.projects["mer"]
+				project.Path, project.Kind = source, domain.ProjectKindSingleRepo
+				st.projects["mer"] = project
+				archive := &aiderNativeArchiveStore{fakeStore: st}
+				svc := sessionimport.New(archive, m.dataDir, nil)
+				m.SetImportArchiveRefresher(svc)
+				preview, err := svc.Scan(context.Background())
+				if err != nil || len(preview.Candidates) != 1 {
+					t.Fatalf("scan = %+v, %v", preview, err)
+				}
+				results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+				if err != nil || len(results) != 1 || results[0].Status != "created" {
+					t.Fatalf("import = %+v, %v", results, err)
+				}
+				rec := st.sessions["mer-1"]
+				rec.Metadata.WorkspacePath, rec.Metadata.Branch = workspace, "ao/import"
+				rec.Metadata.ImportSource.Transferred, rec.Metadata.ImportSource.Prepared = true, true
+				st.sessions[rec.ID] = rec
+				store := &failingImportWorkspaceStore{fakeStore: st, failAt: 1}
+				m.store = store
+				if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err == nil || store.calls != 1 || rt.created != 0 {
+					t.Fatalf("checkpoint failure was not isolated: %v, calls=%d launches=%d", err, store.calls, rt.created)
+				}
+				pending := st.sessions[rec.ID].Metadata.ImportSource
+				if pending.ResumeNativeID != "" || pending.ResumeCwd != "" {
+					t.Fatal("failed checkpoint unexpectedly persisted")
+				}
+				if sourceState == "removed" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte(original+"#### later source turn\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				proof := filepath.Join(workspace, ".aider.chat.history.md.ao-import.json")
+				target := filepath.Join(workspace, ".aider.chat.history.md")
+				want := original
+				switch damage {
+				case "missing proof":
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+				case "bad proof":
+					if err := os.WriteFile(proof, []byte(`{}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "corrupt copy":
+					want = "#### altered private context\n"
+					if err := os.WriteFile(target, []byte(want), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// A fresh adapter must establish recovery from disk, not memory.
+				m.agents = singleAgent{agent: aider.New()}
+				result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+				if damage == "none" {
+					if err != nil || result.Mode != RestoreModeNative || result.Session.NeedsImportResume() || result.Session.Metadata.AgentSessionID != rec.Metadata.AgentSessionID || result.Session.Metadata.NativeTranscriptPath != target || rt.lastCfg.WorkspacePath != workspace || rt.created != 1 {
+						t.Fatalf("private recovery = %#v, %v", result, err)
+					}
+				} else if err == nil || rt.created != 0 || !st.sessions[rec.ID].NeedsImportResume() {
+					t.Fatalf("unproven private recovery = %#v, %v, launches=%d", result, err, rt.created)
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != want || len(archive.messages) != 2 || archive.messages[0].Text != "original prompt" || archive.messages[1].Text != "Original answer" {
+					t.Fatalf("native/archive snapshot changed: %q, %v, %+v", data, err, archive.messages)
+				}
+			})
+		}
+	}
+}

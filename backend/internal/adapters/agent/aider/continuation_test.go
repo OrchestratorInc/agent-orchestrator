@@ -206,3 +206,73 @@ func TestAiderTransferredHistoryRequiresPinnedSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestAiderPrivateProofRecoversWithoutOriginalSource(t *testing.T) {
+	for _, sourceState := range []string{"removed", "changed"} {
+		for _, damage := range []string{"none", "missing proof", "bad proof", "corrupt copy", "symlink proof"} {
+			t.Run(sourceState+"/"+damage, func(t *testing.T) {
+				r := aiderImportFixture(t)
+				original, err := os.ReadFile(r.TranscriptPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.SourceFingerprint = NativeHistoryFingerprint(original)
+				if _, err := (&Plugin{}).PrepareImportedSession(context.Background(), r); err != nil {
+					t.Fatal(err)
+				}
+				if sourceState == "removed" {
+					if err := os.RemoveAll(r.ConfigDir); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(r.TranscriptPath, []byte("#### later source turn\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				proof := filepath.Join(r.LaunchCWD, aiderPreparationFile)
+				target := filepath.Join(r.LaunchCWD, aiderHistoryFile)
+				want := string(original)
+				switch damage {
+				case "missing proof":
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+				case "bad proof":
+					if err := os.WriteFile(proof, []byte(`{}`), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "corrupt copy":
+					want = "#### altered private history\n"
+					if err := os.WriteFile(target, []byte(want), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink proof":
+					data, err := os.ReadFile(proof)
+					if err != nil {
+						t.Fatal(err)
+					}
+					backing := filepath.Join(t.TempDir(), "proof.json")
+					if err := os.WriteFile(backing, data, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(proof); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(backing, proof); err != nil {
+						t.Skip(err)
+					}
+				}
+				prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+				if damage == "none" {
+					if err != nil || prepared.NativeSessionID != r.NativeSessionID || prepared.ConfigDir != r.LaunchCWD {
+						t.Fatalf("durable private recovery = %+v, %v", prepared, err)
+					}
+				} else if err == nil {
+					t.Fatal("unproven private history was recovered")
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != want {
+					t.Fatalf("private history overwritten = %q, %v", data, err)
+				}
+			})
+		}
+	}
+}
