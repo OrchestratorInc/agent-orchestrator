@@ -154,6 +154,7 @@ import {
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
+import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
 import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
@@ -2381,6 +2382,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		portConfirmed = true;
 		stopDiscovery();
 		setDaemonStatus({ state: "ready", port, pid: child.pid });
+		// The renderer opens event streams on a *.localhost name only while the
+		// daemon also serves [::1] at this port; its probe says whether it does.
+		void readDaemonProbe(port, "healthz").then((probe) => {
+			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
+			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
+			// The same attachment, so only the renderer's copy changes.
+			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
+			getShellWebContents()?.send("daemon:status", daemonStatus);
+		});
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
@@ -3174,6 +3184,7 @@ registerChatImageIpc({
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
+	appName: app.getName(),
 });
 registerCloudArtifactIpc({
 	ipcMain,
@@ -3477,8 +3488,15 @@ function cloudDataDir(): string {
 	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
+// The control plane the daemon is configured for, the only server the AO
+// Cloud token is sent to (the renderer reads the same value from the daemon).
+const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
+	daemonStatus.state === "ready" && daemonStatus.port
+		? { baseUrl: `http://127.0.0.1:${daemonStatus.port}`, key: `${daemonStatus.port}:${daemonStatus.pid ?? ""}` }
+		: null);
+
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
-const cloudAgentProxy = createCloudAgentProxy(cloudDataDir);
+const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
 	if (!account) {
@@ -3499,7 +3517,7 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir);
+installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
