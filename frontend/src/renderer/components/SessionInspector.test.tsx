@@ -646,6 +646,56 @@ describe("SessionInspector PR section", () => {
     expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
   });
 
+  it("marks a tracked PR in a repository outside the project as external", async () => {
+    const external = prSummary(50, "open", {
+      url: "https://github.com/OrchestratorInc/ao-releases/pull/50",
+      htmlUrl: "https://github.com/OrchestratorInc/ao-releases/pull/50",
+      repo: "OrchestratorInc/ao-releases",
+    });
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) =>
+      path === "/api/v1/projects/{id}"
+        ? { data: { status: "ok", project: { id: "ws-1", repo: "git@github.com:acme/repo.git", config: {} } } }
+        : path === "/api/v1/sessions/{sessionId}/pr"
+          ? { data: { prs: [prSummary(7, "open"), external], linkedPrs: [] } }
+          : respond(path),
+    );
+    renderWithQuery(
+      <SessionInspector
+        session={session([
+          pr(7, "open", { url: "https://api.github.com/repos/acme/repo/pulls/7" }),
+          pr(50, "open", { url: external.url }),
+        ])}
+      />,
+      undefined,
+      (client) => {
+        seedPRSummaries(client, [prSummary(7, "open"), external]);
+        client.setQueryData(["project", "ws-1"], { repo: "git@github.com:acme/repo.git", config: {} });
+      },
+    );
+
+    const section = prSection("Pull requests (2)");
+    const externalCard = (await section.findByText("OrchestratorInc/ao-releases PR #50")).closest("article") as HTMLElement;
+    expect(within(externalCard).getByText("External repository")).toBeInTheDocument();
+    expect(within(externalCard).getByText("Checks passing")).toBeInTheDocument();
+    const projectCard = section.getByText(/acme\/repo PR #7/).closest("article") as HTMLElement;
+    expect(within(projectCard).queryByText("External repository")).not.toBeInTheDocument();
+  });
+
+  it("does not mark tracked project PRs as external", () => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")])} />,
+      undefined,
+      (client) => {
+        seedPRSummaries(client, [prSummary(7, "open")]);
+        client.setQueryData(["project", "ws-1"], { repo: "https://github.com/acme/repo", config: {} });
+      },
+    );
+
+    expect(prSection("Pull request").getByText("PR #7")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
+  });
+
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
     renderWithQuery(
       <SessionInspector

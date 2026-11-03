@@ -94,7 +94,10 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	if err != nil {
 		return ClaimPRResult{}, err
 	}
-	if err := s.requireProjectPRRepository(ctx, project, prURL); err != nil {
+	// A full URL outside the project's repositories is an explicit external
+	// claim: the PR still has to exist, be open, and be fetchable with the
+	// user's credentials. Number refs always resolve against the project.
+	if err := s.requireProjectPRRepository(ctx, project, prURL); err != nil && !errors.Is(err, ErrProjectMismatch) {
 		return ClaimPRResult{}, err
 	}
 	if s.scm == nil || s.prClaimer == nil {

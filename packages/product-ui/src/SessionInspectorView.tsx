@@ -337,6 +337,8 @@ export type InspectorPullRequest = PRSummaryMetadata & {
 	title?: string;
 	/** owner/name, shown before the number when a session's PRs span several repositories. */
 	repositoryLabel?: string;
+	/** Badge text for a PR in a repository outside the session's project. */
+	externalRepositoryLabel?: string;
 	reviewDetailsAction?: ReactNode;
 };
 
@@ -401,6 +403,11 @@ export function InspectorPullRequestCardView({
 				>
 					{pr.stateLabel}
 				</span>
+				{pr.externalRepositoryLabel ? (
+					<span className="shrink-0 rounded-full border border-(--color-border-settings-input) px-1.5 py-0.5 text-[9px] leading-none text-settings-muted">
+						{pr.externalRepositoryLabel}
+					</span>
+				) : null}
 			</div>
 			<PRSummaryMeta
 				className="mt-1.5"
