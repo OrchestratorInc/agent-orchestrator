@@ -3111,6 +3111,8 @@
 	"artifacts.share.uploaded": "{{percent}}% アップロード済み",
 	"artifacts.share.publicStatus": "公開 · リンクを知っている人なら誰でも閲覧できます",
 	"artifacts.share.changed": "「共有」を開いた後にこのファイルが変更されました。内容を確認して、もう一度公開してください。",
+	"artifacts.share.unpublished": "このファイルのリンクは公開停止されています。公開すると新しいリンクになります。",
+	"artifacts.share.outdated": "公開後にこのファイルが変更されました。リンクには以前のバージョンが表示されたままです。",
 	"artifacts.share.upgradeTitle": "アップグレードしてさらに共有",
 	"artifacts.share.limitReached": "無料プラン: 有効なリンクは {{limit}} 件まで。アップグレードするとさらに共有できます。",
 	"artifacts.share.upgrade": "アップグレード",

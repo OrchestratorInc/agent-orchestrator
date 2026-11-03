@@ -3169,6 +3169,8 @@
 	"artifacts.share.uploaded": "{{percent}}% enviado",
 	"artifacts.share.publicStatus": "Público · qualquer pessoa com o link pode ver",
 	"artifacts.share.changed": "Este arquivo mudou desde que você abriu Compartilhar. Confira e publique de novo.",
+	"artifacts.share.unpublished": "O link deste arquivo foi despublicado. Ao publicar, ele recebe um novo link.",
+	"artifacts.share.outdated": "Este arquivo mudou desde que você o publicou. O link ainda mostra a versão anterior.",
 	"artifacts.share.upgradeTitle": "Faça upgrade para compartilhar mais",
 	"artifacts.share.limitReached": "Plano gratuito: até {{limit}} links ativos. Faça upgrade para compartilhar mais.",
 	"artifacts.share.upgrade": "Fazer upgrade",

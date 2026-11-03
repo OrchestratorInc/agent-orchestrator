@@ -99,6 +99,23 @@ describe("ShareArtifactButton", () => {
 		expect(screen.queryByRole("button", { name: /update/i })).toBeNull();
 	});
 
+	it("says when the file changed since it was published, and the link shows the earlier version", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] });
+		await openPopover();
+		expect(await screen.findByText("This file changed since you published it. The link still shows the earlier version.")).toBeTruthy();
+		// It stays through an Unpublish that is cancelled.
+		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(await screen.findByText("This file changed since you published it. The link still shows the earlier version.")).toBeTruthy();
+	});
+
+	it("says nothing more when the published file is unchanged", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" }, { ...links, shares: [share] });
+		await openPopover();
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toBeTruthy();
+		expect(screen.queryByText(/changed since you published/)).toBeNull();
+	});
+
 	it("says Publishing while the file uploads", async () => {
 		stub(inspection, links);
 		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
@@ -130,10 +147,18 @@ describe("ShareArtifactButton", () => {
 		expect(screen.getByText("3 of 3 free links left")).toBeTruthy();
 	});
 
-	it("treats a record of an unpublished link as unpublished", async () => {
+	it("treats a record of an unpublished link as unpublished, and says so", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		await openPopover();
 		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(screen.getByText("This file's link was unpublished. Publishing gives it a new link.")).toBeTruthy();
+	});
+
+	it("says nothing about an earlier link for a file never published from here", async () => {
+		stub(inspection, links);
+		await openPopover();
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(screen.queryByText(/was unpublished/)).toBeNull();
 	});
 
 	it("offers only Upgrade at the link limit, never unpublishing", async () => {

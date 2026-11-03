@@ -17,9 +17,9 @@ type Phase =
 	| { kind: "unsupported" }
 	| { kind: "notOwner" }
 	| { kind: "limit"; limit: number }
-	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean }
+	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean; unpublished?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
-	| { kind: "published"; share: CloudShareLink; unpublishing?: "confirm" | "busy"; error?: string }
+	| { kind: "published"; share: CloudShareLink; outdated?: boolean; unpublishing?: "confirm" | "busy"; error?: string }
 	| { kind: "error"; message: string };
 
 /** Videos are not shared yet: there is no partial-file serving for them. */
@@ -203,12 +203,18 @@ function SharePanel({
 				if (inspection.unsupported) return setPhase({ kind: "unsupported" });
 				// The link this file was published to from here, while it is active.
 				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
-				if (current) return setPhase({ kind: "published", share: current });
+				// The file changed since it was published here: the link still
+				// serves what it held then.
+				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
+				if (current) return setPhase({ kind: "published", share: current, outdated });
+				// It was published from here, but its link is unpublished now,
+				// usually from somewhere else. Publishing gives it a new link.
+				const unpublished = Boolean(inspection.shareId);
 				// A file with no active link of its name is most likely a new
 				// document; the server decides for sure when it uploads.
 				const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
 				if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
-				setPhase({ kind: "publish", inspection, links });
+				setPhase({ kind: "publish", inspection, links, unpublished });
 			})
 			.catch((error: unknown) => {
 				if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
@@ -250,13 +256,13 @@ function SharePanel({
 		}
 	};
 
-	const unpublish = async (share: CloudShareLink) => {
-		setPhase({ kind: "published", share, unpublishing: "busy" });
+	const unpublish = async (share: CloudShareLink, outdated?: boolean) => {
+		setPhase({ kind: "published", share, outdated, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
 			load();
 		} catch (error) {
-			setPhase({ kind: "published", share, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
+			setPhase({ kind: "published", share, outdated, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
 		}
 	};
 
@@ -311,7 +317,7 @@ function SharePanel({
 			return (
 				<>
 					{title}
-					{phase.changed ? status(t("artifacts.share.changed"), "status") : null}
+					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: inspection.secretFindings.join(", ") }), "alert") : null}
 					{footer(
 						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
@@ -342,7 +348,7 @@ function SharePanel({
 			);
 		}
 		case "published": {
-			const { share } = phase;
+			const { share, outdated } = phase;
 			const link = share.viewerUrl ?? share.contentUrl;
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
@@ -353,10 +359,10 @@ function SharePanel({
 						{footer(
 							null,
 							<>
-								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share })} size="sm" type="button" variant="ghost">
+								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, outdated })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
 								</Button>
-								<Button className="bg-danger-strong hover:bg-danger-strong" disabled={busy} onClick={() => void unpublish(share)} size="sm" type="button" variant="primary">
+								<Button className="bg-danger-strong hover:bg-danger-strong" disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="primary">
 									{t("artifacts.share.unpublish")}
 								</Button>
 							</>,
@@ -380,11 +386,12 @@ function SharePanel({
 							value={link}
 						/>
 					</div>
+					{outdated ? status(t("artifacts.share.outdated"), "status") : null}
 					{phase.error ? status(phase.error, "alert") : null}
 					{footer(
 						<Button
 							className="-ml-2.5 text-error hover:text-error"
-							onClick={() => setPhase({ kind: "published", share, unpublishing: "confirm" })}
+							onClick={() => setPhase({ kind: "published", share, outdated, unpublishing: "confirm" })}
 							size="sm"
 							type="button"
 							variant="ghost"

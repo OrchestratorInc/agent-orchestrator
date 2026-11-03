@@ -135,6 +135,28 @@ describe("cloudShare IPC", () => {
 		await expect(records.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBeUndefined();
 	});
 
+	it("remembers what a file held when it was published, so a later change shows", async () => {
+		const { invoke, publish, file } = setup();
+		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("publishedFingerprint");
+		await publish();
+		const published = await invoke("cloudShare:inspect", file) as { fingerprint: string; publishedFingerprint?: string };
+		expect(published.publishedFingerprint).toBe(published.fingerprint);
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "a newer version of the report");
+		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string; publishedFingerprint?: string };
+		expect(changed.publishedFingerprint).toBe(published.fingerprint);
+		expect(changed.fingerprint).not.toBe(published.fingerprint);
+	});
+
+	it("reads a record kept before fingerprints were, as a link with nothing to compare", async () => {
+		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [shareRecordKey("https://cp.test", "sess-1", "docs/report.html")]: SHARE_ID }));
+		const { invoke, file, records } = setup();
+		const inspection = await invoke("cloudShare:inspect", file);
+		expect(inspection).toMatchObject({ shareId: SHARE_ID });
+		expect(inspection).not.toHaveProperty("publishedFingerprint");
+		await records.forgetShare(SHARE_ID);
+		await expect(records.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBeUndefined();
+	});
+
 	it("names the document by project, session and folder", async () => {
 		const { publish, bodies } = setup();
 		await publish();
@@ -187,7 +209,7 @@ describe("cloudShare IPC", () => {
 		// The control plane shares only the version the person was shown.
 		expect(bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256 });
 		// The link is remembered apart from any local session's file.
-		await expect(invoke("cloudShare:inspect", cloudFile)).resolves.toMatchObject({ shareId: SHARE_ID });
+		await expect(invoke("cloudShare:inspect", cloudFile)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: CLOUD_SHA256 });
 		await expect(records.get(shareRecordKey("https://cp.test", CLOUD_SESSION_ID, "reports/q3 plan.md"))).resolves.toBeUndefined();
 
 		// Cancel does not stop a cloud share midway: the control plane may

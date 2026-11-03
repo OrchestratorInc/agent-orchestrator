@@ -124,7 +124,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// another version.
 	const inspectCloudFile = async (file: CloudSessionShareFile): Promise<CloudShareInspection> => {
 		const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
-		const shareId = await deps.records.get(cloudRecordKey(file.baseUrl, file));
+		const key = cloudRecordKey(file.baseUrl, file);
+		const shareId = await deps.records.get(key);
+		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
 		return {
 			name: found.name,
 			size: found.size,
@@ -132,6 +134,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			unsupported: isVideo(found.name),
 			fingerprint: found.sha256,
 			...(shareId ? { shareId } : {}),
+			...(publishedFingerprint ? { publishedFingerprint } : {}),
 		};
 	};
 
@@ -144,7 +147,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// request, so there is nothing to cancel: stopping the wait could
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
-			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id);
+			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
@@ -159,7 +162,9 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const file = shareFileArgument(value);
 		if (isCloudFile(file)) return inspectCloudFile(file);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
-		const shareId = await deps.records.get(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath));
+		const key = shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath);
+		const shareId = await deps.records.get(key);
+		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
 		const { secretFindings, fingerprint } = await scanShareFile(resolved);
 		return {
 			name: resolved.name,
@@ -168,6 +173,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			unsupported: isVideo(resolved.name),
 			fingerprint,
 			...(shareId ? { shareId } : {}),
+			...(publishedFingerprint ? { publishedFingerprint } : {}),
 		};
 	});
 
@@ -248,7 +254,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
 				shareId: file.shareId,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id);
+			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id, taken.fingerprint);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

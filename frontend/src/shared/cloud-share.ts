@@ -84,6 +84,12 @@ export interface CloudShareInspection {
 	shareId?: string;
 	/** Names exactly what was scanned: the hash of the file's start, its size and modification time. */
 	fingerprint: string;
+	/**
+	 * The fingerprint the file had when it was published to shareId, when this
+	 * computer recorded it. Unlike fingerprint, the link's live content is
+	 * not checked: a different value means the file changed since publishing.
+	 */
+	publishedFingerprint?: string;
 }
 
 export type CloudSharePublishResult =

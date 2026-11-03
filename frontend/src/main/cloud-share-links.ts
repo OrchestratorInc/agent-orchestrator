@@ -13,35 +13,51 @@ export function shareRecordKey(baseUrl: string, sessionId: string, relativePath:
 	return JSON.stringify([baseUrl, sessionId, relativePath]);
 }
 
+/** One file's record: the link it was published to, and what it held then. */
+interface ShareLinkRecord {
+	shareId: string;
+	/** The file's fingerprint when it was published; see scanShareFile. */
+	fingerprint?: string;
+}
+
 export interface ShareLinkRecordStore {
 	get(key: string): Promise<string | undefined>;
-	set(key: string, shareId: string): Promise<void>;
+	/** The fingerprint the file had when it was last published, if recorded. */
+	publishedFingerprint(key: string): Promise<string | undefined>;
+	set(key: string, shareId: string, fingerprint?: string): Promise<void>;
 	/** Drops every record of a link, after it is unpublished. */
 	forgetShare(shareId: string): Promise<void>;
 }
 
-/** A ShareLinkRecordStore kept as a private JSON file. */
+/**
+ * A ShareLinkRecordStore kept as a private JSON file. A record written
+ * before fingerprints were kept is the link's ID alone.
+ */
 export class ShareLinkRecords implements ShareLinkRecordStore {
-	private records: Record<string, string> | undefined;
+	private records: Record<string, string | ShareLinkRecord> | undefined;
 	private writing: Promise<void> = Promise.resolve();
 
 	constructor(private readonly file: string) {}
 
 	async get(key: string): Promise<string | undefined> {
-		return (await this.load())[key];
+		return asRecord((await this.load())[key])?.shareId;
 	}
 
-	async set(key: string, shareId: string): Promise<void> {
+	async publishedFingerprint(key: string): Promise<string | undefined> {
+		return asRecord((await this.load())[key])?.fingerprint;
+	}
+
+	async set(key: string, shareId: string, fingerprint?: string): Promise<void> {
 		const records = await this.load();
-		records[key] = shareId;
+		records[key] = fingerprint ? { shareId, fingerprint } : shareId;
 		await this.save();
 	}
 
 	async forgetShare(shareId: string): Promise<void> {
 		const records = await this.load();
 		let changed = false;
-		for (const [key, id] of Object.entries(records)) {
-			if (id === shareId) {
+		for (const [key, record] of Object.entries(records)) {
+			if (asRecord(record)?.shareId === shareId) {
 				delete records[key];
 				changed = true;
 			}
@@ -49,7 +65,7 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		if (changed) await this.save();
 	}
 
-	private async load(): Promise<Record<string, string>> {
+	private async load(): Promise<Record<string, string | ShareLinkRecord>> {
 		if (this.records) return this.records;
 		try {
 			const parsed: unknown = JSON.parse(await fs.readFile(this.file, "utf8"));
@@ -73,7 +89,14 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 	}
 }
 
-function isRecordMap(value: unknown): value is Record<string, string> {
+function asRecord(value: string | ShareLinkRecord | undefined): ShareLinkRecord | undefined {
+	return typeof value === "string" ? { shareId: value } : value;
+}
+
+function isRecordMap(value: unknown): value is Record<string, string | ShareLinkRecord> {
 	return typeof value === "object" && value !== null && !Array.isArray(value) &&
-		Object.values(value).every((id) => typeof id === "string");
+		Object.values(value).every((record) => typeof record === "string" || (
+			typeof record === "object" && record !== null && typeof (record as ShareLinkRecord).shareId === "string" &&
+			((record as ShareLinkRecord).fingerprint === undefined || typeof (record as ShareLinkRecord).fingerprint === "string")
+		));
 }

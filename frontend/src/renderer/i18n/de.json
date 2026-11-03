@@ -3111,6 +3111,8 @@
 	"artifacts.share.uploaded": "{{percent}} % hochgeladen",
 	"artifacts.share.publicStatus": "Öffentlich · jeder mit dem Link kann es ansehen",
 	"artifacts.share.changed": "Diese Datei hat sich geändert, seit du „Teilen“ geöffnet hast. Prüfe sie und veröffentliche sie erneut.",
+	"artifacts.share.unpublished": "Die Veröffentlichung des Links dieser Datei wurde aufgehoben. Beim Veröffentlichen erhält sie einen neuen Link.",
+	"artifacts.share.outdated": "Diese Datei hat sich seit der Veröffentlichung geändert. Der Link zeigt noch die frühere Version.",
 	"artifacts.share.upgradeTitle": "Upgrade, um mehr zu teilen",
 	"artifacts.share.limitReached": "Kostenloser Plan: bis zu {{limit}} aktive Links. Führe ein Upgrade durch, um mehr zu teilen.",
 	"artifacts.share.upgrade": "Upgrade",
