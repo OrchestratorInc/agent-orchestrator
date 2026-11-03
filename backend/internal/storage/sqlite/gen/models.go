@@ -637,6 +637,12 @@ type ReportWorkerInterrupt struct {
 	LastInterruptedAt time.Time
 }
 
+type RepositoryRename struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
 type Review struct {
 	ID                     string
 	SessionID              domain.SessionID
@@ -884,6 +890,11 @@ type TelemetryEvent struct {
 	SessionID   sql.NullString
 	RequestID   string
 	PayloadJson string
+}
+
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
 }
 
 type UsageBinding struct {

@@ -35,6 +35,8 @@ vi.mock("./bridge", () => ({
 }));
 
 vi.mock("./api-client", () => ({
+	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
+	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,

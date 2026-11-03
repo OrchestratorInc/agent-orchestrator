@@ -128,6 +128,12 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,
@@ -192,6 +198,7 @@ if (typeof window !== "undefined") {
 		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
+			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
@@ -458,6 +465,8 @@ if (typeof window !== "undefined") {
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
+			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),
+			cancelBinary: () => undefined,
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

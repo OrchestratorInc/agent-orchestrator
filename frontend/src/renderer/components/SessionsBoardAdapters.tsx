@@ -18,7 +18,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
-import { renameSession } from "../lib/rename-session";
+import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -408,8 +408,12 @@ function SessionRenameDialog({
 		}
 		setBusy(true);
 		try {
-			await renameSession(session.id, name, session.hostId);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			if (session.cloud) {
+				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
+			} else {
+				await renameSession(session.id, name, session.hostId);
+				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			}
 			onOpenChange(false);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));

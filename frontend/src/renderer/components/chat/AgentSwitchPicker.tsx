@@ -13,7 +13,7 @@ import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/use
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
 import { useSettings } from "../../hooks/useSettings";
-import { agentModelDisplayLabel, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
+import { agentModelDisplayLabel, mergeSameNamedModels, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
 import { isLaunchableAgent } from "../../lib/agent-select-options";
 import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
@@ -95,6 +95,8 @@ export interface AgentSwitchProps {
 	autoCompact?: AutoCompactControl;
 	/** The agents to offer in place of the chat switch targets, for choosing one before a session exists. */
 	agents?: Array<{ id: string; label: string }>;
+	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
+	harnessView?: "local" | "cloud";
 }
 
 export interface PickerModel {
@@ -247,7 +249,7 @@ export function AgentModelPicker({
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
 	], [chatUnavailable, choices, currentHarness, readiness, terminal]);
-	const management = useAgentManagementMenu(undefined, hostId);
+	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
@@ -354,7 +356,9 @@ export function AgentModelPicker({
 	const setups = favorites.filter((entry) => !terminal || entry.harness !== currentHarness);
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	const searchRows = (open ? agents : []).flatMap((agent) => {
-		const models = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
+		const chosen = agent.id === currentHarness ? currentSource.modelId : pending?.harness === agent.id ? pending.model : undefined;
+		const models = agent.id === "claude-code" ? mergeSameNamedModels(listed, chosen) : listed;
 		return models.filter((model) => model.id).map((model) => ({
 			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
 		}));
@@ -476,7 +480,7 @@ export function AgentModelPicker({
 									<OptionMenuSub>
 										<OptionMenuSubTrigger label={t("agentSwitch.model")} value={modelValue} />
 										<OptionMenuSubContent scrollable className={SUB_CLASS}>
-											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(source.models) } : source} harness={shownHarness} />
+											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(mergeSameNamedModels(source.models, source.modelId)) } : source} harness={shownHarness} />
 										</OptionMenuSubContent>
 									</OptionMenuSub>
 								) : null}

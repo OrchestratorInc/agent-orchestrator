@@ -1470,9 +1470,11 @@ select {
 	font: inherit;
 }
 
+/* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+[role="alert"] {
 	-webkit-user-select: text;
 	user-select: text;
 }
@@ -6144,6 +6146,13 @@ html[data-window-translucent="true"] :is(
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
 	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* A Cloud session's startup and interface-switch screens cover the session
+ * beneath them; on a clear canvas that session would show through the steps,
+ * so they keep the solid one. */
+html[data-window-translucent="true"] [data-startup-cover] {
+	background-color: var(--solid-bg-primary);
 }
 
 /* Text drawn in the canvas colour sits on a solid foreground fill (the send

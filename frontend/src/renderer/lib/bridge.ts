@@ -6,6 +6,12 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		dictation: {
+			start: async () => undefined,
+			stop: async () => undefined,
+			cancel: async () => undefined,
+			onEvent: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,
@@ -94,6 +100,9 @@ export const aoBridge: AoBridge =
 				const response = await fetch(url);
 				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
 				return new Uint8Array(await response.arrayBuffer());
+			},
+			openFolder: async () => {
+				throw new Error("Opening a folder needs the desktop app");
 			},
 			onFrameNavigated: () => () => undefined,
 		},
@@ -387,6 +396,10 @@ export const aoBridge: AoBridge =
 			request: async () => {
 				throw new Error("AO Cloud requests require the desktop app.");
 			},
+			requestBinary: async () => {
+				throw new Error("AO Cloud requests require the desktop app.");
+			},
+			cancelBinary: () => undefined,
 			openStream: async () => {
 				throw new Error("AO Cloud event streams require the desktop app.");
 			},

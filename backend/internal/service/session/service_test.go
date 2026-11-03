@@ -73,6 +73,7 @@ type fakeStore struct {
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
 	reportedPRURLs      map[domain.SessionID][]string
+	repositoryRenames   []domain.RepositoryRename
 	projects            map[string]domain.ProjectRecord
 	worktrees           map[domain.SessionID][]domain.SessionWorktreeRecord
 	checks              map[string][]domain.PullRequestCheck
@@ -520,6 +521,10 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 
 func (f *fakeStore) ListReportedPRURLs(_ context.Context, id domain.SessionID) ([]string, error) {
 	return append([]string(nil), f.reportedPRURLs[id]...), nil
+}
+
+func (f *fakeStore) ListRepositoryRenames(context.Context) ([]domain.RepositoryRename, error) {
+	return append([]domain.RepositoryRename(nil), f.repositoryRenames...), nil
 }
 
 func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
@@ -3397,6 +3402,29 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 }
 
+func TestStandaloneSessionTelemetryKind(t *testing.T) {
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	st := newFakeStore()
+	st.sessions[rec.ID] = rec
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
+	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
+	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := &sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("launch failed")}
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", rec.ID, cause, apierr.Conflict("AGENT_RESUME_FAILED", "Agent resume failed", nil))
+	if len(sink.events) != 3 {
+		t.Fatalf("events = %d, want three session outcomes", len(sink.events))
+	}
+	for _, ev := range sink.events {
+		if got := ev.Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v, want standalone", ev.Name, got)
+		}
+	}
+}
+
 type fakeTracker struct {
 	issue domain.Issue
 	err   error
@@ -5178,6 +5206,29 @@ func TestListPRListingKeepsExternalReportsLinkedAndDedupesTracked(t *testing.T) 
 	}
 	if len(got.Tracked) != 1 || len(got.Linked) != 1 || got.Linked[0].URL != "https://gitlab.com/release/notes/-/merge_requests/9" {
 		t.Fatalf("listing = %+v", got)
+	}
+}
+
+func TestListPRListingDedupesReportsUnderARenamedRepositorysOldName(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	st.prs["mer-1"] = []domain.PullRequest{{
+		URL: "https://github.com/New-Owner/example/pull/31", SessionID: "mer-1", Number: 31,
+		CI: domain.CIUnknown, Review: domain.ReviewNone, Mergeability: domain.MergeUnknown,
+		UpdatedAt: time.Now().UTC(),
+	}}
+	st.repositoryRenames = []domain.RepositoryRename{{Host: "github.com", OldName: "old-owner/example", Name: "new-owner/example"}}
+	st.reportedPRURLs["mer-1"] = []string{
+		"https://github.com/old-owner/example/pull/31",
+		"http://www.github.com/Old-Owner/example/pull/31/",
+		"https://github.com/other/example/pull/31", // same number, another repository
+	}
+	got, err := (&Service{store: st}).ListPRListing(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Linked) != 1 || got.Linked[0].URL != "https://github.com/other/example/pull/31" {
+		t.Fatalf("linked = %+v, want only the other repository's PR", got.Linked)
 	}
 }
 
