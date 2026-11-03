@@ -47,8 +47,12 @@ api_key = "..."
 AO verifies the login with a provider round-trip and never reports a key as
 connected just because it exists:
 
-- With no credentials, `stakpak auth status` prints "No credentials
-  configured.", which reads as signed out, so the Log in action is offered.
+- `stakpak auth status` reads stored credentials only. When it prints "No
+  credentials configured.", AO still checks the providers below, since a
+  keyless provider runs on `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or
+  `GEMINI_API_KEY`. Only with no usable key at all does it read as signed out,
+  so the Log in action is offered. A `STAKPAK_API_KEY` in the environment
+  can't be checked that way and reads as configured but unverified.
 - With a Stakpak API key, `stakpak auth status` checks it against the Stakpak
   API.
 - Otherwise AO reads the active profile's providers (`STAKPAK_PROFILE`, else

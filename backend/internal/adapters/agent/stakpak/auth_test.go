@@ -196,3 +196,42 @@ func TestProbeProvidersUsesAuthTableKey(t *testing.T) {
 		t.Fatalf("probeProviders = %q, %v; want authorized from the auth table key", got, err)
 	}
 }
+
+// `stakpak auth status` reads stored credentials only, so it prints "No
+// credentials configured." for a keyless provider that runs on
+// ANTHROPIC_API_KEY, or for STAKPAK_API_KEY alone.
+func TestEnvironmentKeysAreNotSignedOut(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "env-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("STAKPAK_PROFILE", "")
+	t.Setenv("STAKPAK_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "env-key")
+	if err := os.MkdirAll(filepath.Join(home, ".stakpak"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "[profiles.default.providers.anthropic]\ntype = \"anthropic\"\napi_endpoint = \"" + server.URL + "/v1/\"\n"
+	if err := os.WriteFile(filepath.Join(home, ".stakpak", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("keyless provider with ANTHROPIC_API_KEY = %q, %v; want authorized", got, err)
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("no credentials = %q, %v; want unauthorized", got, err)
+	}
+	t.Setenv("STAKPAK_API_KEY", "stakpak-key")
+	if got, err := withEnvironmentKey(probeProviders(context.Background(), server.Client())); err != nil || got != ports.AgentAuthStatusConfigured {
+		t.Fatalf("STAKPAK_API_KEY only = %q, %v; want configured", got, err)
+	}
+}

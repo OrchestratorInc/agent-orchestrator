@@ -44,21 +44,29 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	defer cancel()
 	out, runErr := process.CommandContext(statusCtx, binary, "auth", "status").CombinedOutput()
 	switch apiCheck(string(out)) {
-	case apiCheckNoCredentials:
-		// A fresh install: report signed out so the Log in action is offered.
-		return ports.AgentAuthStatusUnauthorized, nil
 	case apiCheckPassed:
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath()).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	case apiCheckFailed:
 		return ports.AgentAuthStatusUnauthorized, nil
-	case apiCheckSkipped:
-		return probeProviders(ctx, http.DefaultClient)
+	case apiCheckSkipped, apiCheckNoCredentials:
+		// `auth status` reads stored credentials only, so "No credentials
+		// configured." still allows the environment keys Stakpak runs on.
+		return withEnvironmentKey(probeProviders(ctx, http.DefaultClient))
 	}
 	if runErr != nil {
 		return ports.AgentAuthStatusUnknown, fmt.Errorf("stakpak auth status: %w", runErr)
 	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// withEnvironmentKey keeps a STAKPAK_API_KEY, which Stakpak runs on but
+// `auth status` never reads, from reading as signed out. AO cannot verify it without the Stakpak API, so it is only configured.
+func withEnvironmentKey(status ports.AgentAuthStatus, err error) (ports.AgentAuthStatus, error) {
+	if status == ports.AgentAuthStatusUnauthorized && strings.TrimSpace(os.Getenv("STAKPAK_API_KEY")) != "" {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return status, err
 }
 
 type apiCheckResult int
