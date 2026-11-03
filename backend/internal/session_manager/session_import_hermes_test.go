@@ -10,15 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestHermesImportMarker(t *testing.T) {
-	meta := domain.SessionMetadata{AgentSessionID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native"}}
-	if importedNativeSessionMarker(meta) != "true" {
-		t.Fatal("import marker missing")
-	}
-	meta.AgentSessionID = "other"
-	if importedNativeSessionMarker(meta) != "" {
-		t.Fatal("stale import marked")
-	}
+func TestHermesImportOwnershipRequiresImportSource(t *testing.T) {
 	if hermesImportOwnedElsewhere(context.Background(), domain.SessionRecord{}) {
 		t.Fatal("non-import owned")
 	}

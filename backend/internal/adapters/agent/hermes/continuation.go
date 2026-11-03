@@ -47,7 +47,7 @@ func (*Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRe
 // a corrupt/unreadable title file: that would hide damage to a managed session.
 func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if id == "" || cfg.Session.Metadata["importedNativeSession"] != "true" {
+	if id == "" || cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != id {
 		return nil, false, nil
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir(cfg.DataDir, cfg.Session.ID), "native-title")); !errors.Is(err, os.ErrNotExist) {

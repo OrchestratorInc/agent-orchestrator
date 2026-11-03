@@ -50,9 +50,3 @@ func hermesImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) b
 	return false
 }
 
-func importedNativeSessionMarker(meta domain.SessionMetadata) string {
-	if meta.ImportSource != nil && meta.ImportSource.NativeID == meta.AgentSessionID {
-		return "true"
-	}
-	return ""
-}

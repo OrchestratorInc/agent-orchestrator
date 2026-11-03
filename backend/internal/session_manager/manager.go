@@ -7168,7 +7168,6 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	metadata := nativeRestoreMetadata(domain.SessionRecord{Metadata: meta})
 	metadata[ports.MetadataKeySessionMode] = string(domain.SessionModeTUI)
-	metadata["importedNativeSession"] = importedNativeSessionMarker(meta)
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
