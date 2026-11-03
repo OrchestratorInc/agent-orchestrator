@@ -20,8 +20,12 @@ func memcodeRelocationFixture(t *testing.T) ports.ImportedSessionRelocation {
 
 func TestMemcodeImportCopiesExactNativeStateBeforeInteractiveRestore(t *testing.T) {
 	r := memcodeRelocationFixture(t)
-	if err := (&Plugin{}).RelocateImportedSession(context.Background(), r); err != nil {
+	prepared, err := (&Plugin{}).PrepareImportedSession(context.Background(), r)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if prepared.NativeSessionID != testID || prepared.ConfigDir != r.LaunchCWD || prepared.TranscriptPath != filepath.Join(r.LaunchCWD, ".memcode", "sessions", testID, "messages.json") {
+		t.Fatalf("prepared native copy = %+v", prepared)
 	}
 	wantDigest, wantCount, err := transcript(r.ConfigDir, testID)
 	if err != nil {

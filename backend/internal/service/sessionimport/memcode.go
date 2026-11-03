@@ -17,6 +17,21 @@ import (
 
 var memcodeImportID = regexp.MustCompile(`^sess_([0-9a-f]{8}|[0-9a-f]{16})$`)
 
+func discoverMemcodeRegistered(ctx context.Context, projects []string) ([]sourceFiles, error) {
+	var out []sourceFiles
+	for _, project := range projects {
+		files, err := discoverMemcodeProject(ctx, project)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue // One unreadable registered project does not hide the others.
+		}
+		out = append(out, files...)
+	}
+	return out, nil
+}
+
 func discoverMemcodeProject(ctx context.Context, project string) ([]sourceFiles, error) {
 	root, err := os.OpenRoot(project)
 	if errors.Is(err, os.ErrNotExist) {
@@ -65,7 +80,7 @@ func readMemcodeTranscript(ctx context.Context, root string, paths ...string) (t
 	}
 	t.nativeID = filepath.Base(filepath.Dir(paths[0]))
 	rel := filepath.Join(".memcode", "sessions", t.nativeID, "messages.json")
-	if !memcodeImportID.MatchString(t.nativeID) || filepath.Clean(paths[0]) != filepath.Join(t.root, rel) {
+	if !memcodeImportID.MatchString(t.nativeID) || canonical(paths[0]) != filepath.Join(t.root, rel) {
 		return t, errors.New("memcode native transcript path is invalid")
 	}
 	provider, err := os.OpenRoot(t.root)

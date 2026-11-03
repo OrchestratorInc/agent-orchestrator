@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const memcodeImportFixture = `{"session_id":"sess_01234567","saved_at":"2026-11-01T10:00:00Z","messages":[{"role":"system","content":[{"type":"text","text":"hidden instructions"}]},{"role":"user","content":[{"type":"text","text":"make a greeting"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"private thought"},{"type":"text","text":"Hello"},{"type":"tool_use","name":"bash","input":{"command":"private command"}}]},{"role":"user","content":[{"type":"tool_result","content":"private result"}]}]}`
@@ -15,7 +17,7 @@ func TestMemcodeDiscoversOnlyResumableProjectHistory(t *testing.T) {
 	path := writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_01234567", "messages.json"), memcodeImportFixture)
 	writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_89abcdef", "events.jsonl"), `{"kind":"user_message","text":"recall only"}`)
 	groups, err := discoverMemcodeProject(context.Background(), project)
-	if err != nil || len(groups) != 1 || groups[0].paths[0] != path || groups[0].key != "sess_01234567" {
+	if err != nil || len(groups) != 1 || groups[0].paths[0] != canonical(path) || groups[0].key != "sess_01234567" {
 		t.Fatalf("groups = %+v, %v", groups, err)
 	}
 	got, err := readMemcodeTranscript(context.Background(), project, path)
@@ -26,6 +28,32 @@ func TestMemcodeDiscoversOnlyResumableProjectHistory(t *testing.T) {
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.last.Format("15:04") != "10:00" {
 		t.Fatalf("native metadata = %+v", got)
 	}
+}
+
+func TestMemcodeRegisteredProjectNativeTerminalImportAndRefresh(t *testing.T) {
+	project, unrelated := t.TempDir(), t.TempDir()
+	path := writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_01234567", "messages.json"), memcodeImportFixture)
+	writeFile(t, filepath.Join(unrelated, ".memcode", "sessions", "sess_89abcdef", "messages.json"), strings.Replace(memcodeImportFixture, "sess_01234567", "sess_89abcdef", 1))
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(st, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{}
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].Harness != domain.HarnessMemcode || preview.Candidates[0].ProjectID != "repo" {
+		t.Fatalf("registered native scan = %+v, %v", preview, err)
+	}
+	results, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+	if err != nil || len(results) != 1 || results[0].Status != "created" {
+		t.Fatalf("native import = %+v, %v", results, err)
+	}
+	rec := st.sessions[0]
+	if rec.Mode != domain.SessionModeTUI || rec.Metadata.AgentSessionID != "sess_01234567" || rec.Metadata.ImportSource.ConfigDir != canonical(project) || !rec.NeedsImportResume() {
+		t.Fatalf("native import record = %+v", rec)
+	}
+	writeFile(t, path, strings.Replace(memcodeImportFixture, "Hello", "Updated answer", 1))
+	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, st.messages, "user: make a greeting", "assistant: Updated answer")
 }
 
 func TestMemcodeImportRejectsMismatchedAndMalformedWireHistory(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 
 var (
 	_ ports.AgentImportedSessionRelocator = (*Plugin)(nil)
+	_ ports.AgentImportedSessionPreparer  = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber      = (*Plugin)(nil)
 	_ ports.AgentTranscriptLocator        = (*Plugin)(nil)
 )
@@ -43,6 +44,15 @@ func memcodeImportFile(ctx context.Context, root *os.Root, name string, limit in
 		return nil, errors.New("memcode import exceeds read budget")
 	}
 	return data, ctx.Err()
+}
+
+// PrepareImportedSession checkpoints the selected native copy in the AO
+// worktree before the existing interactive PrepareNativeRestore reads it.
+func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	if err := p.RelocateImportedSession(ctx, r); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.LaunchCWD, TranscriptPath: filepath.Join(r.LaunchCWD, ".memcode", "sessions", r.NativeSessionID, "messages.json")}, nil
 }
 
 func installMemcodeImport(ctx context.Context, root *os.Root, name string, data []byte) error {
