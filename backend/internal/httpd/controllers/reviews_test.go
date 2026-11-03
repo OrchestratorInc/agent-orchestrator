@@ -156,7 +156,7 @@ func (f *fakeReviewService) SubmitMany(_ context.Context, _ domain.SessionID, re
 	f.submitted = append([]reviewsvc.SubmittedReview(nil), reviews...)
 	runs := make([]domain.ReviewRun, 0, len(reviews))
 	for _, review := range reviews {
-		runs = append(runs, domain.ReviewRun{ID: review.RunID, Verdict: review.Verdict, Body: review.Body, GithubReviewID: review.GithubReviewID})
+		runs = append(runs, domain.ReviewRun{ID: review.RunID, Verdict: review.Verdict, Body: review.Body, GithubReviewID: review.GithubReviewID, Publication: review.Publication})
 	}
 	return runs, nil
 }

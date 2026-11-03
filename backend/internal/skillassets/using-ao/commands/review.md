@@ -55,7 +55,24 @@ ao review ls mer-3
 
 ### ao review submit
 
-Record a reviewer's result for a worker's PR.
+Record a reviewer's result for a worker's PR. Submission records AO's local
+verdict; it does not publish a provider review.
+
+Submit an optional structured `publication` receipt through `--reviews` JSON:
+`provider`, `status` (`published`, `blocked`, `unconfirmed`), `prUrl`, `targetSha`,
+typed `refs`, and `error` for blocked or unconfirmed results. The target and head
+must match the durable review run. GitHub references use `kind: "review"`;
+GitLab references use `note`, `discussion`, or pending `draft_note` IDs.
+A published receipt requires confirmed summary/review references and all required
+finding discussions and original notes. Pending drafts cannot be published.
+Missing receipts do not confirm GitLab publication. Legacy GitHub review IDs
+remain supported.
+
+AO validates and records the reviewer's receipt with the result and the session's
+auto-inject setting at the first submit. Retries cannot replace that snapshot.
+Confirmed publication schedules normal read-only SCM refresh and sets provider
+publication telemetry. AO does not independently attest to the provider readback,
+and the receipt does not prove worker delivery.
 
 **Syntax:**
 ```

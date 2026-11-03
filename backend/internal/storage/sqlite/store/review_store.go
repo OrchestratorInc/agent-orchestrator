@@ -238,7 +238,12 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	if r.TriggerSource == "" {
 		r.TriggerSource = domain.ReviewTriggerManual
 	}
-	err := s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
+	publicationJSON, err := json.Marshal(r.Publication)
+	if err != nil {
+		return fmt.Errorf("encode review publication: %w", err)
+	}
+	err = s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
+		PublicationJson:  string(publicationJSON),
 		ID:               r.ID,
 		ReviewID:         r.ReviewID,
 		SessionID:        r.SessionID,
@@ -260,12 +265,21 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	return err
 }
 
-// UpdateReviewRunResult sets the status/verdict/body and the GitHub review id of
-// a running review pass.
-func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+// UpdateReviewRunResult atomically records a running pass's result, policy
+// snapshot and optional provider receipt. Omitting the receipt stores no confirmation.
+func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool, publication ...*domain.ReviewPublication) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	var receipt *domain.ReviewPublication
+	if len(publication) > 0 {
+		receipt = publication[0]
+	}
+	publicationJSON, err := json.Marshal(receipt)
+	if err != nil {
+		return false, fmt.Errorf("encode review publication: %w", err)
+	}
 	n, err := s.qw.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
+		PublicationJson:  string(publicationJSON),
 		Status:           status,
 		Verdict:          verdict,
 		Body:             body,
@@ -324,7 +338,8 @@ func (s *Store) GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, 
 	if err != nil {
 		return domain.ReviewRun{}, false, fmt.Errorf("get review run %s: %w", id, err)
 	}
-	return reviewRunFromRow(row), true, nil
+	run, err := reviewRunFromRow(row)
+	return run, err == nil, err
 }
 
 // GetReviewRunBySessionPRAndSHA returns the most recent review pass for a
@@ -339,7 +354,8 @@ func (s *Store) GetReviewRunBySessionPRAndSHA(ctx context.Context, id domain.Ses
 	if err != nil {
 		return domain.ReviewRun{}, false, fmt.Errorf("get review run for session %s pr %s sha %s: %w", id, prURL, targetSHA, err)
 	}
-	return reviewRunFromRow(row), true, nil
+	run, err := reviewRunFromRow(row)
+	return run, err == nil, err
 }
 
 // GetReviewRunBySessionPRSHAAndHarness returns the most recent review pass for
@@ -352,7 +368,8 @@ func (s *Store) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, id dom
 	if err != nil {
 		return domain.ReviewRun{}, false, fmt.Errorf("get review run for session %s pr %s sha %s harness %s: %w", id, prURL, targetSHA, harness, err)
 	}
-	return reviewRunFromRow(row), true, nil
+	run, err := reviewRunFromRow(row)
+	return run, err == nil, err
 }
 
 // ListReviewRunsBySession returns all review passes for a worker session, newest first.
@@ -363,7 +380,11 @@ func (s *Store) ListReviewRunsBySession(ctx context.Context, id domain.SessionID
 	}
 	out := make([]domain.ReviewRun, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, reviewRunFromRow(row))
+		run, err := reviewRunFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
 	}
 	return out, nil
 }
@@ -377,7 +398,11 @@ func (s *Store) ListRunningReviewRunsBySession(ctx context.Context, id domain.Se
 	}
 	out := make([]domain.ReviewRun, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, reviewRunFromRow(row))
+		run, err := reviewRunFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
 	}
 	return out, nil
 }
@@ -390,7 +415,11 @@ func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, 
 	}
 	out := make([]domain.ReviewRun, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, reviewRunFromRow(row))
+		run, err := reviewRunFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
 	}
 	return out, nil
 }
@@ -483,7 +512,11 @@ func reviewFromListRecoverableChatReviewsRow(r gen.ListRecoverableChatReviewsRow
 	return domain.Review{ID: r.ID, SessionID: r.SessionID, ProjectID: r.ProjectID, Harness: r.Harness, PRURL: r.PRURL, ReviewerHandleID: r.ReviewerHandleID, AgentSessionID: r.AgentSessionID, ReviewerActivityState: domain.ActivityState(r.ReviewerActivityState), ReviewerLaunchID: r.ReviewerLaunchID, InterfaceMode: domain.ReviewerInterfaceMode(r.InterfaceMode), ProviderConversationID: r.ProviderConversationID, ControllerGeneration: r.ControllerGeneration, ControllerError: r.ControllerError, IsArchived: r.IsArchived, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 }
 
-func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
+func reviewRunFromRow(r gen.ReviewRun) (domain.ReviewRun, error) {
+	var publication *domain.ReviewPublication
+	if err := json.Unmarshal([]byte(r.PublicationJson), &publication); err != nil {
+		return domain.ReviewRun{}, fmt.Errorf("decode review publication for %s: %w", r.ID, err)
+	}
 	var deliveredAt *time.Time
 	if r.DeliveredAt.Valid {
 		t := r.DeliveredAt.Time
@@ -505,7 +538,8 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		CreatedAt:        r.CreatedAt,
 		DeliveredAt:      deliveredAt,
 		AutoInjectReview: r.AutoInjectReview,
-	}
+		Publication:      publication,
+	}, nil
 }
 
 // ListCurrentHeadReviewRunsForSession returns AO's review passes against the

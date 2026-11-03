@@ -62,7 +62,8 @@ type Store interface {
 	ListReviewsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.Review, error)
 	ClearReviewerHandleByHarness(ctx stdctx.Context, id domain.SessionID, harness domain.ReviewerHarness) error
 	InsertReviewRun(ctx stdctx.Context, r domain.ReviewRun) error
-	UpdateReviewRunResult(ctx stdctx.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	// UpdateReviewRunResult atomically records a running pass's result, policy snapshot and optional receipt.
+	UpdateReviewRunResult(ctx stdctx.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool, publication ...*domain.ReviewPublication) (bool, error)
 	UpdateReviewAgentSessionID(ctx stdctx.Context, id, agentSessionID string) (bool, error)
 	SupersedeStaleRunningReviewRuns(ctx stdctx.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error)
 	CancelRunningReviewRunsBySession(ctx stdctx.Context, sessionID domain.SessionID, body string) (int64, error)
@@ -1757,6 +1758,7 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		run.Verdict = domain.VerdictNone
 		run.Body = "cancelled by user"
 		run.GithubReviewID = ""
+		run.Publication = nil
 		cancelled = append(cancelled, run)
 	}
 	prs, err := e.prs.ListPRsBySession(ctx, workerID)
@@ -1911,6 +1913,7 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 		run.Verdict = domain.VerdictNone
 		run.Body = body
 		run.GithubReviewID = ""
+		run.Publication = nil
 		cancelled = append(cancelled, run)
 	}
 	return TerminateResult{ReviewerHandleID: destroyedHandle, CancelledRuns: cancelled}, nil
