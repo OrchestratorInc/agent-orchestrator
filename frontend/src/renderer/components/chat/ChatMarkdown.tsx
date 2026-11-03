@@ -285,9 +285,13 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 			data-wrap={wrap ? "true" : "false"}
 		>
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="text-caption text-muted-foreground">
-					{language || "text"}
-				</span>
+				{/* Chrome, not content: painted from a pseudo-element so it stays out of
+				    Selection.toString() (user-select: none does not). A chat excerpt that
+				    spans the fence must match the stored Markdown. */}
+				<span
+					data-language={language || "text"}
+					className="text-caption text-muted-foreground before:content-[attr(data-language)]"
+				/>
 				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
 				    timeline's whole point is that prose dominates; a permanent row of
 				    controls on every fence is the opposite. */}

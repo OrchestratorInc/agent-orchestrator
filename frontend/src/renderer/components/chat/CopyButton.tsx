@@ -68,7 +68,9 @@ export function CopyButton({
 			) : (
 				<Copy aria-hidden="true" className="size-3" />
 			)}
-			{compact ? null : copied ? copiedLabel : "Copy"}
+			{/* Painted from a pseudo-element so selecting a code block in Chat does
+			    not pick up the word; the button's aria-label names it. */}
+			{compact ? null : <span data-label={copied ? copiedLabel : "Copy"} className="before:content-[attr(data-label)]" />}
 		</button>
 	);
 
