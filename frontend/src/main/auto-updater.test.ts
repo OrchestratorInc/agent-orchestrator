@@ -3844,6 +3844,39 @@ describe("quitAndInstallUpdate", () => {
     } finally { vi.useRealTimers(); restore(); }
   });
 
+  it("keeps an install waiting while the download ahead of it is still moving (#6911)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    vi.useFakeTimers();
+    try {
+      const { module, autoUpdater, updaterEvents, nativeAutoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      await flushMicrotasks();
+      const slow = deferred<{ isUpdateAvailable: boolean; updateInfo: { version: string } }>();
+      autoUpdater.checkForUpdates.mockReturnValueOnce(slow.promise);
+      const check = module.checkForUpdatesNow(stateDir).catch(() => undefined);
+      await flushMicrotasks();
+
+      let settled = false;
+      const install = module.quitAndInstallUpdate("2.1.0");
+      install.then(() => { settled = true; }, () => { settled = true; });
+      // Three minutes of a slow but moving download: the install keeps waiting.
+      for (let transferred = 1; transferred <= 6; transferred++) {
+        updaterEvents.get("download-progress")?.({ percent: transferred * 10, transferred, total: 100 });
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+      expect(settled).toBe(false);
+      // Once the bytes stop, the stuck step is given up on like any other.
+      const assertion = expect(install).rejects.toThrow(/Relaunch AO/);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await assertion;
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      slow.resolve({ isUpdateAvailable: false, updateInfo: { version: "2.1.0" } });
+      await check;
+    } finally { vi.useRealTimers(); restore(); }
+  });
+
   it("ignores duplicate downloads during native preparation and accepts a later replacement", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {

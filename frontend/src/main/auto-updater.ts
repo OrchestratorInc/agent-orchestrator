@@ -634,6 +634,9 @@ let pendingUpdateVersion: string | undefined;
 const DOWNLOAD_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 let downloadStallTimer: ReturnType<typeof setTimeout> | undefined;
 let activeDownloadCancellation: CancellationToken | undefined;
+// When electron-updater last reported download bytes. The install deadline
+// waits on a download that is still moving rather than failing a slow network.
+let lastDownloadProgressAtMs: number | undefined;
 let downloadStalled = false;
 let manualDownloadPending = false;
 
@@ -2112,6 +2115,7 @@ function wireUpdaterEvents(): void {
     consecutiveAutomaticCheckFailures = 0;
     failingChecksPublished = false;
     activeUpdaterPhase = "download";
+    lastDownloadProgressAtMs = Date.now();
     const transferred = Number.isFinite(p?.transferred) && p.transferred >= 0 ? p.transferred : undefined;
     const total = Number.isFinite(p?.total) && p.total >= 0 ? p.total : undefined;
     const bytesPerSecond = Number.isFinite(p?.bytesPerSecond) && p.bytesPerSecond >= 0 ? p.bytesPerSecond : undefined;
@@ -3107,7 +3111,8 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
 // forever, and because the pending request is reused, every later click shows
 // "Preparing update…" too (#6911). Give up on getting a turn after a minute so
 // the dialog can offer Relaunch AO. Native preparation has its own watchdog,
-// so time spent waiting on it does not count.
+// so time spent waiting on it does not count, and neither does a download that
+// is still receiving bytes (a slow network, not a stuck step).
 const INSTALL_QUEUE_WAIT_MS = 60_000;
 const INSTALL_QUEUE_STUCK_MESSAGE = "Another update step didn't finish, so the install couldn't start. AO stayed open. Relaunch AO to try again.";
 
@@ -3118,6 +3123,7 @@ function installQueueDeadline(started: () => boolean): { promise: Promise<never>
       timer = setTimeout(() => {
         if (started()) return;
         if (nativePreparation) return arm();
+        if (lastDownloadProgressAtMs !== undefined && Date.now() - lastDownloadProgressAtMs < INSTALL_QUEUE_WAIT_MS) return arm();
         recordUpdateDiagnostic("install-queue-timeout");
         reject(new Error(INSTALL_QUEUE_STUCK_MESSAGE));
       }, INSTALL_QUEUE_WAIT_MS);
