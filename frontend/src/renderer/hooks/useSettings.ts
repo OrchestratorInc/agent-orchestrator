@@ -37,6 +37,8 @@ export interface Settings {
 	versionRefresh?: boolean;
 	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
 	computerUse?: boolean;
+	/** New workers keep a one-line summary on their kanban card, and the board shows it. */
+	cardSummaries?: boolean;
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 }
@@ -81,6 +83,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				computerUse: data?.computerUse ?? false,
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
+				// A daemon that predates the setting never asks for card summaries.
+				cardSummaries: data?.cardSummaries ?? false,
 			};
 		},
 	});
@@ -171,6 +175,27 @@ export function useUpdateSessionRetention() {
 
 	return {
 		update: (days: number) => mutation.mutate(days),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateCardSummaries() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/card-summaries", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// The daemon is the source of truth: refetch instead of assuming the write.
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

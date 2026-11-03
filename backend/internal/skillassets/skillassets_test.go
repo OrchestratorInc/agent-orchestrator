@@ -252,6 +252,26 @@ func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testi
 	}
 }
 
+func TestEmbeddedSummaryGuidanceIsLinkedFromTheCatalog(t *testing.T) {
+	catalog, err := files.ReadFile("using-ao/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(catalog), "[commands/summary.md](commands/summary.md)") {
+		t.Fatal("using-ao catalog does not link commands/summary.md")
+	}
+	body, err := files.ReadFile("using-ao/commands/summary.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{"ao summary --done", "at most once a minute", "do not retry it", "only when your system prompt has a Card Summary section"} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("summary guidance missing %q", want)
+		}
+	}
+}
+
 func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 	body, err := files.ReadFile("using-ao/commands/render.md")
 	if err != nil {

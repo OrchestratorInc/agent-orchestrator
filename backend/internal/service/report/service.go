@@ -33,22 +33,31 @@ type ArtifactRecorder interface {
 	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
 }
 
-// Service validates and creates durable worker reports.
-type Service struct {
-	store     Store
-	now       func() time.Time
-	newID     func() string
-	onCreated func(domain.ReportRecord)
-	artifacts ArtifactRecorder
+// CardSummaryFiller sets a session's kanban card summary only while it is empty
+// or still previous, the text an earlier fill wrote, so it never replaces a
+// summary the agent set.
+type CardSummaryFiller interface {
+	FillSessionCardSummary(ctx context.Context, id domain.SessionID, summary, previous string) (bool, error)
 }
 
-// Deps configures a Service. Artifacts is optional.
+// Service validates and creates durable worker reports.
+type Service struct {
+	store         Store
+	now           func() time.Time
+	newID         func() string
+	onCreated     func(domain.ReportRecord)
+	artifacts     ArtifactRecorder
+	cardSummaries CardSummaryFiller
+}
+
+// Deps configures a Service. Artifacts and CardSummaries are optional.
 type Deps struct {
-	Store     Store
-	Now       func() time.Time
-	NewID     func() string
-	OnCreated func(domain.ReportRecord)
-	Artifacts ArtifactRecorder
+	Store         Store
+	Now           func() time.Time
+	NewID         func() string
+	OnCreated     func(domain.ReportRecord)
+	Artifacts     ArtifactRecorder
+	CardSummaries CardSummaryFiller
 }
 
 // New constructs a report Service.
@@ -59,7 +68,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts, cardSummaries: d.CardSummaries}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -149,5 +158,48 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 			}
 		}
 	}
+	s.fillCardSummary(ctx, created)
 	return created, nil
+}
+
+// fillCardSummary gives a finished worker's card its done report as a summary
+// when the agent never set one with `ao summary`. Agents reliably file the
+// done report but often skip the summary. Best effort: it never fails the
+// report, and a summary the agent set is never replaced.
+func (s *Service) fillCardSummary(ctx context.Context, report domain.ReportRecord) {
+	if s.cardSummaries == nil || report.State != domain.ReportDone {
+		return
+	}
+	if text := doneReportSummary(report); text != "" {
+		_, _ = s.cardSummaries.FillSessionCardSummary(ctx, report.SessionID, text, s.previousDoneSummary(ctx, report))
+	}
+}
+
+func doneReportSummary(report domain.ReportRecord) string {
+	if text := domain.CardSummaryFromNote(report.Note); text != "" {
+		return text
+	}
+	return domain.CardSummaryFromNote(report.Message)
+}
+
+// previousDoneSummary is the card text the session's previous done report
+// would have filled in, so a newer done report can replace it. Empty when
+// there is none or the reports cannot be read.
+func (s *Service) previousDoneSummary(ctx context.Context, current domain.ReportRecord) string {
+	reader, ok := s.store.(interface {
+		ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error)
+	})
+	if !ok {
+		return ""
+	}
+	reports, err := reader.ListReportsBySession(ctx, current.SessionID)
+	if err != nil {
+		return ""
+	}
+	for i := len(reports) - 1; i >= 0; i-- {
+		if reports[i].ID != current.ID && reports[i].State == domain.ReportDone {
+			return doneReportSummary(reports[i])
+		}
+	}
+	return ""
 }

@@ -33,7 +33,10 @@ type AppSettings struct {
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
-	UpdatedAt            time.Time
+	// CardSummaries asks new workers to keep a one-line summary on their
+	// kanban card, and shows it on the board.
+	CardSummaries bool
+	UpdatedAt     time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -54,6 +57,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: int(row.SessionRetentionDays),
+		CardSummaries:        row.CardSummaries,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -96,6 +100,19 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 		UpdatedAt:   now,
 	}); err != nil {
 		return fmt.Errorf("set computer use: %w", err)
+	}
+	return nil
+}
+
+// SetCardSummaries persists whether new workers keep a kanban card summary.
+func (s *Store) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetCardSummaries(ctx, gen.SetCardSummariesParams{
+		CardSummaries: enabled,
+		UpdatedAt:     now,
+	}); err != nil {
+		return fmt.Errorf("set card summaries: %w", err)
 	}
 	return nil
 }

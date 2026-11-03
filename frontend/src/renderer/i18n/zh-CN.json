@@ -2749,6 +2749,8 @@
 	"settings.harness.waitReason.resume": "更新后无法恢复",
 	"settings.versionRefresh.label": "自动将打开的会话切换到新版本",
 	"settings.versionRefresh.description": "代理更新后，空闲会话会在新版本上重启，无需等待你手动重启。",
+	"settings.cardSummaries.label": "卡片摘要",
+	"settings.cardSummaries.description": "工作代理实时显示其活动。仅对之后启动的工作代理生效。",
 	"settings.sessionRetention.label": "删除已归档会话",
 	"settings.sessionRetention.description": "worktree 已清理的已归档会话会在此时长后被永久删除。分支、拉取请求和用量合计会保留。",
 	"settings.sessionRetention.never": "从不",

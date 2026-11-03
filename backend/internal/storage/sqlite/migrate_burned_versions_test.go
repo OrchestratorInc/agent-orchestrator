@@ -241,6 +241,8 @@ var shippedMigrations = map[int64]string{
 	20261031021251693: "20261031021251693_session_interface_transitions_degraded_kind.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
 	20261101145613011: "20261101145613011_repository_renames.sql",
+	20261101173946025: "20261101173946025_app_settings_card_summaries.sql",
+	20261101175833666: "20261101175833666_session_card_summary.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
 	20261103094403671: "20261103094403671_backfill_spanning_plan_copies.sql",

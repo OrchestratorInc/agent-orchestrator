@@ -2725,6 +2725,8 @@
 	"settings.harness.waitReason.resume": "ne peut pas reprendre après la mise à jour",
 	"settings.versionRefresh.label": "Passer automatiquement les sessions ouvertes aux nouvelles versions",
 	"settings.versionRefresh.description": "Après la mise à jour d’un agent, les sessions inactives redémarrent avec la nouvelle version au lieu d’attendre que vous les redémarriez.",
+	"settings.cardSummaries.label": "Résumés sur les cartes",
+	"settings.cardSummaries.description": "Les workers affichent leur activité en direct. S'applique aux workers démarrés ensuite.",
 	"settings.sessionRetention.label": "Supprimer les sessions archivées",
 	"settings.sessionRetention.description": "Les sessions archivées dont le worktree est nettoyé sont supprimées pour de bon après ce délai. Les branches, les pull requests et les totaux d’utilisation sont conservés.",
 	"settings.sessionRetention.never": "Jamais",

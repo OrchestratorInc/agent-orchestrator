@@ -2681,6 +2681,8 @@
 	"settings.harness.waitReason.resume": "更新後に再開できません",
 	"settings.versionRefresh.label": "開いているセッションを新しいバージョンへ自動で切り替える",
 	"settings.versionRefresh.description": "エージェントの更新後、待機中のセッションは再起動を待たずに新しいバージョンで再起動します。",
+	"settings.cardSummaries.label": "カードの要約",
+	"settings.cardSummaries.description": "ワーカーが作業状況をリアルタイムで表示します。この後に開始したワーカーに適用されます。",
 	"settings.sessionRetention.label": "アーカイブしたセッションを削除",
 	"settings.sessionRetention.description": "worktree がクリーンアップ済みのアーカイブ済みセッションを、この期間の後に完全に削除します。ブランチ、プルリクエスト、使用量の合計は残ります。",
 	"settings.sessionRetention.never": "削除しない",

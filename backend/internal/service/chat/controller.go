@@ -225,6 +225,7 @@ type Controller struct {
 	onAccountChanged       func(domain.SessionID, string, domain.AgentHarness)
 	recheckAccount         func(domain.SessionID, domain.AgentHarness)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
+	onCardSummary          func(context.Context, domain.SessionID, string, bool)
 
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
@@ -397,6 +398,7 @@ func newController(
 	recheckAccount func(domain.SessionID, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
 	reader SnapshotReader,
+	onCardSummary func(context.Context, domain.SessionID, string, bool),
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -414,6 +416,7 @@ func newController(
 		onAccountChanged:       onAccountChanged,
 		recheckAccount:         recheckAccount,
 		onCodexCapacityChanged: onCodexCapacityChanged,
+		onCardSummary:          onCardSummary,
 		state:                  ports.ChatControllerReady,
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
@@ -3605,6 +3608,20 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	}
 }
 
+// extractAOSummaryFromDetail parses the JSON detail of a ChatEventActivityStarted
+// event and returns the summary text if the command is `ao summary "..."`, and
+// whether it carries --done. This lets the card update without an HTTP
+// round-trip to the daemon, which is blocked from sandboxed worker environments.
+func extractAOSummaryFromDetail(detail []byte) (string, bool) {
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil || d.Command == "" {
+		return "", false
+	}
+	return extractAOSummary(d.Command)
+}
+
 // afterProject performs effects that intentionally live outside the SQLite
 // archive/projection transaction. Lifecycle writes touch the sessions table and
 // draining may call the provider, so either one inside the store transaction
@@ -3612,6 +3629,14 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
 	now := c.now()
 	switch event.Kind {
+	case ports.ChatEventActivityStarted:
+		if c.reviewID == "" && len(event.Detail) > 0 {
+			if c.onCardSummary != nil {
+				if text, done := extractAOSummaryFromDetail(event.Detail); text != "" {
+					c.onCardSummary(ctx, c.sessionID, text, done)
+				}
+			}
+		}
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)

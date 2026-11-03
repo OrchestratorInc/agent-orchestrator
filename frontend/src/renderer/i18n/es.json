@@ -2725,6 +2725,8 @@
 	"settings.harness.waitReason.resume": "no se puede reanudar tras la actualización",
 	"settings.versionRefresh.label": "Pasar las sesiones abiertas a las nuevas versiones automáticamente",
 	"settings.versionRefresh.description": "Tras actualizar un agente, las sesiones inactivas se reinician con la nueva versión en lugar de esperar a que las reinicies.",
+	"settings.cardSummaries.label": "Resúmenes en tarjetas",
+	"settings.cardSummaries.description": "Los workers muestran actualizaciones en vivo de su actividad. Se aplica a los workers que se inicien después.",
 	"settings.sessionRetention.label": "Eliminar sesiones archivadas",
 	"settings.sessionRetention.description": "Las sesiones archivadas cuyo worktree está limpio se eliminan para siempre pasado este tiempo. Se conservan las ramas, las pull requests y los totales de uso.",
 	"settings.sessionRetention.never": "Nunca",

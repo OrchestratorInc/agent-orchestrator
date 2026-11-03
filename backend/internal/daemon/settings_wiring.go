@@ -28,6 +28,7 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: row.SessionRetentionDays,
+		CardSummaries:        row.CardSummaries,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -46,6 +47,10 @@ func (s settingsStore) SetVersionRefresh(ctx context.Context, enabled bool, now 
 
 func (s settingsStore) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetComputerUse(ctx, enabled, now)
+}
+
+func (s settingsStore) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
+	return s.store.SetCardSummaries(ctx, enabled, now)
 }
 
 func (s settingsStore) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {

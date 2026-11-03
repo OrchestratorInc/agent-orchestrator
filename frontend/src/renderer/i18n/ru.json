@@ -1787,6 +1787,8 @@
 	"settings.harness.waitReason.resume": "не удастся возобновить после обновления",
 	"settings.versionRefresh.label": "Автоматически переводить открытые сессии на новые версии",
 	"settings.versionRefresh.description": "После обновления агента свободные сессии перезапускаются на новой версии автоматически, без ручного перезапуска.",
+	"settings.cardSummaries.label": "Сводки на карточках",
+	"settings.cardSummaries.description": "Воркеры показывают свою активность в реальном времени. Применяется к воркерам, запущенным после включения.",
 	"settings.sessionRetention.label": "Удалять архивные сессии",
 	"settings.sessionRetention.description": "Архивные сессии с очищенным worktree удаляются безвозвратно по истечении этого срока. Ветки, pull request и итоги использования сохраняются.",
 	"settings.sessionRetention.never": "Никогда",

@@ -4075,6 +4075,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/card-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether new workers keep a one-line summary on their kanban card */
+        patch: operations["updateCardSummaries"];
+        trace?: never;
+    };
     "/api/v1/settings/chat-hibernation": {
         parameters: {
             query?: never;
@@ -4255,6 +4272,23 @@ export interface paths {
         get: operations["exportSideChatLaunch"];
         put?: never;
         post: operations["recoverSideChatLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update the kanban card summary for a session */
+        post: operations["updateCardSummary"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5524,6 +5558,7 @@ export interface components {
             status: "working" | "pr_open" | "draft" | "ci_failed" | "review_pending" | "changes_requested" | "commented" | "approved" | "mergeable" | "merged" | "needs_input" | "exited" | "idle" | "terminated" | "no_signal";
             /** @enum {string} */
             statusReadiness: "checking" | "ready" | "unavailable";
+            summary?: string;
             terminalGeneration?: string;
             terminalHandleId?: string;
             terminateOnPrMerge: boolean;
@@ -7349,6 +7384,8 @@ export interface components {
             enabled: null | boolean;
         };
         SettingsResponse: {
+            /** @description New workers keep a one-line summary on their kanban card with ao summary, and the board shows it. The desktop app turns it on with Developer mode. */
+            cardSummaries: boolean;
             chatHarnesses: string[];
             chatHibernationEnabled: boolean;
             client: string;
@@ -7835,6 +7872,9 @@ export interface components {
             /** @enum {null|string} */
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
+        UpdateCardSummariesRequest: {
+            enabled: null | boolean;
+        };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
         };
@@ -7859,6 +7899,16 @@ export interface components {
         UpdateShellTerminalRequest: {
             /** @description New tab title for the shell terminal. Trimmed; must be non-empty. */
             title: string;
+        };
+        UpdateSummaryRequest: {
+            done?: boolean;
+            sessionId: string;
+            summary: string;
+        };
+        UpdateSummaryResponse: {
+            ok: boolean;
+            retryAfterSeconds?: number;
+            updated: boolean;
         };
         UpdateVersionRefreshRequest: {
             enabled: null | boolean;
@@ -23251,6 +23301,57 @@ export interface operations {
             };
         };
     };
+    updateCardSummaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCardSummariesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateChatHibernation: {
         parameters: {
             query?: never;
@@ -23909,6 +24010,66 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateCardSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSummaryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

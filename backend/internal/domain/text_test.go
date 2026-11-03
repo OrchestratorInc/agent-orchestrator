@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSanitizeControlChars(t *testing.T) {
 	tests := []struct {
@@ -21,5 +24,36 @@ func TestSanitizeControlChars(t *testing.T) {
 				t.Fatalf("SanitizeControlChars(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeCardSummary(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"collapses whitespace", "  Fixing \n the   bug ", "Fixing the bug"},
+		{"strips escapes", "Fixing\x1b[2J it", "Fixing[2J it"},
+		{"strips bidi override", "Reading \u202etxt.exe", "Reading txt.exe"},
+		{"strips zero width", "Fix\u200bing", "Fixing"},
+		{"strips line separator", "one\u2028two", "onetwo"},
+		{"too long", strings.Repeat("a", MaxCardSummaryRunes+1), ""},
+		{"empty", "  ", ""},
+	}
+	for _, tt := range tests {
+		if got := NormalizeCardSummary(tt.in); got != tt.want {
+			t.Errorf("%s: NormalizeCardSummary(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestCardSummaryFromNote(t *testing.T) {
+	if got := CardSummaryFromNote("  Added the 404 page;\n build passes "); got != "Added the 404 page; build passes" {
+		t.Fatalf("short note = %q", got)
+	}
+	long := strings.Repeat("word ", 60)
+	got := CardSummaryFromNote(long)
+	if n := len([]rune(got)); n == 0 || n > MaxCardSummaryRunes || !strings.HasSuffix(got, "word…") {
+		t.Fatalf("long note = %q (%d runes), want a word-boundary cut ending in an ellipsis", got, n)
+	}
+	if got := CardSummaryFromNote(" \t "); got != "" {
+		t.Fatalf("blank note = %q, want empty", got)
 	}
 }

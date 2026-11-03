@@ -74,6 +74,7 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
@@ -390,6 +391,7 @@ func Run(buildVersion string) error {
 			}()
 		}
 	}
+	cardSummaries := sessionsvc.NewCardSummaryLimiter(store, time.Now)
 	chatSvc := chatsvc.New(chatsvc.Options{
 		Store:               store,
 		Sessions:            store,
@@ -478,6 +480,11 @@ func Run(buildVersion string) error {
 			if err := sessMgr.PersistChatModel(ctx, sessionID, model); err != nil {
 				log.Warn("persist ChatUI model on session failed; a TUI rebuild may resume with a different model",
 					"sessionID", sessionID, "model", model, "error", err)
+			}
+		},
+		OnCardSummary: func(ctx context.Context, sessionID domain.SessionID, summary string, done bool) {
+			if _, _, err := cardSummaries.Update(ctx, sessionID, summary, done); err != nil {
+				log.Warn("update card summary from event stream failed", "sessionID", sessionID, "error", err)
 			}
 		},
 	})
@@ -724,7 +731,7 @@ func Run(buildVersion string) error {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, CardSummaries: store, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}
@@ -801,6 +808,7 @@ func Run(buildVersion string) error {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	sessMgr.SetCardSummariesEnabled(settingsSvc.CardSummariesEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
@@ -1115,6 +1123,7 @@ func Run(buildVersion string) error {
 		Reviews:            reviewSvc,
 		Notifications:      notifier,
 		Reports:            reportSvc,
+		CardSummaries:      cardSummaries,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,

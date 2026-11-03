@@ -191,6 +191,29 @@ func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBin
 	return items, nil
 }
 
+const fillSessionCardSummary = `-- name: FillSessionCardSummary :execrows
+UPDATE sessions
+SET card_summary = ?1
+WHERE id = ?2 AND is_terminated = 0 AND card_summary IN ('', ?3)
+`
+
+type FillSessionCardSummaryParams struct {
+	Summary  string
+	ID       domain.SessionID
+	Previous string
+}
+
+// Sets the card summary only while it is empty or still the text an earlier
+// fallback wrote (previous), so a fallback never replaces one the agent set
+// itself. The check and the write are one statement.
+func (q *Queries) FillSessionCardSummary(ctx context.Context, arg FillSessionCardSummaryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, fillSessionCardSummary, arg.Summary, arg.ID, arg.Previous)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `
@@ -218,7 +241,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at, card_summary,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -276,6 +299,7 @@ type GetSessionRow struct {
 	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
+	CardSummary                      string
 	ConversationCheckpointState      domain.ConversationCheckpointState
 	ConversationCheckpointGeneration string
 	ConversationCheckpointNativeID   string
@@ -360,6 +384,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
+		&i.CardSummary,
 		&i.ConversationCheckpointState,
 		&i.ConversationCheckpointGeneration,
 		&i.ConversationCheckpointNativeID,
@@ -408,7 +433,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at, card_summary,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -466,6 +491,7 @@ type GetSessionByAutomationRunIDRow struct {
 	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
+	CardSummary                      string
 	ConversationCheckpointState      domain.ConversationCheckpointState
 	ConversationCheckpointGeneration string
 	ConversationCheckpointNativeID   string
@@ -550,6 +576,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
+		&i.CardSummary,
 		&i.ConversationCheckpointState,
 		&i.ConversationCheckpointGeneration,
 		&i.ConversationCheckpointNativeID,
@@ -761,7 +788,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at, card_summary,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -819,6 +846,7 @@ type ListAllSessionsRow struct {
 	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
+	CardSummary                      string
 	ConversationCheckpointState      domain.ConversationCheckpointState
 	ConversationCheckpointGeneration string
 	ConversationCheckpointNativeID   string
@@ -909,6 +937,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
+			&i.CardSummary,
 			&i.ConversationCheckpointState,
 			&i.ConversationCheckpointGeneration,
 			&i.ConversationCheckpointNativeID,
@@ -1055,7 +1084,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
     artifact_dir, session_output_type,
-    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at, card_summary,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
@@ -1113,6 +1142,7 @@ type ListSessionsByProjectRow struct {
 	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
+	CardSummary                      string
 	ConversationCheckpointState      domain.ConversationCheckpointState
 	ConversationCheckpointGeneration string
 	ConversationCheckpointNativeID   string
@@ -1203,6 +1233,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
+			&i.CardSummary,
 			&i.ConversationCheckpointState,
 			&i.ConversationCheckpointGeneration,
 			&i.ConversationCheckpointNativeID,
@@ -2324,6 +2355,27 @@ type UpdateSessionArtifactOutputParams struct {
 // names them.
 func (q *Queries) UpdateSessionArtifactOutput(ctx context.Context, arg UpdateSessionArtifactOutputParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateSessionArtifactOutput, arg.ArtifactDir, arg.SessionOutputType, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateSessionCardSummary = `-- name: UpdateSessionCardSummary :execrows
+UPDATE sessions
+SET card_summary = ?1
+WHERE id = ?2 AND is_terminated = 0
+`
+
+type UpdateSessionCardSummaryParams struct {
+	Summary string
+	ID      domain.SessionID
+}
+
+// Narrow on purpose: it leaves updated_at alone so a new summary does not
+// reorder the board, and touches no column a lifecycle write owns.
+func (q *Queries) UpdateSessionCardSummary(ctx context.Context, arg UpdateSessionCardSummaryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionCardSummary, arg.Summary, arg.ID)
 	if err != nil {
 		return 0, err
 	}
