@@ -829,32 +829,37 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 						/>
 					))}
 				</ul>
-				<div className="flex flex-wrap items-center gap-3">
-					<Button variant="primary" onClick={signIn} disabled={browserWaiting}>
-						{browserWaiting ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}
-						{t(browserWaiting ? "firstRun.signInWaiting" : "firstRun.signInBrowser")}
-					</Button>
-					{browserWaiting ? null : (
-						<Button variant="ghost" className="text-muted-foreground" onClick={onNext}>
-							{t("firstRun.doLater")}
-						</Button>
-					)}
-					{browserWaiting ? (
+				{/* While the browser has the login page, say so here; the actions
+				    stay in the bottom bar. */}
+				{browserWaiting ? (
+					<div className="flex flex-wrap items-center gap-3">
+						<Waiting>{t("firstRun.signInWaiting")}</Waiting>
 						<Button variant="ghost" className="text-muted-foreground" onClick={() => cloud.signIn()}>
 							{t("firstRun.signInReopen")}
 						</Button>
-					) : null}
-				</div>
+					</div>
+				) : null}
 				</>
 			)}
 			{/* The local email/password dialog is only mounted by the cloud gate. */}
 			{localAuth.available && !cloudEnabled ? <CloudLocalSignInDialog /> : null}
-			{/* Optional: Continue works either way, and leads once signed in. */}
-			{account ? (
-				<StepAction>
+			{/* The page's actions live in the bottom bar: Continue once logged in,
+			    else Do later beside Log in. */}
+			<StepAction>
+				{account ? (
 					<Button variant="primary" onClick={onNext}>{t("firstRun.continue")}</Button>
-				</StepAction>
-			) : null}
+				) : cloud.status === "loading" ? null : (
+					<>
+						<Button variant="ghost" className="text-muted-foreground" onClick={onNext}>
+							{t("firstRun.doLater")}
+						</Button>
+						<Button variant="primary" onClick={signIn} disabled={browserWaiting}>
+							{browserWaiting ? <LoaderCircle className="size-icon-base animate-spin" aria-hidden="true" /> : null}
+							{t("firstRun.signInBrowser")}
+						</Button>
+					</>
+				)}
+			</StepAction>
 		</StepSplit>
 	);
 }
