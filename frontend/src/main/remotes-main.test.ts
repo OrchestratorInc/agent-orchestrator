@@ -444,11 +444,14 @@ describe("registerRemotesIpc", () => {
 		const closed = vi.fn().mockResolvedValue(undefined);
 		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
 		await registry.connect({ hostId: "h_legacy", label: "Old", url: "https://old.example", password: "stale-pw" });
-		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, getAccountId: async () => "user-a" });
+		const probe = vi.fn(async (entry: { password: string }) => entry.password === "a".repeat(64) ? "online" as const : "unauthorized" as const);
+		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, getAccountId: async () => "user-a", identity: async () => "h_legacy", probe });
 
 		await ipc.invoke("remotes:importAccountHost", "user-a", {
 			hostId: "h_legacy", label: "Discovered", url: "https://new.example", password: "a".repeat(64),
 		});
+		// The token was tried before it replaced the typed password.
+		expect(probe).toHaveBeenCalledWith(expect.objectContaining({ url: "https://new.example", password: "a".repeat(64) }));
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_legacy", label: "Discovered", url: "https://new.example" },
 		]);
@@ -469,7 +472,7 @@ describe("registerRemotesIpc", () => {
 		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
 		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
 		const ipc = fakeIpc();
-		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn });
+		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online" });
 
 		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "b".repeat(64) });
 		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
@@ -478,5 +481,32 @@ describe("registerRemotesIpc", () => {
 		expect(closed).not.toHaveBeenCalled();
 		// The saved credential changed, so the old proxy no longer counts as connected.
 		expect(registry.connected({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "b".repeat(64) })).toBeUndefined();
+	});
+
+	it("keeps a typed password that still works when the account's token is rejected", async () => {
+		// The host was linked to another account since: this account's listing
+		// still carries a token the host no longer accepts.
+		const file = await tempFile();
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			identity: async () => "h_workbox", probe: async () => "unauthorized",
+		});
+		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "Workbox", url: "https://moved.example", password: "c".repeat(64) });
+		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+			{ hostId: "h_workbox", label: "Workbox", url: "https://moved.example", password: "old", accountUserId: TEST_ACCOUNT },
+		]);
+	});
+
+	it("keeps a typed password while the host cannot be reached to try the token", async () => {
+		const file = await tempFile();
+		const original = JSON.parse(await readFile(file, "utf8"));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			identity: async () => { throw new Error("offline"); },
+		});
+		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "c".repeat(64) });
+		expect(JSON.parse(await readFile(file, "utf8"))).toEqual(original);
 	});
 });

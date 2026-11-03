@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
-import { addRemote, readRemotes, type RemoteChanges, type RemoteEntry } from "./remotes-store";
+import { addRemote, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 
 // An isolated desktop run must not read or write the real user's credentials.
 // Without an override, keep the existing ~/.ao location.
@@ -191,7 +191,19 @@ export function registerRemotesIpc(
 		// again whenever its password changes. A password typed here goes stale on
 		// the first rotation, so the account's token replaces it.
 		const local = (await readRemotes(file)).find((entry) => entry.hostId === input.hostId);
-		await addRemote(file, { label: input.label, url: input.url, password: input.password, hostId: input.hostId, accountUserId: account });
+		const entry = { label: input.label, url: input.url, password: input.password, hostId: input.hostId, accountUserId: account };
+		if (local && !/^[0-9a-f]{64}$/.test(local.password)) {
+			// Only once the token is seen to work: a listing lags a host since
+			// linked to another account, whose typed password still works.
+			let health: RemoteHealth = "offline";
+			try { health = await checkedProbe(entry, account); } catch { /* keep the typed password */ }
+			if (health !== "online") {
+				if (local.label !== input.label || local.url !== input.url) await updateRemote(file, local.url, { label: input.label, url: input.url });
+				if (local.url !== input.url) await disconnect(local.url);
+				return;
+			}
+		}
+		await addRemote(file, entry);
 		if (local && local.url !== input.url) await disconnect(local.url);
 	}));
 	ipcMain.handle("remotes:pruneAccountHosts", async (_event, expectedAccountId: string, currentHostIds: string[]) => ordered(async () => {
