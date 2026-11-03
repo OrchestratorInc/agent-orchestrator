@@ -138,6 +138,19 @@ describe("PeopleField", () => {
 		expect(onNewTeam).toHaveBeenCalledWith([{ kind: "person", email: "dana@northwind.dev", name: "Dana Kim" }], "riya");
 	});
 
+	it("narrows the suggestions to what's typed before the answer for it arrives", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "a");
+		await screen.findByText("Dana Kim");
+		// Typed on, with no time for the next answer: only matches stay.
+		fireEvent.change(input, { target: { value: "riya" } });
+		expect(screen.queryByText("Dana Kim")).toBeNull();
+		expect(screen.queryByText("Platform")).toBeNull();
+		expect(screen.getByText("Riya Sen")).toBeTruthy();
+	});
+
 	it("adds a pasted email on Enter instead of a match for the text before it", async () => {
 		renderField();
 		const input = screen.getByRole("combobox", { name: "Add people or teams" });

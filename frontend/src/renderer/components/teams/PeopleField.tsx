@@ -111,7 +111,14 @@ export function PeopleField({
 
 	const options = useMemo<Option[]>(() => {
 		const list: Option[] = [];
+		// Until the answer for what's typed arrives, the last answer is narrowed
+		// to what still matches (the control plane's rule: the name or email
+		// contains the text), so nobody who doesn't match shows for a moment.
+		const needle = typed.toLowerCase();
+		const stillMatches = (candidate: CloudCpShareCandidate) =>
+			fresh || !needle || `${candidate.name}\n${candidate.email ?? ""}`.toLowerCase().includes(needle);
 		for (const candidate of candidates.data ?? []) {
+			if (!stillMatches(candidate)) continue;
 			if (candidate.kind === "team") {
 				if (!allowTeams || !candidate.teamId) continue;
 				const key = `team:${candidate.teamId}`;
@@ -130,7 +137,7 @@ export function PeopleField({
 		}
 		if (onNewTeam && allowTeams) list.push({ id: "new-team", kind: "newTeam", disabled: false });
 		return list;
-	}, [allowTeams, candidates.data, onNewTeam, picked, text, unavailable, workspaceHasAccess]);
+	}, [allowTeams, candidates.data, fresh, onNewTeam, picked, text, typed, unavailable, workspaceHasAccess]);
 
 	// With something typed, the first suggestion that answers it is
 	// highlighted: a match once the results are current, else the typed email.
