@@ -488,7 +488,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 
 func TestSentryTagRules(t *testing.T) {
 	t.Parallel()
-	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
+	for value, want := range map[string]bool{"500": true, "502": true, "503": true, "409": true, "400": true, "399": false, "600": false, "500x": false} {
 		if got := safeSentryTag("status", value); got != want {
 			t.Fatalf("status %q allowed = %v, want %v", value, got, want)
 		}

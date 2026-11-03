@@ -8,11 +8,13 @@ package reaper
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -131,10 +133,15 @@ func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 		case <-t.C:
 			if err := r.Tick(ctx); err != nil {
 				r.logger.Error("reaper: tick failed", "err", err)
+				sentryobs.CaptureBackground(ctx, err, "reaper", "reaper_tick", nil)
 			}
 		}
 	}
 }
+
+// errMassDeath stands in for the tripped mass-death breaker, which has no
+// error of its own.
+var errMassDeath = errors.New("reaper: mass-death circuit breaker tripped")
 
 // Tick runs one observation cycle: it enumerates non-terminated sessions,
 // probes each one's runtime, and reports each result back as a fact.
@@ -184,6 +191,9 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		// board untouched and let the next probe decide.
 		r.logger.Error("reaper: mass-death circuit breaker tripped, reporting the pass as inconclusive",
 			"dead", dead, "probed", len(observations))
+		// The outage signal: many agents "died" in one pass. The counts are
+		// logged locally; Sentry only needs to know the breaker tripped.
+		sentryobs.CaptureBackground(ctx, errMassDeath, "reaper", "reaper_breaker", map[string]string{"reason": "mass_death"})
 		for i := range observations {
 			if observations[i].facts.Runtime == ports.ProbeDead {
 				observations[i].facts.Runtime = ports.ProbeFailed
@@ -195,6 +205,7 @@ func (r *Reaper) Tick(ctx context.Context) error {
 		if err := r.sink.ApplyRuntimeObservation(ctx, obs.id, obs.facts); err != nil {
 			r.logger.Error("reaper: ApplyRuntimeObservation failed",
 				"session", obs.id, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "reaper", "runtime_observation", nil)
 		}
 	}
 	return nil

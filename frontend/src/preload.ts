@@ -177,12 +177,27 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
-ipcRenderer.on(TELEMETRY_POLICY_CHANGED_CHANNEL, (_event, view: TelemetryPolicyView) => {
+// Errors raised before the first policy arrives (module load, first render)
+// used to be dropped. Hold a few and forward them once the policy is known;
+// main still applies consent, so an opted-out policy discards them there.
+const PENDING_CAPTURE_LIMIT = 20;
+let pendingTelemetryCaptures: RendererTelemetryCaptureInput[] = [];
+function flushPendingTelemetryCaptures(view: TelemetryPolicyView): void {
+	const held = pendingTelemetryCaptures;
+	pendingTelemetryCaptures = [];
+	for (const input of held) void ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: view.consentGeneration }).catch(() => false);
+}
+function applyTelemetryPolicy(view: TelemetryPolicyView): void {
 	currentTelemetryPolicy = view;
+	flushPendingTelemetryCaptures(view);
 	for (const listener of telemetryPolicyListeners) listener(view);
+}
+ipcRenderer.on(TELEMETRY_POLICY_CHANGED_CHANNEL, (_event, view: TelemetryPolicyView) => {
+	applyTelemetryPolicy(view);
 });
 ipcRenderer.on(TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL, (_event, request: unknown) => {
 	if (!isRendererQueuePurgeRequest(request)) return;
+	pendingTelemetryCaptures = [];
 	void Promise.allSettled([...rendererQueuePurgeListeners].map((listener) => Promise.resolve().then(listener)))
 		.then((results) => {
 			ipcRenderer.send(TELEMETRY_RENDERER_QUEUES_CLEARED_CHANNEL, {
@@ -503,15 +518,17 @@ const api = {
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
-			currentTelemetryPolicy = view;
-			for (const listener of telemetryPolicyListeners) listener(view);
+			applyTelemetryPolicy(view);
 			return view;
 		},
 		setEventsEnabled: (eventsEnabled: boolean) => ipcRenderer.invoke("telemetry:setEventsEnabled", { eventsEnabled, expectedGeneration: currentTelemetryPolicy?.consentGeneration ?? "" }) as Promise<TelemetryPolicyView>,
 		onPolicy: (listener: (view: TelemetryPolicyView) => void) => { telemetryPolicyListeners.add(listener); if (currentTelemetryPolicy) listener(currentTelemetryPolicy); return () => telemetryPolicyListeners.delete(listener); },
 		onClearQueues: (listener: () => void | Promise<void>) => { rendererQueuePurgeListeners.add(listener); return () => rendererQueuePurgeListeners.delete(listener); },
 		capture: (input: RendererTelemetryCaptureInput) => {
-			if (!currentTelemetryPolicy) return Promise.resolve(false);
+			if (!currentTelemetryPolicy) {
+				if (pendingTelemetryCaptures.length < PENDING_CAPTURE_LIMIT) pendingTelemetryCaptures.push(input);
+				return Promise.resolve(false);
+			}
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
 		},
 	},

@@ -1413,7 +1413,10 @@ export async function captureRendererException(error: unknown, properties?: Reco
 		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
 	}
 	if (isDeniedEvent("$exception")) return;
-	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
+	// Budget per error type and call site, so one noisy TypeError cannot starve
+	// a different failure that happens to share the same constructor name.
+	const site = typeof properties?.operation === "string" ? properties.operation : typeof properties?.source === "string" ? properties.source : "unknown";
+	if (!reserveCapture(`exception:${exceptionName(error)}:${site.slice(0, 64)}`)) return;
 	// The main-owned policy gate decides whether this reaches Sentry. Renderer
 	// exceptions no longer enter the PostHog product-analytics path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;

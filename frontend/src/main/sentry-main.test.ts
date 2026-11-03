@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
-import { DEFAULT_ELECTRON_SENTRY_DSN, ELECTRON_SENTRY_ERROR_SAMPLE_RATE } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
 import { clearMainSentryCache, electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
 
@@ -65,29 +65,39 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.makeElectronOfflineTransport).toHaveBeenCalledOnce();
 	});
 
-	it("samples regular main and renderer errors once while retaining fatal crashes", async () => {
+	it("keeps every consented main and renderer error without random sampling", async () => {
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		const options = sdk.init.mock.calls[0]?.[0];
 		const beforeSend = options.beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		const random = vi.mocked(Math.random);
-		expect(ELECTRON_SENTRY_ERROR_SAMPLE_RATE).toBe(0.25);
-		// The SDK's own rate must stay at one: it runs after beforeSend and
-		// would otherwise drop fatal events too.
+		random.mockReturnValue(0.99);
 		expect(options.sampleRate).toBe(1);
-		random.mockReturnValueOnce(0.24).mockReturnValueOnce(0.25);
 		expect(beforeSend({ type: undefined, message: "ordinary main error" })).not.toBeNull();
-		expect(beforeSend({ type: undefined, message: "another main error" })).toBeNull();
 		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [] } });
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
-		random.mockReturnValueOnce(0.25);
-		expect(beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent)).toBeNull();
-		expect(random).toHaveBeenCalledTimes(3);
-		random.mockClear();
-		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", value: "private", mechanism: { type: "generic" } }] } })).not.toBeNull();
+		expect(beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent)).not.toBeNull();
 		expect(beforeSend({ type: undefined, level: "fatal", message: "'renderer' process exited with 'crashed'" })).not.toBeNull();
-		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "fatal", exception: { type: "TypeError", frames: [] } });
-		expect(beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent)).not.toBeNull();
 		expect(random).not.toHaveBeenCalled();
+	});
+
+	it("reports handled main failures with fixed titles and no error text", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const secret = "/Users/dave/private-project";
+		transport.captureMain?.({ category: "daemon", reason: "exited", detail: "signal:SIGKILL", error: new TypeError(`spawn ${secret}`) });
+		transport.captureMain?.({ category: "daemon", reason: "exited", detail: `path:${secret}` });
+		transport.captureMain?.({ category: "made_up" as never, reason: "exited" });
+		expect(sdk.captureEvent).toHaveBeenCalledTimes(2);
+		const first = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
+		expect(first).toMatchObject({
+			message: "Electron main daemon failure (exited)",
+			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main"],
+			tags: { surface: "electron-main", kind: "handled", category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
+			exception: { values: [{ type: "TypeError", value: "" }] },
+		});
+		const second = beforeSend(sdk.captureEvent.mock.calls[1]?.[0] as ErrorEvent);
+		expect(second?.tags).not.toHaveProperty("detail");
+		expect(JSON.stringify([first, second])).not.toContain(secret);
 	});
 
 	it("matches daemon Sentry environments for stable, nightly, and development versions", async () => {

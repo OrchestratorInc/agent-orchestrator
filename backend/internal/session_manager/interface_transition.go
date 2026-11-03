@@ -456,6 +456,7 @@ func (m *Manager) runInterfaceTransition(
 				"TRANSITION_CANCELLED", transitionDetail(transition, "TRANSITION_CANCELLED", "The interface switch was cancelled."))
 			return
 		}
+		captureBackgroundFault(context.Background(), cause, "interface_transition", "")
 		if sourceStopped {
 			m.rollbackInterfaceTransition(transition, sourceRuntimeHandle, modeChanged, accountStarting, code, cause)
 			return
@@ -701,6 +702,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed
 		// to advance; mark recovery so a user is never left with no controller.
+		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"TRANSITION_STATE_FAILED", err.Error())
 		return
@@ -708,6 +710,7 @@ func (m *Manager) runInterfaceTransition(
 	if err := m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionCompleted, "", ""); err != nil {
 		m.logger.Error("interface transition completed but durable completion failed",
 			"sessionID", rec.ID, "transitionID", transition.ID, "error", err)
+		captureBackgroundFault(context.Background(), err, "interface_transition", "durable_completion")
 		return
 	}
 }
@@ -1511,6 +1514,7 @@ func (m *Manager) rollbackInterfaceTransition(
 		false,
 		domain.SessionInterfaceTransitionHistoryStrict,
 	); err != nil {
+		captureBackgroundFault(context.Background(), err, "interface_transition", "relaunch")
 		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionRecovery,
 			"RECOVERY_REQUIRED", cause.Error()+"; source restore: "+err.Error())
 		return
@@ -1551,6 +1555,7 @@ func (m *Manager) retainUnconfirmedTransitionTarget(transition domain.SessionInt
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionTargetStarting,
 		"TARGET_STOP_UNCONFIRMED", "AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. "+cause.Error()); err != nil {
 		m.logger.Error("interface transition: retain unconfirmed target shutdown", "transition", transition.ID, "error", err)
+		captureBackgroundFault(context.Background(), err, "interface_transition", "state_record")
 		return fmt.Errorf("persist unconfirmed target for transition %s: %w", transition.ID, err)
 	}
 	return nil
@@ -1762,6 +1767,7 @@ func (m *Manager) settleTransitionMessages(transition domain.SessionInterfaceTra
 	if err := m.deliverTransitionMessages(context.Background(), current); err != nil {
 		m.logger.Error("interface transition: queued-message delivery deferred",
 			"transitionID", transition.ID, "error", err)
+		captureBackgroundFault(context.Background(), err, "interface_transition", "queued_delivery")
 	}
 	m.wakeTransitionMessageDispatcher()
 }
@@ -1836,6 +1842,7 @@ func (m *Manager) startTransitionMessageDispatcher(ctx context.Context) {
 			}
 			if err := m.deliverAllTransitionMessages(ctx); err != nil {
 				m.logger.Error("interface transition: retry queued-message delivery", "error", err)
+				captureBackgroundFault(ctx, err, "interface_transition", "queued_delivery")
 				delay = interfaceDeliveryRetry
 			} else {
 				delay = interfaceDeliveryIdlePoll
@@ -1947,6 +1954,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 							return nil, err
 						}
 						m.logger.Error("account transition: session quarantined after unconfirmed target shutdown", "sessionID", transition.SessionID, "transition", transition.ID, "error", stopErr)
+						captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 						continue
 					}
 					detail = "The daemon restarted during the account switch; AO stopped the agent and kept the session on its committed account. Resume it to continue."
@@ -1964,6 +1972,7 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 						return nil, err
 					}
 					m.logger.Error("interface transition: session quarantined after unconfirmed target shutdown", "sessionID", transition.SessionID, "transition", transition.ID, "error", stopErr)
+					captureBackgroundFault(ctx, stopErr, "session_quarantine", "")
 					continue
 				}
 				if m.lcm == nil {

@@ -1,13 +1,15 @@
 // Package sentryobs is the daemon-side Sentry integration. It captures genuine
-// server faults (5xx and panics) with a stable fingerprint. Recovered panics
+// server faults (5xx, registered fault codes answered with a 4xx or 503,
+// background failures, and panics) with a stable fingerprint. Recovered panics
 // keep their interrupted frame. Ordinary Go errors have no captured stack;
 // their wrapped causes expose bounded types instead of an opaque count.
 //
 // It is a no-op until a DSN is configured (AO_SENTRY_DSN), and deny-by-default
 // on privacy: no PII, no server name, no request data, no breadcrumbs, and
-// dynamic error text and stack paths are removed before send. Transient
-// conditions (503 SERVICE_UNAVAILABLE) are deliberately not captured. They are
-// retryable contention, not faults, and would drown the signal.
+// dynamic error text and stack paths are removed before send. Plain transient
+// conditions (503 SERVICE_UNAVAILABLE from lock contention) are deliberately
+// not captured; a 503 whose cause is a server-side deadline is, because that is
+// a hang, not contention.
 package sentryobs
 
 import (
@@ -367,7 +369,7 @@ func safeSentryTag(key, value string) bool {
 	case "platform":
 		return value == "daemon"
 	case "component":
-		return value == "httpd" || value == "session_service" || value == "daemon"
+		return value == "httpd" || value == "session_service" || value == "daemon" || isBackgroundComponent(value)
 	case "operation":
 		_, ok := operationLabels[value]
 		return ok
@@ -384,10 +386,12 @@ func safeSentryTag(key, value string) bool {
 			return true
 		}
 	case "status":
+		// Fault codes can answer with a 4xx or 503 (see IsFaultCode), so any
+		// error status is a valid tag; it is a bare number, never request data.
 		status, err := strconv.Atoi(value)
-		return err == nil && ShouldCaptureStatus(status)
+		return err == nil && status >= http.StatusBadRequest && status <= 599
 	case "category":
-		return value == "http_5xx"
+		return value == "http_5xx" || value == "http_fault" || value == "http_timeout"
 	case "area":
 		_, ok := areaLabels[value]
 		return ok
@@ -405,6 +409,9 @@ func safeSentryTag(key, value string) bool {
 	case "install_id":
 		id := installID.Load()
 		return id != nil && value != "" && value == *id
+	}
+	if ok, handled := safeBackgroundTag(key, value); handled {
+		return ok
 	}
 	return false
 }
@@ -431,19 +438,35 @@ func ShouldCaptureStatus(status int) bool {
 // CaptureError captures a reportable daemon error with safe tags and the
 // caller's stable fingerprint. No-op when disabled or canceled.
 func CaptureError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+	captureErrorFor(ctx, err, tags, fingerprint, route, site, tags["operation"])
+}
+
+func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
 	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()
-	if !allowErrorFingerprint(fingerprint, time.Now().UTC()) {
+	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
 		return
 	}
 	capture(sentry.LevelError, tags, fingerprint, route, site, false)
 }
 
 func allowErrorFingerprint(fingerprint string, now time.Time) bool {
+	return allowErrorFingerprintFor(fingerprint, "", now)
+}
+
+// allowErrorFingerprintFor applies the per-fingerprint budget. Once a day has
+// seen maxErrorFingerprintsPerDay distinct fingerprints, a new one shares an
+// overflow bucket for its operation rather than one bucket for the whole
+// daemon, so a noisy day cannot hide a new failure in a different operation.
+func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool {
+	overflow := "unknown"
+	if _, ok := operationLabels[operation]; ok {
+		overflow = "overflow:" + operation
+	}
 	if !safeFingerprint.MatchString(fingerprint) {
-		fingerprint = "unknown"
+		fingerprint = overflow
 	}
 	errorBudget.Lock()
 	defer errorBudget.Unlock()
@@ -454,7 +477,7 @@ func allowErrorFingerprint(fingerprint string, now time.Time) bool {
 	}
 	group, known := errorBudget.groups[fingerprint]
 	if !known && len(errorBudget.groups) >= maxErrorFingerprintsPerDay {
-		fingerprint = "unknown"
+		fingerprint = overflow
 		group = errorBudget.groups[fingerprint]
 	}
 	minute := now.Unix() / 60

@@ -1,7 +1,7 @@
 import createClient from "openapi-fetch";
 import type { paths } from "../../api/schema";
 import { aoBridge } from "./bridge";
-import { apiClient } from "./api-client";
+import { apiClient, reportingFetch } from "./api-client";
 import { LOCAL_HOST, type HostId } from "./hosts";
 
 type ConnectedHost = { hostId: HostId; label: string; url: string; base: string };
@@ -47,7 +47,7 @@ export function clientForHost(hostId: HostId) {
 	if (!host) throw new Error(`Host ${hostId} is not connected`);
 	let client = clients.get(hostId);
 	if (!client) {
-		client = createClient<paths>({ baseUrl: host.base });
+		client = createClient<paths>({ baseUrl: host.base, fetch: reportingFetch });
 		clients.set(hostId, client);
 	}
 	return client;
