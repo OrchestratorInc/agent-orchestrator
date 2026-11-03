@@ -7126,7 +7126,7 @@ components:
           type: string
           description: >-
             Where the link's file is served, for example
-            https://<slug>.orchestrator-usercontent.com/.
+            https://<slug>.orchestratorusercontent.com/.
         viewerUrl:
           type: string
           description: >-
