@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { redeemShareTarget, requestOpenShareLink, ShareLinkHost } from "./OpenShareLinkDialog";
 
@@ -22,6 +22,15 @@ function renderHost() {
 }
 
 describe("opening a share link", () => {
+	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
+	// Unmount, then wait one tick so that timer fires while this file's DOM
+	// still exists; left pending, it fires into the next test file's jsdom
+	// window on a shared CI worker and fails the run as an unhandled error.
+	afterEach(async () => {
+		cleanup();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
 	beforeEach(() => {
 		mocks.client.redeemShareLink.mockReset().mockResolvedValue(shared);
 		mocks.client.redeemShareLinkCode.mockReset().mockResolvedValue(shared);

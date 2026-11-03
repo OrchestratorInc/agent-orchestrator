@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpShareLink } from "../lib/cloud-cp";
@@ -37,6 +37,15 @@ function renderDialog() {
 }
 
 describe("sharing a session", () => {
+	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
+	// Unmount, then wait one tick so that timer fires while this file's DOM
+	// still exists; left pending, it fires into the next test file's jsdom
+	// window on a shared CI worker and fails the run as an unhandled error.
+	afterEach(async () => {
+		cleanup();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
 	beforeEach(() => {
 		mocks.client.listShareLinks.mockReset().mockResolvedValue({
 			links: [
@@ -90,6 +99,15 @@ describe("sharing a session", () => {
 });
 
 describe("share links", () => {
+	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
+	// Unmount, then wait one tick so that timer fires while this file's DOM
+	// still exists; left pending, it fires into the next test file's jsdom
+	// window on a shared CI worker and fails the run as an unhandled error.
+	afterEach(async () => {
+		cleanup();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
 	it("shares one session, or the whole project without naming a session", () => {
 		expect(shareLinkRequest({ scope: "session", access: "editor", modeCap: "trusted", expiry: "24", sessionId: "s1" })).toEqual({
 			sessionId: "s1", role: "editor", accessScope: "anyone", interaction: "interact", modeCap: "trusted", expiresInHours: 24,
