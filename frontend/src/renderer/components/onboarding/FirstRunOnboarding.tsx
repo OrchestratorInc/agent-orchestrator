@@ -101,8 +101,11 @@ const INSTALL_POLL_MS = 1_000;
 // --duration-normal and --ease-out, for motion's JS-driven transitions.
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
-const COPY_WIDTH = 400;
+const COPY_WIDTH = 520;
 const COLLAPSE_SPRING = { type: "spring", visualDuration: 0.34, bounce: 0.04 } as const;
+/** The stage opening or closing (the copy column's width). */
+const COLLAPSE_MS = 340;
+const COLLAPSE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 /** Pages that lead with the app icon. */
 const STEPS_WITH_ICON: ReadonlySet<Step> = new Set<Step>(["welcome", "signin"]);
 /** The icon (48px) and the gap under it (20px). */
@@ -237,9 +240,8 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	}, []);
 	const wide = rowWidth >= 900;
 	const stageCollapsed = step === "project";
-	// The stage always springs open or closed (an interrupted spring picks up
-	// from where it is), so it can't be left half-way or snap back.
-	const collapseTransition = reduceMotion ? { duration: 0 } : COLLAPSE_SPRING;
+	// Back from the project page: the stage opens first, then the phone slides
+	// in, so the two don't play over each other.
 	// Whether the page being left showed the app icon, so the next page's
 	// icon slot starts from it and collapses (or grows) instead of cutting.
 	const lastStep = useRef(step);
@@ -247,6 +249,9 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	useEffect(() => {
 		lastStep.current = step;
 	}, [step]);
+	// Back from the project page: the stage opens first, then the phone slides
+	// in, so the two don't play over each other.
+	const phoneDelay = lastStep.current === "project" && step !== "project" ? COLLAPSE_MS / 1000 : 0;
 	// Pages with nothing to do are passed over in both directions, decided when
 	// the person moves (these checks start on the welcome page, so they have
 	// usually settled by then); a page still checking is shown, never flashed.
@@ -342,12 +347,14 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 			    stage keeps its full layout width meanwhile and is cropped, not
 			    rescaled. */}
 			<div ref={rowRef} className="flex min-h-0 flex-1 overflow-hidden">
-				<motion.div
+				{/* A CSS transition, not a JS spring: it always lands, even if frames
+				    are dropped while the next page mounts. */}
+				<div
 					className="relative min-h-0 shrink-0"
-					initial={false}
-					animate={{ width: !wide ? rowWidth : stageCollapsed ? rowWidth : COPY_WIDTH }}
-					transition={collapseTransition}
-					style={{ width: !wide ? "100%" : undefined }}
+					style={{
+						width: !wide ? "100%" : stageCollapsed ? rowWidth : COPY_WIDTH,
+						transition: reduceMotion ? undefined : `width ${COLLAPSE_MS}ms ${COLLAPSE_EASE}`,
+					}}
 				>
 					<IconSlotContext.Provider value={previousHadIcon}>
 					<AnimatePresence initial={false}>
@@ -368,13 +375,14 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 						</motion.div>
 					</AnimatePresence>
 					</IconSlotContext.Provider>
-				</motion.div>
+				</div>
 				{wide ? (
 					<div className="flex min-h-0 min-w-0 flex-1">
 						{/* Beside the phone, the window drops transparency so both devices show
 						    the theme in the same colours. */}
 						<PreviewStage
 							frameWidth={rowWidth - COPY_WIDTH}
+							phoneDelay={phoneDelay}
 							phone={<ExamplePhone />}
 							phoneShown={step === "signin"}
 							opaque={step === "signin"}
